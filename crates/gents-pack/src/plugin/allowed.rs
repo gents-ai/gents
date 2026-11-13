@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use rapidhash::{HashSetExt, RapidHashSet};
 use serde::{Deserialize, Serialize};
 
 use super::BoundDir;
@@ -268,6 +269,21 @@ impl Scope {
         Ok(Self { entries })
     }
 
+    /// Lean `pluginScope`: this scope and, for a plugin whose pack came from
+    /// this runtime's release, its agent's own folder read-write. Nothing is
+    /// written to the allowed list.
+    pub fn with_own_folder(
+        mut self,
+        gents_home: &Path,
+        user_home: Option<&Path>,
+        release: bool,
+        own_folder: Option<&Path>,
+    ) -> Self {
+        self.entries
+            .extend(own_folder_grant(gents_home, user_home, release, own_folder));
+        self
+    }
+
     pub fn granted(&self, target: &Path) -> Option<BindAccess> {
         self.entries
             .iter()
@@ -276,6 +292,79 @@ impl Scope {
             })
             .map(|entry| entry.access)
             .max()
+    }
+}
+
+/// Lean `ownFolderGrant`: a folder the allowed list could never hold is
+/// never granted.
+fn own_folder_grant(
+    gents_home: &Path,
+    user_home: Option<&Path>,
+    release: bool,
+    own_folder: Option<&Path>,
+) -> Option<AllowedDir> {
+    if !release {
+        return None;
+    }
+    let path = own_folder?.canonicalize().ok()?;
+    ensure_scope_path(&path, user_home, gents_home).ok()?;
+    Some(AllowedDir {
+        path,
+        access: BindAccess::ReadWrite,
+    })
+}
+
+/// The digests of the core pack archives this build carries: Lean
+/// `ownFolderGrant`'s `release`. A registry build of the same coordinate has
+/// another digest and is not release.
+#[derive(Clone, Debug, Default)]
+pub struct ReleaseDigests(RapidHashSet<String>);
+
+impl ReleaseDigests {
+    pub fn embedded() -> Self {
+        static EMBEDDED: std::sync::LazyLock<ReleaseDigests> = std::sync::LazyLock::new(|| {
+            ReleaseDigests::of_archives(
+                gents_core_packs::archives()
+                    .iter()
+                    .map(|(_, archive)| *archive),
+            )
+        });
+        EMBEDDED.clone()
+    }
+
+    pub fn of_archives<'a, I>(archives: I) -> Self
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        use crate::pack::archive::{peek_header, Bounds};
+        Self::from_digests(archives.into_iter().filter_map(|archive| {
+            peek_header(archive, Bounds::default())
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        error = %format!("{error:#}"),
+                        "a core pack archive has no readable header; its plugins are not release"
+                    );
+                })
+                .ok()
+                .map(|header| header.digest)
+        }))
+    }
+
+    pub fn from_digests<I, S>(digests: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut set = RapidHashSet::new();
+        set.extend(digests.into_iter().map(Into::into));
+        Self(set)
+    }
+
+    pub fn is_release(&self, record: &super::store::InstalledPlugin) -> bool {
+        record
+            .owner_pack_digest
+            .as_deref()
+            .is_some_and(|digest| self.0.contains(digest))
     }
 }
 

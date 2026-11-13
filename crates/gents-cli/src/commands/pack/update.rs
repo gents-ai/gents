@@ -1,5 +1,7 @@
 use anyhow::Result;
-use gents_pack::pack::core_packs::{self, PluginInterfaceError, UpdateDecision};
+use gents_pack::pack::archive::OpenError;
+use gents_pack::pack::core_packs::{self, PluginInterfaceError, Release, UpdateDecision};
+use gents_pack::pack::registry::{advertised_release, open_candidate, CandidateError};
 use gents_pack::pack::PackChangeError;
 use serde_json::{json, Value};
 
@@ -34,10 +36,11 @@ pub(crate) async fn outdated_packs_on(
 ) -> Result<Vec<Value>> {
     let installed = gents_pack::pack::installed_packs(home, node).await?;
     let client = RegistryClient::new(resolve_registry_url(registry));
+    let runtime = core_packs::runtime_release();
     let mut report = Vec::new();
     for pack in installed {
         let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&pack.coordinate);
-        let (latest, outdated, error) = match client.package(namespace, name).await {
+        let (latest, outdated, mut error) = match client.package(namespace, name).await {
             Err(error) => (None, None, Some(format!("{error:#}"))),
             Ok(package) => match package["latest"].as_str() {
                 None => (
@@ -58,25 +61,91 @@ pub(crate) async fn outdated_packs_on(
                 },
             },
         };
-        report.push(json!({
+        let mut entry = json!({
             "pack": pack.coordinate,
             "installed": pack.version,
             "digest": pack.digest,
             "source": pack.source,
             "latest": latest,
             "outdated": outdated,
-            "error": error,
-        }));
+        });
+        let newer = match (&latest, outdated, &error) {
+            (Some(latest), Some(true), None) => Some(latest.clone()),
+            _ => None,
+        };
+        if let Some(latest) = newer {
+            match built_for(&client, &pack.coordinate, &latest).await {
+                Err(lookup) => error = Some(lookup),
+                Ok(None) => {}
+                Ok(Some(release)) => {
+                    entry["gents_version"] = json!(release.to_string());
+                    let refusal = PluginInterfaceError::refusal(
+                        &pack.coordinate,
+                        &latest,
+                        &runtime,
+                        Some(&release),
+                    );
+                    entry["loadable"] = json!(refusal.is_none());
+                    if let Some(refusal) = refusal {
+                        entry["reason"] = json!(refusal.to_string());
+                    }
+                }
+            }
+        }
+        entry["error"] = json!(error);
+        report.push(entry);
     }
     Ok(report)
 }
 
-/// The plugin interface refusal of a candidate the update could not open.
-fn interface_refusal(error: &PackChangeError) -> Option<&PluginInterfaceError> {
-    match error {
-        PackChangeError::Other(error) => core_packs::plugin_interface_refusal(error.as_ref()),
-        _ => None,
-    }
+/// The release the registry says `coordinate` at `version` was built for;
+/// `None` when it does not say.
+async fn built_for(
+    client: &RegistryClient,
+    coordinate: &str,
+    version: &str,
+) -> Result<Option<Release>, String> {
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
+    let entry = client
+        .version(namespace, name, version)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    advertised_release(&entry).transpose().map_err(|error| {
+        format!("the registry's gents_version for {coordinate} {version}: {error}")
+    })
+}
+
+/// What the update does with `latest` of `pack` before installing it: keep
+/// the installed version, with the refusal, when this runtime does not load
+/// the candidate. The registry's `gents_version` decides without a download;
+/// without it the candidate is downloaded and opened.
+async fn keep_reason(
+    client: &RegistryClient,
+    pack: &Value,
+    latest: &str,
+) -> Option<PluginInterfaceError> {
+    let coordinate = pack["pack"].as_str().unwrap_or_default();
+    let refusal = match pack["gents_version"].as_str().map(Release::parse) {
+        Some(Ok(release)) => PluginInterfaceError::refusal(
+            coordinate,
+            latest,
+            &core_packs::runtime_release(),
+            Some(&release),
+        )?,
+        Some(Err(_)) | None => {
+            let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
+            match open_candidate(client, namespace, name, latest).await {
+                Err(CandidateError::Open(OpenError::Interface(refusal))) => refusal,
+                _ => return None,
+            }
+        }
+    };
+    refusal
+        .admission()
+        .is_some_and(|admission| {
+            core_packs::update_decision(admission) == UpdateDecision::KeepInstalled
+        })
+        .then_some(refusal)
 }
 
 fn is_newer(latest: &str, installed: &str) -> Option<bool> {
@@ -114,6 +183,7 @@ pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
 
 pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> {
     let packs = outdated_packs(&args.scope, args.registry.as_deref()).await?;
+    let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
     let selected = select_packs(&packs, args.package.as_deref())?;
     // A caller of one named pack, such as the shell or the desktop, drops the report, so its
     // failure is returned itself, after the report a person at the command line reads.
@@ -146,6 +216,15 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
             }));
             continue;
         };
+        if let Some(refusal) = keep_reason(&client, pack, latest).await {
+            kept.push(json!({
+                "pack": coordinate,
+                "installed": pack["installed"],
+                "candidate": latest,
+                "reason": refusal.to_string(),
+            }));
+            continue;
+        }
         let install_args = PackInstallArgs {
             package: format!("{coordinate}@{latest}"),
             inference_slots: args.inference_slots.clone(),
@@ -165,19 +244,6 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
         };
         match crate::request_helpers::capture_report(super::install(install_args)).await {
             Ok(_) => updated.push(coordinate),
-            Err(error)
-                if interface_refusal(&error).is_some_and(|refusal| {
-                    core_packs::update_decision(refusal.admission())
-                        == UpdateDecision::KeepInstalled
-                }) =>
-            {
-                kept.push(json!({
-                    "pack": coordinate,
-                    "installed": pack["installed"],
-                    "candidate": latest,
-                    "reason": format!("{error:#}"),
-                }));
-            }
             Err(error) => {
                 failed.push(json!({ "pack": coordinate, "error": format!("{error:#}") }));
                 if named {
@@ -554,121 +620,124 @@ mod tests {
     }
 
     /// `fixture/assets_fixture` at `version`, its manifest declaring
-    /// `declared` as the plugin interface it was built for.
-    fn assets_pack_declaring(version: &str, declared: Option<u64>) -> tempfile::TempDir {
+    /// `declared` as the Gents release it was built for.
+    fn assets_pack_declaring(version: &str, declared: Option<&Release>) -> tempfile::TempDir {
         let dir = super::super::test_support::assets_pack_dir("fixture", "assets_fixture", version);
         let path = dir.path().join("manifest.json");
         let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         if let Some(declared) = declared {
-            manifest["plugin_interface"] = declared.into();
+            manifest["gents_version"] = declared.to_string().into();
         }
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         dir
     }
 
-    #[tokio::test]
-    async fn interface_admission_conforms_through_the_install_handler() {
-        use gents_lean_vocab::families::pack_core_packs_interface_admission_cases as family;
-        use gents_pack::pack::core_packs::InterfaceAdmission;
-
-        for case in family::cases() {
-            let declared: Option<u64> = case.input.declared;
-            let home = tempfile::tempdir().unwrap();
-            let pack = assets_pack_declaring("1.0.0", declared);
-            let package = pack.path().to_str().unwrap().to_owned();
-            let installed = crate::request_helpers::capture_report(super::super::install(
-                install_from(package, &home_scope(home.path()), None),
-            ))
-            .await;
-            let admission: InterfaceAdmission = match installed {
-                Ok(_) => InterfaceAdmission::Compatible,
-                Err(error) => interface_refusal(&error)
-                    .unwrap_or_else(|| {
-                        panic!("{declared:?} was refused for another reason: {error:#}")
-                    })
-                    .admission(),
-            };
-            case.check(admission);
-        }
-    }
-
+    /// Each case runs twice: once with a registry that advertises the
+    /// candidate's `gents_version`, which decides before any download, and
+    /// once with one that does not, which decides on the downloaded archive.
     #[tokio::test]
     async fn update_decision_conforms_through_the_update_handler() {
         use gents_lean_vocab::families::pack_core_packs_update_decision as family;
         use gents_pack::pack::core_packs::{
-            interface_admission, InterfaceAdmission, OLDEST_PLUGIN_INTERFACE, PLUGIN_INTERFACE,
+            interface_admission, runtime_release, InterfaceAdmission,
         };
 
+        let runtime = runtime_release();
         for case in family::cases() {
             let candidate: InterfaceAdmission = case.input.candidate;
             let declared = match candidate {
-                InterfaceAdmission::Compatible => PLUGIN_INTERFACE,
-                InterfaceAdmission::TooOld => OLDEST_PLUGIN_INTERFACE - 1,
-                InterfaceAdmission::TooNew => PLUGIN_INTERFACE + 1,
+                InterfaceAdmission::Compatible => runtime,
+                InterfaceAdmission::OlderMajor => Release {
+                    major: runtime.major - 1,
+                    minor: 0,
+                    patch: 0,
+                    rc: None,
+                },
+                InterfaceAdmission::TooNew => Release {
+                    patch: runtime.patch + 1,
+                    rc: None,
+                    ..runtime
+                },
             };
-            assert_eq!(interface_admission(Some(declared)), candidate);
+            assert_eq!(interface_admission(&runtime, Some(&declared)), candidate);
 
-            let home = tempfile::tempdir().unwrap();
-            let scope = home_scope(home.path());
-            let installed = assets_pack_declaring("1.0.0", None);
-            crate::request_helpers::capture_report(super::super::install(install_from(
-                installed.path().to_str().unwrap().to_owned(),
-                &scope,
-                None,
-            )))
-            .await
-            .expect("installing the current build");
+            for advertised in [false, true] {
+                let home = tempfile::tempdir().unwrap();
+                let scope = home_scope(home.path());
+                let installed = assets_pack_declaring("1.0.0", None);
+                crate::request_helpers::capture_report(super::super::install(install_from(
+                    installed.path().to_str().unwrap().to_owned(),
+                    &scope,
+                    None,
+                )))
+                .await
+                .expect("installing the current build");
 
-            let newer = assets_pack_declaring("1.1.0", Some(declared.into()));
-            let (bytes, _) =
-                gents_pack::pack::archive::format::pack_dir_for_any_interface(newer.path())
-                    .unwrap();
-            let digest = {
-                use sha2::Digest;
-                format!("{:x}", sha2::Sha256::digest(&bytes))
-            };
-            let (registry, _state) = crate::commands::pack::registry::tests::serve_fake_pack(
-                "assets_fixture",
-                "1.1.0",
-                bytes,
-                digest,
-            )
-            .await;
-            let report = crate::request_helpers::capture_report(update(PackUpdateArgs {
-                package: None,
-                inference_slots: Vec::new(),
-                scope,
-                registry: Some(registry),
-                drift: crate::cli::PackDriftArgs::default(),
-            }))
-            .await
-            .unwrap_or_else(|error| panic!("{candidate:?}: the update failed: {error:#}"));
+                let newer = assets_pack_declaring("1.1.0", Some(&declared));
+                let (bytes, _) =
+                    gents_pack::pack::archive::format::pack_dir_for_any_interface(newer.path())
+                        .unwrap();
+                let digest = {
+                    use sha2::Digest;
+                    format!("{:x}", sha2::Sha256::digest(&bytes))
+                };
+                let (registry, state) =
+                    crate::commands::pack::registry::tests::serve_fake_pack_built_for(
+                        "assets_fixture",
+                        "1.1.0",
+                        bytes,
+                        digest,
+                        advertised.then(|| declared.to_string()),
+                    )
+                    .await;
+                let report = crate::request_helpers::capture_report(update(PackUpdateArgs {
+                    package: None,
+                    inference_slots: Vec::new(),
+                    scope,
+                    registry: Some(registry),
+                    drift: crate::cli::PackDriftArgs::default(),
+                }))
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{candidate:?} (advertised: {advertised}): the update failed: {error:#}")
+                });
 
-            let named = |list: &str| {
-                report[list].as_array().into_iter().flatten().any(|entry| {
-                    entry == "fixture/assets_fixture" || entry["pack"] == "fixture/assets_fixture"
-                })
-            };
-            let decision = match (named("updated"), named("kept")) {
-                (true, false) => UpdateDecision::Take,
-                (false, true) => UpdateDecision::KeepInstalled,
-                _ => panic!("{candidate:?}: the update neither took nor kept the pack: {report}"),
-            };
-            let version = gents_pack::pack::list_home_installs(home.path())
-                .unwrap()
-                .into_iter()
-                .find(|record| record.coordinate == "fixture/assets_fixture")
-                .map(|record| record.version);
-            let expected = match decision {
-                UpdateDecision::Take => "1.1.0",
-                UpdateDecision::KeepInstalled => "1.0.0",
-            };
-            assert_eq!(
-                version.as_deref(),
-                Some(expected),
-                "{candidate:?}: {report}"
-            );
-            case.check(decision);
+                let named = |list: &str| {
+                    report[list].as_array().into_iter().flatten().any(|entry| {
+                        entry == "fixture/assets_fixture"
+                            || entry["pack"] == "fixture/assets_fixture"
+                    })
+                };
+                let decision = match (named("updated"), named("kept")) {
+                    (true, false) => UpdateDecision::Take,
+                    (false, true) => UpdateDecision::KeepInstalled,
+                    _ => panic!(
+                        "{candidate:?} (advertised: {advertised}): the update neither took nor kept the pack: {report}"
+                    ),
+                };
+                let version = gents_pack::pack::list_home_installs(home.path())
+                    .unwrap()
+                    .into_iter()
+                    .find(|record| record.coordinate == "fixture/assets_fixture")
+                    .map(|record| record.version);
+                let expected = match decision {
+                    UpdateDecision::Take => "1.1.0",
+                    UpdateDecision::KeepInstalled => "1.0.0",
+                };
+                assert_eq!(
+                    version.as_deref(),
+                    Some(expected),
+                    "{candidate:?} (advertised: {advertised}): {report}"
+                );
+                if advertised && decision == UpdateDecision::KeepInstalled {
+                    assert_eq!(
+                        state.downloads.load(std::sync::atomic::Ordering::SeqCst),
+                        0,
+                        "{candidate:?}: an advertised release decides before any download"
+                    );
+                }
+                case.check(decision);
+            }
         }
     }
 

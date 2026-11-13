@@ -121,7 +121,6 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
         "tags": [],
         "namespace": names.namespace,
         "dependencies": [],
-        "plugin_interface": crate::pack::core_packs::PLUGIN_INTERFACE,
     });
     match template {
         Template::Assets => manifest["kind"] = json!(template.manifest_kind()),

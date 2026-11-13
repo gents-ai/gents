@@ -22,6 +22,64 @@ fn staged_plugin_resolution_conforms_to_lean() {
     });
 }
 
+#[test]
+fn own_folder_grant_conforms_to_lean() {
+    use crate::plugin::executor::BindContext;
+    use gents_lean_vocab::families::pack_allowed_folders_fixture_grant as family;
+    use gents_pack::pack::BindAccess;
+    use gents_pack::plugin::allowed::ReleaseDigests;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Target {
+        OwnFolder,
+        InsideOwnFolder,
+        OutsideOwnFolder,
+        InsideGentsHome,
+    }
+
+    const RELEASE: &str = "sha256:release-pack";
+    let (_plugins, record) = installed_echo();
+    family::replay::<BindAccess, Target>(|input| {
+        let world = tempfile::tempdir().unwrap();
+        let root = world.path().canonicalize().unwrap();
+        let user_home = root.join("home").join("user");
+        let gents_home = user_home.join(".gents");
+        let own = root.join("work").join("engineer");
+        let other = root.join("work").join("other");
+        let keys = gents_home.join("keys");
+        for dir in [&own, &other, &keys] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(own.join("chart.svg"), "<svg/>").unwrap();
+        let executor = PluginExecutor::new(Some(gents_home.clone()))
+            .with_release(ReleaseDigests::from_digests([RELEASE]));
+        let mut record = record.clone();
+        let pack = if input.release {
+            RELEASE
+        } else {
+            "sha256:registry-pack"
+        };
+        record.owner_pack_digest = Some(pack.to_owned());
+        let context = BindContext {
+            workdir: Some(&own),
+            own_folder: input.own_folder.then_some(own.as_path()),
+            session_id: None,
+            interactive: false,
+        };
+        let target = match input.target {
+            Target::OwnFolder => own.clone(),
+            Target::InsideOwnFolder => own.join("chart.svg"),
+            Target::OutsideOwnFolder => other.clone(),
+            Target::InsideGentsHome => keys.clone(),
+        };
+        executor
+            .bind_scope(&gents_home, &record, &context, Some(&user_home))
+            .unwrap()
+            .granted(&target)
+    });
+}
+
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
     PluginToolRef {
         tool_calls: false,
@@ -836,6 +894,7 @@ mod bound {
             };
             let context = BindContext {
                 workdir: Some(&work),
+                own_folder: None,
                 session_id: None,
                 interactive: case.input.interactive,
             };

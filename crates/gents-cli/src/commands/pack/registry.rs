@@ -264,6 +264,7 @@ pub(crate) mod tests {
         latest: String,
         bytes: Vec<u8>,
         digest: String,
+        gents_version: Option<String>,
         pub(crate) downloads: AtomicUsize,
         pub(crate) last_yank: Mutex<Option<YankRequest>>,
         pub(crate) last_owner_transfer: Mutex<Option<OwnerTransferRequest>>,
@@ -281,7 +282,11 @@ pub(crate) mod tests {
     }
 
     async fn fake_version(State(state): State<Arc<FakeRegistryState>>) -> Json<Value> {
-        Json(json!({ "digest": state.digest }))
+        let mut version = json!({ "digest": state.digest });
+        if let Some(release) = &state.gents_version {
+            version["gents_version"] = json!(release);
+        }
+        Json(version)
     }
 
     async fn fake_download(
@@ -369,11 +374,24 @@ pub(crate) mod tests {
         bytes: Vec<u8>,
         advertised_digest: String,
     ) -> (String, Arc<FakeRegistryState>) {
+        serve_fake_pack_built_for(name, latest, bytes, advertised_digest, None).await
+    }
+
+    /// [`serve_fake_pack`] whose version entry advertises `gents_version`,
+    /// the Gents release the pack was built for, when it is `Some`.
+    pub(crate) async fn serve_fake_pack_built_for(
+        name: &str,
+        latest: &str,
+        bytes: Vec<u8>,
+        advertised_digest: String,
+        gents_version: Option<String>,
+    ) -> (String, Arc<FakeRegistryState>) {
         let state = Arc::new(FakeRegistryState {
             name: name.to_owned(),
             latest: latest.to_owned(),
             bytes,
             digest: advertised_digest,
+            gents_version,
             downloads: AtomicUsize::new(0),
             last_yank: Mutex::new(None),
             last_owner_transfer: Mutex::new(None),

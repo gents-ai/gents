@@ -393,6 +393,45 @@ pub async fn download_verified_pack(
     Ok(bytes)
 }
 
+/// The Gents release a registry version entry says the pack was built for,
+/// its `gents_version` (gents-ai/packs#63); `None` when the entry does not
+/// say.
+pub fn advertised_release(
+    version: &Value,
+) -> Option<Result<crate::pack::core_packs::Release, crate::pack::core_packs::ReleaseParseError>> {
+    version
+        .get("gents_version")
+        .and_then(Value::as_str)
+        .map(crate::pack::core_packs::Release::parse)
+}
+
+/// Why a registry candidate did not open: the archive's own refusal, or the
+/// lookup or download before it.
+#[derive(Debug, thiserror::Error)]
+pub enum CandidateError {
+    #[error(transparent)]
+    Open(#[from] crate::pack::archive::OpenError),
+    #[error(transparent)]
+    Fetch(anyhow::Error),
+}
+
+/// Downloads `namespace/name@version` and opens it without storing it, so a
+/// caller can decide on the archive before an install takes it.
+pub async fn open_candidate(
+    client: &RegistryClient,
+    namespace: &str,
+    name: &str,
+    version: &str,
+) -> Result<PackArchive, CandidateError> {
+    let coordinate = resolve_pack_coordinate(client, namespace, name, Some(version))
+        .await
+        .map_err(CandidateError::Fetch)?;
+    let bytes = download_verified_pack(client, &coordinate)
+        .await
+        .map_err(CandidateError::Fetch)?;
+    Ok(PackArchive::from_bytes(&bytes)?)
+}
+
 pub async fn fetch_pack(
     client: &RegistryClient,
     cache_home: Option<&Path>,

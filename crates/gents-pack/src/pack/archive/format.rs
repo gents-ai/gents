@@ -6,6 +6,9 @@ use flate2::bufread::GzDecoder;
 use flate2::{Compression, GzBuilder};
 use serde::{Deserialize, Serialize};
 
+use crate::pack::core_packs::{
+    check_gents_version, runtime_release, PluginInterfaceError, Release,
+};
 use crate::pack::{
     declared_paths, is_distributable_asset_path, validate_manifest, PackDigester, PackKind,
     PackManifest,
@@ -90,7 +93,32 @@ pub struct VerifiedPack {
     pub manifest_bytes: Vec<u8>,
 }
 
+/// Why an archive did not open. A caller deciding on the release a pack was
+/// built for matches `Interface`; every other failure is `Invalid`.
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    /// A well-formed pack built for a Gents release this runtime does not load.
+    #[error(transparent)]
+    Interface(#[from] PluginInterfaceError),
+    /// Not a readable, self-consistent pack whose manifest validates.
+    #[error(transparent)]
+    Invalid(anyhow::Error),
+}
+
+/// Opens a pack: its structure, its digest, the Gents release it was built
+/// for (checked against [`runtime_release`]), then its manifest.
 pub fn read_pack(
+    input: impl Read,
+    bounds: Bounds,
+    asset: impl FnMut(&str, &mut dyn Read) -> Result<()>,
+) -> Result<VerifiedPack, OpenError> {
+    let verified = read_unchecked(input, bounds, asset).map_err(OpenError::Invalid)?;
+    check_gents_version(&runtime_release(), &verified.manifest)?;
+    validate_manifest(&verified.manifest.name, &verified.manifest).map_err(OpenError::Invalid)?;
+    Ok(verified)
+}
+
+fn read_unchecked(
     input: impl Read,
     bounds: Bounds,
     mut asset: impl FnMut(&str, &mut dyn Read) -> Result<()>,
@@ -185,7 +213,6 @@ pub fn read_pack(
         manifest_bytes.context("this pack carries no manifest.json, so it is not a pack")?;
     let manifest =
         PackManifest::from_slice(&manifest_bytes).context("the pack manifest is not valid JSON")?;
-    validate_manifest(&manifest.name.clone(), &manifest)?;
 
     let declared = declared_paths(&manifest);
     for path in &declared {
@@ -285,19 +312,28 @@ pub fn write_pack(dir: &Path, out: impl Write) -> Result<PackHeader> {
 }
 
 fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<PackHeader> {
-    write_pack_validated(dir, out, bounds, |manifest| {
+    write_pack_validated(dir, out, bounds, None, |manifest| {
         validate_manifest(&manifest.name, manifest)
     })
 }
 
-/// [`pack_dir`] for a pack built for a plugin interface this runtime does not
+/// [`write_pack`] for `gents config pack build`: a manifest that declares no
+/// `gents_version` is packed declaring `release`, the building CLI's own, and
+/// the digest covers the manifest as packed.
+pub fn write_built_pack(dir: &Path, out: impl Write, release: &Release) -> Result<PackHeader> {
+    write_pack_validated(dir, out, Bounds::default(), Some(release), |manifest| {
+        validate_manifest(&manifest.name, manifest)
+    })
+}
+
+/// [`pack_dir`] for a pack built for a Gents release this runtime does not
 /// load: a fixture of an archive another runtime built.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub fn pack_dir_for_any_interface(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
     let mut bytes = Vec::new();
-    let header = write_pack_validated(dir, &mut bytes, Bounds::default(), |manifest| {
+    let header = write_pack_validated(dir, &mut bytes, Bounds::default(), None, |manifest| {
         let current = PackManifest {
-            plugin_interface: None,
+            gents_version: None,
             ..manifest.clone()
         };
         validate_manifest(&current.name, &current)
@@ -305,10 +341,30 @@ pub fn pack_dir_for_any_interface(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
     Ok((bytes, header))
 }
 
+/// The manifest as packed with `gents_version` set to `release`.
+fn stamped_manifest(manifest_bytes: &[u8], release: &Release) -> Result<Vec<u8>> {
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(manifest_bytes).context("parsing manifest.json")?;
+    raw.as_object_mut()
+        .context("manifest.json is not a JSON object")?
+        .insert(
+            "gents_version".to_owned(),
+            serde_json::Value::String(release.to_string()),
+        );
+    let mut bytes = serde_json::to_vec_pretty(&raw).context("encoding manifest.json")?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn packed_manifest<'a>(stamped: Option<&'a [u8]>, path: &str) -> Option<&'a [u8]> {
+    stamped.filter(|_| path == "manifest.json")
+}
+
 fn write_pack_validated(
     dir: &Path,
     out: impl Write,
     bounds: Bounds,
+    stamp: Option<&Release>,
     validate: impl FnOnce(&PackManifest) -> Result<()>,
 ) -> Result<PackHeader> {
     let mut manifest_file = crate::pack::open_pack_asset(dir, "manifest.json")?;
@@ -316,7 +372,15 @@ fn write_pack_validated(
     manifest_file
         .read_to_end(&mut manifest_bytes)
         .context("reading manifest.json")?;
-    let manifest = PackManifest::from_slice(&manifest_bytes).context("parsing manifest.json")?;
+    let mut manifest =
+        PackManifest::from_slice(&manifest_bytes).context("parsing manifest.json")?;
+    let stamped = match stamp {
+        Some(release) if manifest.gents_version.is_none() => {
+            manifest.gents_version = Some(release.to_string());
+            Some(stamped_manifest(&manifest_bytes, release)?)
+        }
+        _ => None,
+    };
     validate(&manifest)?;
     let paths = declared_paths(&manifest);
     ensure!(
@@ -329,6 +393,12 @@ fn write_pack_validated(
     let mut total = 0u64;
     let mut digest = PackDigester::default();
     for path in &paths {
+        if let Some(bytes) = packed_manifest(stamped.as_deref(), path) {
+            total += bytes.len() as u64;
+            digest.begin_entry(path, bytes.len() as u64);
+            digest.update(bytes);
+            continue;
+        }
         let (mut file, len) = open_declared(dir, path)?;
         total += len;
         ensure!(
@@ -358,6 +428,16 @@ fn write_pack_validated(
     )?;
     let mut again = PackDigester::default();
     for path in &paths {
+        if let Some(bytes) = packed_manifest(stamped.as_deref(), path) {
+            let len = bytes.len() as u64;
+            again.begin_entry(path, len);
+            let hashing = HashingReader {
+                inner: bytes,
+                digest: &mut again,
+            };
+            append_entry(&mut builder, path, len, hashing)?;
+            continue;
+        }
         let (file, len) = open_declared(dir, path)?;
         again.begin_entry(path, len);
         let hashing = HashingReader {

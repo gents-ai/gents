@@ -29,6 +29,7 @@ pub struct PluginTool {
     record: InstalledPlugin,
     definition: ToolDefinition,
     root: Option<PathBuf>,
+    own_folder: Option<PathBuf>,
     input_fields: Vec<WriteToolField>,
     tool_calls: bool,
     data_caller: Option<DataCaller>,
@@ -64,11 +65,18 @@ impl PluginTool {
             record,
             definition,
             root,
+            own_folder: None,
             input_fields: plugin.input_fields.clone(),
             tool_calls: plugin.tool_calls,
             data_caller: None,
             model_actor: None,
         })
+    }
+
+    /// The root the calling agent's file-writing tools write.
+    pub fn with_own_folder(mut self, own_folder: Option<PathBuf>) -> Self {
+        self.own_folder = own_folder;
+        self
     }
 
     pub fn with_agent_data(
@@ -196,6 +204,7 @@ impl PluginTool {
                 &self.record,
                 input,
                 self.root.as_deref(),
+                self.own_folder.as_deref(),
                 self.tool_calls,
                 self.data_caller.clone(),
                 self.model_actor.clone(),

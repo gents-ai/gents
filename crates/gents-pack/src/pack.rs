@@ -201,11 +201,12 @@ pub struct PackManifest {
     )]
     #[schemars(transform = gents_documents::accepts_null)]
     pub external_dependencies: Vec<PackageExternalDependency>,
-    /// The plugin interface the pack was built for (Lean
-    /// `Pack.CorePacks.builtFor`): absent is interface 1, from before the
-    /// interface had a version.
+    /// The Gents release the pack was built for, `MAJOR.MINOR.PATCH` or
+    /// `MAJOR.MINOR.PATCH-rcN` (Lean `Pack.CorePacks.builtFor`): absent counts
+    /// as `core_packs::Release::BASELINE`. `gents config pack build` stamps the
+    /// building CLI's release when the source does not declare one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_interface: Option<u32>,
+    pub gents_version: Option<String>,
 }
 
 impl PackManifest {

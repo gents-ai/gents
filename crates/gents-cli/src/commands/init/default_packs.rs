@@ -146,7 +146,8 @@ pub(crate) struct PackStatus {
     pub(crate) without: &'static str,
     pub(crate) state: PackState,
     pub(crate) version: Option<String>,
-    /// Why an `unavailable` pack cannot be installed.
+    /// Why an `unavailable` pack cannot be installed, or why an installed
+    /// pack's plugins do not run on this runtime.
     pub(crate) reason: Option<String>,
     /// The call that installs or turns on a `missing` or `not_enabled` pack.
     pub(crate) enable_with: Option<String>,
@@ -297,6 +298,24 @@ async fn engineer_packs(home: &Path) -> Result<Option<Vec<(CorePack, Option<Inst
     read
 }
 
+/// Why the plugins of `pack`, installed as `record`, do not run on this
+/// runtime: the first plugin record refused for the release its pack was
+/// built for.
+fn interface_refusal(
+    home: &Path,
+    pack: CorePack,
+    record: &gents_pack::pack::HomePackInstall,
+) -> Option<String> {
+    let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(pack.coordinate());
+    record.plugins.iter().find_map(|plugin| {
+        gents_pack::plugin::store::read_record(home, namespace, &plugin.name)
+            .ok()?
+            .check_interface()
+            .err()
+            .map(|refusal| refusal.to_string())
+    })
+}
+
 /// Each core pack as `home` has it, with `archives` the release's. A home
 /// whose default agent is not the Engineer has none.
 pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<PackStatus>> {
@@ -307,17 +326,20 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
         .into_iter()
         .map(|(pack, installed)| {
             let (state, version, reason) = match installed {
-                Some((record, observed)) => (
-                    if on_the_engineer(observed)
-                        == on_the_engineer(core_packs::enabled_wiring(pack))
-                    {
-                        PackState::Installed
-                    } else {
-                        PackState::NotEnabled
-                    },
-                    Some(record.version),
-                    None,
-                ),
+                Some((record, observed)) => {
+                    let reason = interface_refusal(home, pack, &record);
+                    (
+                        if on_the_engineer(observed)
+                            == on_the_engineer(core_packs::enabled_wiring(pack))
+                        {
+                            PackState::Installed
+                        } else {
+                            PackState::NotEnabled
+                        },
+                        Some(record.version),
+                        reason,
+                    )
+                }
                 None => match release_archive(archives, pack).map(|bytes| {
                     gents_pack::pack::archive::peek_header(
                         bytes,

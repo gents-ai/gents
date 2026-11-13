@@ -34,7 +34,8 @@ pub(super) fn read_distribution_manifest(root: &Path) -> Result<gents_pack::pack
         &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
     )
     .with_context(|| format!("parsing {}", path.display()))?;
-    gents_pack::pack::core_packs::check_plugin_interface(&manifest)?;
+    let runtime = gents_pack::pack::core_packs::runtime_release();
+    gents_pack::pack::core_packs::check_gents_version(&runtime, &manifest)?;
     Ok(manifest)
 }
 
