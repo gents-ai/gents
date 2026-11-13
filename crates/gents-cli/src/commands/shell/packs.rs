@@ -124,7 +124,7 @@ where
 /// The tags of the node's documents of each of `KINDS`, in its order.
 async fn tags(access: &ConfigAccess, node_did: &str) -> anyhow::Result<Vec<Vec<Vec<String>>>> {
     let setup = load_inference_setup_state(access, node_did).await?;
-    let tasks = load_task_inventory(access, None).await?.tasks;
+    let tasks = load_task_inventory(access, node_did, None).await?.tasks;
     let tasks = tasks
         .into_iter()
         .filter(|task| task["node_did"] == node_did);

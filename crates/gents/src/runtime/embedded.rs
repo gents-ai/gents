@@ -402,7 +402,8 @@ fn release_unstopped_node<H>(node: Arc<EmbeddedNode>, held: H) {
 /// The node a trial home's HTTP route serves. The node owns the HTTP server
 /// that holds this cell, so it is held weakly: a strong reference would keep a
 /// dropped home's node (and its threads and descriptors) alive.
-type ServedNode = Arc<std::sync::OnceLock<(std::sync::Weak<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
+pub type ServedNode =
+    Arc<std::sync::OnceLock<(std::sync::Weak<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
 
 /// A trial endpoint serves the runtime's client routes: Agent identity
 /// provisioning and owner-staged relationship changes.
@@ -426,7 +427,7 @@ async fn trial_http(
 /// through the same owners (`provision_agent_identity_authorized`,
 /// `observe_agent_admission`). The admission route observes native ACP for
 /// the authenticated caller only; it decides nothing itself.
-fn agent_identity_routes(served: ServedNode) -> axum::Router {
+pub fn agent_identity_routes(served: ServedNode) -> axum::Router {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     let failure = |status: StatusCode, message: &str| {

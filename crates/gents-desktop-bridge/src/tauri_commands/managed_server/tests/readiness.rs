@@ -417,7 +417,7 @@ fn a_refused_store_exit_reports_an_incompatible_home_not_a_crash_loop() {
     assert!(status
         .error
         .as_deref()
-        .is_some_and(|error| error.contains("/tmp/.gents/data")));
+        .is_some_and(|error| error.contains("/tmp/.gents")));
 
     let starting = ManagedServerRuntimeState {
         starting: true,

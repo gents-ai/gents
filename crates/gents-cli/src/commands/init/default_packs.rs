@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents_pack::pack::core_packs::{self, CorePack, Origin, Wiring};
+use gents_store::local::home::SETUP_UNFINISHED_FILE_NAME;
 use serde_json::{json, Value};
 
 use crate::cli::ScopeArgs;
@@ -97,13 +98,79 @@ async fn release(access: gents_store::config_client::ConfigAccess) {
 /// that cannot be installed is reported with the command that installs it
 /// later; it never fails the init.
 pub(crate) async fn install(home: &Path, engineer: &str, archives: Archives<'_>) -> Value {
-    eprintln!("\nThe Engineer starts with the core packs this release carries:");
+    install_each(home, engineer, archives, &CorePack::ALL).await
+}
+
+/// Records that `home`'s setup still has its core packs to install. Written
+/// before init finishes the home's settings and removed by
+/// [`record_installed`], so a setup stopped in between is found by
+/// `gents_store::local::home::unfinished_setup`.
+pub(crate) fn record_installing(home: &Path) -> Result<()> {
+    let record = home.join(SETUP_UNFINISHED_FILE_NAME);
+    std::fs::write(
+        &record,
+        serde_json::to_vec(&CorePack::ALL.map(CorePack::coordinate))?,
+    )
+    .with_context(|| format!("recording setup progress in {}", record.display()))
+}
+
+pub(crate) fn record_installed(home: &Path) -> Result<()> {
+    let record = home.join(SETUP_UNFINISHED_FILE_NAME);
+    match std::fs::remove_file(&record) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error).with_context(|| format!("removing {}", record.display()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The core packs `home` has no install record of.
+pub(crate) fn not_installed(home: &Path) -> Result<Vec<CorePack>> {
+    let mut missing = Vec::new();
     for pack in CorePack::ALL {
+        if gents_pack::pack::read_home_install(home, pack.coordinate())?.is_none() {
+            missing.push(pack);
+        }
+    }
+    Ok(missing)
+}
+
+/// Continues a setup that stopped before it installed every core pack: each
+/// one the home lacks is installed as init leaves it, under init's consent.
+/// The home's own store is opened, so its node is stopped first.
+pub(crate) async fn install_missing(home: &Path, archives: Archives<'_>) -> Result<Value> {
+    let missing = not_installed(home)?;
+    if missing.is_empty() {
+        return Ok(json!({"installed": [], "not_installed": []}));
+    }
+    let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
+    let engineer = match access.local_node() {
+        Some(_) => engineer_of(&access, &owner).await,
+        None => Err(anyhow::anyhow!(
+            "a runtime is serving this home, and a core pack is installed through the home's own store. Nothing was changed. Stop the runtime (gents service stop --home {}), then run `gents --home {}` again",
+            home.display(),
+            home.display()
+        )),
+    };
+    release(access).await;
+    let engineer = engineer?
+        .context("this home's default agent is not the Engineer, so it has no core packs")?;
+    Ok(install_each(home, &engineer, archives, &missing).await)
+}
+
+async fn install_each(
+    home: &Path,
+    engineer: &str,
+    archives: Archives<'_>,
+    packs: &[CorePack],
+) -> Value {
+    eprintln!("\nThe Engineer starts with the core packs this release carries:");
+    for &pack in packs {
         eprintln!("  {}: {}", pack.coordinate(), describe(pack).0);
     }
     let mut installed = Vec::new();
     let mut not_installed = Vec::new();
-    for pack in CorePack::ALL {
+    for &pack in packs {
         let wiring = core_packs::init_wiring(pack);
         match apply(home, engineer, pack, archives, wiring, Consent::Init).await {
             Ok(mut report) if wiring != core_packs::enabled_wiring(pack) => {

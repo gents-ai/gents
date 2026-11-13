@@ -135,7 +135,7 @@ pub async fn desktop_session_reload(
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
-    let node_did = crate::commands::resolve_session_node(&session_id, node_did)?;
+    let node_did = crate::commands::session::resolve_session_node(&session_id, node_did)?;
     core.reload_session(&session_id, &node_did)
         .await
         .map_err(BridgeError::classify_transport_error)
@@ -157,7 +157,7 @@ pub async fn desktop_session_live_delta(
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
-    let node_did = Some(crate::commands::resolve_session_node(
+    let node_did = Some(crate::commands::session::resolve_session_node(
         &session_id,
         node_did,
     )?);

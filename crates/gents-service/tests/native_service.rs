@@ -478,6 +478,40 @@ fn stop_for_missing_definition_is_a_noop_without_host_mutation() -> Result<()> {
     Ok(())
 }
 
+/// #3737: launchd keeps and restarts a loaded job after its plist is deleted,
+/// so the job is observed and stopped through launchd, not through the file.
+#[test]
+fn mac_loaded_job_without_a_definition_is_observed_and_stopped() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let runner = ScriptedRunner::with_outputs([
+        output(true, "501", ""),
+        output(true, "state = spawn scheduled", ""),
+        output(true, "501", ""),
+        output(true, "state = spawn scheduled", ""),
+        ok(),
+        output(true, "501", ""),
+        output(false, "Could not find service", ""),
+    ]);
+    let service = manager(
+        config(temp.path(), "gents"),
+        NativeServicePlatform::Macos,
+        runner.clone(),
+    );
+    let status = service.status()?;
+    assert!(!status.installed && status.job_loaded && !status.running);
+    service.stop(false)?;
+    let calls = runner.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.iter().any(|arg| arg == "bootout"))
+            .count(),
+        1,
+        "{calls:?}"
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn native_definition_is_private_to_the_user() -> Result<()> {

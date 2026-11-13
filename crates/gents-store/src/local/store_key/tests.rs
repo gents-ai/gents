@@ -203,9 +203,9 @@ fn a_removed_key_file_is_a_missing_key_refusal() {
     let error = record.load(&key_file, &data).unwrap_err();
     let store = incompatible_store(&error, &data).expect("typed refusal");
     assert_eq!(store.kind, IncompatibleStoreKind::MissingStoreKey);
-    assert!(store.kind.is_older());
+    assert!(!store.kind.made_by_older_version());
     assert!(
-        error.to_string().contains("Re-initialize the home"),
+        error.to_string().contains("choose to set it aside"),
         "{error}"
     );
 }

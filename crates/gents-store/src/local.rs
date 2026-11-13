@@ -7,6 +7,7 @@ pub mod plugin_delete_source;
 mod projection_policy;
 pub mod runtime_document_projection;
 pub mod storage_backend;
+pub mod store_compat;
 pub mod store_key;
 pub mod tool_permission_projection;
 
