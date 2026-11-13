@@ -77,6 +77,9 @@ impl LocalConfigAccess {
     }
 
     pub(crate) fn with_agent_signer(mut self, signer: crate::identity::ManagedAgentSigner) -> Self {
+        if let Some(proof) = signer.runtime_proof().cloned() {
+            self.attach_agent_proof(proof);
+        }
         self.agent_signer = Some(signer);
         self
     }

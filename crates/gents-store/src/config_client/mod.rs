@@ -464,6 +464,14 @@ impl ConfigAccess {
         ))
     }
 
+    /// The runtime host's own access as its node: it holds the runtime key,
+    /// so it carries the key's proof (`Identity.OwnerStaged.KeyCarrier.hostAccess`).
+    pub fn local_runtime(node: Arc<Node>, runtime: Arc<dyn crate::identity::NodeIdentity>) -> Result<Self> {
+        let actor = identity::Did::new(runtime.did()).map_err(ConfigClientError::RelationshipTargetIdentity)?;
+        let access = Self::local_as(node, actor);
+        Ok(access.with_runtime_agent_proof(crate::identity::RuntimeAgentProof::new(runtime)))
+    }
+
     pub fn local_managed_agent(
         node: Arc<Node>,
         actor: identity::Did,
@@ -498,8 +506,11 @@ impl ConfigAccess {
     /// key is not attached.
     pub fn with_runtime_agent_proof(
         self,
-        proof: crate::identity::RuntimeAgentProof,
+        proof: Option<crate::identity::RuntimeAgentProof>,
     ) -> Self {
+        let Some(proof) = proof else {
+            return self;
+        };
         match self {
             Self::Local(mut local) => {
                 let proof_did = proof.runtime_did().to_owned();

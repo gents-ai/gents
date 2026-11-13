@@ -117,6 +117,9 @@ pub struct AgentDerivationRoot {
 #[derive(Clone)]
 pub struct ManagedAgentSigner {
     node_did: String,
+    /// The proof of the runtime key this signer was derived from, so a local
+    /// access the host builds for the Agent carries it (`hostAccess`).
+    runtime_proof: Option<agent::RuntimeAgentProof>,
     signer: defra_node::EmbeddedSigner,
     identity: Arc<KeyIdentity>,
 }
@@ -155,6 +158,10 @@ impl ManagedAgentSigner {
 
     pub fn node_did(&self) -> &str {
         &self.node_did
+    }
+
+    pub(crate) fn runtime_proof(&self) -> Option<&agent::RuntimeAgentProof> {
+        self.runtime_proof.as_ref()
     }
 
     pub fn native(&self) -> &defra_node::EmbeddedSigner {

@@ -87,7 +87,7 @@ pub struct OwnerStagedRoute {
     served: Arc<
         OnceLock<(
             Weak<EmbeddedNode>,
-            crate::identity::RuntimeAgentProof,
+            Option<crate::identity::RuntimeAgentProof>,
         )>,
     >,
 }
@@ -129,7 +129,7 @@ impl OwnerStagedRoute {
         )
     }
 
-    fn node(&self) -> Option<(Arc<EmbeddedNode>, crate::identity::RuntimeAgentProof)> {
+    fn node(&self) -> Option<(Arc<EmbeddedNode>, Option<crate::identity::RuntimeAgentProof>)> {
         let (node, proof) = self.served.get()?;
         Some((node.upgrade()?, proof.clone()))
     }
