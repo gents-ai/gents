@@ -547,7 +547,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         };
         match &control_outcome {
             gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
-                assert!(text.contains("first"), "control output: {text}");
+                assert!(text.contains("first.txt"), "control output: {text}");
             }
             other => panic!("control blocker should complete, got {other:?}"),
         }
