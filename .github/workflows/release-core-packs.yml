@@ -1,0 +1,59 @@
+name: Release core packs
+
+# Builds and tests the Engineer's core packs once per release tag and
+# attaches the archives and their checksums to the GitHub release. The
+# Linux, Linux desktop and macOS release legs download exactly these
+# (.github/scripts/fetch-release-core-packs.sh), so every platform embeds
+# identical archives with identical digests.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build the core packs for, e.g. v1.0.0-rc3
+        required: true
+        type: string
+
+concurrency:
+  group: release-core-packs-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  core-packs:
+    uses: ./.github/workflows/core-packs.yml
+
+  attach:
+    name: Attach core packs to the GitHub release
+    needs: core-packs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: core-packs
+          path: core-packs
+
+      - name: Attach
+        run: |
+          set -euo pipefail
+          [[ "${TAG}" == v* ]] || { echo "::error::${TAG} is not a release tag." >&2; exit 1; }
+          cd core-packs
+          sha256sum -c SHA256SUMS-core-packs.txt
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release create "${TAG}" \
+              --verify-tag \
+              --title "${TAG}" \
+              --notes "Installers and CLI archives are attached as they finish." \
+              || gh release view "${TAG}" >/dev/null
+          fi
+          gh release upload "${TAG}" gents.*.pack SHA256SUMS-core-packs.txt --clobber
