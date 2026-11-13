@@ -1991,8 +1991,6 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// for in an adapter classifier instead. This list only shrinks.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    // HistoryUnlockRequired in Provider::failed
-    ("crates/gents-client-host/src/editor_store.rs", 1),
 ];
 
 /// Owner classifiers: the functions through which an owner asks an erased
@@ -2004,6 +2002,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 /// a new entry is a reviewed addition.
 #[rustfmt::skip]
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
+    ("crates/gents-client-host/src/editor_store.rs", &["HistoryUnlockRequired::occurs_in"]),
     ("crates/gents-desktop-core/src/error.rs", &["BridgeError::carried_by", "BridgeError::classify_transport_error"]),
     ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
     ("crates/gents-documents/src/desired_state/validate.rs", &["OutcomeSourceSchemaError::in_error"]),
