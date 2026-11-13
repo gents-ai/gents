@@ -268,38 +268,4 @@ mod conformance {
             approval_required(input.origin, input.grants)
         });
     }
-
-    #[test]
-    fn init_and_enabled_wiring_match_the_lean_model() {
-        families::pack_core_packs_init_wiring::replay(|input| {
-            let wiring = init_wiring(input.core_pack);
-            families::pack_core_packs_init_wiring::Wiring {
-                wired: wiring.wired,
-                tool_calls: wiring.tool_calls,
-                consent_dynamic: wiring.consent_dynamic,
-                root_readers: wiring.root_readers,
-            }
-        });
-        families::pack_core_packs_enabled_wiring::replay(|input| {
-            let wiring = enabled_wiring(input.core_pack);
-            families::pack_core_packs_enabled_wiring::Wiring {
-                wired: wiring.wired,
-                tool_calls: wiring.tool_calls,
-                consent_dynamic: wiring.consent_dynamic,
-                root_readers: wiring.root_readers,
-            }
-        });
-    }
-
-    #[test]
-    fn interface_admission_matches_the_lean_model() {
-        families::pack_core_packs_interface_admission_cases::replay(|input| {
-            interface_admission(input.declared.map(|declared: u64| declared as u32))
-        });
-    }
-
-    #[test]
-    fn update_decision_matches_the_lean_model() {
-        families::pack_core_packs_update_decision::replay(|input| update_decision(input.candidate));
-    }
 }

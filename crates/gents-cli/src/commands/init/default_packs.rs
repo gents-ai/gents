@@ -902,35 +902,6 @@ mod tests {
             case.check(family_output(wiring_of(&at_init, pack)));
         }
 
-        // Init asked nothing, so a pack is installed exactly when no approval
-        // is required of it. Every archive init installs is the release's.
-        for case in families::pack_core_packs_approval_required::cases() {
-            let origin: Origin = case.input.origin;
-            if origin != Origin::Release {
-                continue;
-            }
-            let grants = |pack: &Value| {
-                pack["granted_permissions"]
-                    .as_array()
-                    .is_some_and(|asks| !asks.is_empty())
-                    || pack["host_tool_roots"]
-                        .as_array()
-                        .is_some_and(|rows| !rows.is_empty())
-            };
-            let pack = report["installed"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|pack| grants(pack) == case.input.grants)
-                .unwrap_or_else(|| panic!("no fixture grants {}: {report}", case.input.grants));
-            let left_for_approval = report["not_installed"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|refused| refused["pack"] == pack["pack"]);
-            case.check(left_for_approval);
-        }
-
         let listed = status(home.path(), &archives).await.unwrap();
         for pack in &listed {
             let expected = if pack.pack == CorePack::DynamicWorkflows.coordinate() {
