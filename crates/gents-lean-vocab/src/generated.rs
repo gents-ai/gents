@@ -1149,7 +1149,6 @@ pub struct LeanContractSnapshot {
     pub identity_readiness_observation_cases: Vec<serde_json::Value>,
     pub identity_readiness_settled_cases: Vec<LeanIdentityReadinessSettledCase>,
     pub goal_link_cases: Vec<LeanGoalLinkCase>,
-    pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
     pub client_request_closure_cases: Vec<serde_json::Value>,
     pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
@@ -1220,76 +1219,6 @@ pub struct LeanCoverageEntry {
     pub accepted_follow_up: String,
     pub feature: String,
     pub surfaces: Vec<LeanSurface>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCrossActorAuthorizationCase {
-    pub name: String,
-    pub intent: LeanCrossActorIntent,
-    pub observation: LeanCrossActorObservation,
-    pub before_session_changes: Vec<LeanPermissionChange>,
-    pub session_changes: Vec<LeanPermissionChange>,
-    pub invoke_changes: Vec<LeanPermissionChange>,
-    pub node_changes: Vec<LeanPermissionChange>,
-    pub native_committed: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub prior_effect: Option<String>,
-    pub prior_lifecycle: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub prior_terminal_output: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub prior_failure_reason: Option<String>,
-    pub decision: LeanCrossActorDecision,
-    #[serde(deserialize_with = "required_nullable")]
-    pub effect: Option<String>,
-    pub lifecycle: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub terminal_output: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub failure_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanCrossActorDecision {
-    Blocked,
-    Unavailable,
-    Denied,
-    Conflict,
-    Claimed,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCrossActorIntent {
-    pub document: String,
-    pub session: String,
-    pub agent_document: String,
-    pub author: String,
-    pub selected_agent: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCrossActorObservation {
-    pub supported: bool,
-    pub visible: bool,
-    pub targets_visible: bool,
-    pub transient_failure: bool,
-    pub document: String,
-    pub session: String,
-    pub agent_document: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub owner: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub authenticated_author: Option<String>,
-    pub executing_agent: String,
-    pub signature_valid: bool,
-    pub session_permission: bool,
-    pub agent_invoke: bool,
-    pub node_permission_enforced: bool,
-    pub requester_node_permission: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -2603,13 +2532,6 @@ pub struct LeanPayloadRef {
 pub struct LeanPayloadSpec {
     pub reference: LeanPayloadRef,
     pub presentation: LeanPresentation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanPermissionChange {
-    Revoke,
-    Grant,
 }
 
 #[derive(Debug, Deserialize)]

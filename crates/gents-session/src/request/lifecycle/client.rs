@@ -1490,35 +1490,30 @@ mod tests {
     async fn client_signature_binds_modeled_physical_targets() {
         let home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let cases = &gents_lean_vocab::lean_contract_snapshot().cross_actor_authorization_cases;
-        let baseline = cases
-            .iter()
-            .find(|case| case.name == "committed_claim")
-            .unwrap();
-        let mut request = AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            "request",
-            user.did(),
-            user.did(),
-            "agent",
-            "session",
-            "hello",
-            "interactive",
-            "2026-11-04T00:00:00Z",
-            AgentRequestAdmissionRecord::client(user.did()),
-        );
-        request.session_doc_id = Some(baseline.intent.session.clone());
-        request.agent_doc_id = Some(baseline.intent.agent_document.clone());
-        crate::request::admission::sign_agent_request_create(&user, &mut request)
-            .await
-            .unwrap();
-        for name in ["wrong_session", "wrong_agent_document"] {
-            let case = cases.iter().find(|case| case.name == name).unwrap();
+        for case in
+            gents_lean_vocab::families::cross_actor_authorization_request_signed_targets::cases()
+        {
+            let input = &case.input;
+            let mut request = AgentRequestCreate::base(
+                RequestPurpose::Normal,
+                "request",
+                user.did(),
+                user.did(),
+                "agent",
+                "session",
+                "hello",
+                "interactive",
+                "2026-11-04T00:00:00Z",
+                AgentRequestAdmissionRecord::client(user.did()),
+            );
+            request.session_doc_id = Some(input.signed_session.clone());
+            request.agent_doc_id = Some(input.signed_agent_document.clone());
+            crate::request::admission::sign_agent_request_create(&user, &mut request)
+                .await
+                .unwrap();
             let mut changed = request.clone();
-            changed.session_doc_id = Some(case.observation.session.clone());
-            changed.agent_doc_id = Some(case.observation.agent_document.clone());
-            // A changed payload is rejected by the identity owner either as
-            // Ok(false) or as a verification error; only Ok(true) verifies.
+            changed.session_doc_id = Some(input.session.clone());
+            changed.agent_doc_id = Some(input.agent_document.clone());
             let verified = matches!(
                 user.verify(
                     user.did(),
@@ -1528,20 +1523,8 @@ mod tests {
                 .await,
                 Ok(true)
             );
-            assert_eq!(
-                verified,
-                case.decision == gents_lean_vocab::LeanCrossActorDecision::Claimed,
-                "{name}"
-            );
+            case.check(verified);
         }
-        assert!(user
-            .verify(
-                user.did(),
-                &request.signing_payload(),
-                &request.admission.signature
-            )
-            .await
-            .unwrap());
     }
 
     #[test]

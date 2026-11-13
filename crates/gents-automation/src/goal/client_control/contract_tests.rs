@@ -325,41 +325,38 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
     let user =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user.key"), None)
             .unwrap();
-    let cases = &gents_lean_vocab::lean_contract_snapshot().cross_actor_authorization_cases;
-    let baseline = cases
-        .iter()
-        .find(|case| case.name == "committed_claim")
-        .unwrap();
-    let mut command = SessionGoalControl {
-        version: SESSION_GOAL_CONTROL_VERSION,
-        command_id: baseline.intent.document.clone(),
-        requester_did: user.did().into(),
-        requester_peer_id: None,
-        node_did: "node".into(),
-        agent_did: baseline.intent.selected_agent.clone(),
-        agent_doc_id: baseline.intent.agent_document.clone(),
-        session_id: "session".into(),
-        session_doc_id: Some(baseline.intent.session.clone()),
-        issued_at: "2026-11-04T00:00:00Z".into(),
-        expires_at: "2026-11-04T00:01:00Z".into(),
-        expected: Some(GoalRevision {
-            document: "goal".into(),
-            composite: "revision".into(),
-        }),
-        operation: GoalOperation::Pause {},
-        initial_request: None,
-        native_evidence: None,
-        signature: Vec::new(),
-    };
-    command.signature = user
-        .sign(&command.signing_payload().unwrap())
-        .await
-        .unwrap();
-    for name in ["wrong_session", "wrong_agent_document"] {
-        let case = cases.iter().find(|case| case.name == name).unwrap();
+    for case in
+        gents_lean_vocab::families::cross_actor_authorization_goal_command_signed_targets::cases()
+    {
+        let input = &case.input;
+        let mut command = SessionGoalControl {
+            version: SESSION_GOAL_CONTROL_VERSION,
+            command_id: "request-doc".into(),
+            requester_did: user.did().into(),
+            requester_peer_id: None,
+            node_did: "node".into(),
+            agent_did: "agent".into(),
+            agent_doc_id: input.signed_agent_document.clone(),
+            session_id: "session".into(),
+            session_doc_id: Some(input.signed_session.clone()),
+            issued_at: "2026-11-04T00:00:00Z".into(),
+            expires_at: "2026-11-04T00:01:00Z".into(),
+            expected: Some(GoalRevision {
+                document: "goal".into(),
+                composite: "revision".into(),
+            }),
+            operation: GoalOperation::Pause {},
+            initial_request: None,
+            native_evidence: None,
+            signature: Vec::new(),
+        };
+        command.signature = user
+            .sign(&command.signing_payload().unwrap())
+            .await
+            .unwrap();
         let mut changed = command.clone();
-        changed.session_doc_id = Some(case.observation.session.clone());
-        changed.agent_doc_id = case.observation.agent_document.clone();
+        changed.session_doc_id = Some(input.session.clone());
+        changed.agent_doc_id = input.agent_document.clone();
         let verified = user
             .verify(
                 user.did(),
@@ -368,18 +365,6 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
             )
             .await
             .unwrap_or(false);
-        assert_eq!(
-            verified,
-            case.decision == gents_lean_vocab::LeanCrossActorDecision::Claimed,
-            "{name}"
-        );
+        case.check(verified);
     }
-    assert!(user
-        .verify(
-            user.did(),
-            &command.signing_payload().unwrap(),
-            &command.signature
-        )
-        .await
-        .unwrap());
 }

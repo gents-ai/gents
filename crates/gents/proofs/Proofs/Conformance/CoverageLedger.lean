@@ -525,9 +525,22 @@ def caseCoverage : List CoverageEntry :=
       "hooks_contracts_owed_prune"
       "Production prunable decides every record. The deletion of pruned rows is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_request_signed_targets")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_goal_command_signed_targets")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_signed_client_claim")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "cross_actor_authorization_cases" "CrossActorAuthorization"
-      "Native transaction-bound requester document and node authorization is unavailable; cross-actor execution remains blocked. Bind these cases to native transaction and claim owners when supported.")
+      "family"
+      "cross_actor_authorization_unreached"
+      "model-production-gap: the served claim fixture cannot present an unsupported or disabled native check, a transient or hidden observation, a foreign or missing native owner or authenticated author, a mismatched request document, physical target or executor, or a permission change or commit failure between the claim transaction's check and its commit.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "goal_link_cases" "GoalLinks"

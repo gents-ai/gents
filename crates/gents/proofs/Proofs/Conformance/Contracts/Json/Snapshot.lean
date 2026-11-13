@@ -293,6 +293,7 @@ import Proofs.Conformance.Identity.Conformance
 import Proofs.Store.Identity.SessionChild
 import Proofs.Session.Request.RemoteDelivery
 import Proofs.Session.Request.CrossActorAuthorization
+import Proofs.Conformance.CrossActorAuthorization
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.TriggerDelivery
 import Proofs.Conformance.GoalOperatorResume
@@ -506,7 +507,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ deviationsJson ++ ","
     ++ "\"request_progress_cases\":"
       ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
-    ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=
   ""
