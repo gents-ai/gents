@@ -103,6 +103,9 @@ async fn provision_rejects_initialized_home_without_loadable_identity() -> Resul
         }),
     )?;
     write_portable_manifest_root(tempdir.path(), &root, placeholder_did)?;
+    let client = graphql::cli_client_paths(&home_env, &[]);
+    client.ensure_root_dirs().await?;
+    gents_desktop_core::client::PrincipalIdentity::load_or_create(&client).await?;
 
     let stderr = run_cli_failure_stderr(
         &home_env,
