@@ -5,6 +5,7 @@ import type {
   DefaultPacksApproval,
 } from "@source-inc/gents-desktop-client";
 import { resetPreferences } from "../src/ui/preferences";
+import { href } from "../src/ui/lib/router";
 import { PacksScreen } from "../src/ui/screens/PacksScreen";
 import { StarterPacksCard } from "../src/ui/screens/packs/DefaultPacksReview";
 import { rememberPacksView, resetInstalledPacks } from "../src/ui/screens/packs/model";
@@ -337,7 +338,32 @@ describe("starter packs on the Packs page", () => {
     expect(listDefaultPacks).toHaveBeenCalledTimes(2);
   });
 
-  it("hides to one line, put off as the card's Not now is, and shows again", async () => {
+  it("links an opened pack to its own page, which the card does not", async () => {
+    const { api } = harness([web, git]);
+    withFlags({ packs: true });
+    rememberPacksView("installed");
+    renderIn(
+      local(api),
+      <>
+        <StarterPacksCard />
+        <PacksScreen />
+      </>,
+    );
+    const inCard = within(await card());
+    await click(inCard.getByRole("button", { name: "What gents/web asks for" }));
+    expect(inCard.queryByRole("link", { name: /View web’s page/ })).toBeNull();
+    await click(inCard.getByRole("button", { name: "Not now" }));
+    const section = await screen.findByRole("region", { name: "Starter packs" });
+    await click(within(section).getByRole("button", { name: "Show" }));
+    await click(
+      within(section).getByRole("button", { name: "What gents/web asks for" }),
+    );
+    expect(
+      within(section).getByRole("link", { name: /View web’s page/ }),
+    ).toHaveAttribute("href", href({ name: "packs", item: "gents/web" }));
+  });
+
+  it("hides to one line, put off as the card's Not now is, and shows again here only", async () => {
     const { api } = harness([web, notes, git]);
     page(api);
     const section = await screen.findByRole("region", { name: "Starter packs" });
@@ -352,10 +378,12 @@ describe("starter packs on the Packs page", () => {
     ).toEqual([deployment.nodeDid]);
     await click(within(section).getByRole("button", { name: "Show" }));
     expect(within(section).getByRole("button", { name: "Approve all" })).toBeVisible();
+    /* shown here only: the card stays put off */
     expect(
       JSON.parse(localStorage.getItem("gents-preferences")!).state
         .starterPacksDismissed,
-    ).toEqual([]);
+    ).toEqual([deployment.nodeDid]);
+    expect(screen.queryByTestId("starter-packs-card")).toBeNull();
   });
 
   it("shows nothing when every starter pack is installed", async () => {

@@ -315,12 +315,12 @@ export const preferences = {
   setNotify(kind: NotifyKind, on: boolean) {
     store.setState({ notify: { ...store.getState().notify, [kind]: on } });
   },
-  dismissStarterPacks(nodeDid: string, dismissed = true) {
+  dismissStarterPacks(nodeDid: string) {
     store.setState({
       starterPacksDismissed: toggled(
         store.getState().starterPacksDismissed,
         nodeDid,
-        dismissed,
+        true,
       ),
     });
   },

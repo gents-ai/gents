@@ -1,5 +1,5 @@
-import { useRef, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import { ArrowRight, ChevronRight } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
   Collapsible,
@@ -21,6 +21,7 @@ import type {
   DefaultPackApproval,
 } from "@source-inc/gents-desktop-client";
 import { preferences, useStarterPacksDismissed } from "@/preferences";
+import { href } from "@/lib/router";
 import { shortName } from "./model";
 import { ErrorDetail, Section } from "./PackCard";
 import {
@@ -139,6 +140,15 @@ export function DefaultPacksReview({
                         <p className={LABEL}>
                           {pack.without} <span className="font-mono">{pack.pack}</span>
                         </p>
+                        {!onDismiss && (
+                          <a
+                            href={href({ name: "packs", item: pack.pack })}
+                            className="inline-flex w-max items-center gap-1 text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+                          >
+                            View {shortName(pack.pack)}’s page
+                            <ArrowRight className="size-3" />
+                          </a>
+                        )}
                       </div>
                     </CollapsibleContent>
                   </Collapsible>
@@ -295,12 +305,14 @@ export function StarterPacksCard() {
 
 /** The same review as a section of the Packs page, shown while any starter
     pack is not installed or the list could not be read. Hiding it puts the
-    packs off as Not now on the card does, leaving one line to show them
-    again; showing them again also lets the card offer them once more. */
+    packs off as Not now on the card does, leaving one line; Show opens them
+    here again without bringing the card back. */
 export function StarterPacksSection() {
   const review = useDefaultPacks();
   const { nodeDid } = review;
-  const hidden = useStarterPacksDismissed(nodeDid);
+  const dismissed = useStarterPacksDismissed(nodeDid);
+  const [shown, setShown] = useState(false);
+  const hidden = dismissed && !shown;
   const waiting = review.packs.filter((pack) => pack.state !== "installed");
   if (waiting.length === 0 && !review.error) return null;
   const toggle =
@@ -310,7 +322,13 @@ export function StarterPacksSection() {
         variant="ghost"
         className="text-xs text-muted-foreground hover:text-foreground"
         aria-expanded={!hidden}
-        onClick={() => preferences.dismissStarterPacks(nodeDid, !hidden)}
+        onClick={() => {
+          if (hidden) setShown(true);
+          else {
+            setShown(false);
+            preferences.dismissStarterPacks(nodeDid);
+          }
+        }}
       >
         {hidden ? "Show" : "Hide"}
       </Button>
