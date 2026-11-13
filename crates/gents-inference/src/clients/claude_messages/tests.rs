@@ -854,7 +854,7 @@ fn claude_sse_dispatch_cases_drive_the_stream_state() {
             );
         };
         match error {
-            MessagesParseError::ToolUse { .. } => {
+            MessagesParseError::ToolUse { .. } | MessagesParseError::EmptyToolSurface { .. } => {
                 fail_closed_tool_use();
                 "tool_use".into()
             }
