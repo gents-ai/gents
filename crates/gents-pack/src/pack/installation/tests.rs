@@ -795,32 +795,69 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
 }
 
 #[tokio::test]
-async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
-    let access = access().await;
-    let home = tempfile::tempdir().unwrap();
-    install(&access, "1", &config(&[]), DriftPolicy::Refuse)
+async fn plugin_store_notices_match_the_lean_record_model() {
+    use gents_lean_vocab::families::plugin_store_notice_record as notice_family;
+    for case in gents_lean_vocab::families::plugin_store_notice_record::cases::<String>() {
+        let access = access().await;
+        let home = tempfile::tempdir().unwrap();
+        match case.input.prior.as_str() {
+            "absent" => {}
+            "pack" => {
+                install(&access, "1", &config(&[]), DriftPolicy::Refuse)
+                    .await
+                    .unwrap();
+            }
+            other => panic!("unbuildable prior record {other}"),
+        }
+        if case.input.retired {
+            super::super::record_plugin_retirement_as(
+                &access,
+                OWNER,
+                None,
+                home.path(),
+                "acme/demo",
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
+        } else {
+            record_plugin_store_change(
+                &access,
+                OWNER,
+                home.path(),
+                "acme/demo",
+                None,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
+        }
+        let rows = access
+            .execute("{ PackInstallation { _docID } }")
+            .await
+            .unwrap();
+        let recorded = !rows["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .is_empty();
+        let installed = list_installed_packs(&access, OWNER).await.unwrap();
+        assert!(installed.len() <= 1, "{installed:?}");
+        let listed = installed.iter().any(|pack| pack.coordinate == "acme/demo");
+        let removed = remove_pack(
+            &access,
+            OWNER,
+            "acme/demo",
+            DriftPolicy::Refuse,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
         .await
-        .unwrap();
-    record_plugin_store_change(
-        &access,
-        OWNER,
-        home.path(),
-        "acme/demo",
-        None,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    assert_eq!(list_installed_packs(&access, OWNER).await.unwrap().len(), 1);
-    remove_pack(
-        &access,
-        OWNER,
-        "acme/demo",
-        DriftPolicy::Refuse,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
+        .is_ok();
+        case.check(notice_family::Output {
+            recorded,
+            listed,
+            removed,
+        });
+    }
 }
 
 async fn create_raw_tools(access: &ConfigAccess, id: &str) {

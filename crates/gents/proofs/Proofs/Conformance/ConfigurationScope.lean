@@ -47,6 +47,28 @@ def contextBounds : Conformance.Family ContextBoundsInput Bool where
   model := fun i =>
     ConfigDefaults.contextOverrideAllowed i.selected i.modelDefault i.maximum
 
+structure ContextPreviewInput where
+  profileId : String
+  modelName : String
+  selected : Nat
+  modelDefault : Option Nat
+  maximum : Option Nat
+  deriving ToJson
+
+/-- The desired-state preview of an InferenceProfile on a backend whose recorded
+catalog advertises the model: the selected window is refused with its text
+exactly when it exceeds the advertised ceiling. -/
+@[conformance_family]
+def contextPreview : Conformance.Family ContextPreviewInput (Option String) where
+  inputs := [(900000, some 272000, some 872000), (500000, some 272000, some 872000),
+      (872000, some 272000, some 872000), (872001, none, some 872000),
+      (872001, some 272000, none), (872001, some 900000, some 872000)].map
+    fun (selected, modelDefault, maximum) =>
+      { profileId := "profile", modelName := "model", selected, modelDefault, maximum }
+  model := fun i =>
+    ConfigDefaults.contextOverrideRejection i.profileId i.modelName (some i.selected)
+      (i.modelDefault.map Int.ofNat) (i.maximum.map Int.ofNat)
+
 private def defaultAgentCases :
     List (String × String × Bool × Option String × Option String) := [
   ("no_default", "alice", false, some "context", none),

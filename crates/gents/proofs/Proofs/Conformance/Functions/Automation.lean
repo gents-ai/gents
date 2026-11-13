@@ -4,6 +4,7 @@ import Proofs.Automation.RuntimeReconcile.State
 import Proofs.Automation.Triggers.ManualRun
 import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Automation.GoalAutomation.Operations
+import Proofs.Automation.Triggers.MaterializedLineage
 import Proofs.Conformance.Family
 
 namespace Mailbox
@@ -31,6 +32,18 @@ namespace GoalAutomation.Operations
 deriving instance Lean.ToJson for Actor, Session, Existing, Claim, StartDecision, Target,
   FieldChange, Reason, SetDecision
 end GoalAutomation.Operations
+
+deriving instance Lean.ToJson for TriggerKind
+deriving instance Lean.ToJson for Enrollment.AgentRequestAdmissionKind
+
+namespace MaterializedLineage
+deriving instance Lean.ToJson for ProvenanceRefusal, Fire, Materialized
+
+@[conformance_family]
+def materialization : Conformance.Family Fire Materialized where
+  inputs := fires
+  model := materialize
+end MaterializedLineage
 
 attribute [conformance_function]
   Mailbox.Status.terminal

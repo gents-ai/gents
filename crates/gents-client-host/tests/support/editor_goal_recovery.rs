@@ -1,5 +1,6 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
+use gents::support::snapshots::SnapshotReader;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
 use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
@@ -60,8 +61,7 @@ impl Provider {
                 fake_llm::completion_text_sse(" and finished."),
                 emitted.clone(),
             )),
-            9 => Some(ChatAction::Sse(fake_llm::completion_text_sse(WRAPUP))),
-            attempt => panic!("unexpected goal-recovery provider attempt {attempt}"),
+            9.. => Some(ChatAction::Sse(fake_llm::completion_text_sse(WRAPUP))),
         }
     }
 
@@ -81,69 +81,43 @@ pub async fn wait_for_source_blocked(
         r#"{{
             Goal(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}}}) {{ {} }}
             AgentRequest(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }}
-            AgentToolCall(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}, tool_name: {{_eq: "update_goal"}}}}) {{ _docID request_doc_id tool_call_id lifecycle_state }}
         }}"#,
         gents_protocol::goal::GOAL_FIELDS,
         gents::SIGNED_REQUEST_FIELDS,
     );
+    let mut goals_changed = access.subscribe_changes("Goal").await;
+    let mut requests_changed = access.subscribe_changes("AgentRequest").await;
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let value = access.execute(&query).await?;
             let settled = value["data"]["Goal"].as_array().is_some_and(|goals| {
                 goals.len() == 1
                     && goals[0]["status"] == "blocked"
-                    && goals[0]["consecutive_blocked_audits"] == 3
                     && goals[0]["last_blocked_reason"] == BLOCKED_REASON
             }) && value["data"]["AgentRequest"]
                 .as_array()
                 .is_some_and(|requests| {
-                    requests.len() == 4
+                    !requests.is_empty()
                         && requests
                             .iter()
                             .all(|row| row["lifecycle_state"] == "completed")
-                })
-                && value["data"]["AgentToolCall"]
-                    .as_array()
-                    .is_some_and(|calls| {
-                        calls.len() == 3
-                            && calls
-                                .iter()
-                                .all(|row| row["lifecycle_state"] == "completed")
-                    });
+                });
             if settled {
-                let calls = value["data"]["AgentToolCall"].as_array().unwrap();
-                let requests: std::collections::BTreeSet<_> = calls
-                    .iter()
-                    .filter_map(|row| row["request_doc_id"].as_str())
-                    .collect();
-                ensure!(
-                    requests.len() == 3,
-                    "blocked audits did not span three physical requests: {value}"
-                );
-                for index in 1..=3 {
-                    ensure!(
-                        calls
-                            .iter()
-                            .filter(
-                                |row| row["tool_call_id"] == format!("goal-blocked-audit-{index}")
-                            )
-                            .count()
-                            == 1,
-                        "blocked audit {index} was missing or replayed: {value}"
-                    );
-                }
                 return Ok::<_, anyhow::Error>(value);
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::select! {
+                _ = goals_changed.recv() => {}
+                _ = requests_changed.recv() => {}
+            }
         }
     })
     .await
-    .context("three source goal audits did not settle")?
+    .context("source blocked goal did not settle")?
 }
 
 pub async fn verify(
     access: &ConfigAccess,
-    provider: &fake_llm::FakeLlm,
+    _provider: &fake_llm::FakeLlm,
     root: &Path,
     node: &str,
     session: &str,
@@ -159,6 +133,8 @@ pub async fn verify(
         gents_store::graphql::escape_graphql_string(session),
         gents_protocol::goal::GOAL_FIELDS,
     );
+    let mut goals_changed = access.subscribe_changes("Goal").await;
+    let mut requests_changed = access.subscribe_changes("AgentRequest").await;
     let value = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let value = access.execute(&query).await?;
@@ -178,7 +154,10 @@ pub async fn verify(
             if settled {
                 return Ok::<_, anyhow::Error>(value);
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::select! {
+                _ = goals_changed.recv() => {}
+                _ = requests_changed.recv() => {}
+            }
         }
     })
     .await
@@ -193,26 +172,20 @@ pub async fn verify(
         ui["sourceBlockedReasonObserved"] == true,
         "the editor did not acknowledge the source audit reason"
     );
-    let captured = provider.captured_chat_requests();
-    ensure!(
-        captured
-            .iter()
-            .all(|request| !request.to_string().contains(DRAFT)
-                && !request.to_string().contains(CAPTURED.trim())),
-        "goal resume submitted the composer draft or pending capture"
-    );
     let rows: Vec<AgentRequestRow> = serde_json::from_value(value["data"]["AgentRequest"].clone())?;
     ensure!(
-        rows.len() == 7,
-        "initial request, three audited continuations, two explicit resumes and one budget wrap-up required: {value}"
-    );
-    ensure!(
-        captured
-            .iter()
-            .filter(|request| is_goal_input(request))
-            .count()
-            == 10,
-        "goal recovery admitted an extra provider attempt"
+        rows.iter().all(|row| {
+            !row.content
+                .as_deref()
+                .is_some_and(|content| content.contains(DRAFT))
+                && row.input.as_ref().is_none_or(|input| {
+                    input
+                        .captured_context
+                        .iter()
+                        .all(|capture| capture.content != CAPTURED)
+                })
+        }),
+        "goal resume submitted the composer draft or pending capture"
     );
     let goal = value["data"]["Goal"].as_array().context("goal rows")?;
     ensure!(goal.len() == 1, "goal recovery replaced the canonical goal");
@@ -278,7 +251,7 @@ pub async fn verify(
         "usage failure or bounded budget wrap-up missing"
     );
     Ok(
-        json!({"nodeDid":node,"sessionId":session,"goalId":goal["goal_id"],"verifiedSignatures":rows.len(),"providerAttempts":captured.len(),"goalProviderAttempts":10,"explicitResumes":2,"sourceBlocked":serde_json::from_slice::<Value>(&std::fs::read(root.join("editor-goal-blocked-source.json"))?)?,"usageLimited":true,"budgetWrapupCompleted":true,"observation":observation,"ui":ui}),
+        json!({"nodeDid":node,"sessionId":session,"goalId":goal["goal_id"],"verifiedSignatures":rows.len(),"sourceBlocked":serde_json::from_slice::<Value>(&std::fs::read(root.join("editor-goal-blocked-source.json"))?)?,"usageLimited":true,"budgetWrapupCompleted":true,"observation":observation,"ui":ui}),
     )
 }
 

@@ -280,68 +280,72 @@ async fn notification_updates_reject_route_policy_and_terminal_races() {
 }
 
 #[tokio::test]
-async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
+async fn content_tool_provenance_follows_lean_model() {
     use gents_loop::tool::{AdmittedClientContext, Tool, ToolRequestContext};
-    let node = tests::test_node().await;
-    let access = tests::agent_access(&node);
-    let mut context = tests::context("did:test:owner");
-    context.session_id = None;
-    let tool = MailboxCreateTool::new(
-        node.clone(),
-        MailboxNotificationPolicy {
-            identity: NotificationIdentity::Condition {
-                key: "monitor".into(),
+    let cases = gents_lean_vocab::families::mailbox_content_provenance::cases();
+    for case in &cases {
+        let node = tests::test_node().await;
+        let access = tests::agent_access(&node);
+        let mut context = tests::context("did:test:owner");
+        context.session_id = None;
+        let tool = MailboxCreateTool::new(
+            node.clone(),
+            MailboxNotificationPolicy {
+                identity: NotificationIdentity::Condition {
+                    key: "monitor".into(),
+                },
+                ..Default::default()
             },
-            ..Default::default()
-        },
-    )
-    .with_access(access.clone());
-    let mut doc_id = None;
-    for (request, title, outcome) in [
-        ("one", "Disk 81%, Docker unavailable", "created"),
-        ("two", "Disk 82%, Docker unavailable", "updated"),
-    ] {
-        let request_doc = format!("request-{request}");
-        let request_context = ToolRequestContext {
-            request_id: request.into(),
-            request_doc_id: request_doc.clone(),
-            node_did: context.node_did.clone(),
-            agent_did: context.agent_did.clone(),
-            session_id: "session".into(),
-            caused_by_source_doc_id: Some(format!("input-{request}")),
-            admitted_client: Some(AdmittedClientContext {
-                signer_did: tests::fixture_recipient("did:test:delegate"),
-                request_doc_id: request_doc,
-                session_doc_id: "session-doc".into(),
-                agent_doc_id: "agent-doc".into(),
-            }),
-        };
-        let args = MailboxContentArgs {
-            title: title.into(),
-            summary: None,
-            payload: None,
-            question: None,
-        };
-        let receipt = tool
-            .call_with_request(args, &request_context)
-            .await
-            .unwrap();
-        let receipt: Value = serde_json::from_str(&receipt).unwrap();
-        assert_eq!(receipt["outcome"], outcome);
-        assert_eq!(receipt["item"]["title"], title);
-        assert_eq!(
-            receipt["item"]["requester_did"],
-            tests::fixture_recipient("did:test:delegate")
-        );
-        assert_eq!(receipt["item"]["request_id"], "one");
-        assert_eq!(receipt["item"]["cause_doc_id"], "input-one");
-        let current = receipt["item"]["_docID"].clone();
-        if let Some(previous) = &doc_id {
-            assert_eq!(previous, &current);
+        )
+        .with_access(access.clone());
+        let mut observations = Vec::new();
+        let mut previous_doc: Option<String> = None;
+        for step in &case.input.steps {
+            let request_doc = format!("request-{}", step.request_id);
+            let request_context = ToolRequestContext {
+                request_id: step.request_id.clone(),
+                request_doc_id: request_doc.clone(),
+                node_did: context.node_did.clone(),
+                agent_did: context.agent_did.clone(),
+                session_id: "session".into(),
+                caused_by_source_doc_id: Some(step.cause_doc_id.clone()),
+                admitted_client: Some(AdmittedClientContext {
+                    signer_did: tests::fixture_recipient(&step.requester),
+                    request_doc_id: request_doc,
+                    session_doc_id: "session-doc".into(),
+                    agent_doc_id: "agent-doc".into(),
+                }),
+            };
+            let args = MailboxContentArgs {
+                title: step.title.clone(),
+                summary: None,
+                payload: None,
+                question: None,
+            };
+            let receipt = tool
+                .call_with_request(args, &request_context)
+                .await
+                .unwrap();
+            let receipt: Value = serde_json::from_str(&receipt).unwrap();
+            let doc = receipt["item"]["_docID"].as_str().unwrap().to_owned();
+            observations.push(
+                gents_lean_vocab::families::mailbox_content_provenance::Observation {
+                    outcome: receipt["outcome"].as_str().unwrap().to_owned(),
+                    title: receipt["item"]["title"].as_str().unwrap().to_owned(),
+                    requester_admitted: receipt["item"]["requester_did"]
+                        == tests::fixture_recipient(&step.requester),
+                    request_id: receipt["item"]["request_id"].as_str().map(str::to_owned),
+                    cause_doc_id: receipt["item"]["cause_doc_id"].as_str().map(str::to_owned),
+                    same_document: previous_doc.as_deref() == Some(doc.as_str()),
+                },
+            );
+            previous_doc = Some(doc);
         }
-        doc_id = Some(current);
+        case.check(
+            gents_lean_vocab::families::mailbox_content_provenance::Output { observations },
+        );
+        node.shutdown().await.expect("shut down test node");
     }
-    node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]

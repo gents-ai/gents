@@ -939,6 +939,7 @@ fn step0_context(
         control_targets: Vec::new(),
         resume_targets: Vec::new(),
         resume_facts: facts,
+        caller_node_did: Some(caller.node_did.clone()),
     })
 }
 

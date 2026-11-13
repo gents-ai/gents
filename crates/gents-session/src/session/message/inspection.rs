@@ -512,20 +512,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_summary_batch_is_one_exact_scoped_read() {
-        let ids = vec!["tool-1".to_owned(), "tool\"2".to_owned()];
-        let query = tool_call_batch_query(
-            r#"node_did: {_eq: "node"}, session_id: {_eq: "session"}, requester_did: {_eq: null}"#,
-            &ids,
-        )
-        .unwrap();
-        assert_eq!(query.matches("AgentToolCall(").count(), 1);
-        assert!(query.contains(r#"_docID: {_in: ["tool-1","tool\"2"]}"#));
-        assert!(query.contains(r#"requester_did: {_eq: null}"#));
-        assert!(tool_call_batch_query("scope", &[]).is_none());
-    }
-
-    #[test]
     fn queued_input_decode_accepts_canonical_default_and_fails_malformed() {
         let request_id = "pending-request";
         // Canonical writer omits `input` when it equals the default.

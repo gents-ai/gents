@@ -1,4 +1,7 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum TriggerKind {
     Schedule,
     Event,
@@ -44,4 +47,19 @@ pub fn validate_task_delivery_options(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::{validate_task_delivery_options, TriggerKind};
+    use crate::ConcurrencyMode;
+    use gents_lean_vocab::families::trigger_delivery_delivery_options as family;
+
+    #[test]
+    fn delivery_options_match_the_lean_owner() {
+        family::replay::<ConcurrencyMode, TriggerKind>(|i| {
+            validate_task_delivery_options(i.kind, i.emit_outcome, i.concurrency, i.target_existing)
+                .is_ok()
+        });
+    }
 }

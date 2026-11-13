@@ -60,7 +60,12 @@ structure Evidence where
   existingIdentityMatches : Bool := false
   capturedBaseMatches : Bool := true
   appliedSnapshotMatches : Bool := true
+  trunkDirty : List String := []
   deriving DecidableEq, Repr
+
+def overlaps (e : Evidence) : Bool :=
+  e.delta.any fun c => e.trunkDirty.contains c.path
+
 inductive Disposition where
   | accepted | recovered | denied
   deriving DecidableEq, Repr
@@ -89,6 +94,7 @@ def execute (s : Snapshot) (op : Operation) (e : Evidence) : Snapshot × Disposi
         else (s, .denied)
       else if w.state == .sealed && w.sealHash == some e.expected.tree && s.writer == some e.expected then
         if s.integrator == some e.expected then (s, .recovered)
+        else if overlaps e then (s, .denied)
         else ({s with integrator := some e.expected, trunkEffects := s.trunkEffects + 1}, .accepted)
       else (s, .denied)
 
@@ -127,5 +133,22 @@ theorem unauthorized_delta_cannot_integrate (s : Snapshot) (e : Evidence)
     (h : deltaAuthorized s.workspace.pathCapability e.delta = false) :
     execute s .integrate e = (s,.denied) := by
   simp [execute, h]
+
+def dirtyWorkspace : IsolatedWorkspace :=
+  {workspaceId := "workspace-1", workUnitId := "work-1", repositoryId := "repo-1",
+   baseSha := "immutable-base", branch := "workspace-branch", creationPolicy := .gitWorktreeDiff,
+   ownerNodeDid := "host-1", sealHash := some "tree-1", state := .sealed,
+   pathCapability := .exactPaths ["README.md"]}
+
+def dirtyBinding : Binding := binding dirtyWorkspace "tree-1"
+
+def dirtySealed : Snapshot := ⟨dirtyWorkspace, some dirtyBinding, none, 0⟩
+
+def dirtyEvidence (dirty : Option String) (delta : String) : Evidence :=
+  {expected := dirtyBinding, delta := [⟨delta, .regular, true⟩], trunkDirty := dirty.toList}
+
+theorem integrate_overlapping_dirty_trunk_path_fails_closed :
+    execute dirtySealed .integrate (dirtyEvidence (some "README.md") "README.md") = (dirtySealed, .denied) := by
+  decide
 
 end Workspace.PathCapability

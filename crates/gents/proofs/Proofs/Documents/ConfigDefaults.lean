@@ -74,4 +74,33 @@ theorem missing_context_ceiling_is_not_invented (selected modelDefault : Option 
     contextOverrideAllowed selected modelDefault none = true := by
   cases selected <;> rfl
 
+/-- The refusal a profile above its model's advertised ceiling reports, naming
+the profile, the selected window, the model and the ceiling. -/
+def contextOverrideRejection (profileId model : String)
+    (selected modelDefault maximum : Option Int) : Option String :=
+  match selected, advertisedCeiling modelDefault maximum with
+  | some value, some cap =>
+      if value ≤ cap then none
+      else some s!"profile {profileId} context window {value} exceeds model {model} advertised maximum {cap}"
+  | _, _ => none
+
+theorem rejection_iff_not_allowed (profileId model : String)
+    (selected modelDefault maximum : Option Int) :
+    (contextOverrideRejection profileId model selected modelDefault maximum).isSome =
+      !contextOverrideAllowed selected modelDefault maximum := by
+  unfold contextOverrideRejection contextOverrideAllowed
+  cases selected with
+  | none => cases advertisedCeiling modelDefault maximum <;> rfl
+  | some value =>
+    cases advertisedCeiling modelDefault maximum with
+    | none => rfl
+    | some cap => by_cases h : value ≤ cap <;> simp [h]
+
+theorem preview_rejects_a_context_window_above_the_advertised_maximum :
+    contextOverrideRejection "profile" "model" (some 900000) (some 272000) (some 872000) =
+        some "profile profile context window 900000 exceeds model model advertised maximum 872000" ∧
+      contextOverrideRejection "profile" "model" (some 500000) (some 272000) (some 872000) = none ∧
+      contextOverrideRejection "profile" "model" (some 872000) (some 272000) (some 872000) = none := by
+  native_decide
+
 end ConfigDefaults

@@ -13,8 +13,8 @@ a real guarantee.
 
 The row-only refinement additionally requires calls-only assistant content and
 nondegenerate messages; intra-turn duplicate call occurrences are outside the
-Finset row abstraction (native sanitizer regressions fence multiplicity and
-cross-turn key reuse).
+Finset row abstraction (`ProviderSanitation.perTurnSanitize` models multiplicity
+and cross-turn key reuse).
 -/
 
 namespace PromptAssembly.Provider
