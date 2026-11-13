@@ -139,15 +139,30 @@ fn focused_window(app: &AppHandle) -> Option<WebviewWindow> {
         .find(|window| window.is_focused().unwrap_or(false))
 }
 
+/// The view the app's menus act on: the one with focus, or the main view
+/// while a plugin's own window has focus. That window is one page, never a
+/// tab or a view of the app, so a tab is opened beside the main view and the
+/// tab commands move the main view's tabs; a main view closed out of sight
+/// is left there.
+fn menu_window(app: &AppHandle) -> Option<WebviewWindow> {
+    let focused = focused_window(app)?;
+    if !super::plugin_window::is_page_window(focused.label()) {
+        return Some(focused);
+    }
+    app.get_webview_window("main")
+        .filter(|main| main.is_visible().unwrap_or(false))
+}
+
 pub fn handle_menu(app: &AppHandle, action: &str) -> tauri::Result<()> {
     if matches!(action, "new-tab" | "new-window") {
         create_window(app, action == "new-tab")?;
-    } else if let Some(window) = focused_window(app) {
+    } else if let Some(step) = action.strip_prefix("zoom-") {
         // the page owns its zoom, so it is remembered with the viewer's
         // other preferences and reaches the other windows from there
-        if let Some(step) = action.strip_prefix("zoom-") {
+        if let Some(window) = focused_window(app) {
             return app.emit_to(window.label(), "zoom", step);
         }
+    } else if let Some(window) = menu_window(app) {
         with_native_window(&window, |native| match action {
             "detach-tab" => native.moveTabToNewWindow(None),
             "merge-windows" => native.mergeAllWindows(None),
@@ -169,7 +184,7 @@ pub fn create_window(app: &AppHandle, tab: bool) -> tauri::Result<WebviewWindow>
             "finish setup before opening another view"
         )));
     }
-    let parent = focused_window(app);
+    let parent = menu_window(app);
     let mut config = app.config().app.windows[0].clone();
     config.label = format!("gents-view-{}", NEXT_WINDOW.fetch_add(1, Ordering::Relaxed));
     config.visible = false;
