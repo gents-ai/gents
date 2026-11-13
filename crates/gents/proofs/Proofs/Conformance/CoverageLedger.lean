@@ -537,8 +537,8 @@ def caseCoverage : List CoverageEntry :=
       "RootAdmissionCases")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "pairing_reconcile_cases"
-      "PairingReconcileCases"
+      "family"
+      "contracts_pairing_reconcile_projection"
       "The consumer exercises the production resource diff over emitted multi-resource snapshots. Connected flags are observations; actual transport dial/failure and applying operations to reach the post-state still require the transport reconciliation owner.")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -691,16 +691,21 @@ def caseCoverage : List CoverageEntry :=
       "The native consumer checks closure construction against modeled rows, but supplies access and denial observations as fixture input. It does not verify live ACP decisions.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_cases"
-      "EnrollmentCases")
+      "family"
+      "enrollment_core_trace")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "enrollment_auto_renewal_offer_unreached"
+      "model-production-gap: issue_renewal_offer is reached only through a served two-node offer exchange holding one enabled current generation; conflicted, revoked or expired generations, transport mismatch and re-signed intents with another scope or window are not built per case. enrollment_auto_renewal_intent_projection replays their generation and window checks.")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_encoding_cases"
-      "EnrollmentEncodingCases")
+      "family"
+      "enrollment_core_frame")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_digest_cases"
-      "EnrollmentDigestCases")
+      "family"
+      "enrollment_core_digest")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -708,8 +713,8 @@ def caseCoverage : List CoverageEntry :=
       "Exercises the production count/timeout eligibility owner for trigger and callback cases. Typed consumer/config/owner identity, durable marker suppression and atomic materialization require the migrated event-group owner; the old trigger-only spy cannot establish these guarantees.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_durable_projection_cases"
-      "EnrollmentDurableProjectionCases")
+      "family"
+      "enrollment_core_durable_projection")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1138,16 +1143,16 @@ def caseCoverage : List CoverageEntry :=
       "Drive each generated native-tool route through its actual managed process boundary. Names and processTree flags are not evidence of runtime routing.")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "pairing_reconcile_cases"
+      "pairing_reconcile_shutdown_boundary_cases"
       "PairingReconcileShutdownBoundaryCases")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pairing_reconcile_cases"
+      "pairing_reconcile_sweep_retry_boundary_cases"
       "PairingReconcileSweepRetryBoundaryCases")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pairing_reconcile_cases"
-      "PairingReconcileSweepSchedulingCases")
+      "family"
+      "pairing_sweep_scheduling_sweep")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1593,6 +1598,26 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "revoke_follows_grant_steps")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_desired_publisher_unreached"
+      "model-production-gap: a store holds only its own Node's signer, so no production path writes a desired route as a foreign actor whose signer is held.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_registry_writer_unreached"
+      "model-production-gap: the replicated registry scenario creates no registry row naming another Node, so no production path observes its writer.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_reader_policy_unreached"
+      "model-production-gap: the applied-pairing scenario observes only the reads, the reader Agent's update and the reader management replayed by identity_operations_reader_policy_read, identity_operations_reader_policy_update and identity_operations_reader_policy_manage; the initial route access of the runtime and user and every other route update decision are not observed.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_operations_deferred_unreached"
+      "model-production-gap: the served scenarios observe only the parent link or grant the identity_operations_deferred_* families replay; no production path builds a foreign embedded runtime, an unregistered Node or a failed commit, or observes the recorded parent Node.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "node_file_requests_access"
@@ -1624,8 +1649,20 @@ def caseCoverage : List CoverageEntry :=
       "file_review_routes")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "scope_node_route_cases"
-      "ScopeNodeRouteCases")
+      "family"
+      "scope_node_route_allowed")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "scope_node_route_filter")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "scope_template")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "scope_template_filters")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

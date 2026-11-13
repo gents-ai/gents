@@ -19,9 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
-use gents_p2p::test_support::enrollment::{
-    authorize_enrollment_generation, EnrollmentGeneration,
-};
+use gents_p2p::test_support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
 
 struct Stop(CancellationToken);
 impl Drop for Stop {
@@ -73,17 +71,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
     };
 
-    let contract = tokio::task::spawn_blocking(gents_lean_vocab::lean_contract_snapshot)
-        .await
-        .expect("load enrollment renewal contract before creating timed credentials");
-    let modeled = |name: &str| {
-        contract
-            .enrollment_renewal_intent_cases
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap()
-            .allowed
-    };
+    let mut offered = std::collections::BTreeMap::new();
     let server = support::test_p2p_db("automatic-renewal-server").await;
     let member = support::test_p2p_db("automatic-renewal-member").await;
     gents_documents::ensure_node(&server.node, server.node_identity.did())
@@ -152,7 +140,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         member_sig: vec![0; 64],
     };
     let disabled_result = store.issue_renewal_offer(&forged).await;
-    assert_eq!(disabled_result.is_ok(), modeled("disabled"));
+    offered.insert("disabled", disabled_result.is_ok());
     let disabled = disabled_result.unwrap_err();
     assert!(disabled
         .to_string()
@@ -166,7 +154,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         .unwrap();
     let before_invalid_signature = store.load_projection().await.unwrap();
     let signature_result = store.issue_renewal_offer(&forged).await;
-    assert_eq!(signature_result.is_ok(), modeled("unsigned"));
+    offered.insert("unsigned", signature_result.is_ok());
     let invalid_signature = signature_result.unwrap_err();
     assert!(
         gents_protocol::error_chain::find_map_source(invalid_signature.as_ref(), |cause| {
@@ -190,9 +178,9 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         .await
         .unwrap();
     forged.member_peer = "another-peer".into();
-    assert_eq!(
+    offered.insert(
+        "wrong_peer",
         store.issue_renewal_offer(&forged).await.is_ok(),
-        modeled("wrong_peer")
     );
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
@@ -264,7 +252,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
             entry.request.candidate_did == member.node_identity.did()
                 && entry.revision.sequence == 2
         }) {
-            assert!(modeled("valid"));
+            offered.insert("valid", true);
             assert_ne!(active.request.request_id, first.request_id);
             assert_eq!(active.request.candidate_peer, member_peer);
             let lease =
@@ -284,6 +272,16 @@ async fn opted_in_members_renew_over_authenticated_routes() {
     server_task.await.unwrap().unwrap();
     member_task.await.unwrap().unwrap();
     pairing_task.await.unwrap().unwrap();
+    for case in gents_lean_vocab::families::enrollment_auto_renewal_offer::cases() {
+        let allowed = offered
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the offer scenario never reached {}", case.input.name));
+        case.check(gents_lean_vocab::families::enrollment_auto_renewal_offer::Offer { allowed });
+    }
+    assert!(
+        offered.is_empty(),
+        "unmodeled offer observations: {offered:?}"
+    );
 }
 
 #[tokio::test]

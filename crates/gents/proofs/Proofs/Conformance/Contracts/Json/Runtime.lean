@@ -99,25 +99,6 @@ def pairingReconcileSweepRetryBoundaryCaseJson
       ++ boolString witness.convergenceRetried
     ++ "}"
 
-def pairingReconcileSweepSchedulingCaseJson
-    (witness : PairingReconcileSweepSchedulingCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"supervisor\":" ++ jsonString witness.supervisor ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"max_concurrent_peer_preparations\":"
-      ++ toString witness.maxConcurrentPeerPreparations ++ ","
-    ++ "\"peer_preparation_bounded\":"
-      ++ boolString witness.peerPreparationBounded ++ ","
-    ++ "\"topology_mutation_serialized\":"
-      ++ boolString witness.topologyMutationSerialized ++ ","
-    ++ "\"stale_peer_blocks_ready_peer\":"
-      ++ boolString witness.stalePeerBlocksReadyPeer ++ ","
-    ++ "\"every_peer_result_accounted\":"
-      ++ boolString witness.everyPeerResultAccounted
-    ++ "}"
-
 def sessionRecoveryCaseJson (witness : SessionRecoveryCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

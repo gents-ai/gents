@@ -279,77 +279,102 @@ mod tests {
     }
 
     #[test]
-    fn node_replication_matches_executable_scope_model() {
-        let snapshot = gents_lean_vocab::lean_contract_snapshot();
+    fn pairing_directions_are_the_modeled_route_directions() {
+        gents_lean_vocab::families::scope_templates_route_direction_vocabulary::replay(&[
+            PairingDirection::ClientToRuntime,
+            PairingDirection::RuntimeToClient,
+        ]);
+    }
+
+    #[test]
+    fn node_route_collections_match_executable_scope_model() {
+        gents_lean_vocab::families::scope_node_route_allowed::replay::<PairingDirection>(|input| {
+            gents_lean_vocab::families::scope_node_route_allowed::NodeRouteAllowed {
+                allowed: client_route_collections(input.direction).contains(&"Node"),
+            }
+        });
+    }
+
+    #[test]
+    fn node_route_filters_match_executable_scope_model() {
         let template = resolve_template(CLIENT_TEMPLATE).expect("client template");
-        for case in &snapshot.scope_node_route_cases {
-            let direction = PairingDirection::parse(case.direction.as_str()).unwrap();
-            assert_eq!(
-                client_route_collections(direction).contains(&"Node"),
-                case.allowed,
-            );
-            let filters = resolve_template_filters(
-                template,
-                direction,
-                "did:key:reader",
-                case.owner.as_str(),
-            );
-            assert_eq!(
-                filters
+        gents_lean_vocab::families::scope_node_route_filter::replay::<PairingDirection>(|input| {
+            let filters =
+                resolve_template_filters(template, input.direction, &input.requester, &input.owner);
+            gents_lean_vocab::families::scope_node_route_filter::NodeRouteFilter {
+                node_did: filters
                     .get("Node")
                     .and_then(single_string_eq)
-                    .map(|(_, value)| value),
-                case.node_did.as_ref().and_then(|value| value.as_str())
-            );
-        }
+                    .map(|(_, value)| value.to_owned()),
+            }
+        });
     }
 
     #[test]
     fn protocol_routes_match_model_actions() {
-        let snapshot = gents_lean_vocab::lean_contract_snapshot();
+        use gents_lean_vocab::families::scope_template::TemplateRoute;
         let mut modeled = BTreeSet::new();
-        for case in &snapshot.scope_template_cases {
-            let id = case.id.as_str();
-            modeled.insert(id);
-            let template = resolve_template(id).expect("modeled protocol route");
-            assert_eq!(
-                template
-                    .collections
-                    .iter()
-                    .copied()
-                    .collect::<BTreeSet<_>>(),
-                case.collections
-                    .iter()
-                    .map(|value| value.as_str())
-                    .collect()
-            );
-            assert_eq!(
-                match template.delivery {
-                    Delivery::Push => "push",
-                },
-                case.delivery.as_str()
-            );
-            let direction = PairingDirection::parse(case.direction.as_str()).unwrap();
-            let filters =
-                resolve_template_filters(template, direction, "did:key:reader", "did:key:owner");
-            let expected = &case.filters;
-            assert_eq!(filters.len(), expected.len());
-            for expected in expected {
-                let clause = &expected.clauses[0];
-                assert_eq!(expected.clauses.len(), 1);
-                assert_eq!(
-                    single_string_eq(filters.get(expected.collection.as_str()).unwrap()),
-                    Some((clause.field.as_str(), clause.value.as_str()))
-                );
-            }
+        for case in gents_lean_vocab::families::scope_template::cases::<String>() {
+            modeled.insert(case.input.id.clone());
+            case.check(resolve_template(&case.input.id).map(|template| {
+                TemplateRoute {
+                    collections: template
+                        .collections
+                        .iter()
+                        .map(|collection| (*collection).to_owned())
+                        .collect(),
+                    delivery: match template.delivery {
+                        Delivery::Push => "push".to_owned(),
+                    },
+                }
+            }));
         }
         assert_eq!(
             builtin_templates()
                 .iter()
-                .map(|template| template.id)
+                .map(|template| template.id.to_owned())
                 .collect::<BTreeSet<_>>(),
             modeled
         );
+    }
+
+    #[test]
+    fn protocol_route_filters_match_model_actions() {
+        use gents_lean_vocab::families::scope_template_filters::{
+            Clause, Predicate, TemplateFilters,
+        };
+        gents_lean_vocab::families::scope_template_filters::replay::<PairingDirection>(|input| {
+            resolve_template(&input.id).map(|template| TemplateFilters {
+                filters: resolve_template_filters(
+                    template,
+                    input.direction,
+                    &input.requester,
+                    &input.owner,
+                )
+                .iter()
+                .map(|(collection, filter)| {
+                    let FilterPredicate::Predicate(conditions) = filter else {
+                        panic!("{collection} route filter is not a predicate");
+                    };
+                    Predicate {
+                        collection: collection.clone(),
+                        clauses: conditions
+                            .iter()
+                            .flat_map(|(field, operators)| {
+                                operators.as_object().expect("filter operators").iter().map(
+                                    move |(operator, value)| Clause {
+                                        field: field.clone(),
+                                        operator: operator.clone(),
+                                        value: value.as_str().expect("string filter").to_owned(),
+                                    },
+                                )
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
+            })
+        });
     }
 
     fn household_subject(

@@ -58,6 +58,11 @@ import Proofs.Conformance.AgentViews
 import Proofs.Conformance.InferenceViews
 import Proofs.Conformance.PluginGrantDeclaration
 import Proofs.Conformance.EnrollmentRenewalNotices
+import Proofs.Conformance.Scope
+import Proofs.Conformance.EnrollmentAutoRenewal
+import Proofs.Conformance.EnrollmentCore
+import Proofs.Conformance.PairingSweepScheduling
+import Proofs.Conformance.Identity.Operations
 import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.RequestAssembly
 import Proofs.Conformance.UsageWrite
@@ -308,35 +313,6 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-def nodeRouteCasesJson : String :=
-  jsonArray (([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
-    ["did:key:owner", "did:key:quoted\"owner"].map fun owner =>
-      let predicate := (ScopeTemplates.clientRouteFilters direction "did:key:reader" owner).find?
-        (fun item => item.collection == "Node")
-      "{\"direction\":" ++ jsonString (match direction with
-        | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
-      ",\"owner\":" ++ jsonString owner ++
-      ",\"allowed\":" ++ boolJson ((ScopeTemplates.clientRouteCollections direction).contains "Node") ++
-      ",\"node_did\":" ++ (predicate.bind fun item =>
-        (item.clauses.find? fun clause => clause.field == "node_did").map (fun clause => jsonString clause.value)).getD "null" ++ "}")
-
-def scopePredicateJson (predicate : ScopeTemplates.CollectionPredicate) : String :=
-  "{\"collection\":" ++ jsonString predicate.collection ++
-  ",\"clauses\":" ++ jsonArray (predicate.clauses.map fun clause =>
-    "{\"field\":" ++ jsonString clause.field ++ ",\"operator\":" ++ jsonString clause.operator ++
-    ",\"value\":" ++ jsonString clause.value ++ "}") ++ "}"
-
-def scopeTemplateCasesJson : String :=
-  jsonArray (ScopeTemplates.builtinCatalog.flatMap fun template =>
-    [ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient].map fun direction =>
-      "{\"id\":" ++ jsonString template.id ++
-      ",\"direction\":" ++ jsonString (match direction with
-        | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
-      ",\"collections\":" ++ jsonArray (template.collections.map jsonString) ++
-      ",\"delivery\":" ++ jsonString (match template.delivery with | .push => "push") ++
-      ",\"filters\":" ++ jsonArray ((ScopeTemplates.directionalScopeFilters template direction
-        "did:key:reader" "did:key:owner").map scopePredicateJson) ++ "}")
-
 /-- The snapshot's concatenation chains are bounded to keep model execution
 within Lean's interpreter recursion limit. -/
 def snapshotPromptTailJson : String :=
@@ -449,7 +425,6 @@ def snapshotGoalCasesJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
-    ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"goal_fresh_session_input_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.freshSessionCasesJson ++ ","
     ++ "\"goal_wake_receipt_cases\":"
@@ -548,18 +523,8 @@ def snapshotRequestCasesJson : String :=
 
 def snapshotSessionCasesJson : String :=
   ""
-    ++ "\"enrollment_auto_renewal_cases\":" ++ autoRenewalCasesJson ++ ","
-    ++ "\"enrollment_renewal_intent_cases\":" ++ renewalIntentCasesJson ++ ","
-    ++ "\"enrollment_cases\":"
-      ++ enrollmentCasesJson ++ ","
-    ++ "\"enrollment_durable_projection_cases\":"
-      ++ enrollmentDurableProjectionCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
-    ++ "\"enrollment_encoding_cases\":"
-      ++ enrollmentEncodingCasesJson ++ ","
-    ++ "\"enrollment_digest_cases\":"
-      ++ enrollmentDigestCasesJson ++ ","
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"session_document_reference_encoding\":" ++ sessionDocumentReferenceEncodingJson ++ ","
     ++ "\"session_document_retry_cases\":" ++ sessionDocumentRetryCasesJson ++ ","
@@ -631,20 +596,10 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OptimizationPromotion.casesJson ++ ","
     ++ "\"identity_readiness_preflight_cases\":"
       ++ Identity.OperationsConformance.preflightCasesJson ++ ","
-    ++ "\"identity_deferred_operation_cases\":"
-      ++ Identity.OperationsConformance.deferredCasesJson ++ ","
     ++ "\"identity_pairing_partition_cases\":"
       ++ Identity.OperationsConformance.pairingPartitionCasesJson ++ ","
-    ++ "\"identity_desired_publisher_cases\":"
-      ++ Identity.OperationsConformance.desiredPublisherCasesJson ++ ","
     ++ "\"identity_pairing_reader_cases\":"
       ++ Identity.OperationsConformance.pairingReaderCasesJson ++ ","
-    ++ "\"identity_pairing_reader_policy_cases\":"
-      ++ Identity.OperationsConformance.pairingReaderPolicyCasesJson ++ ","
-    ++ "\"identity_local_registry_writer_cases\":"
-      ++ Identity.OperationsConformance.localRegistryWriterCasesJson ++ ","
-    ++ "\"identity_discovery_policy_cases\":"
-      ++ Identity.OperationsConformance.discoveryPolicyCasesJson ++ ","
     ++ "\"identity_replica_grant_cases\":"
       ++ Identity.OperationsConformance.replicaGrantCasesJson ++ ","
     ++ "\"identity_enrollment_policy_cases\":"
@@ -742,10 +697,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray
         (pairingReconcileSweepRetryBoundaryCases.map
           pairingReconcileSweepRetryBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_sweep_scheduling_cases\":"
-      ++ jsonArray
-        (pairingReconcileSweepSchedulingCases.map
-          pairingReconcileSweepSchedulingCaseJson) ++ ","
     ++ "\"managed_exec_liveness_cases\":"
       ++ jsonArray
         (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
@@ -858,8 +809,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_lineage_cases\":" ++ Conformance.PluginJob.lineageCasesJson ++ ","
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
-    ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
-    ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
     ++ "\"causal_hop_cap_observation_cases\":"

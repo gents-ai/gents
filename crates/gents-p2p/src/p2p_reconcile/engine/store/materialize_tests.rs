@@ -221,13 +221,26 @@ async fn expired_authority_rolls_back_the_whole_materialization_transaction() {
 #[tokio::test]
 async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document() {
     use gents_store::identity::NodeIdentity;
-    let model = &gents_lean_vocab::lean_contract_snapshot().identity_desired_publisher_cases;
-    let allowed = model.iter().find(|case| case["name"] == "client").unwrap()["allowed"]
-        .as_bool()
-        .unwrap();
-    let rejected = model.iter().find(|case| case["name"] == "unheld").unwrap()["allowed"]
-        .as_bool()
-        .unwrap();
+    let mut published = std::collections::BTreeMap::new();
+    let mut linked = std::collections::BTreeMap::new();
+    let own_node = fixture().await;
+    let own = own_node.node_identity_did().unwrap().to_owned();
+    let entry = authorized();
+    let own_saved = ConfigAccess::transact_local_write(
+        &own_node,
+        runtime_actor(&own_node),
+        "test.desired.runtime",
+        |txn| {
+            let entry = &entry;
+            let target = own.as_str();
+            Box::pin(async move {
+                materialize_enrollment_desired_in_txn(txn, target, entry, &BTreeSet::new()).await
+            })
+        },
+    )
+    .await;
+    published.insert("runtime", own_saved.is_ok());
+    own_node.shutdown().await.unwrap();
     let node = fixture().await;
     let directory = tempfile::tempdir().unwrap();
     let remote =
@@ -249,17 +262,17 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
         },
     )
     .await;
-    assert_eq!(saved.is_ok(), allowed);
+    published.insert("client", saved.is_ok());
     let doc = saved.unwrap();
     let result = rows(&node).await;
     let row = result.iter().find(|row| row["_docID"] == doc).unwrap();
     assert_eq!(row["node_did"], remote.did());
-    let before = gents_lean_vocab::lean_contract_snapshot()
-        .identity_deferred_operation_cases
-        .iter()
-        .find(|case| case["name"] == "before-node")
-        .unwrap();
-    assert_eq!(row["parent_linked"], before["expected_linked"]);
+    linked.insert(
+        "before-node",
+        row["parent_linked"]
+            .as_bool()
+            .expect("parent_linked marker"),
+    );
     let owners = runtime_access(&node)
         .transact_readonly("test.desired.owner", |txn| {
             let doc = &doc;
@@ -284,7 +297,7 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
             })
         })
         .await;
-    assert_eq!(denied.is_ok(), rejected);
+    published.insert("unheld", denied.is_ok());
     let denied = denied.unwrap_err();
     assert!(
         gents_protocol::error_chain::find_map_source(denied.as_ref(), |cause| cause
@@ -297,6 +310,33 @@ async fn client_owned_route_can_name_a_remote_node_without_a_local_node_document
         "{denied:#}"
     );
     node.shutdown().await.unwrap();
+    for case in gents_lean_vocab::families::identity_operations_desired_publisher::cases() {
+        let allowed = published
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the publisher scenario never reached {}", case.input.name));
+        case.check(
+            gents_lean_vocab::families::identity_operations_desired_publisher::Allowed { allowed },
+        );
+    }
+    assert!(
+        published.is_empty(),
+        "unmodeled publisher observations: {published:?}"
+    );
+    for case in gents_lean_vocab::families::identity_operations_deferred_materialize_linked::cases()
+    {
+        let linked = linked
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the publisher scenario never reached {}", case.input.name));
+        case.check(
+            gents_lean_vocab::families::identity_operations_deferred_materialize_linked::Linked {
+                linked,
+            },
+        );
+    }
+    assert!(
+        linked.is_empty(),
+        "unmodeled deferred observations: {linked:?}"
+    );
 }
 
 #[tokio::test]
