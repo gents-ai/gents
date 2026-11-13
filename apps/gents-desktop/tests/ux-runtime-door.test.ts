@@ -142,6 +142,33 @@ it("refreshes only the changed pack and removes its retired pages", async () => 
   expect(chips()).toEqual(["second:chip"]);
 });
 
+it("reloads a pack plugin on a plain scan only when its listing digest changes (a CLI reinstall)", async () => {
+  const v1 = { ...packed("first", true), digest: "sha256:a" };
+  listings = [v1];
+  sources.set(v1.id, chipPlugin("first"));
+  await scanRuntimeUxPlugins();
+  expect(chips()).toEqual(["first:chip"]);
+
+  call.mockClear();
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([]);
+
+  listings = [{ ...v1, digest: "sha256:b" }];
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: v1.id }]]);
+  expect(chips()).toEqual(["first:chip"]);
+});
+
+it("never rereads a pack plugin listed without a digest on a plain scan", async () => {
+  const p = packed("first", true);
+  listings = [p];
+  sources.set(p.id, chipPlugin("first"));
+  await scanRuntimeUxPlugins();
+  call.mockClear();
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([]);
+});
+
 it("reports an explicit pack refresh failure without retiring the current pages", async () => {
   const entry = packed("widget", true);
   listings = [entry];
