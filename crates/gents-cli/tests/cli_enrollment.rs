@@ -37,6 +37,7 @@ use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::TerminalOutput;
 #[cfg(feature = "live-e2e")]
 use gents_protocol::output::MessageRole;
+#[cfg(feature = "live-e2e")]
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 #[cfg(feature = "live-e2e")]
 use gents_protocol::row::AgentRequestRow;
@@ -681,7 +682,7 @@ async fn wait_for_complete_agent_response_with_access(
                         bail!("terminal message output lost its header identity for {request_id}: {row}");
                     };
                     #[cfg(not(feature = "live-e2e"))]
-                    let _ = message_doc_id;
+                    let _ = (message_doc_id, visible);
                     return Ok(RuntimeTerminalReply {
                         #[cfg(feature = "live-e2e")]
                         header_doc_id: message_doc_id,
