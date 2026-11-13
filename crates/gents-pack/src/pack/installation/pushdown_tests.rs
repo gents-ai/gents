@@ -343,13 +343,13 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
         .unwrap()
     };
     let slot = |name: &str| &bindings[&format!("fixture-{name}")];
-    let actors = BTreeMap::from([
+    let actors = [
         ("user", user_access.clone()),
         ("writer", agent_access(slot("writer"))),
         ("reviewer", agent_access(slot("reviewer"))),
         ("integrator", agent_access(slot("integrator"))),
         ("other", agent_access(&other)),
-    ]);
+    ];
     let readable = |actor: &'static str, access: ConfigAccess| async move {
         let rows = access
             .execute("{ RepositoryPlacement { repository_id } }")
@@ -364,10 +364,24 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
                     .any(|row| row["repository_id"] == "placement-fixture-repository")
             })
     };
-    let cases = &gents_lean_vocab::lean_contract_snapshot().pack_placement_reader_cases;
-    assert_eq!(cases.len(), 3);
-    for case in cases {
-        match case.state.as_str() {
+    let fixture_config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("pack_config.json")).unwrap()).unwrap();
+    let fixture_readers: Vec<&str> = fixture_config["repository_placements"][0]["readers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|reader| reader["agent_did"].as_str().unwrap())
+        .collect();
+    for case in gents_lean_vocab::families::pack_placement_readers_readers::cases::<String>() {
+        assert_eq!(
+            fixture_readers,
+            case.input
+                .declared
+                .iter()
+                .map(|slot| format!("gents:agent-slot:fixture-{slot}"))
+                .collect::<Vec<_>>()
+        );
+        match case.input.state.as_str() {
             "installed" => {}
             "reinstalled_after_revoke" => {
                 let (doc, _) = user_access
@@ -410,18 +424,16 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
             }
             state => panic!("unmodeled placement reader state {state}"),
         }
-        for expected in &case.readers {
-            let actor = *actors
-                .keys()
-                .find(|known| **known == expected.actor.as_str())
-                .unwrap();
-            assert_eq!(
-                readable(actor, actors[actor].clone()).await,
-                expected.read,
-                "{} {actor}",
-                case.state
+        let mut observed = Vec::new();
+        for (actor, access) in &actors {
+            observed.push(
+                gents_lean_vocab::families::pack_placement_readers_readers::ReaderObservation {
+                    actor: (*actor).to_owned(),
+                    read: readable(*actor, access.clone()).await,
+                },
             );
         }
+        case.check(observed);
     }
     db.node.shutdown().await.unwrap();
 }

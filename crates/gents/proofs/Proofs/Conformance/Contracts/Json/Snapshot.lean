@@ -173,7 +173,7 @@ import Proofs.Conformance.PluginStoreNotice
 import Proofs.Conformance.NativeCompletionTrace
 import Proofs.Store.Identity.MailboxAccess
 import Proofs.Store.Identity.WorkspaceAndFileRequests
-import Proofs.Store.Identity.PackPlacementReaders
+import Proofs.Conformance.Identity.PackPlacementReaders
 import Proofs.Store.Identity.AgentTargetAccess
 import Proofs.Conformance.NativeRoute
 import Proofs.Session.Identity.SessionInputEdit
@@ -424,7 +424,6 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
-    ++ "\"operator_path_cases\":" ++ Conformance.OperatorPaths.casesJson.compress ++ ","
     ++ "\"access_review_task_cases\":" ++ Conformance.AccessReview.taskCasesJson.compress ++ ","
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
     ++ "\"workspace_command_grant_answers\":" ++ Conformance.WorkspaceCommandGrants.answersJson.compress ++ ","
@@ -534,7 +533,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
     ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
-    ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
     ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
@@ -578,12 +576,8 @@ def snapshotClientCasesJson : String :=
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
     ++ "\"client_live_delta_cases\":"
       ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
-    ++ "\"plugin_reference_cases\":"
-      ++ PackInstallation.casesJson ++ ","
-    ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
-    ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","
     ++ "\"snapshot_demotion_cases\":"
       ++ snapshotDemotionCasesJson ++ ","
     ++ "\"startup_readiness_cases\":"
@@ -708,24 +702,12 @@ def snapshotRecoveryCasesJson : String :=
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"plugin_resource_consent_cases\":"
-      ++ Conformance.PluginResources.pluginResourceConsentCasesJson ++ ","
-    ++ "\"plugin_resource_budget_cases\":"
-      ++ Conformance.PluginResources.pluginResourceBudgetCasesJson ++ ","
-    ++ "\"plugin_resource_publication_cases\":"
-      ++ Conformance.PluginResources.pluginResourcePublicationCasesJson ++ ","
     ++ "\"plugin_resource_child_admission_cases\":"
       ++ Conformance.PluginResources.pluginResourceChildAdmissionCasesJson ++ ","
     ++ "\"plugin_resource_tool_effect_terminal_cases\":"
       ++ Conformance.PluginResources.pluginResourceToolEffectTerminalCasesJson ++ ","
     ++ "\"plugin_resource_tool_effect_accounting_cases\":"
       ++ Conformance.PluginResources.pluginResourceToolEffectAccountingCasesJson ++ ","
-    ++ "\"plugin_resource_model_slot_cases\":"
-      ++ Conformance.PluginResources.pluginResourceModelSlotCasesJson ++ ","
-    ++ "\"plugin_resource_network_cases\":"
-      ++ Conformance.PluginResources.pluginResourceNetworkCasesJson ++ ","
-    ++ "\"plugin_resource_host_import_cases\":"
-      ++ Conformance.PluginResources.pluginResourceHostImportCasesJson ++ ","
     ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
     ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
     ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","

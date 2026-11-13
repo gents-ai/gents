@@ -1,39 +1,8 @@
 use super::*;
 
 #[test]
-fn generated_operator_path_cases_protect_names_and_file_aliases() {
-    #[derive(serde::Deserialize)]
-    struct Case {
-        kind: String,
-        expected: bool,
-        command: Option<CommandCase>,
-    }
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct CommandCase {
-        required: bool,
-        supported: bool,
-        inspected: bool,
-        single_linked: bool,
-    }
-
-    let cases = &gents_lean_vocab::lean_contract_snapshot().operator_path_cases;
-    assert_eq!(cases.len(), 29);
-    for value in cases {
-        let case: Case = serde_json::from_value(value.clone()).unwrap();
-        if let Some(input) = case.command {
-            assert_eq!(
-                gents_loop::tool_policy::operator_paths::command_guard_allows(
-                    input.required,
-                    input.supported,
-                    input.inspected,
-                    input.single_linked,
-                ),
-                case.expected,
-                "{value}",
-            );
-            continue;
-        }
+fn operator_path_protection_follows_the_lean_model() {
+    gents_lean_vocab::families::operator_paths_protection::replay::<String>(|i| {
         let world = world();
         let guarded = file(&world.gents);
         let queue = world
@@ -49,9 +18,9 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
             .join(gents_store::local::home::PERMISSION_STAGING_DIR_NAME);
         paths.push(staging.clone());
         let mut target = world.root.join("work/a.txt");
-        match case.kind.as_str() {
+        match i.kind.as_str() {
             "ordinary" => {}
-            "writeOnly" => {
+            "write_only" => {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
@@ -59,17 +28,17 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
                         .unwrap();
                 }
             }
-            "ordinaryAlias" => {
+            "ordinary_alias" => {
                 let alias = world.root.join("work/alias.txt");
                 std::fs::hard_link(&target, &alias).unwrap();
                 target = alias;
             }
             "missing" => target = world.root.join("work/missing.txt"),
-            "staged" | "stagedAlias" => {
+            "staged" | "staged_alias" => {
                 std::fs::create_dir(&staging).unwrap();
                 let staged = staging.join("pending");
                 std::fs::write(&staged, "pending permissions").unwrap();
-                target = if case.kind == "staged" {
+                target = if i.kind == "staged" {
                     staged
                 } else {
                     let alias = world.root.join("work/staged-alias");
@@ -77,15 +46,15 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
                     alias
                 };
             }
-            "uncreatedStaged" => target = staging.join("future"),
+            "uncreated_staged" => target = staging.join("future"),
             "named" => target = guarded,
-            "uncreatedNamed" => {
+            "uncreated_named" => {
                 std::fs::remove_file(&guarded).unwrap();
                 target = guarded;
             }
-            "alias" | "queueAlias" => {
+            "alias" | "queue_alias" => {
                 target = world.root.join("work/operator-alias.txt");
-                let source = if case.kind == "alias" {
+                let source = if i.kind == "alias" {
                     &guarded
                 } else {
                     &question
@@ -93,15 +62,11 @@ fn generated_operator_path_cases_protect_names_and_file_aliases() {
                 std::fs::hard_link(source, &target).unwrap();
             }
             "unavailable" => target = world.root.join("work/invalid\0path"),
-            "guardUnavailable" => paths.push(world.gents.join("invalid\0path")),
+            "guard_unavailable" => paths.push(world.gents.join("invalid\0path")),
             other => panic!("unknown operator path case: {other}"),
         }
-        assert_eq!(
-            protected::inspect(&paths, &target).unwrap_or(true),
-            case.expected,
-            "{value}"
-        );
-    }
+        protected::inspect(&paths, &target).unwrap_or(true)
+    });
 }
 
 #[cfg(unix)]

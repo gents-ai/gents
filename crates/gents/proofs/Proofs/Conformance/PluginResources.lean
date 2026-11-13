@@ -8,27 +8,39 @@ import Proofs.Tools.ToolPolicy.PluginCalls
 import Proofs.Tools.ToolPolicy.PluginData
 import Proofs.Conformance.PluginEffects
 import Proofs.Conformance.Family
+import Std.Data.HashMap
 import Lean
 
 namespace Conformance.PluginResources
 open ToolPolicy Lean
 
-private def consentJson : Json := toJson <| [0, 1, 64, 1536, 4096, 4294967295].flatMap fun requested =>
-  [0, 1, 64, 1536, 4096].flatMap fun previous =>
-  [false, true].map fun consent => Json.mkObj [
-    ("requested", toJson requested), ("previous", toJson previous), ("consent", toJson consent),
-    ("expected", toJson (pluginResourceConsented requested previous consent))]
+structure LimitConsentInput where
+  requested : Nat
+  previous : Nat
+  consent : Bool
+  deriving ToJson
 
-private def budgetsJson : Json := toJson <| [(64, 4096), (5, 900), (60, 900), (1, 4)].flatMap fun (baseline, ceiling) =>
-  [0, 1, baseline, ceiling, ceiling + 1, 4294967295].map fun requested => Json.mkObj [
-    ("baseline", toJson baseline), ("requested", toJson requested), ("ceiling", toJson ceiling),
-    ("expected", toJson (effectivePluginResource baseline requested ceiling))]
+@[conformance_family]
+def limitConsent : Family LimitConsentInput Bool where
+  inputs := [0, 1, 64, 1536, 4096, 4294967295].flatMap fun requested =>
+    [0, 1, 64, 1536, 4096].flatMap fun previous =>
+    [false, true].map fun consent => { requested, previous, consent }
+  model := fun i => pluginResourceConsented i.requested i.previous i.consent
 
-private def modelSlotsJson : Json := toJson <| [false, true].flatMap fun declared =>
-  [false, true].flatMap fun optional =>
-  [false, true].map fun agentFree => Json.mkObj [
-    ("declared", toJson declared), ("optional", toJson optional), ("agent_free", toJson agentFree),
-    ("expected", toJson (pluginModelSlotAllowed declared optional agentFree))]
+structure LimitBudgetInput where
+  baseline : Nat
+  requested : Nat
+  ceiling : Nat
+  deriving ToJson
+
+@[conformance_family]
+def limitBudget : Family LimitBudgetInput Nat where
+  inputs := [(64, 4096), (5, 900), (60, 900), (1, 4)].flatMap fun (baseline, ceiling) =>
+    [0, 1, baseline, ceiling, ceiling + 1, 4294967295].map fun requested =>
+      { baseline, requested, ceiling }
+  model := fun i => effectivePluginResource i.baseline i.requested i.ceiling
+
+attribute [conformance_function] ToolPolicy.pluginModelSlotAllowed
 
 section Network
 open ToolPolicy.PluginNetwork
@@ -96,17 +108,54 @@ private def targets : List (Target × List Addr) :=
       (Target.mk https (.ip ip) port, [ip])
   named ++ literal
 
-private def renderGrant : Grant → Json
-  | .sealed => Json.null
-  | .anyHost => Json.str "any"
-  | .hosts es => toJson (es.map renderEntry)
+inductive GrantScope where
+  | any
+  deriving ToJson, BEq, Hashable
 
-private def networkJson : Json := toJson <| grants.flatMap fun g =>
-  targets.map fun (t, addrs) => Json.mkObj [
-    ("grant", renderGrant g), ("url", toJson (renderTarget t)),
-    ("addresses", toJson (addrs.map renderAddr)),
-    ("public", toJson (addrs.map ipPublic)),
-    ("expected", toJson (allowed g t addrs))]
+/-- A plugin's HTTP grant: any host, or the listed host entries. -/
+structure HttpGrant where
+  scope : Option GrantScope
+  hosts : List String
+  deriving ToJson, BEq, Hashable
+
+structure NetworkInput where
+  grant : Option HttpGrant
+  url : String
+  addresses : List String
+  deriving ToJson, BEq, Hashable
+
+private def grantWire : Grant → Option HttpGrant
+  | .sealed => none
+  | .anyHost => some ⟨some .any, []⟩
+  | .hosts es => some ⟨none, es.map renderEntry⟩
+
+private def networkCases : List (Grant × Target × List Addr) :=
+  grants.flatMap fun g => targets.map fun (t, addrs) => (g, t, addrs)
+
+private def networkWire (c : Grant × Target × List Addr) : NetworkInput :=
+  { grant := grantWire c.1, url := renderTarget c.2.1, addresses := c.2.2.map renderAddr }
+
+private def networkAllowed : Std.HashMap NetworkInput Bool :=
+  networkCases.foldl (fun table (g, t, addrs) => table.insert (networkWire (g, t, addrs)) (allowed g t addrs)) {}
+
+@[conformance_family]
+def networkAdmission : Family NetworkInput Bool where
+  inputs := networkCases.map networkWire
+  model := fun i => networkAllowed.getD i false
+
+private def addressSets : List (List Addr) := (targets.map (·.2)).eraseDups
+
+private def addressesPublic : Std.HashMap (List String) (List Bool) :=
+  addressSets.foldl (fun table addrs => table.insert (addrs.map renderAddr) (addrs.map ipPublic)) {}
+
+structure AddressInput where
+  addresses : List String
+  deriving ToJson
+
+@[conformance_family]
+def addressPublic : Family AddressInput (List Bool) where
+  inputs := addressSets.map fun addrs => { addresses := addrs.map renderAddr }
+  model := fun i => addressesPublic.getD i.addresses []
 
 end Network
 
@@ -364,30 +413,62 @@ private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun sel
       ("selected", toJson selected), ("route", toJson name), ("admitted", toJson admitted),
       ("expected", toJson (PluginCalls.childAdmissible selected route admitted))]
 
-private def publicationJson : Json := toJson <| [false, true].flatMap fun previous =>
-  [("local_failure", [PluginPublication.Event.localFailure]),
-   ("notification_success", [.localPublished, .notificationSucceeded]),
-   ("notification_failure", [.localPublished, .notificationFailed]),
-   ("notification_cancelled", [.localPublished, .cancelled])].map fun (outcome, events) =>
-    Json.mkObj [("previous", toJson previous), ("outcome", toJson outcome),
-      ("expected", if PluginPublication.installedNew events then toJson "new"
-        else if previous then toJson "previous" else Json.null)]
+inductive PublicationOutcome where
+  | localFailure | notificationSuccess | notificationFailure | notificationCancelled
+  deriving ToJson
+
+/-- The installation a home shows after an install attempt. -/
+inductive VisibleInstallation where
+  | new | previous
+  deriving ToJson
+
+structure PublicationInput where
+  previous : Bool
+  outcome : PublicationOutcome
+  deriving ToJson
+
+def publicationEvents : PublicationOutcome → List PluginPublication.Event
+  | .localFailure => [.localFailure]
+  | .notificationSuccess => [.localPublished, .notificationSucceeded]
+  | .notificationFailure => [.localPublished, .notificationFailed]
+  | .notificationCancelled => [.localPublished, .cancelled]
+
+@[conformance_family]
+def publication : Family PublicationInput (Option VisibleInstallation) where
+  inputs := [false, true].flatMap fun previous =>
+    [PublicationOutcome.localFailure, .notificationSuccess, .notificationFailure,
+      .notificationCancelled].map fun outcome => { previous, outcome }
+  model := fun i =>
+    if PluginPublication.installedNew (publicationEvents i.outcome) then some .new
+    else if i.previous then some .previous else none
+
+inductive ImportAnswer where
+  | result | noScript
+  deriving ToJson
+
+structure HostImportInput where
+  declared : Bool
+  callHasScript : Bool
+  deriving ToJson
+
+structure HostImportObservation where
+  linked : Bool
+  answer : Option ImportAnswer
+  deriving ToJson
 
 /-- `PackPlugin.host_imports`: a plugin that declares `run_script` gets the
 `gents` imports linked on every call; one that does not gets none, so a guest
 importing them fails to instantiate. The import answers `result` when the call
-carries a script and `no_script` when it does not. (declared, callHasScript) -/
-def hostImportCases : List (Bool × Bool) :=
-  [(false, false), (false, true), (true, false), (true, true)]
+carries a script and `no_script` when it does not. -/
+def hostImportVerdict (i : HostImportInput) : HostImportObservation :=
+  { linked := i.declared
+    answer := if i.declared then some (if i.callHasScript then .result else .noScript) else none }
 
-/-- (linked, answer). -/
-def hostImportVerdict (c : Bool × Bool) : Bool × Option String :=
-  (c.1, if c.1 then some (if c.2 then "result" else "no_script") else none)
-
-private def hostImportJson : Json := toJson <| hostImportCases.map fun c =>
-  let (linked, answer) := hostImportVerdict c
-  Json.mkObj [("declared", toJson c.1), ("call_has_script", toJson c.2),
-    ("linked", toJson linked), ("answer", toJson answer)]
+@[conformance_family]
+def hostImport : Family HostImportInput HostImportObservation where
+  inputs := [false, true].flatMap fun declared => [false, true].map fun callHasScript =>
+    { declared, callHasScript }
+  model := hostImportVerdict
 
 section Scratch
 
@@ -678,15 +759,6 @@ def childRoutes : Family ChildRouteInput Bool where
     { staticHookOwned, jobBound, selected, admitted }
   model := fun i => routeVerdict (i.staticHookOwned, i.jobBound, i.selected, i.admitted)
 
-def pluginResourceConsentCasesJson : String :=
-  consentJson.compress
-
-def pluginResourceBudgetCasesJson : String :=
-  budgetsJson.compress
-
-def pluginResourcePublicationCasesJson : String :=
-  publicationJson.compress
-
 def pluginResourceChildAdmissionCasesJson : String :=
   childAdmissionJson.compress
 
@@ -696,14 +768,6 @@ def pluginResourceToolEffectTerminalCasesJson : String :=
 def pluginResourceToolEffectAccountingCasesJson : String :=
   PluginEffects.accountingCasesJson.compress
 
-def pluginResourceModelSlotCasesJson : String :=
-  modelSlotsJson.compress
-
-def pluginResourceNetworkCasesJson : String :=
-  networkJson.compress
-
-def pluginResourceHostImportCasesJson : String :=
-  hostImportJson.compress
 end Conformance.PluginResources
 
 namespace Conformance.PluginScratch

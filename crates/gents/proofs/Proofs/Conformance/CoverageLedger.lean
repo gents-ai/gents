@@ -800,6 +800,15 @@ def caseCoverage : List CoverageEntry :=
       "pack_wire_lock_cases"
       "PackWireLockCases")
       "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_hosted_plugin")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_pack_installation_hosted_plugin_unreached"
+      "model-production-gap: production has no single decision over the reviewed digest, the client plan and native authorization, and no production scenario installs a hosted plugin root with one of them missing.")
+      "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "contracts_pack_installation_hosted_schema"
@@ -973,8 +982,16 @@ def caseCoverage : List CoverageEntry :=
       "contracts_pack_installation_identity_plan")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_reference_cases"
-      "PluginReferenceCases")
+      "family"
+      "contracts_pack_installation_reference_availability")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_reference_removal")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_store_record_retention")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "snapshot_demotion_cases"
@@ -1600,8 +1617,8 @@ def caseCoverage : List CoverageEntry :=
       "workspace_callback_selection_visibility")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
-      "pack_placement_reader_cases"
-      "PackPlacementReaderCases")
+      "family"
+      "pack_placement_readers_readers")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "family"
@@ -1833,16 +1850,20 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: an operator Tools write bypasses the grant guard and no production scenario drives an operator write of a job block.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_model_slot_cases"
-      "PluginModelSlotCases")
+      "family"
+      "tool_policy_plugin_model_slot_allowed")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_budget_cases"
-      "PluginResourceCases")
+      "family"
+      "plugin_resources_limit_budget")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_network_cases"
-      "PluginNetworkCases")
+      "family"
+      "plugin_resources_network_admission")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_resources_address_public")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -1862,8 +1883,8 @@ def caseCoverage : List CoverageEntry :=
       "plugin_resources_invocations")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_publication_cases"
-      "ToolPolicy.PluginPublication")
+      "family"
+      "plugin_resources_publication")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -2003,8 +2024,8 @@ def caseCoverage : List CoverageEntry :=
       "plugin_resources_scratch_admissions")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_host_import_cases"
-      "PluginHostImportCases")
+      "family"
+      "plugin_resources_host_import")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -2545,9 +2566,13 @@ def caseCoverage : List CoverageEntry :=
       "workspace_command_root_selection"
       "Canonical host paths drive the production writable-root selection. A macOS execution regression checks real writes inside the project, rejection in its sibling and Full access restoring the configured root; other platforms retain the existing sandbox-unavailable barrier.")
       "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "operator_paths_command_guard")
+      "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "operator_path_cases"
-      "OperatorPathCases"
+      "family"
+      "operator_paths_protection"
       "Generated decisions drive the shared path guard with real files, hard links, nested approval queues, missing targets and failed filesystem inspection. File-tool regressions verify that both reads and writes reject operator aliases before touching contents. Filesystem handle identity and concurrent external namespace changes remain native premises.")
       "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

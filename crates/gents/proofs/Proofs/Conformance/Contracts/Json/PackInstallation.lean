@@ -112,12 +112,32 @@ def identityReference :
       fun binding => ResolvedBinding.mk binding.creationNonce binding.agentDid
 
 
-def hostedPluginCasesJson : String := jsonArray (
+structure HostedPluginInput where
+  reviewed : Bool
+  plan : Bool
+  native : Bool
+  deriving Lean.ToJson
+
+def hostedPluginInputs : List HostedPluginInput :=
   [false, true].flatMap fun reviewed => [false, true].flatMap fun plan =>
-    [false, true].map fun native =>
-      "{\"reviewed\":" ++ toString reviewed ++
-      ",\"plan\":" ++ toString plan ++ ",\"native\":" ++ toString native ++
-      ",\"allowed\":" ++ toString (Configuration.hostedPluginInstallAllowed reviewed plan native) ++ "}")
+    [false, true].map fun native => { reviewed, plan, native }
+
+/-- The hosted plugin-root scenario applies a reviewed archive's graph with
+the client's plan in a native-authorized transaction: it builds only the case
+where all three hold. -/
+@[conformance_family]
+def hostedPlugin : Conformance.Family HostedPluginInput Bool where
+  inputs := hostedPluginInputs.filter fun i => i.reviewed && i.plan && i.native
+  model := fun i => Configuration.hostedPluginInstallAllowed i.reviewed i.plan i.native
+
+/-- model-production-gap: production has no single decision over the reviewed
+digest, the client plan and native authorization; each denial is distributed
+across the hosted install route, and no production scenario yet installs a
+plugin root with one of them missing. -/
+@[conformance_family]
+def hostedPluginUnreached : Conformance.Family HostedPluginInput Bool where
+  inputs := hostedPluginInputs.filter fun i => !(i.reviewed && i.plan && i.native)
+  model := fun i => Configuration.hostedPluginInstallAllowed i.reviewed i.plan i.native
 
 deriving instance Lean.ToJson for Configuration.PackAttemptEvidence
 
@@ -161,38 +181,35 @@ example : Configuration.packCommitUnconfirmed [.noCommit] = false := by decide
 
 example : Configuration.packCommitUnconfirmed [.unknownCommit, .noCommit] = true := by decide
 
-def caseJson (name : String) (references : List (List String))
-    (rootShips dependencyShips installed : List String) (isLocal : Bool := true) : String :=
-  "{\"witness\":" ++ jsonString name ++
-    ",\"references\":" ++ jsonArray (references.map jsonStringArray) ++
-    ",\"root_ships\":" ++ jsonStringArray rootShips ++
-    ",\"dependency_ships\":" ++ jsonStringArray dependencyShips ++
-    ",\"installed\":" ++ jsonStringArray installed ++
-    ",\"local\":" ++ toString isLocal ++
-    ",\"removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
-      references.flatten (rootShips ++ dependencyShips) true) ++
-    ",\"unobserved_removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
-      references.flatten (rootShips ++ dependencyShips) false) ++
-    ",\"retain_notification_record\":" ++ toString
-      (Configuration.retainPluginStoreRecord rootShips false) ++
-    ",\"retain_retired_record\":" ++ toString
-      (Configuration.retainPluginStoreRecord rootShips true) ++
-    ",\"accepted\":" ++ toString (Configuration.pluginInstallAvailable
-      references.flatten (rootShips ++ dependencyShips) installed isLocal) ++ "}"
+inductive PinSource where
+  | installed | shipped
+  deriving Lean.ToJson, BEq
 
-def pinCaseJson (name : String) (source : String) (pin : Option String) (actual : String) : String :=
-  "{\"name\":" ++ jsonString name ++ ",\"source\":" ++ jsonString source ++
-    ",\"pin\":" ++ (match pin with | none => "null" | some value => jsonString value) ++
-    ",\"actual\":" ++ jsonString actual ++
-    ",\"accepted\":" ++ toString (Configuration.pluginPinMatches pin actual) ++ "}"
+structure PinInput where
+  name : String
+  source : PinSource
+  pin : Option String
+  actual : String
+  deriving Lean.ToJson
 
-def pinCasesJson : String := jsonArray [
-  pinCaseJson "installed_unpinned" "installed" none "a",
-  pinCaseJson "installed_match" "installed" (some "a") "a",
-  pinCaseJson "installed_mismatch" "installed" (some "b") "a",
-  pinCaseJson "shipped_match" "shipped" (some "a") "a",
-  pinCaseJson "shipped_mismatch" "shipped" (some "b") "a"
-]
+def pinCases : List PinInput := [
+  ⟨"installed_unpinned", .installed, none, "a"⟩,
+  ⟨"installed_match", .installed, some "a", "a"⟩,
+  ⟨"installed_mismatch", .installed, some "b", "a"⟩,
+  ⟨"shipped_match", .shipped, some "a", "a"⟩,
+  ⟨"shipped_mismatch", .shipped, some "b", "a"⟩]
+
+@[conformance_family]
+def pinPrepare : Conformance.Family PinInput Bool where
+  inputs := pinCases
+  model := fun i => Configuration.pluginPinMatches i.pin i.actual
+
+/-- The graph-commit scenario pins a plugin that is already installed in the
+home and ships none, so only installed sources can be built there. -/
+@[conformance_family]
+def pinInstalledCommit : Conformance.Family PinInput Bool where
+  inputs := pinCases.filter (·.source == .installed)
+  model := fun i => Configuration.pluginPinMatches i.pin i.actual
 
 def wireLockCasesJson : String := jsonArray ([false, true].map fun held =>
   "{\"held\":" ++ toString held ++ ",\"publish_allowed\":" ++
@@ -218,26 +235,62 @@ def operatorWireCasesJson : String := jsonArray (
       ",\"home\":" ++ toString home ++ ",\"allowed\":" ++
       toString (Configuration.operatorWireAvailable operator ready home) ++ "}")
 
-def casesJson : String := jsonArray [
-  caseJson "plugin_references.empty" [[]] [] [] [],
-  caseJson "plugin_references.missing" [["acme/search"]] [] [] [],
-  caseJson "plugin_references.shipped" [["acme/search"]] ["acme/search"] [] [],
-  caseJson "plugin_references.dependency" [["acme/search"]] [] ["acme/search"] [],
-  caseJson "plugin_references.installed" [["acme/search"]] [] [] ["acme/search"],
-  caseJson "plugin_references.wrong_namespace" [["other/search"]] ["acme/search"] [] [],
-  caseJson "plugin_references.mixed" [["acme/search", "acme/parse"]]
-    ["acme/search"] [] ["acme/parse"],
-  caseJson "plugin_references.missing_in_dependency"
-    [["acme/search"], ["acme/missing"]] ["acme/search"] [] [],
-  caseJson "plugin_references.repeated" [["acme/search", "acme/search"]]
-    [] ["acme/search"] [],
-  caseJson "plugin_references.remote_empty" [[]] [] [] [] false,
-  caseJson "plugin_references.remote_missing" [["acme/search"]] [] [] [] false,
-  caseJson "plugin_references.remote_recorded" [["acme/search"]] [] [] ["acme/search"] false,
-  caseJson "plugin_references.remote_shipped" [["acme/search"]] ["acme/search"] [] [] false,
-  caseJson "plugin_references.remote_dependency" [[]] [] ["acme/search"] [] false
-]
+structure ReferenceInput where
+  witness : String
+  references : List (List String)
+  rootShips : List String
+  dependencyShips : List String
+  installed : List String
+  «local» : Bool
+  deriving Lean.ToJson
 
+def referenceCases : List ReferenceInput := [
+  ⟨"plugin_references.empty", [[]], [], [], [], true⟩,
+  ⟨"plugin_references.missing", [["acme/search"]], [], [], [], true⟩,
+  ⟨"plugin_references.shipped", [["acme/search"]], ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.dependency", [["acme/search"]], [], ["acme/search"], [], true⟩,
+  ⟨"plugin_references.installed", [["acme/search"]], [], [], ["acme/search"], true⟩,
+  ⟨"plugin_references.wrong_namespace", [["other/search"]], ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.mixed", [["acme/search", "acme/parse"]], ["acme/search"], [],
+    ["acme/parse"], true⟩,
+  ⟨"plugin_references.missing_in_dependency", [["acme/search"], ["acme/missing"]],
+    ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.repeated", [["acme/search", "acme/search"]], [], ["acme/search"], [], true⟩,
+  ⟨"plugin_references.remote_empty", [[]], [], [], [], false⟩,
+  ⟨"plugin_references.remote_missing", [["acme/search"]], [], [], [], false⟩,
+  ⟨"plugin_references.remote_recorded", [["acme/search"]], [], [], ["acme/search"], false⟩,
+  ⟨"plugin_references.remote_shipped", [["acme/search"]], ["acme/search"], [], [], false⟩,
+  ⟨"plugin_references.remote_dependency", [[]], [], ["acme/search"], [], false⟩]
+
+@[conformance_family]
+def referenceAvailability : Conformance.Family ReferenceInput Bool where
+  inputs := referenceCases
+  model := fun i => Configuration.pluginInstallAvailable i.references.flatten
+    (i.rootShips ++ i.dependencyShips) i.installed i.«local»
+
+/-- The removal check reads the node's configuration, so its observation is
+the observed one. -/
+@[conformance_family]
+def referenceRemoval : Conformance.Family ReferenceInput Bool where
+  inputs := referenceCases
+  model := fun i => Configuration.pluginRetirementAllowed i.references.flatten
+    (i.rootShips ++ i.dependencyShips) true
+
+structure RetentionInput where
+  rootShips : List String
+  deriving Lean.ToJson
+
+structure RetentionObservation where
+  retainNotificationRecord : Bool
+  retainRetiredRecord : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def storeRecordRetention : Conformance.Family RetentionInput RetentionObservation where
+  inputs := [[], ["acme/search"]].map fun rootShips => { rootShips }
+  model := fun i =>
+    { retainNotificationRecord := Configuration.retainPluginStoreRecord i.rootShips false
+      retainRetiredRecord := Configuration.retainPluginStoreRecord i.rootShips true }
 
 structure EvalSubjectInput where
   name : String
