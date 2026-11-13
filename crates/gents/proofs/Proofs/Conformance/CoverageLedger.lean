@@ -3235,8 +3235,10 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "event_delivery_group_capture_unreached"
       "model-production-gap: production captures a callback group only inside the served callback scan (materialize_group), which loads the group by the delivery's own key; mismatched or trigger candidates have no production path and the eligible and quiesced cases need a served callback-binding scenario.")
       "triggers" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "callback_transition_cases" "CallbackTransitionCases"
-      "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through contracts_callback_recovery.")
+  , tagged (followUpCoverage "family" "contracts_callback_transition_unreached"
+      "model-production-gap: the callback executor's claim, run, succeed, fail and retry steps happen inside the served engine's database writes and no production function applies one step to an invocation; denial and interrupt state and journal replay through contracts_callback_denial and contracts_callback_recovery, but the invocation document stores the origin group as a derived key string and has no emission flag, so these input, origin and emission preservation witnesses have no native replay.")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_callback_saturation_trace")
       "triggers" [Surface.runtimeInternal]
 
   , tagged (consumerCoverage "family" "contracts_discovery_guidance_presented")

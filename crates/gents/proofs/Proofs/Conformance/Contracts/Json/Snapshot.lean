@@ -551,7 +551,6 @@ def snapshotPluginCasesJson : String :=
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

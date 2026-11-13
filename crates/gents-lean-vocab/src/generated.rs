@@ -196,88 +196,6 @@ pub struct LeanAuxiliaryOutputExpected {
     pub public_view: LeanCanonicalOutputView,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCase {
-    pub name: String,
-    pub post: LeanCallbackTransitionCasePost,
-    pub pre: LeanCallbackTransitionCasePre,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCasePost {
-    pub agent_did: String,
-    pub attempts: u64,
-    pub input: String,
-    pub invocation_id: String,
-    pub journal: Vec<LeanCallbackTransitionCasePostJournalItem>,
-    pub origin_group_key: LeanCallbackTransitionCasePostOriginGroupKey,
-    pub owner_node_did: String,
-    pub result_emitted: bool,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCasePostJournalItem {
-    pub index: u64,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCasePostOriginGroupKey {
-    pub consumer: LeanCallbackTransitionCasePostOriginGroupKeyConsumer,
-    pub consumer_config_key: String,
-    pub correlation: String,
-    pub node_did: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCasePostOriginGroupKeyConsumer {
-    pub binding_id: String,
-    pub kind: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCasePre {
-    pub agent_did: String,
-    pub attempts: u64,
-    pub input: String,
-    pub invocation_id: String,
-    pub journal: Vec<LeanCallbackTransitionCasePreJournalItem>,
-    pub origin_group_key: LeanCallbackTransitionCasePreOriginGroupKey,
-    pub owner_node_did: String,
-    pub result_emitted: bool,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCasePreJournalItem {
-    pub index: u64,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCasePreOriginGroupKey {
-    pub consumer: LeanCallbackTransitionCasePreOriginGroupKeyConsumer,
-    pub consumer_config_key: String,
-    pub correlation: String,
-    pub node_did: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCallbackTransitionCasePreOriginGroupKeyConsumer {
-    pub binding_id: String,
-    pub kind: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LeanCanonicalClosure {
@@ -1147,7 +1065,6 @@ pub struct LeanContractSnapshot {
     pub client_request_closure_cases: Vec<serde_json::Value>,
     pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub process_transition_cases: Vec<LeanLifecycleTransitionCase>,
-    pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub goal_client_delivery_cases: Vec<serde_json::Value>,
     pub goal_client_control_cases: Vec<LeanGoalClientControlCase>,
