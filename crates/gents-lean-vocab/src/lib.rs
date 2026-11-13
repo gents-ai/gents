@@ -105,7 +105,6 @@ pub use generated::*;
 mod canonical_execution;
 mod canonical_output;
 pub mod canonical_wire;
-pub mod canonical_presentation;
 pub mod claude_replay;
 pub mod consumer_scan;
 pub mod family;
@@ -118,8 +117,6 @@ pub mod families {
 
 pub use canonical_execution::*;
 pub use canonical_output::*;
-pub use canonical_presentation::native_adapter::native_presentation;
-pub use canonical_presentation::*;
 pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use title::*;
 

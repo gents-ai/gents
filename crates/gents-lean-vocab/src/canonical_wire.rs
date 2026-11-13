@@ -1160,3 +1160,42 @@ pub fn audit(observation: &Observation) -> AuditResult {
         None,
     ))
 }
+
+fn media_payloads(media: &Media<Vec<u8>>) -> Vec<&Vec<u8>> {
+    match &media.data {
+        MediaPayload::Base64 { payload }
+        | MediaPayload::Raw { payload }
+        | MediaPayload::String { payload } => vec![payload],
+        MediaPayload::Url { .. } | MediaPayload::Unknown => Vec::new(),
+    }
+}
+
+/// The payload fields of a reconstructed message: inline identifiers, media
+/// URLs and signatures are not payload.
+pub fn payload_fields(native: &Reconstructed) -> Vec<&Vec<u8>> {
+    native
+        .blocks
+        .iter()
+        .flat_map(|block| match block {
+            Block::Text { payload } => vec![payload],
+            Block::Reasoning { parts, .. } => parts
+                .iter()
+                .map(|part| match part {
+                    ReasoningPart::Text { payload, .. }
+                    | ReasoningPart::Encrypted { payload }
+                    | ReasoningPart::Redacted { payload }
+                    | ReasoningPart::Summary { payload } => payload,
+                })
+                .collect(),
+            Block::ToolCall { arguments, .. } => vec![arguments],
+            Block::ToolResult { parts, .. } => parts
+                .iter()
+                .flat_map(|part| match part {
+                    ResultPart::Text { payload } => vec![payload],
+                    ResultPart::Media { value } => media_payloads(value),
+                })
+                .collect(),
+            Block::Media { value } => media_payloads(value),
+        })
+        .collect()
+}

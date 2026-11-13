@@ -140,10 +140,10 @@
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.PayloadPresentationContracts.cases" }
       ],
       "constructors": [],
-      "generated_groups": ["canonical_payload_presentation_cases"],
+      "generated_groups": ["families"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents-session/src/session/history.rs", "crates/gents-toolcalls/src/call/lifecycle/delivery.rs", "crates/gents-tools/src/native/cli_tool.rs"],
-      "consumer_paths": ["crates/gents-lean-vocab/src/canonical_presentation.rs", "crates/gents-lean-vocab/src/canonical_presentation/native_adapter.rs", "crates/gents-toolcalls/src/call/lifecycle/delivery.rs"],
+      "consumer_paths": ["crates/gents-protocol/tests/canonical_output.rs", "crates/gents-toolcalls/src/call/lifecycle/delivery.rs"],
       "native_status": "pending",
       "required_cases": [
         "Bind exact terminal diagnostic ranges, literals and rendered bytes to the longest UTF-8-safe committed suffix within the supplied byte budget; invalid byte inputs are rejected at the adapter conversion boundary before the typed native helper.",

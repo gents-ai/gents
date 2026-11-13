@@ -2669,9 +2669,13 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the join of the observed request row with the own-lease title or access-review world runs only through the Lean activation and claim owner; no production scenario materializes those rows for the native watcher admission and claim owners, nor renewal, recovery or output capture.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "canonical_payload_presentation_cases"
-      "CanonicalPayloadPresentationCases"
-      "The four generated cases bind presented payload-field bytes and missing-dependency failure to native canonical reconstruction; stored-byte quantities remain Lean expectations. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
+      "family"
+      "payload_presentation_contracts_lengths"
+      "The four generated cases bind stored and presented payload-field bytes and missing-dependency failure to native canonical reconstruction; payload_presentation_contracts_malformed_lengths binds integrity rejection of a corrupted stored flush. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
+      "canonical-output" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "payload_presentation_contracts_malformed_lengths")
       "canonical-output" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "family"

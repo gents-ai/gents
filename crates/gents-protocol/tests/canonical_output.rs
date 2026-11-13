@@ -1,8 +1,11 @@
 use gents_lean_vocab::canonical_wire::{
-    self as wire, Observation, PayloadSpec, Presentation, Reconstructed, Segment,
+    self as wire, Message as WireMessage, Observation, PayloadSpec, Presentation, Reconstructed,
+    Segment,
 };
 use gents_lean_vocab::family::Json;
-use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
+use gents_protocol::output::reconstruction::{
+    reconstruct_message, reconstruct_stream, ObservedSegment,
+};
 use gents_protocol::output::recovery::plan_recovery_prefix;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputWriter,
@@ -139,5 +142,65 @@ fn auxiliary_output_projection_follows_the_lean_model() {
                 recovery_close,
             },
         )
+    });
+}
+
+fn payload_measurement(
+    segments: &Json,
+    message: &Json,
+) -> Option<gents_lean_vocab::families::payload_presentation_contracts_lengths::Measurement> {
+    let message: WireMessage<PayloadSpec> = wire::decode(&message.0);
+    let records: Vec<Segment> = wire::decode(&segments.0);
+    let records = wire::segments(&records, message.header.session);
+    let observed = observed(&records);
+    let header = wire::message(&message);
+    let (verdict, stored, presented) = match reconstruct_message(&observed, &[], &[], &header) {
+        Ok(native) => {
+            let native = wire::reconstructed_wire(&native, &header);
+            let presented = wire::payload_fields(&native)
+                .iter()
+                .map(|payload| payload.len() as u64)
+                .sum::<u64>();
+            let mut references = Vec::new();
+            for reference in &message.header.refs {
+                if !references.contains(reference) {
+                    references.push(reference.clone());
+                }
+            }
+            let stored = references
+                .iter()
+                .map(|reference| {
+                    reconstruct_stream(&observed, &[], &[], &wire::payload_ref(reference))
+                        .expect("a reconstructed message's stream reconstructs")
+                        .text
+                        .len() as u64
+                })
+                .sum::<u64>();
+            ("measured", Some(stored), Some(presented))
+        }
+        Err(error) if error.is_incomplete() => ("missing", None, None),
+        Err(_) => ("rejected", None, None),
+    };
+    Some(
+        gents_lean_vocab::families::payload_presentation_contracts_lengths::Measurement {
+            verdict: verdict.to_owned(),
+            stored_payload_bytes: stored,
+            presented_payload_bytes: presented,
+        },
+    )
+}
+
+#[test]
+fn payload_presentation_lengths_follow_the_lean_model() {
+    gents_lean_vocab::families::payload_presentation_contracts_lengths::replay(|input| {
+        payload_measurement(&input.segments, &input.message)
+    });
+}
+
+#[test]
+fn malformed_payload_presentation_follows_the_lean_model() {
+    gents_lean_vocab::families::payload_presentation_contracts_malformed_lengths::replay(|input| {
+        payload_measurement(&input.segments, &input.message)
+            .map(|measurement| gents_lean_vocab::family::recode(&measurement))
     });
 }

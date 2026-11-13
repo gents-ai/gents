@@ -99,7 +99,7 @@ background continuation owner rather than a gate operation.
 
 ## Payload presentation before provider-input sizing
 
-`canonical_payload_presentation_cases` measures only reconstructed payload fields.
+The family `payload_presentation_contracts_lengths` measures only reconstructed payload fields.
 Headers select presentations of stored streams, and neither payload length
 bounds the other:
 

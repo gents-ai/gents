@@ -13,10 +13,6 @@ pub fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecution
     &lean_contract_snapshot().canonical_execution_gate_cases
 }
 
-pub fn lean_canonical_payload_presentation_cases() -> &'static [LeanPayloadPresentationCase] {
-    &lean_contract_snapshot().canonical_payload_presentation_cases
-}
-
 pub fn lean_client_session_turn_cases() -> &'static [LeanSessionTurnCase] {
     &lean_contract_snapshot().client_session_turn_cases
 }
@@ -1039,7 +1035,6 @@ pub struct LeanContractSnapshot {
     pub session_input_edit_client_observation_cases: Vec<
         LeanSessionInputEditClientObservationCase,
     >,
-    pub canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub native_completion_cases: Vec<LeanNativeCompletionCase>,
     pub native_claim_lifetime_cases: Vec<LeanNativeClaimLifetimeCase>,
     pub families: BTreeMap<String, LeanFamily>,
@@ -2734,27 +2729,6 @@ pub enum LeanPayloadKind {
     Arguments,
     ToolOutput,
     Media,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPayloadLengths {
-    pub stored_payload_bytes: u64,
-    pub presented_payload_bytes: u64,
-}
-
-/// Payload presentation before provider-specific projection. These byte counts
-/// exclude metadata, escaping, media URLs and request structure; they are neither
-/// serialized request sizes nor token estimates. The existing provider_input
-/// owner must still project and estimate the complete request.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPayloadPresentationCase {
-    pub name: String,
-    pub segments: Vec<LeanCanonicalSegment>,
-    pub message: LeanCanonicalMessage<LeanPayloadSpec>,
-    /// `None` when the message cannot be reconstructed.
-    pub expected: Option<LeanPayloadLengths>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
