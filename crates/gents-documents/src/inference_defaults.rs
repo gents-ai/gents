@@ -61,3 +61,15 @@ impl ReasoningEffort {
         }
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::ReasoningEffort;
+
+    #[test]
+    fn reasoning_efforts_are_the_lean_reasoning_efforts() {
+        gents_lean_vocab::families::configuration_reasoning_effort_vocabulary::replay(
+            &ReasoningEffort::ALL,
+        );
+    }
+}

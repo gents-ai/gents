@@ -349,31 +349,6 @@ mod tests {
     }
 
     #[test]
-    fn generated_workspace_permission_resolution_cases() {
-        use gents_lean_vocab::families::workspace_permission_resolution_selection::Result;
-        gents_lean_vocab::families::workspace_permission_resolution_selection::replay::<Mode>(
-            |input| {
-                let entries: Vec<_> = input
-                    .entries
-                    .iter()
-                    .map(|entry| ((entry.key.workspace, entry.key.session), entry.clone()))
-                    .collect();
-                let session = input
-                    .session
-                    .map(|session| (input.workspace, Some(session)));
-                let default = (input.workspace, None);
-                let resolved = resolve(&entries, session.as_ref(), &default, |entry| &entry.0)
-                    .map(|entry| entry.1.clone());
-                let admits = resolved
-                    .as_ref()
-                    .map(|entry| (entry.key.workspace, entry.key.session))
-                    == Some((input.bound.workspace, input.bound.session));
-                Result { resolved, admits }
-            },
-        );
-    }
-
-    #[test]
     fn generated_workspace_permission_cases() {
         let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
         assert!(!snapshot.workspace_permission_cases.is_empty());
@@ -385,5 +360,19 @@ mod tests {
                 case.expected_reviewed_route,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod mode_conformance {
+    use super::Mode;
+
+    #[test]
+    fn workspace_permission_modes_are_the_lean_modes() {
+        gents_lean_vocab::families::tool_policy_workspace_permissions_mode_vocabulary::replay(&[
+            Mode::Ask,
+            Mode::AutoReview,
+            Mode::FullAccess,
+        ]);
     }
 }
