@@ -69,6 +69,12 @@ import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming
 import Proofs.Conformance.BackendHealthRetention
+import Proofs.Conformance.BackendProbeSchedule
+import Proofs.Conformance.BackendHealthAdmission
+import Proofs.Conformance.CaptureScope
+import Proofs.Conformance.InferenceSlotAccounting
+import Proofs.Conformance.FleetSlotAccounting
+import Proofs.Conformance.Identity.AgentBaseline
 import Proofs.Conformance.InferenceDroppedPermit
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.Identity.AgentTargetAccess
@@ -341,8 +347,6 @@ def snapshotCaptureTailJson : String :=
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
     ++ "\"client_request_publication_cases\":"
       ++ Identity.SessionChild.clientRequestPublicationCasesJson ++ ","
-    ++ "\"capture_scope_cases\":"
-      ++ captureScopeCasesJson ++ ","
     ++ "\"aggregate_token_budget_cases\":"
       ++ aggregateTokenBudgetCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
@@ -351,9 +355,6 @@ def snapshotCaptureTailJson : String :=
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
     ++ "\"task_hook_run_cases\":"
       ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
-    ++ "\"backend_probe_schedule_cases\":"
-      ++ jsonArray
-        (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""
@@ -512,16 +513,12 @@ def snapshotSessionCasesJson : String :=
     ++ "\"title_text_cases\":" ++ Conformance.TitleText.casesJson ++ ","
     ++ "\"title_usage_cases\":"
       ++ Conformance.TitleUsage.casesJson ++ ","
-    ++ "\"provider_usage_cases\":"
-      ++ Conformance.ProviderUsage.casesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
-    ++ "\"inference_observation_cases\":"
-      ++ Conformance.InferenceObservation.casesJson ++ ","
     ++ "\"inference_visibility_cases\":"
       ++ Conformance.InferenceObservation.visibilityCasesJson ++ ","
     ++ "\"inference_route_cases\":"
@@ -533,8 +530,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"identity_agent_baseline_cases\":"
-      ++ Identity.GrantSetsConformance.baselineCasesJson ++ ","
     ++ "\"identity_agent_creator_cases\":"
       ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
     ++ "\"mailbox_runtime_notice_case\":" ++ Identity.MailboxAccess.runtimeNoticeCasesJson ++ ","
@@ -617,10 +612,6 @@ def snapshotClientCasesJson : String :=
       ++ selfConfigCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
-    ++ "\"inference_slot_accounting_cases\":"
-      ++ jsonArray (inferenceSlotAccountingCases.map inferenceSlotAccountingCaseJson) ++ ","
-    ++ "\"fleet_slot_accounting_cases\":"
-      ++ jsonArray (fleetSlotAccountingCases.map fleetSlotAccountingCaseJson) ++ ","
 
 def snapshotRuntimeCasesJson : String :=
   ""
@@ -630,9 +621,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"storage_observation_runtime_cases\":"
       ++ jsonArray
         (storageObservationRuntimeCases.map storageObservationRuntimeCaseJson) ++ ","
-    ++ "\"backend_health_admission_cases\":"
-      ++ jsonArray
-        (backendHealthAdmissionCases.map backendHealthAdmissionCaseJson) ++ ","
     ++ "\"native_filesystem_boundary_cases\":"
       ++ jsonArray
         (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","

@@ -94,7 +94,9 @@ fn backend_health_transitions_follow_the_lean_model() {
 
 #[test]
 fn generated_backend_probe_schedule_cases_match_runtime_selection() {
-    fn configuration(value: &gents_lean_vocab::LeanBackendProbeConfiguration) -> InferenceBackend {
+    use gents_lean_vocab::families::backend_probe_schedule_select as wire;
+
+    fn configuration(value: &wire::ProbeConfiguration) -> InferenceBackend {
         let mut backend = backend(
             &format!("backend-{}", value.backend_id),
             format!("http://localhost/revision-{}", value.revision),
@@ -103,106 +105,94 @@ fn generated_backend_probe_schedule_cases_match_runtime_selection() {
         backend
     }
 
-    for case in gents_lean_vocab::lean_backend_probe_schedule_cases() {
+    fn backend_number(backend_id: &str) -> u64 {
+        backend_id
+            .strip_prefix("backend-")
+            .and_then(|id| id.parse().ok())
+            .unwrap_or_else(|| panic!("schedule fixture backend id {backend_id:?}"))
+    }
+
+    gents_lean_vocab::families::backend_probe_schedule_select::replay(|input: &wire::SelectInput| {
         let mut schedule = ProbeSchedule::default();
         schedule.select(
-            &case.known.iter().map(configuration).collect::<Vec<_>>(),
+            &input.known.iter().map(configuration).collect::<Vec<_>>(),
             true,
         );
         let selected = schedule.select(
-            &case.current.iter().map(configuration).collect::<Vec<_>>(),
-            case.periodic,
+            &input.current.iter().map(configuration).collect::<Vec<_>>(),
+            input.periodic,
         );
-        let expected = case
-            .due
+        let mut due = selected
             .iter()
-            .map(|id| format!("backend-{id}"))
-            .collect::<RapidHashSet<_>>();
-        assert_eq!(selected, expected, "{}", case.name);
-        let observed = case
-            .observed
+            .map(|id| backend_number(id))
+            .collect::<Vec<_>>();
+        due.sort_unstable();
+        let mut observed = schedule
+            .known
             .iter()
-            .map(configuration)
-            .map(|backend| (backend.backend_id.clone(), backend))
-            .collect::<RapidHashMap<_, _>>();
-        assert_eq!(
-            serde_json::to_value(&schedule.known).unwrap(),
-            serde_json::to_value(observed).unwrap(),
-            "{}",
-            case.name
-        );
-    }
+            .map(|(backend_id, backend)| {
+                assert_eq!(backend_id, &backend.backend_id);
+                wire::ProbeConfiguration {
+                    backend_id: backend_number(&backend.backend_id),
+                    revision: backend
+                        .endpoint
+                        .strip_prefix("http://localhost/revision-")
+                        .and_then(|revision| revision.parse().ok())
+                        .unwrap_or_else(|| panic!("schedule fixture endpoint {}", backend.endpoint)),
+                    enabled: backend.enabled,
+                }
+            })
+            .collect::<Vec<_>>();
+        observed.sort_unstable_by_key(|configuration| configuration.backend_id);
+        wire::SelectOutput { due, observed }
+    });
 }
 
 #[test]
 fn backend_fields_refine_the_modeled_probe_revision() {
-    type Edit = (&'static str, fn(&mut InferenceBackend), u32);
-    let edits: &[Edit] = &[
-        (
-            "provider",
-            |value| {
-                value.provider_kind = crate::backends::provider::BackendProviderKind::OpenRouter
-            },
-            1,
-        ),
-        ("endpoint", |value| value.endpoint.push_str("/changed"), 1),
-        (
-            "auth",
-            |value| {
-                value.auth = gents_documents::BackendAuth::ApiKey {
+    use gents_lean_vocab::families::backend_probe_schedule_field_edit as wire;
+
+    gents_lean_vocab::families::backend_probe_schedule_field_edit::replay::<String>(|input: &wire::FieldEditInput<String>| {
+        let base = backend("backend-0", "http://localhost/v1".into());
+        let mut changed = base.clone();
+        match input.field.as_str() {
+            "provider" => {
+                changed.provider_kind = crate::backends::provider::BackendProviderKind::OpenRouter
+            }
+            "wire_api" => {
+                changed.openai_wire_api = Some(gents_loop::openai_wire::OpenAiWireApi::Responses)
+            }
+            "endpoint" => changed.endpoint.push_str("/changed"),
+            "auth" => {
+                changed.auth = gents_documents::BackendAuth::ApiKey {
                     key: "test-key".into(),
                 }
-            },
-            1,
-        ),
-        (
-            "connect timeout",
-            |value| value.connect_timeout_secs = Some(20),
-            1,
-        ),
-        (
-            "discovery timeout",
-            |value| value.discovery_timeout_secs = Some(20),
-            1,
-        ),
-        ("name", |value| value.name = "Renamed".into(), 0),
-        ("tags", |value| value.tags = vec!["changed".into()], 0),
-        ("capacity", |value| value.max_concurrent = Some(2), 0),
-        ("queue capacity", |value| value.max_queue_depth = Some(2), 0),
-    ];
-    let base = backend("backend-0", "http://localhost/v1".into());
-    for (name, edit, revision) in edits {
-        let mut changed = base.clone();
-        edit(&mut changed);
+            }
+            "connect_timeout" => changed.connect_timeout_secs = Some(20),
+            "discovery_timeout" => changed.discovery_timeout_secs = Some(20),
+            "name" => changed.name = "Renamed".into(),
+            "tags" => changed.tags = vec!["changed".into()],
+            "capacity" => changed.max_concurrent = Some(2),
+            "queue_capacity" => changed.max_queue_depth = Some(2),
+            other => panic!("unknown modeled backend field {other:?}"),
+        }
         let mut schedule = ProbeSchedule::default();
         schedule.select(std::slice::from_ref(&base), true);
-        for known_revision in [0, *revision] {
-            let modeled = gents_lean_vocab::lean_backend_probe_schedule_cases()
-                .iter()
-                .find(|case| {
-                    !case.periodic
-                        && case.known.len() == 1
-                        && case.current.len() == 1
-                        && case.known[0].backend_id == 0
-                        && case.known[0].revision == known_revision
-                        && case.known[0].enabled
-                        && case.current[0].backend_id == 0
-                        && case.current[0].revision == *revision
-                        && case.current[0].enabled
-                })
-                .expect("the model emits changed and unchanged enabled configurations");
-            let expected = modeled
-                .due
-                .iter()
-                .map(|id| format!("backend-{id}"))
-                .collect::<RapidHashSet<_>>();
-            assert_eq!(
-                schedule.select(std::slice::from_ref(&changed), false),
-                expected,
-                "{name}"
-            );
+        let mut selected = schedule.select(std::slice::from_ref(&changed), false);
+        if input.repeated {
+            selected = schedule.select(std::slice::from_ref(&changed), false);
         }
-    }
+        let mut due = selected
+            .iter()
+            .map(|id| {
+                id.strip_prefix("backend-")
+                    .and_then(|id| id.parse().ok())
+                    .unwrap_or_else(|| panic!("schedule fixture backend id {id:?}"))
+            })
+            .collect::<Vec<u64>>();
+        due.sort_unstable();
+        due
+    });
 }
 
 struct ModelsListener {

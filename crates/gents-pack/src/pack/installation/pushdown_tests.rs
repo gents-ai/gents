@@ -122,6 +122,16 @@ async fn document_install_records_portable_source_and_history() {
 
 #[tokio::test]
 async fn locally_installed_pack_agent_holds_the_projected_baseline() {
+    use gents_lean_vocab::families::agent_baseline_pack_install as wire;
+
+    for case in gents_lean_vocab::families::agent_baseline_pack_install::cases() {
+        case.check(wire::InstallOutput {
+            installed: installed_baseline_after_local_pack_install().await,
+        });
+    }
+}
+
+async fn installed_baseline_after_local_pack_install() -> Vec<String> {
     use gents_store::identity::NodeIdentity as _;
     let (db, user, user_access) = gents_inference::test_support::signed_test_node_without_agent(
         "local-pack-baseline",
@@ -221,19 +231,9 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     )
     .await
     .unwrap();
-    let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .identity_agent_baseline_cases
-        .iter()
-        .find(|case| case.actor == "enrolled-user")
-        .expect("modeled enrolled-user lifecycle")
-        .steps
-        .iter()
-        .find(|step| step.action == "publish")
-        .expect("modeled publication")
-        .installed
-        .clone();
-    assert_eq!(held(db.node.clone(), agent).await, modeled);
+    let installed = held(db.node.clone(), agent).await;
     db.node.shutdown().await.unwrap();
+    installed
 }
 
 /// Lean `Identity.PackPlacementReaders`: installing the pack applies exactly

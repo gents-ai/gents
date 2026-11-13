@@ -1073,8 +1073,8 @@ def caseCoverage : List CoverageEntry :=
       "Exercises desktop retry eligibility and successor lineage. Admission lease release remains an owner refinement: terminal-failed is the current adapter assumption, and emitted admission witnesses are not independently observed. Exact-row retryFromRows cases require the migrated query/transaction owner.")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "inference_slot_accounting_cases"
-      "InferenceCallSlotAccounting")
+      "family"
+      "inference_slot_accounting_reconstruction")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "mailbox_notification_cases"
@@ -1128,17 +1128,17 @@ def caseCoverage : List CoverageEntry :=
       "Retry policy and canonical-execution composition are executable Lean witnesses. The native owned loop must still implement retraction-before-retry and immutable acceptance before this is consumer coverage.")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
-      "fleet_slot_accounting_cases"
+      "Proofs.Conformance.FleetSlotAccounting"
       "FleetSlotAccounting"
       "The database persists InferenceCall rows, not a FleetState aggregate; the scheduler reconstruction assumes those rows can be observed.")
       "fleet-slot-accounting" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "fleet_slot_accounting_cases"
-      "FleetSlotAccounting")
+      "family"
+      "fleet_slot_accounting_contribution")
       "fleet-slot-accounting" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "fleet_slot_accounting_cases"
-      "FleetSlotAccounting")
+      "family"
+      "fleet_slot_accounting_bound")
       "fleet-slot-accounting" [Surface.api]
   , tagged (consumerCoverage
       "persistence_failure_policy_cases"
@@ -1155,16 +1155,24 @@ def caseCoverage : List CoverageEntry :=
       "A provider models-endpoint probe does not establish completion health, remote-node reachability or fleet-wide document freshness.")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "backend_health_admission_cases"
-      "BackendHealthAdmissionCases")
+      "family"
+      "backend_health_admission_admission")
+      "backend-health" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "backend_health_admission_display")
       "backend-health" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
       "contracts_backend_health_transition")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "backend_probe_schedule_cases"
-      "BackendProbeScheduleCases")
+      "family"
+      "backend_probe_schedule_select")
+      "backend-health" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "backend_probe_schedule_field_edit")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1223,8 +1231,8 @@ def caseCoverage : List CoverageEntry :=
       "update_handoff_transitions")
       "runtime-reconcile" [Surface.runtimeInternal, Surface.operatorUi]
   , tagged (consumerCoverage
-      "inference_observation_cases"
-      "InferenceObservationCases")
+      "family"
+      "inference_observation_trace")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "inference_visibility_cases"
@@ -2749,8 +2757,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_rendered_capture_key")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "capture_scope_cases"
-      "CaptureScopeCases")
+      "family"
+      "capture_scope_parse")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

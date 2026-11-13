@@ -102,17 +102,6 @@ def renderedCaptureKey : Family CaptureKeyPair Bool where
         requestId := i.rightRequestId, turnIndex := i.rightTurnIndex
         attempt := i.rightAttempt })
 
-def captureScopeCaseJson (witness : CaptureScopeCase) : String :=
-  "{"
-    ++ "\"label\":" ++ jsonString witness.label ++ ","
-    ++ "\"kind\":" ++ jsonString witness.kind ++ ","
-    ++ "\"seq\":" ++ toString witness.seq ++ ","
-    ++ "\"valid\":" ++ boolString witness.valid
-    ++ "}"
-
-def captureScopeCasesJson : String :=
-  jsonArray (captureScopeCases.map captureScopeCaseJson)
-
 structure CaptureOrderPair where
   leftLabel : String
   leftTurn : Nat

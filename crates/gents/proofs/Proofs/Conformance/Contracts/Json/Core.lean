@@ -53,20 +53,4 @@ def storageObservationRuntimeCaseJson
       ++ boolString witness.externalVisibilityClaimed
     ++ "}"
 
-def backendHealthAdmissionCaseJson
-    (witness : BackendHealthAdmissionCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"enabled\":" ++ boolString witness.enabled ++ ","
-    ++ "\"probe_status\":" ++ jsonString witness.probeStatus ++ ","
-    ++ "\"expected_available\":"
-      ++ boolString witness.expectedAvailable ++ ","
-    ++ "\"admission_decision\":"
-      ++ jsonString witness.admissionDecision ++ ","
-    ++ "\"observed_document_only\":"
-      ++ boolString witness.observedDocumentOnly ++ ","
-    ++ "\"external_endpoint_freshness_claimed\":"
-      ++ boolString witness.externalEndpointFreshnessClaimed
-    ++ "}"
-
 end Conformance.Contracts

@@ -399,6 +399,15 @@ def CaptureScopeKind.rank : CaptureScopeKind → Nat
 def allCaptureScopeKinds : List CaptureScopeKind :=
   [.inference, .compaction, .compactionFallback, .title, .oneshot, .accessReview]
 
+/-- A string names a scope exactly when it is that scope's `kind.seq` label;
+every other string, a non-canonical number included, is malformed and must be
+refused rather than defaulted into another loop's ordering. -/
+def scopeOfLabel? (label : String) : Option (CaptureScopeKind × Nat) :=
+  allCaptureScopeKinds.findSome? fun kind =>
+    (label.dropPrefix? (kind.label ++ ".")).bind fun rest =>
+      rest.toString.toNat?.bind fun seq =>
+        if kind.label ++ "." ++ toString seq == label then some (kind, seq) else none
+
 structure CaptureScopeCase where
   label : String
   kind : String

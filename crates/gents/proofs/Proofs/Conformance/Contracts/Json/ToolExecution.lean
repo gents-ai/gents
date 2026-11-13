@@ -287,18 +287,4 @@ def backendHealthTransition :
       readinessReason := next.state.readinessReason.map
         RuntimeState.AgentUnavailableReason.code }
 
-def backendProbeConfigurationJson (config : Proofs.BackendHealth.ProbeConfiguration) : String :=
-  "{\"backend_id\":" ++ toString config.backendId
-    ++ ",\"revision\":" ++ toString config.revision
-    ++ ",\"enabled\":" ++ boolString config.enabled ++ "}"
-
-def backendProbeScheduleCaseJson (witness : Proofs.BackendHealth.ScheduleCase) : String :=
-  "{\"name\":" ++ jsonString witness.name
-    ++ ",\"known\":" ++ jsonArray (witness.known.map backendProbeConfigurationJson)
-    ++ ",\"current\":" ++ jsonArray (witness.current.map backendProbeConfigurationJson)
-    ++ ",\"periodic\":" ++ boolString witness.periodic
-    ++ ",\"due\":" ++ jsonArray (witness.due.map toString)
-    ++ ",\"observed\":" ++ jsonArray (witness.observed.map backendProbeConfigurationJson)
-    ++ "}"
-
 end Conformance.Contracts
