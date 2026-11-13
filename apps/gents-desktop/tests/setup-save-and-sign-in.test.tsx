@@ -64,22 +64,67 @@ describe("setup provider sign-in", () => {
     },
   );
 
-  it("starts sign-in for a chosen provider, not for the preselected one", async () => {
+  it("chooses no provider on first entry, and shows no setup or sign-in for one", async () => {
+    const accounts = vi.fn().mockResolvedValue([]);
+    const { api, app } = setup({ listProviderAccounts: accounts });
+    renderIn(
+      app,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
+    );
+    const choices = await screen.findAllByRole("radio");
+    await waitFor(() => expect(accounts).toHaveBeenCalled());
+    await accounts.mock.results[0]!.value;
+
+    expect(choices.length).toBeGreaterThan(1);
+    for (const choice of choices)
+      expect(choice).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("region", { name: /^Set up / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Connection method" }),
+    ).not.toBeInTheDocument();
+    for (const provider of ["openai", "anthropic", "grok"] as const)
+      expect(login(api, provider)).not.toHaveBeenCalled();
+  });
+
+  it("starts no sign-in until a provider is chosen, then only for that one", async () => {
     const { api, app } = setup();
     renderIn(
       app,
       <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
     );
-    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    const choice = await screen.findByTestId("setup-provider-anthropic");
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+    expect(api.claudeLogin).not.toHaveBeenCalled();
     expect(api.codexLogin).not.toHaveBeenCalled();
 
-    await userEvent.click(screen.getByTestId("setup-provider-anthropic"));
+    await userEvent.click(choice);
     expect(await screen.findByText("Account connected")).toBeVisible();
+    expect(choice).toHaveAttribute("aria-checked", "true");
     expect(api.claudeLogin).toHaveBeenCalledTimes(1);
     expect(api.codexLogin).not.toHaveBeenCalled();
+    expect(api.grokLogin).not.toHaveBeenCalled();
   });
 
-  it("starts sign-in when the preselected provider is chosen", async () => {
+  it.each(["openai", "anthropic"] as const)(
+    "shows the setup of %s, once chosen, while its sign-in is under way",
+    async (provider) => {
+      const { api, app } = setup();
+      vi.mocked(login(api, provider)).mockImplementation(() => new Promise(() => {}));
+      renderIn(
+        app,
+        <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
+      );
+      const choice = await screen.findByTestId(`setup-provider-${provider}`);
+      await userEvent.click(choice);
+      await waitFor(() => expect(login(api, provider)).toHaveBeenCalledTimes(1));
+      expect(choice).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByText("Finish signing in in your browser.")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+    },
+  );
+
+  it("starts sign-in when the first listed provider is chosen", async () => {
     const { api, app } = setup();
     renderIn(
       app,
@@ -123,7 +168,7 @@ describe("setup provider sign-in", () => {
     expect(api.claudeLogin).toHaveBeenCalledTimes(1);
   });
 
-  it("starts sign-in for the preselected provider chosen during the account lookup", async () => {
+  it("starts sign-in for the first listed provider chosen during the account lookup", async () => {
     let resolveAccounts: (accounts: []) => void = () => {};
     const { api, app } = setup({
       listProviderAccounts: vi.fn(
@@ -142,16 +187,37 @@ describe("setup provider sign-in", () => {
   });
 
   it("starts sign-in when the OAuth connection method is chosen", async () => {
-    const { api, app } = setup();
+    const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
+    const catalog = await harness.adapter.getInferenceSetupCatalog();
+    const keyFirst = {
+      ...catalog,
+      providers: catalog.providers.map((option) => {
+        const key = option.authOptions.find((auth) => auth.method === "api_key");
+        return option.id === "openai" && key
+          ? {
+              ...option,
+              defaultAuthMethod: key.method,
+              defaultEndpoint: key.defaultEndpoint,
+            }
+          : option;
+      }),
+    };
+    const { api, app } = setup(
+      { getInferenceSetupCatalog: vi.fn().mockResolvedValue(keyFirst) },
+      harness,
+    );
     renderIn(
       app,
       <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
     );
     const user = userEvent.setup();
     const method = () => screen.getByRole("combobox", { name: "Connection method" });
-    await screen.findByRole("button", { name: "Sign in" });
-    await user.click(method());
-    await user.click(await screen.findByRole("option", { name: "OpenAI API key" }));
+    await user.click(await screen.findByTestId("setup-provider-anthropic"));
+    expect(await screen.findByText("Account connected")).toBeVisible();
+    await user.click(screen.getByTestId("setup-provider-openai"));
+    expect(await screen.findByLabelText("API key")).toBeVisible();
+    expect(method()).toHaveTextContent("OpenAI API key");
+    expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
     expect(api.codexLogin).not.toHaveBeenCalled();
     await user.click(method());
     await user.click(await screen.findByRole("option", { name: "ChatGPT sign-in" }));
@@ -290,13 +356,14 @@ describe("a connected account in setup", () => {
     await userEvent.click(screen.getByRole("button", { name: "Use another account" }));
     accounts.mockResolvedValue([claude(), work]);
     await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
-    const find = await screen.findByRole("button", { name: /find models/i });
-    discover.mockClear();
-    await userEvent.click(find);
-    await waitFor(() => expect(discover).toHaveBeenCalled());
-    expect(discover).toHaveBeenLastCalledWith(
-      expect.objectContaining({ accountRef: "acct-2" }),
+    await waitFor(() =>
+      expect(discover).toHaveBeenLastCalledWith(
+        expect.objectContaining({ accountRef: "acct-2" }),
+      ),
     );
+    expect(
+      screen.queryByRole("button", { name: /find models/i }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -398,6 +465,15 @@ describe.each(["onboarding", "add-backend"] as const)("%s API-key setup", (purpo
         />,
       );
       const user = userEvent.setup();
+      if (purpose === "onboarding") {
+        /* setup opens on the saved account; the method is offered again
+           once that account is set aside */
+        expect(await screen.findByText("Connected as work@example.com")).toBeVisible();
+        expect(
+          screen.queryByRole("combobox", { name: "Connection method" }),
+        ).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Use another account" }));
+      }
       const method = await screen.findByRole("combobox", { name: "Connection method" });
       expect(method).toHaveTextContent(choice.signIn);
       await user.click(method);
@@ -526,7 +602,6 @@ describe("add another account", () => {
       await screen.findByRole("button", { name: "Use saved account: Personal" }),
     );
     expect(await screen.findByText("Connected as Personal")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Find models" }));
     await waitFor(() => expect(discoverInferenceModels).toHaveBeenCalledTimes(1));
     expect(discoverInferenceModels).toHaveBeenCalledWith(
       expect.objectContaining({

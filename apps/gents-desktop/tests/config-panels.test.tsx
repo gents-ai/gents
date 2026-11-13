@@ -271,7 +271,18 @@ describe("configuration panels", () => {
         onDone={vi.fn()}
       />,
     );
-    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    await waitFor(() =>
+      expect(screen.queryByText("Account connected")).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(api.listProviderAccounts).toHaveBeenCalledTimes(2));
+    expect(api.listProviderAccounts).toHaveBeenLastCalledWith("did:test:agent-b");
+    expect(screen.getByTestId("setup-provider-openai")).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(
+      screen.queryByRole("region", { name: "Set up OpenAI" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
   });
 

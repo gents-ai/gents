@@ -16,7 +16,8 @@ import {
 import { Spinner } from "@gents/ui/components/spinner";
 import { useApp } from "@/app/AppContext";
 import { PROVIDER_CREDENTIAL_KIND } from "@/lib/providerLogin";
-import { Field } from "./parts";
+import { ArrowLeftRight } from "lucide-react";
+import { Field, IconAction } from "./parts";
 import {
   oauthProviderFor,
   type ConnectionDraft,
@@ -42,6 +43,7 @@ export function ConnectionFields({
   option,
   purpose,
   canRetrySave,
+  finding,
   ops,
 }: {
   form: SetupForm;
@@ -51,6 +53,8 @@ export function ConnectionFields({
   option: InferenceProviderOption | undefined;
   purpose: "onboarding" | "add-backend";
   canRetrySave: boolean;
+  /** models are being listed, by the reader or on connecting */
+  finding: boolean;
   ops: {
     updateConnection: (
       changes: Partial<ConnectionDraft>,
@@ -92,7 +96,9 @@ export function ConnectionFields({
   return (
     <>
       <div className="grid gap-3 text-sm">
-        {connection && authOptions.length > 1 ? (
+        {connection &&
+        authOptions.length > 1 &&
+        !(oauthProvider && signedIn[provider]) ? (
           <Field label="Connection method">
             <Select
               items={authOptions.map((option) => ({
@@ -136,14 +142,12 @@ export function ConnectionFields({
                     ? `Connected as ${connectedAccount.accountId || connectedAccount.label}`
                     : "Account connected"}
                 </p>
-                <button
-                  type="button"
+                <IconAction
+                  label="Use another account"
+                  icon={ArrowLeftRight}
                   disabled={busy}
                   onClick={ops.useAnotherAccount}
-                  className="text-xs text-muted-foreground underline hover:text-foreground disabled:opacity-50"
-                >
-                  Use another account
-                </button>
+                />
               </div>
             ) : (
               <>
@@ -170,8 +174,12 @@ export function ConnectionFields({
                   </Field>
                 ) : null}
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-muted-foreground">
-                    {authLabel(connection!.authMethod)}
+                  <p className="text-xs text-muted-foreground">
+                    {accountOp === "signIn"
+                      ? "Finish signing in in your browser."
+                      : authOptions.length > 1
+                        ? "Sign-in opens in your browser."
+                        : authLabel(connection!.authMethod)}
                   </p>
                   <span className="flex gap-2">
                     {accountOp === "signIn" && (
@@ -242,18 +250,30 @@ export function ConnectionFields({
           </>
         )}
       </div>
-      <Button
-        variant="outline"
-        disabled={busy || !connectionReady}
-        onClick={ops.discover}
-      >
-        {busy ? <Spinner /> : null}{" "}
-        {discovery
-          ? "Refresh models"
-          : oauthProvider && signedIn[provider]
-            ? "Find models"
-            : "Connect and find models"}
-      </Button>
+      {discovery ? null : oauthProvider ? (
+        signedIn[provider] ? (
+          finding ? (
+            <p
+              role="status"
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+            >
+              <Spinner /> Finding models…
+            </p>
+          ) : (
+            <Button variant="outline" disabled={busy} onClick={ops.discover}>
+              Find models
+            </Button>
+          )
+        ) : null
+      ) : (
+        <Button
+          variant={connectionReady ? "brand" : "outline"}
+          disabled={busy || !connectionReady}
+          onClick={ops.discover}
+        >
+          {finding ? <Spinner /> : null} Connect and find models
+        </Button>
+      )}
     </>
   );
 }
