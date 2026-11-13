@@ -1104,17 +1104,17 @@ def caseCoverage : List CoverageEntry :=
       "contracts_lsp_action_authorization")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "self_config_field_tables"
-      "SelfConfigFieldTables")
+      "family"
+      "contracts_self_config_field_table")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "self_config_cases"
-      "SelfConfigCases"
+      "family"
+      "contracts_self_config_case"
       "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Agent row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Agent no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "self_config_scope_cases"
-      "SelfConfigScopeCases")
+      "family"
+      "contracts_self_config_scope")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -1451,12 +1451,12 @@ def caseCoverage : List CoverageEntry :=
       "CommandPolicyEnv")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "command_isolation_cases"
-      "CommandIsolation")
+      "family"
+      "command_policy_effective_network_mode")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "command_isolation_cases"
-      "CommandIsolationSeatbelt")
+      "family"
+      "command_isolation_seatbelt")
       "command-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "command_policy_cases"
@@ -2092,8 +2092,8 @@ def caseCoverage : List CoverageEntry :=
       "plugin_resources_child_routes")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "self_config_cases"
-      "SelfConfigCases")
+      "family"
+      "contracts_self_config_case")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "tool_timeout_cases"
@@ -2575,16 +2575,16 @@ def caseCoverage : List CoverageEntry :=
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_command_grant_answers"
-      "WorkspaceCommandGrantAnswers")
+      "family"
+      "workspace_command_grants_answers")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "workspace_command_grants_lookup")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_command_grant_revocations"
-      "WorkspaceCommandGrantRevocations")
+      "family"
+      "workspace_command_grants_revocations")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2620,9 +2620,13 @@ def caseCoverage : List CoverageEntry :=
       "access_review_context_selection"
       "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "access_review_task_eligibility")
+      "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "access_review_task_cases"
-      "AccessReviewTaskCases"
+      "family"
+      "access_review_selected_task_eligibility"
       "Generated Task documents bind node, task, agent, operator-selected policy text, eligibility and excluded execution effects. Store lookup, template evaluation, policy fingerprint integrity, concurrent edits and provider behavior remain native adapter boundaries.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

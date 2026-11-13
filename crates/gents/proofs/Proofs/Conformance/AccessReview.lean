@@ -181,26 +181,60 @@ def contextSelection : Conformance.Family ContextInput (Option Nat) where
       [4, 4, 4, 4, 4]] : List (List Nat)).map fun costs => { required, limit, costs }
   model := fun i => ToolPolicy.AccessReview.selectContext i.required i.limit i.costs
 
-private def taskCaseJson (policy : ToolPolicy.AccessReview.TaskPolicy)
-    (budgetOnly : Bool := false) (approvedPrompt : Option String := none) : Json :=
-  let selected := approvedPrompt.getD policy.prompt
-  Json.mkObj [
-  ("approvedPrompt", toJson selected),
-  ("selectedEligible", toJson (ToolPolicy.AccessReview.selectedTaskEligible "node" "review" "agent" selected policy)),
-  ("node", toJson "node"), ("taskId", toJson "review"), ("agent", toJson "agent"),
-  ("document", Json.mkObj [
-    ("node_did", toJson policy.node), ("task_id", toJson policy.task),
-    ("agent_did", toJson policy.agent), ("prompt_template", toJson policy.prompt),
-    ("enabled", toJson policy.enabled), ("emit_outcome", toJson policy.outcome),
-    ("hooks", if policy.hooks then toJson [Json.mkObj [
-      ("hook_id", toJson "setup"), ("phase", toJson "before"),
-      ("command", toJson ["fixture"])]] else toJson ([] : List Json)),
-    ("goal_objective_template", if policy.goal && !budgetOnly then toJson "goal" else Json.null),
-    ("goal_token_budget", if policy.goal && budgetOnly then toJson (500 : Nat) else Json.null),
-    ("output_schema_ref", if policy.schema then toJson "schema" else Json.null)]),
-  ("eligible", toJson (ToolPolicy.AccessReview.taskEligible "node" "review" "agent" policy))]
+structure TaskHookWire where
+  hookId : String
+  phase : String
+  command : List String
+  deriving ToJson
 
-def taskCasesJson : Json :=
+structure TaskDocumentWire where
+  nodeDid : String
+  taskId : String
+  agentDid : String
+  promptTemplate : String
+  enabled : Bool
+  emitOutcome : Bool
+  hooks : List TaskHookWire
+  goalObjectiveTemplate : Option String
+  goalTokenBudget : Option Nat
+  outputSchemaRef : Option String
+  deriving ToJson
+
+structure TaskInput where
+  approvedPrompt : String
+  node : String
+  taskId : String
+  agent : String
+  document : TaskDocumentWire
+  deriving ToJson
+
+structure TaskEligibility where
+  eligible : Bool
+  deriving ToJson
+
+structure SelectedTaskEligibility where
+  selectedEligible : Bool
+  deriving ToJson
+
+private def taskInput (policy : ToolPolicy.AccessReview.TaskPolicy)
+    (budgetOnly : Bool := false) (approvedPrompt : Option String := none) : TaskInput :=
+  { approvedPrompt := approvedPrompt.getD policy.prompt
+    node := "node", taskId := "review", agent := "agent"
+    document :=
+      { nodeDid := policy.node, taskId := policy.task, agentDid := policy.agent
+        promptTemplate := policy.prompt, enabled := policy.enabled, emitOutcome := policy.outcome
+        hooks := if policy.hooks then [{ hookId := "setup", phase := "before", command := ["fixture"] }] else []
+        goalObjectiveTemplate := if policy.goal && !budgetOnly then some "goal" else none
+        goalTokenBudget := if policy.goal && budgetOnly then some 500 else none
+        outputSchemaRef := if policy.schema then some "schema" else none } }
+
+private def taskPolicy (document : TaskDocumentWire) : ToolPolicy.AccessReview.TaskPolicy :=
+  ⟨document.nodeDid, document.taskId, document.agentDid, document.promptTemplate,
+    document.enabled, !document.hooks.isEmpty, document.emitOutcome,
+    document.goalObjectiveTemplate.isSome || document.goalTokenBudget.isSome,
+    document.outputSchemaRef.isSome⟩
+
+private def taskInputs : List TaskInput :=
   let base : ToolPolicy.AccessReview.TaskPolicy :=
     ⟨"node", "review", "agent", "Review workspace access.", true, false, false, false, false⟩
   let combinations := [false, true].flatMap fun sameNode =>
@@ -210,7 +244,7 @@ def taskCasesJson : Json :=
     [false, true].flatMap fun hooks =>
     [false, true].flatMap fun outcome =>
     [false, true].flatMap fun goal =>
-    [false, true].map fun schema => taskCaseJson
+    [false, true].map fun schema => taskInput
       { base with
         node := if sameNode then "node" else "other-node"
         task := if sameTask then "review" else "other-task"
@@ -220,12 +254,25 @@ def taskCasesJson : Json :=
         outcome := outcome
         goal := goal
         schema := schema }
-  toJson (combinations ++ [taskCaseJson { base with prompt := "" },
-    taskCaseJson { base with prompt := " \n\t" },
-    taskCaseJson { base with goal := true } true,
-    taskCaseJson base false (some "Earlier policy."),
-    taskCaseJson base false (some (base.prompt ++ " "))] ++
+  combinations ++ [taskInput { base with prompt := "" },
+    taskInput { base with prompt := " \n\t" },
+    taskInput { base with goal := true } true,
+    taskInput base false (some "Earlier policy."),
+    taskInput base false (some (base.prompt ++ " "))] ++
     TextNormalization.objectiveWhitespaceCodepoints.map (fun value =>
-      taskCaseJson { base with prompt := String.singleton (Char.ofNat value) }))
+      taskInput { base with prompt := String.singleton (Char.ofNat value) })
+
+@[conformance_family]
+def taskEligibility : Conformance.Family TaskInput TaskEligibility where
+  inputs := taskInputs
+  model := fun i =>
+    { eligible := ToolPolicy.AccessReview.taskEligible i.node i.taskId i.agent (taskPolicy i.document) }
+
+@[conformance_family]
+def selectedTaskEligibility : Conformance.Family TaskInput SelectedTaskEligibility where
+  inputs := taskInputs
+  model := fun i =>
+    { selectedEligible := ToolPolicy.AccessReview.selectedTaskEligible i.node i.taskId i.agent
+        i.approvedPrompt (taskPolicy i.document) }
 
 end Conformance.AccessReview

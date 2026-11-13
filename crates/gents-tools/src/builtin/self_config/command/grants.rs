@@ -182,121 +182,88 @@ mod creation_exposure_tests {
 #[cfg(test)]
 mod scope_tests {
     use super::*;
-    use gents_lean_vocab::LeanSelfConfigScopeCases;
+    use crate::surface::{ResolvedToolSelection, ToolPolicySurface};
+    use gents_lean_vocab::families::contracts_self_config_scope::{
+        GroupOutput, PresetOutput, ScopeOutput,
+    };
 
     fn categories(names: &[String]) -> BTreeSet<String> {
         names.iter().cloned().collect()
     }
 
-    #[test]
-    fn modeled_edit_scope_cases_drive_production_gate() {
-        let LeanSelfConfigScopeCases { edit, .. } =
-            &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
-        assert!(!edit.is_empty());
-        for case in edit {
-            let scope = match case.scope.as_str() {
-                "own" => ConfigScope::Own,
-                "foreign" => ConfigScope::Foreign,
-                other => panic!("unknown scope {other}"),
-            };
-            assert_eq!(
-                may_edit(&categories(&case.categories), &case.category, scope),
-                case.allowed,
-                "{}",
-                case.name
-            );
-        }
-    }
-
-    #[test]
-    fn category_vocabulary_is_the_modeled_vocabulary() {
-        let LeanSelfConfigScopeCases {
-            categories,
-            default_categories,
-            ..
-        } = &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
-        let sorted = |names: &[&str]| {
-            let mut names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
-            names.sort();
-            names
-        };
-        let mut modeled = categories.clone();
-        modeled.sort();
-        assert_eq!(
-            sorted(&gents_documents::patch::SELF_CONFIG_CATEGORIES),
-            modeled
-        );
-        let mut modeled = default_categories.clone();
-        modeled.sort();
-        assert_eq!(
-            sorted(&gents_documents::patch::DEFAULT_SELF_CONFIG_CATEGORIES),
-            modeled
-        );
-    }
-
-    #[test]
-    fn engineer_preset_is_the_modeled_engineer_group() {
-        let LeanSelfConfigScopeCases { groups, .. } =
-            &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
-        let modeled = groups
+    fn sorted(names: &[&str]) -> Vec<String> {
+        names
             .iter()
-            .find(|case| case.name == "engineer")
-            .expect("engineer row");
+            .map(|name| (*name).to_owned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn effective(enabled: bool, categories: Option<Vec<String>>) -> BTreeSet<String> {
+        ToolPolicySurface::from_selection(
+            &ResolvedToolSelection {
+                enable_self_config: enabled,
+                self_config_categories: categories,
+                ..Default::default()
+            },
+            &Default::default(),
+        )
+        .self_config_category_set()
+    }
+
+    fn preset() -> PresetOutput {
         let preset = crate::builtin::self_config::engineer_self_config();
-        assert_eq!(preset.enable_self_config, Some(true));
-        let mut granted = preset.self_config_categories.unwrap_or_default();
-        granted.sort();
-        let mut effective = modeled.effective.clone();
-        effective.sort();
-        assert_eq!(granted, effective);
-        assert!(may_edit(&categories(&granted), "tools", ConfigScope::Own));
-        assert!(may_create_agent(&categories(&granted)));
-    }
-
-    /// Lean `SelfConfig.yoloGroup`: the group `gents --yolo` grants is the
-    /// Engineer preset, so the yolo agent edits its own configuration.
-    #[test]
-    fn yolo_group_is_the_engineer_preset() {
-        let LeanSelfConfigScopeCases { groups, .. } =
-            &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
-        let modeled = groups
-            .iter()
-            .find(|case| case.name == "yolo")
-            .expect("yolo row");
-        let mut granted = crate::builtin::self_config::engineer_self_config()
-            .self_config_categories
-            .unwrap_or_default();
-        granted.sort();
-        let mut effective = modeled.effective.clone();
-        effective.sort();
-        assert_eq!(granted, effective);
-        assert!(may_edit(&categories(&granted), "tools", ConfigScope::Own));
+        let enabled = preset.enable_self_config == Some(true);
+        let granted = effective(enabled, preset.self_config_categories);
+        PresetOutput {
+            enabled,
+            edits_own_tools: may_edit(&granted, "tools", ConfigScope::Own),
+            creates_agents: may_create_agent(&granted),
+            effective: granted.into_iter().collect(),
+        }
     }
 
     #[test]
-    fn modeled_effective_groups_and_scope_of_drive_production_helpers() {
-        let LeanSelfConfigScopeCases {
-            groups, scope_of, ..
-        } = &gents_lean_vocab::lean_contract_snapshot().self_config_scope_cases;
-        for case in groups {
-            assert_eq!(
-                may_create_agent(&categories(&case.effective)),
-                case.may_create_agent,
-                "{}",
-                case.name
-            );
-        }
-        for case in scope_of {
-            let expected = match case.scope.as_str() {
-                "own" => ConfigScope::Own,
-                _ => ConfigScope::Foreign,
-            };
-            assert_eq!(
-                config_scope(&case.invoking_agent, &case.target_agent, case.shared),
-                expected,
-                "{}",
-                case.name
-            );
-        }
+    fn contracts_self_config_scope_matches_lean() {
+        gents_lean_vocab::families::contracts_self_config_scope::replay(|i| ScopeOutput {
+            categories: sorted(&gents_documents::patch::SELF_CONFIG_CATEGORIES),
+            default_categories: sorted(&gents_documents::patch::DEFAULT_SELF_CONFIG_CATEGORIES),
+            allowed: i
+                .edit
+                .iter()
+                .map(|case| {
+                    let scope = match case.scope.as_str() {
+                        "own" => ConfigScope::Own,
+                        "foreign" => ConfigScope::Foreign,
+                        other => panic!("unknown scope {other}"),
+                    };
+                    may_edit(&categories(&case.categories), &case.category, scope)
+                })
+                .collect(),
+            groups: i
+                .groups
+                .iter()
+                .map(|group| {
+                    let granted = effective(group.enabled, group.categories.clone());
+                    GroupOutput {
+                        may_create_agent: may_create_agent(&granted),
+                        effective: granted.into_iter().collect(),
+                    }
+                })
+                .collect(),
+            scope: i
+                .scope_of
+                .iter()
+                .map(|case| {
+                    match config_scope(&case.invoking_agent, &case.target_agent, case.shared) {
+                        ConfigScope::Own => "own".to_owned(),
+                        ConfigScope::Foreign => "foreign".to_owned(),
+                    }
+                })
+                .collect(),
+            engineer: preset(),
+            yolo: preset(),
+        });
     }
 }

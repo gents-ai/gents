@@ -6,7 +6,6 @@ import Proofs.Session.ToolExecution
 import Proofs.Tools.MCPHealth.Executable
 import Proofs.Runtime.BackendHealth.Executable
 import Proofs.Conformance.Functions.Runtime
-import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 

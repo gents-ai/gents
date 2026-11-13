@@ -5,7 +5,6 @@ import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Session.Compaction.Executable
 import Proofs.Session.PromptAssembly.ClaudeWire
 import Proofs.Session.PromptAssembly.ResponsesStorage
-import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 

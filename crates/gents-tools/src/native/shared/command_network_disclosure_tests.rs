@@ -2,33 +2,24 @@ use super::command_validation::validate_network_mode;
 use super::*;
 
 #[test]
-fn generated_command_isolation_matches_native_policy() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().command_isolation_cases;
-    assert_eq!(cases.len(), 12);
-    for case in cases {
-        let mode: CommandExecutionMode =
-            serde_json::from_value(serde_json::Value::String(case.mode.clone())).unwrap();
-        let network: CommandNetworkMode =
-            serde_json::from_value(serde_json::Value::String(case.network.clone())).unwrap();
-        let effective: CommandNetworkMode = serde_json::from_value(serde_json::Value::String(
-            case.effective_network.clone(),
-        ))
-        .unwrap();
-        let policy = CommandExecutionPolicy::write_capable()
-            .with_mode(mode)
-            .with_network_mode(network);
-        assert_eq!(policy.effective_network_mode(), effective, "{case:?}");
-        assert_eq!(
-            mode.protects_credentials(),
-            case.protects_credentials,
-            "{case:?}"
-        );
-        if case.protects_credentials && effective == CommandNetworkMode::Disabled {
-            assert!(policy
-                .network_enforcement_disclosure()
-                .starts_with("required_at_execution:"));
-        }
-    }
+fn command_policy_effective_network_mode_matches_lean() {
+    gents_lean_vocab::families::command_policy_effective_network_mode::replay(
+        |i: &gents_lean_vocab::families::command_policy_effective_network_mode::Input<
+            CommandExecutionMode,
+            CommandNetworkMode,
+        >| {
+            let policy = CommandExecutionPolicy::write_capable()
+                .with_mode(i.mode)
+                .with_network_mode(i.network);
+            let effective = policy.effective_network_mode();
+            if i.mode.protects_credentials() && effective == CommandNetworkMode::Disabled {
+                assert!(policy
+                    .network_enforcement_disclosure()
+                    .starts_with("required_at_execution:"));
+            }
+            effective
+        },
+    );
 }
 
 #[test]
