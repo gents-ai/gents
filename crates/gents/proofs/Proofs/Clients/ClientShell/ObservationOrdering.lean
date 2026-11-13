@@ -1,4 +1,5 @@
 import Proofs.Clients.ClientShell.Types
+import Proofs.Store.AccessClassification
 
 /-!
 Ephemeral async presentation fence. These epochs order a single UI owner's
@@ -655,7 +656,27 @@ def streamEndEvent : StreamEnd → Option Event
 
 theorem renewal_publishes_no_failure : streamEndEvent .renewalDue = none := by rfl
 
-theorem classified_refusal_is_refused : streamEndEvent (.failed true) = some .refused := by
+/-- The stream end of a source whose stream or handshake failed with `error`,
+as the source receives it: erased, and classified by the access owner
+(`AccessClassification.Error.erased`). -/
+def failedStreamEnd (error : AccessClassification.Error) : StreamEnd :=
+  .failed (decide (error.erased = .refused))
+
+/-- A failure the access owner classifies as a denial is published as
+`refused`, whatever owners wrap the variant that holds it
+(`AccessClassification.Error.classification_survives_every_wrapping`). -/
+theorem classified_refusal_is_refused (holdings : List AccessClassification.Holding)
+    (failure : AccessClassification.Failure) (refused : failure.classification = .refused) :
+    streamEndEvent (failedStreamEnd (AccessClassification.Error.wrapAll holdings
+      (.wrapper .sourced (.access failure)))) = some .refused := by
+  simp [failedStreamEnd, AccessClassification.Error.classification_survives_every_wrapping,
+    refused, streamEndEvent]
+
+/-- The premise of `classified_refusal_is_refused`: a denial held by a
+transparent variant is published as a transport failure. -/
+theorem hidden_refusal_reads_as_an_outage :
+    streamEndEvent (failedStreamEnd (.wrapper .transparent (.access .forbidden)))
+      = some .transportFailed := by
   rfl
 
 /-- The notice a source sends once every subscription of an arm is armed:
@@ -706,6 +727,16 @@ def snapshotEvent : SnapshotOutcome → Event
   | .refused => .refused
   | .unreachable => .transportFailed
 
+/-- How a snapshot read that failed with `failure` ends. Every snapshot read
+is a typed view read whose error the reader erases
+(`AccessClassification.viewRead`). -/
+def failedSnapshot (failure : AccessClassification.Failure) : SnapshotOutcome :=
+  if (AccessClassification.viewRead failure).erased = .refused then .refused else .unreachable
+
+theorem failed_snapshot_is_refused_iff_classified (failure : AccessClassification.Failure) :
+    failedSnapshot failure = .refused ↔ failure.classification = .refused := by
+  cases failure <;> decide
+
 /-- Where an event came from: the source task's notice (its stream or its
 handshake), or the observer's own snapshot read. -/
 inductive Origin where
@@ -729,6 +760,13 @@ theorem snapshot_transport_failure_keeps_the_streams :
 
 theorem every_refusal_reconnects (origin : Origin) : reconnects origin .refused = true := by
   cases origin <;> rfl
+
+/-- A snapshot read the runtime refused reconnects its source; any other
+failed read, a conflict included, keeps the streams and is retried. -/
+theorem failed_snapshot_reconnects_iff_refused (failure : AccessClassification.Failure) :
+    reconnects .snapshot (snapshotEvent (failedSnapshot failure)) = true
+      ↔ failure.classification = .refused := by
+  cases failure <;> decide
 
 /-- Only a failure or a refusal reconnects; an arm, a renewal, a successful
 read or a missing endpoint never does. -/
