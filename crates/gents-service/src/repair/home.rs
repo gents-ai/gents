@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 
 use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
+use gents_protocol::operations::install_repair::StoreVerdict;
 use gents_store::local::home::{
     default_data_dir, home_entries, keys_dir, lock_home_store, read_init_config, HomeError,
-    BOOTSTRAP_CONSUMED_FILE_NAME, INIT_PENDING_FILE_NAME,
+    BOOTSTRAP_CONSUMED_FILE_NAME, INIT_PENDING_FILE_NAME, SETUP_UNFINISHED_FILE_NAME,
 };
 
 use crate::home_state::init_config_path;
@@ -21,6 +22,12 @@ pub fn classify_observation(
 ) -> HomeState {
     if !o.present || (!o.owned_entries && !o.bootstrap_consumed) {
         HomeState::Absent
+    } else if o.store == StoreVerdict::Newer {
+        HomeState::NewerStore
+    } else if o.store == StoreVerdict::Older {
+        HomeState::OlderStore
+    } else if o.store == StoreVerdict::InsecureKey {
+        HomeState::InsecureKey
     } else if o.pending || (o.bootstrap_consumed && !o.settings_present) {
         HomeState::Interrupted
     } else if !o.settings_readable {
@@ -31,16 +38,43 @@ pub fn classify_observation(
         } else {
             HomeState::MissingSettings
         }
-    } else if o.missing_key_refusal {
+    } else if o.missing_key_refusal || o.store == StoreVerdict::MissingKey {
         HomeState::MissingStoreKey
+    } else if o.store == StoreVerdict::Corrupt {
+        HomeState::CorruptStore
+    } else if o.setup_unfinished {
+        HomeState::UnfinishedSetup
     } else {
         HomeState::Healthy
+    }
+}
+
+/// What this version cannot open in the home's store and keys, decided
+/// without writing to the home. A check that cannot decide counts as nothing
+/// found: the node's own checks still refuse such a store before it writes,
+/// and the repair reports that.
+pub async fn store_check(
+    home: &Path,
+) -> Option<gents_protocol::operations::install_repair::IncompatibleStore> {
+    use gents_store::local::store_compat::{check_home_store, StoreCompatibility};
+    match check_home_store(home).await {
+        Ok(StoreCompatibility::Absent | StoreCompatibility::Compatible) => None,
+        Ok(StoreCompatibility::Refused(store)) => Some(store),
+        Err(error) => {
+            tracing::warn!(
+                home = %home.display(),
+                error = %ErrorChain(&error),
+                "could not decide whether this version can open the home's store"
+            );
+            None
+        }
     }
 }
 
 pub fn classify_home(
     home: &Path,
     last_refusal: Option<ServiceRefusal>,
+    store: StoreVerdict,
 ) -> Result<HomeState, Blocker> {
     use gents_protocol::operations::install_repair::HomeObservation;
     let unreadable = |error: &dyn std::error::Error| Blocker::HomeUnreadable {
@@ -88,6 +122,11 @@ pub fn classify_home(
             == Some(ServiceRefusal::Store(
                 IncompatibleStoreKind::MissingStoreKey,
             )),
+        setup_unfinished: home
+            .join(SETUP_UNFINISHED_FILE_NAME)
+            .try_exists()
+            .map_err(|e| unreadable(&e))?,
+        store,
     }))
 }
 
