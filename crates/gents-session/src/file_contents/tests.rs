@@ -1,5 +1,5 @@
 use super::*;
-use gents_protocol::file_changes::{FilePermissions, ImageFailure};
+use gents_protocol::file_changes::FilePermissions;
 
 pub(crate) fn permissions() -> FilePermissions {
     FilePermissions {

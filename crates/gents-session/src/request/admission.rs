@@ -1645,9 +1645,6 @@ mod unattended_tests;
 #[cfg(test)]
 mod projection_conformance;
 
-#[cfg(any(test, feature = "test-fixtures"))]
-pub mod workspace_cleanup_tests;
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

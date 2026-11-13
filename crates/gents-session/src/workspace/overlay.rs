@@ -248,7 +248,7 @@ pub async fn resolve_request_workspace_overlay_on_host(
     Ok(Some(overlay))
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub(crate) async fn validate_request_workspace_input(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -678,7 +678,7 @@ pub(super) async fn previous_exclusive_is_stale(
     .await?)
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub(super) async fn previous_exclusive_is_stale_with_access(
     access: &gents_store::config_client::ConfigAccess,
     workspace_id: &str,

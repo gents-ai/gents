@@ -2,8 +2,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tempfile::TempDir;
-
 use super::adapter::DIRTY_BASE_SUMMARY_LIMIT;
 use super::fixture::*;
 use super::*;

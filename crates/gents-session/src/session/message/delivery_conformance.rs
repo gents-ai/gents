@@ -56,11 +56,13 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        RenderedBody {
-            content: "message".into(),
-            goal: None,
-        },
-        None,
+        (
+            RenderedBody {
+                content: "message".into(),
+                goal: None,
+            },
+            None,
+        ),
         AgentMessageDelivery::Queue,
         &signer,
     )

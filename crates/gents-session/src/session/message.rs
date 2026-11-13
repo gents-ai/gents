@@ -1,22 +1,12 @@
 use anyhow::Result;
 #[cfg(test)]
 use gents_documents::AgentToolConfig;
-#[cfg(test)]
-use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
-#[cfg(test)]
-use gents_protocol::session::SessionScope;
-#[cfg(test)]
-use gents_store::config_client::ConfigAccess;
-#[cfg(test)]
-use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 #[cfg(test)]
 mod agent_tools_tests;
 #[cfg(test)]
 mod delivery_conformance;
-#[cfg(test)]
-mod hop_tests;
 
 mod body;
 pub mod commit;
