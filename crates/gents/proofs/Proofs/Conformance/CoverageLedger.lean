@@ -317,7 +317,6 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "persistence_state_failure_policy_vocabulary")
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through hook_persistence_failure.")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

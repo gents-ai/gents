@@ -41,8 +41,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         lean_contract_snapshot().request_transition_cases.len(),
         request_states.len().pow(2)
     );
-    assert_eq!(
-    );
     let sweep_ids = &lean_contract_snapshot().recovery_sweep_ids;
     assert!(!sweep_ids.is_empty(), "the model registers recovery sweeps");
     for sweep_id in sweep_ids {

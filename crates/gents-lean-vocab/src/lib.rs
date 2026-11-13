@@ -56,10 +56,6 @@ pub struct LeanVocabulary<'a> {
     pub rust_values: &'a [&'a str],
 }
 
-        }
-    }
-}
-
 impl LeanSurface {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -122,8 +118,6 @@ where
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
-}
-
 pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
     lean_contract_snapshot()
         .recovery_sweep_cases
@@ -171,7 +165,6 @@ impl LeanQueueManagementState {
             terminal: self.terminal.iter().copied().map(&native).collect(),
         }
     }
-    );
 }
 
 pub fn assert_lifecycle_transition_cases_partition(
