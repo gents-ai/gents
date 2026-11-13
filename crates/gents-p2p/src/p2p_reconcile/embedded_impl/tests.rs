@@ -109,7 +109,11 @@ async fn protocol_allowlist_rejects_local_data_before_transport() {
             .unwrap(),
     );
     let admin = EmbeddedRemoteP2pAdmin::new(node);
-    let admitted = |name: &str| admin.require_protocol_collections(&[name.to_owned()]).is_ok();
+    let admitted = |name: &str| {
+        admin
+            .require_protocol_collections(&[name.to_owned()])
+            .is_ok()
+    };
     let cases = gents_lean_vocab::families::agent_identity_replication_admission::cases();
     for case in &cases {
         let name = case.input.collection.as_str();
@@ -128,7 +132,10 @@ async fn protocol_allowlist_rejects_local_data_before_transport() {
             },
         );
     }
-    for name in gents_protocol::schemas::ALL_COLLECTION_NAMES.iter().copied() {
+    for name in gents_protocol::schemas::ALL_COLLECTION_NAMES
+        .iter()
+        .copied()
+    {
         if admitted(name) {
             assert!(
                 cases.iter().any(|case| case.input.collection == name),

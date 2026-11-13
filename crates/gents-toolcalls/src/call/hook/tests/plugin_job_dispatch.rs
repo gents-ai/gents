@@ -1103,8 +1103,7 @@ async fn refused_dispatches_name_their_policy_and_next_help() {
                     },
                 )
                 .await;
-                let call =
-                    json!({"script": PASS_PIN, "agent_budget": 2, "args": pin_args(PASS_PIN, 2, "h")});
+                let call = json!({"script": PASS_PIN, "agent_budget": 2, "args": pin_args(PASS_PIN, 2, "h")});
                 let answer = step.call_as("call-1", &call.to_string()).await;
                 (step, answer, "job.policy.dynamic is check")
             }
@@ -1167,11 +1166,13 @@ async fn refused_dispatches_name_their_policy_and_next_help() {
         let dynamic_code_disabled = answer["next"]
             .as_str()
             .is_some_and(|next| next.contains("without a `script`"));
-        case.check(gents_lean_vocab::families::plugin_job_dispatch_refusal::DispatchVerdict {
-            admitted,
-            dynamic_code_disabled,
-            code: answer["code"].as_str().map(str::to_owned),
-        });
+        case.check(
+            gents_lean_vocab::families::plugin_job_dispatch_refusal::DispatchVerdict {
+                admitted,
+                dynamic_code_disabled,
+                code: answer["code"].as_str().map(str::to_owned),
+            },
+        );
         step.finish().await;
     }
 }

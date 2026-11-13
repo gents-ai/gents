@@ -422,18 +422,20 @@ fn fixture_callback_agents(
     callback: &Value,
 ) -> Option<std::collections::BTreeSet<String>> {
     let agents = &callback["handler"]["workspace_agents"];
-    Some(["writer_agent_did", "integrator_agent_did"]
-        .into_iter()
-        .filter_map(|field| agents[field].as_str())
-        .chain(
-            agents["readers"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|reader| reader["agent_did"].as_str()),
-        )
-        .map(str::to_owned)
-        .collect())
+    Some(
+        ["writer_agent_did", "integrator_agent_did"]
+            .into_iter()
+            .filter_map(|field| agents[field].as_str())
+            .chain(
+                agents["readers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|reader| reader["agent_did"].as_str()),
+            )
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 fn route_outcome(status: StatusCode, body: &Value) -> &'static str {

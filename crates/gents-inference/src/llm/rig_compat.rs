@@ -315,7 +315,16 @@ mod usage_tests {
 
     #[test]
     fn xai_chat_live_and_durable_usage_share_the_executable_normalization() {
-        let expected = gents_protocol::usage::TokenUsage { input_tokens: Some(32), output_tokens: Some(9), cached_input_tokens: Some(8), cache_creation_input_tokens: None, reasoning_output_tokens: Some(110), provider_total_tokens: Some(151), final_response: true }.with_separate_reasoning();
+        let expected = gents_protocol::usage::TokenUsage {
+            input_tokens: Some(32),
+            output_tokens: Some(9),
+            cached_input_tokens: Some(8),
+            cache_creation_input_tokens: None,
+            reasoning_output_tokens: Some(110),
+            provider_total_tokens: Some(151),
+            final_response: true,
+        }
+        .with_separate_reasoning();
         let raw: rig::providers::openai::completion::streaming::StreamingCompletionResponse =
             serde_json::from_value(serde_json::json!({"usage":{
                 "prompt_tokens":32,"completion_tokens":9,"total_tokens":151,

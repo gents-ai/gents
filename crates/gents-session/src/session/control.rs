@@ -20,7 +20,9 @@ pub enum SessionControlError {
         session_id: String,
         blocker: ResumeBlocker,
     },
-    #[error("cannot verify retained process ownership before resume; retry after runtime recovery")]
+    #[error(
+        "cannot verify retained process ownership before resume; retry after runtime recovery"
+    )]
     ProcessOwnershipUnverifiable {
         session_id: String,
         #[source]

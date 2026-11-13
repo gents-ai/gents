@@ -244,7 +244,9 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                     .await;
                 match result {
                     Ok(output) => {
-                        let report = if output.contains("fixture (not started — run a server-backed action") {
+                        let report = if output
+                            .contains("fixture (not started — run a server-backed action")
+                        {
                             Some("not_started".to_string())
                         } else if output.contains("fixture (ready)")
                             || output.contains("fixture (starting/indexing)")
@@ -3124,7 +3126,9 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
                     })
                     .await;
                 match result {
-                    Ok(_) => spawned = Some(CommandExecutionMode::ArtifactWrite.as_str().to_string()),
+                    Ok(_) => {
+                        spawned = Some(CommandExecutionMode::ArtifactWrite.as_str().to_string())
+                    }
                     Err(error) => assert!(matches!(
                         error,
                         ToolError::ReportedFailure {

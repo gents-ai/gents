@@ -401,7 +401,12 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         }
         let start = observe().await;
         assert_eq!(
-            (start.request, start.session, start.parent, start.working_agent),
+            (
+                start.request,
+                start.session,
+                start.parent,
+                start.working_agent
+            ),
             (
                 before.request,
                 before.session,
@@ -432,7 +437,10 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
                 .unwrap_err()
                 .to_string()
                 .contains("forced abort after staged Task session publication"));
-            let fires = access.execute("{ TriggerFire { fire_key } }").await.unwrap();
+            let fires = access
+                .execute("{ TriggerFire { fire_key } }")
+                .await
+                .unwrap();
             assert!(fires["data"]["TriggerFire"].as_array().unwrap().is_empty());
         }
         case.check(observe().await);

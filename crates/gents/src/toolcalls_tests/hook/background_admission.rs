@@ -481,7 +481,8 @@ async fn admission_harness(
 async fn spawned_target_rejection_case(
     case: &gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetInput,
     target: &DeniedTarget,
-) -> gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetOutput {
+) -> gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetOutput
+{
     let AdmissionHarness {
         _db,
         _dir,

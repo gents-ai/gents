@@ -503,7 +503,11 @@ mod tests {
             ToolCallState,
         >() {
             let state = case.input.state;
-            let wire = serde_json::to_value(state).unwrap().as_str().unwrap().to_owned();
+            let wire = serde_json::to_value(state)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned();
             let (fixture, owner, mut child) = spawned_child(&format!("stop-action-{wire}")).await;
             if state != ToolCallState::Pending {
                 child.start_running().await.unwrap();
@@ -556,7 +560,10 @@ mod tests {
                 } => {
                     assert!(!token.is_cancelled(), "{state:?}");
                     assert!(child.start_running().await.is_err(), "{state:?}");
-                    assert!(reload(&child, &fixture.node).await.is_cancelled(), "{state:?}");
+                    assert!(
+                        reload(&child, &fixture.node).await.is_cancelled(),
+                        "{state:?}"
+                    );
                     worker.abort();
                     "cancel_before_dispatch"
                 }
@@ -564,7 +571,10 @@ mod tests {
                     live_execution_cancelled: true,
                 } => {
                     worker.await.unwrap();
-                    assert!(reload(&child, &fixture.node).await.is_cancelled(), "{state:?}");
+                    assert!(
+                        reload(&child, &fixture.node).await.is_cancelled(),
+                        "{state:?}"
+                    );
                     "stop_process"
                 }
                 CancelBackgroundToolCallOutcome::AlreadyTerminal { state: terminal } => {

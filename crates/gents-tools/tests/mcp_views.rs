@@ -152,7 +152,8 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
             .await?;
         case.check(rows.into_iter().map(|row| row.config.service_id).collect());
     }
-    let pages = gents_lean_vocab::families::mcp_views_page::cases::<Cursor, Node, PageSize, Reader>();
+    let pages =
+        gents_lean_vocab::families::mcp_views_page::cases::<Cursor, Node, PageSize, Reader>();
     assert!(!pages.is_empty());
     for case in pages {
         let input = &case.input;
