@@ -888,90 +888,6 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
     models.shutdown().await;
 }
 
-#[tokio::test]
-async fn subscription_probe_account_changes_retire_previous_measurement() {
-    let node = test_node().await;
-    let mut backend = claude_backend();
-    backend.auth = gents_documents::BackendAuth::NodeOAuth {
-        account_ref: Some("account-one".into()),
-    };
-    let health = BackendHealthMap::new();
-    let options = probe_options();
-    let mut outcome = ProbeCycleOutcome::default();
-    record_probe_event(
-        &node,
-        &backend,
-        ProbeEvent::CredentialsRejected,
-        None,
-        ProbeEnv {
-            now: Utc::now(),
-            health_map: &health,
-            options: &options,
-            cancel: None,
-        },
-        &mut outcome,
-    )
-    .await;
-    let rejected = health.get("claude").await.unwrap();
-    assert_modeled_probe(None, &rejected, "credentialsRejected");
-    assert!(rejected.state_for(&backend).unwrap().blocks_routing());
-
-    backend.auth = gents_documents::BackendAuth::NodeOAuth {
-        account_ref: Some("account-two".into()),
-    };
-    assert_eq!(
-        rejected.state_for(&backend),
-        None,
-        "another account must not inherit the rejected account's measurement"
-    );
-    record_probe_event(
-        &node,
-        &backend,
-        ProbeEvent::ProbeFail,
-        Some("network unavailable".into()),
-        ProbeEnv {
-            now: Utc::now(),
-            health_map: &health,
-            options: &options,
-            cancel: None,
-        },
-        &mut outcome,
-    )
-    .await;
-    let changed = health.get("claude").await.unwrap();
-    assert_modeled_probe(None, &changed, "probeFail");
-    assert_eq!(
-        changed.state_for(&backend),
-        Some(BackendHealthState::Degraded)
-    );
-    node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn oauth_kinds_are_skipped_without_a_probe_context() {
-    let (options, client, health_map) = (
-        probe_options(),
-        reqwest::Client::new(),
-        BackendHealthMap::new(),
-    );
-    let node = test_node().await;
-    let outcome = probe_backends_cycle(
-        &node,
-        &client,
-        std::slice::from_ref(&claude_backend()),
-        Utc::now(),
-        &health_map,
-        &options,
-        None,
-    )
-    .await;
-    assert!(outcome.promotable.is_empty());
-    assert!(
-        health_map.get("claude").await.is_none(),
-        "no measurement without a node"
-    );
-}
-
 /// A Claude gateway signed in with `gents accounts login claude-gateway` carries node
 /// OAuth credentials, so the probe must select its stored account and map it to
 /// the gateway refresh kind and product rather than the subscription's.
@@ -1044,4 +960,80 @@ fn a_gateway_backend_maps_to_the_gateway_refresh_kind_and_product() {
         oauth_product(BackendProviderKind::ClaudeGateway),
         crate::claude_gateway_login::CLAUDE_GATEWAY_PRODUCT
     );
+}
+
+#[tokio::test]
+async fn recorded_measurements_match_the_lean_model() {
+    let node = test_node().await;
+    let account = |revision: u64| {
+        let mut backend = claude_backend();
+        backend.auth = gents_documents::BackendAuth::NodeOAuth {
+            account_ref: Some(format!("account-{revision}")),
+        };
+        backend
+    };
+    for case in gents_lean_vocab::families::backend_health_retention_measurement::cases::<
+        String,
+        BackendHealthState,
+    >() {
+        let backend = account(case.input.revision);
+        let health = BackendHealthMap::new();
+        let options = BackendProberOptions {
+            failure_threshold_k: u32::try_from(case.input.threshold_k).unwrap(),
+            ..probe_options()
+        };
+        if let Some(prior) = &case.input.prior {
+            health
+                .set_entry(
+                    backend.backend_id.clone(),
+                    BackendHealthEntry {
+                        state: prior.state,
+                        failure_count: u32::try_from(prior.failure_count).unwrap(),
+                        last_probe_at: Utc::now(),
+                        last_error: None,
+                        configuration_fingerprint: prior
+                            .revision
+                            .map(|revision| probe_configuration_fingerprint(&account(revision))),
+                    },
+                )
+                .await;
+        }
+        let prior_state_for = health
+            .get(&backend.backend_id)
+            .await
+            .and_then(|snapshot| snapshot.state_for(&backend));
+        let event = match case.input.event.as_str() {
+            "probe_success" => ProbeEvent::ProbeSuccess,
+            "probe_fail" => ProbeEvent::ProbeFail,
+            "credentials_rejected" => ProbeEvent::CredentialsRejected,
+            "subscription_not_entitled" => ProbeEvent::SubscriptionNotEntitled,
+            other => panic!("unmodelled probe event {other}"),
+        };
+        let mut outcome = ProbeCycleOutcome::default();
+        record_probe_event(
+            &node,
+            &backend,
+            event,
+            None,
+            ProbeEnv {
+                now: Utc::now(),
+                health_map: &health,
+                options: &options,
+                cancel: None,
+            },
+            &mut outcome,
+        )
+        .await;
+        let next = health.get(&backend.backend_id).await.unwrap();
+        case.check(
+            gents_lean_vocab::families::backend_health_retention_measurement::MeasurementOutput {
+                state: next.state,
+                failure_count: u64::from(next.failure_count),
+                flipped: outcome.flipped.contains(&backend.backend_id),
+                prior_state_for,
+                next_state_for: next.state_for(&backend),
+            },
+        );
+    }
+    node.shutdown().await.expect("node shutdown");
 }

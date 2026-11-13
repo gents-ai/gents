@@ -10,9 +10,6 @@ use gents_loop::tool::{ToolDyn, ToolError};
 use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
-#[path = "background_wait_wakes.rs"]
-mod background_wait_wakes;
-
 struct StaticTool {
     name: &'static str,
     result: &'static str,

@@ -103,61 +103,52 @@ fn allow_create_rejects_a_dangling_symlink_leaf() {
 }
 
 #[tokio::test]
-async fn request_runtime_workspace_overrides_static_base() {
-    let root =
-        std::env::temp_dir().join(format!("gents-tool-context-root-{}", uuid::Uuid::new_v4()));
-    let workspace = root.join("repo");
-    std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::write(workspace.join("README.md"), "ok").unwrap();
-    std::fs::write(root.join("README.md"), "wrong").unwrap();
-
-    let context = ToolContext::new_with_base(root.clone(), Some(root.clone()), false).unwrap();
-    let (resolved, display) = crate::runtime_context::scope_request_tool_execution_with_workspace(
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        Some(workspace.clone()),
-        async {
-            let resolved = context.resolve_existing_file("README.md")?;
-            let display = context.display_path(&resolved);
-            anyhow::Ok((resolved, display))
-        },
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        resolved,
-        std::fs::canonicalize(workspace.join("README.md")).unwrap()
-    );
-    assert_eq!(display, "README.md");
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[tokio::test]
-async fn request_runtime_workspace_root_replaces_static_root() {
-    let baked =
-        std::env::temp_dir().join(format!("gents-tool-context-baked-{}", uuid::Uuid::new_v4()));
-    let placement = std::env::temp_dir().join(format!(
-        "gents-tool-context-placement-{}",
-        uuid::Uuid::new_v4()
-    ));
-    std::fs::create_dir_all(&baked).unwrap();
-    std::fs::create_dir_all(&placement).unwrap();
-    std::fs::write(baked.join("secret.txt"), "nope").unwrap();
-    std::fs::write(placement.join("notes.txt"), "ok").unwrap();
-
-    let context = ToolContext::new(baked.clone(), false).unwrap();
-    let (inside, denied) =
-        crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+async fn request_workspace_overlays_resolve_as_the_tool_root_model() {
+    for case in gents_lean_vocab::families::tool_root_resolution::cases() {
+        let folder = tempfile::tempdir().unwrap();
+        let top = std::fs::canonicalize(folder.path()).unwrap();
+        let at = |segments: &[String]| {
+            segments
+                .iter()
+                .fold(top.clone(), |path, segment| path.join(segment))
+        };
+        let input = &case.input;
+        let directories = [
+            Some(&input.static_root),
+            input.static_base.as_ref(),
+            input.cwd.as_ref(),
+            input.root.as_ref(),
+        ];
+        for directory in directories.into_iter().flatten() {
+            std::fs::create_dir_all(at(directory)).unwrap();
+            if !input.absolute {
+                std::fs::write(at(directory).join(input.target.join("/")), "ok").unwrap();
+            }
+        }
+        if input.absolute {
+            let file = at(&input.target);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "ok").unwrap();
+        }
+        let context = ToolContext::new_with_base(
+            at(&input.static_root),
+            input.static_base.as_ref().map(|base| at(base)),
+            false,
+        )
+        .unwrap();
+        let target = if input.absolute {
+            at(&input.target).to_str().unwrap().to_owned()
+        } else {
+            input.target.join("/")
+        };
+        let outcome = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
             crate::runtime_context::ToolWorkspaceScope {
-                runtime_home: None,
-                workspace_cwd: Some(placement.clone()),
-                workspace_root: Some(std::fs::canonicalize(&placement).unwrap()),
-                workspace_artifact: None,
+                workspace_cwd: input.cwd.as_ref().map(|cwd| at(cwd)),
+                workspace_root: input.root.as_ref().map(|root| at(root)),
                 workspace_authority: Some(crate::native::WorkspaceAuthority::ReadWrite),
+                ..Default::default()
             },
             None,
             None,
@@ -165,24 +156,30 @@ async fn request_runtime_workspace_root_replaces_static_root() {
             Default::default(),
             false,
             async {
-                let inside = context.resolve_existing_file("notes.txt")?;
-                let denied =
-                    context.resolve_existing_file(baked.join("secret.txt").to_str().unwrap());
-                anyhow::Ok((inside, denied.err().map(|error| error.to_string())))
+                context
+                    .resolve_existing_file(&target)
+                    .map(|resolved| {
+                        let display = context.display_path(&resolved);
+                        (resolved, display)
+                    })
+                    .map_err(|error| error.to_string())
             },
         )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        inside,
-        std::fs::canonicalize(placement.join("notes.txt")).unwrap()
-    );
-    assert!(
-        denied.unwrap().contains("outside the allowed tool root"),
-        "bound overlay must deny the baked behavior root"
-    );
-
-    let _ = std::fs::remove_dir_all(baked);
-    let _ = std::fs::remove_dir_all(placement);
+        .await;
+        let (resolved, display) = match outcome {
+            Ok((resolved, display)) => {
+                let segments = resolved
+                    .strip_prefix(&top)
+                    .unwrap()
+                    .iter()
+                    .map(|segment| segment.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                let shown_whole = display == resolved.display().to_string();
+                (Some(segments), (!shown_whole).then_some(display))
+            }
+            Err(error) if error.contains("outside the allowed tool root") => (None, None),
+            Err(error) => panic!("{input:?}: {error}"),
+        };
+        case.check(gents_lean_vocab::families::tool_root_resolution::Output { resolved, display });
+    }
 }

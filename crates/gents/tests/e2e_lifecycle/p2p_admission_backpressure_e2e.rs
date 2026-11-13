@@ -1,16 +1,18 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents_store::graphql::escape_graphql_string;
 
+use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db_with_admission;
 use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";
 
 async fn install_one_way_replicator(
-    sender: &EmbeddedNode,
-    receiver: &EmbeddedNode,
+    sender: &std::sync::Arc<EmbeddedNode>,
+    receiver: &std::sync::Arc<EmbeddedNode>,
     collections: &[&str],
 ) {
     let sender_addr = wait_for_listen_addr(sender).await;
@@ -61,7 +63,7 @@ async fn install_one_way_replicator(
 }
 
 /// Publishes one discovery record, the only document class pairing carries.
-async fn publish_peer_record(node: &EmbeddedNode, peer_id: &str, address: &str) {
+async fn publish_peer_record(node: &std::sync::Arc<EmbeddedNode>, peer_id: &str, address: &str) {
     let peer_id = escape_graphql_string(peer_id);
     let address = escape_graphql_string(address);
     let mutation = format!(
@@ -76,7 +78,13 @@ async fn publish_peer_record(node: &EmbeddedNode, peer_id: &str, address: &str) 
             }}) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
+    let resp = gents_store::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.p2p_fixture",
+        &mutation,
+    )
+    .await
+    .expect("P2P document access");
     assert!(
         !resp.has_errors(),
         "create PeerRegistry failed: {:?}",
@@ -85,7 +93,7 @@ async fn publish_peer_record(node: &EmbeddedNode, peer_id: &str, address: &str) 
 }
 
 async fn wait_for_peer_record(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     peer_id: &str,
     timeout: Duration,
     label: &str,
@@ -95,8 +103,15 @@ async fn wait_for_peer_record(
         r#"{{ PeerRegistry(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{ peer_id node_did endpoint_address }} }}"#,
         escape_graphql_string(peer_id)
     );
+    let mut changes = node.subscribe_changes("PeerRegistry").await;
     loop {
-        let resp = node.execute(&query).await;
+        let resp = gents_store::graphql::graphql_with_transaction_retry(
+            node,
+            &query,
+            "test.p2p_observation",
+        )
+        .await
+        .expect("P2P document access");
         if let Some(row) = resp
             .data
             .as_ref()
@@ -110,7 +125,9 @@ async fn wait_for_peer_record(
             "timed out waiting for PeerRegistry({peer_id}) on {label}: {:?}",
             resp.errors
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("PeerRegistry({peer_id}) did not arrive on {label}"));
     }
 }
 
@@ -120,14 +137,14 @@ async fn single_push_worker_delivers_multi_wave_updates() {
     let owner = test_p2p_db_with_admission("admission-p2p-multi-owner", admission.clone()).await;
     let peer = test_p2p_db_with_admission("admission-p2p-multi-peer", admission).await;
 
-    install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["PeerRegistry"]).await;
+    install_one_way_replicator(&owner.node, &peer.node, &["PeerRegistry"]).await;
 
     for idx in 0..3 {
         let peer_id = format!("admission-p2p-multi-wave-{idx}");
         let address = format!("/ip4/127.0.0.1/tcp/{}", 4100 + idx);
-        publish_peer_record(owner.node.as_ref(), &peer_id, &address).await;
+        publish_peer_record(&owner.node, &peer_id, &address).await;
         let on_peer = wait_for_peer_record(
-            peer.node.as_ref(),
+            &peer.node,
             &peer_id,
             Duration::from_secs(45),
             &format!("peer wave {idx}"),

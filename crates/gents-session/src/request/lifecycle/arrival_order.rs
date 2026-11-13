@@ -128,3 +128,18 @@ pub fn observed_claim_allowed(candidate: &ClaimObservation, rows: &[ClaimObserva
                     })
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{observed_claim_allowed, ClaimObservation};
+    use gents_lean_vocab::family::recode;
+
+    #[test]
+    fn observed_claim_cohorts_match_lean() {
+        gents_lean_vocab::families::trigger_delivery_observed_claim::replay(|case| {
+            let candidate: ClaimObservation = recode(&case.candidate);
+            let rows: Vec<ClaimObservation> = case.rows.iter().map(|row| recode(row)).collect();
+            observed_claim_allowed(&candidate, &rows)
+        });
+    }
+}

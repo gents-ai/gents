@@ -23,8 +23,27 @@ use crate::support::TestDb;
 pub mod inference_target;
 pub use inference_target::InferenceTarget;
 
-pub fn live_target() -> InferenceTarget {
-    InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
+pub async fn live_target() -> InferenceTarget {
+    let mut target = tokio::task::spawn_blocking(|| {
+        let selector = std::env::var("GENTS_LIVE_TARGET").map_err(|_| {
+            anyhow::anyhow!("GENTS_LIVE_TARGET is required: choose workstation-1 or workstation-2")
+        })?;
+        anyhow::ensure!(
+            matches!(selector.as_str(), "workstation-1" | "workstation-2"),
+            "GENTS_LIVE_TARGET must be workstation-1 or workstation-2"
+        );
+        InferenceTarget::load(&selector)
+    })
+    .await
+    .expect("load live inference target")
+    .unwrap_or_else(|error| {
+        panic!("{error:#}; run GENTS_LIVE_TARGET=workstation-1 make live-agent PROFILE=fast-dev")
+    });
+    target
+        .discover_model()
+        .await
+        .unwrap_or_else(|error| panic!("{error:#}"));
+    target
 }
 
 /// Binds the live target as the node's client key. The fixture User is the
@@ -187,6 +206,7 @@ where
     R: SnapshotReader + ?Sized,
 {
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = reader.subscribe_changes("AgentRequest").await;
     let mut last = String::from("<none>");
     loop {
         if let Some(state) = fetch_request_lifecycle(reader, request_id).await {
@@ -215,7 +235,36 @@ where
                 .await;
             panic!("timed out waiting for request {request_id} to terminalize; last={last}; evidence={evidence}");
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .is_err()
+        {
+            continue;
+        }
+    }
+}
+
+pub async fn wait_for_rows<R, F>(
+    reader: &R,
+    collection: &str,
+    query: &str,
+    timeout: Duration,
+    predicate: F,
+) -> serde_json::Value
+where
+    R: SnapshotReader + ?Sized,
+    F: Fn(&serde_json::Value) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = reader.subscribe_changes(collection).await;
+    loop {
+        let rows = reader.read_data(query).await;
+        if predicate(&rows) {
+            return rows;
+        }
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("deadline waiting for {collection}: {rows}"));
     }
 }
 
@@ -322,6 +371,7 @@ where
     R: SnapshotReader + ?Sized,
 {
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = reader.subscribe_changes("AgentMessage").await;
     loop {
         let answer = terminal_assistant_answer(reader, request_id).await;
         if !answer.trim().is_empty() {
@@ -330,7 +380,12 @@ where
         if tokio::time::Instant::now() >= deadline {
             return answer;
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        if tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .is_err()
+        {
+            return terminal_assistant_answer(reader, request_id).await;
+        }
     }
 }
 
@@ -597,6 +652,9 @@ impl LiveUser {
 }
 
 impl SnapshotReader for LiveUser {
+    async fn subscribe_changes(&self, collection: &str) -> super::snapshots::SnapshotChanges {
+        self.access.subscribe_changes(collection).await
+    }
     async fn read_data(&self, query: &str) -> serde_json::Value {
         self.access.read_data(query).await
     }

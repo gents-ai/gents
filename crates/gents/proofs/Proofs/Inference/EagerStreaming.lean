@@ -26,6 +26,11 @@ theorem a_custom_endpoint_never_streams_eagerly (provider : Provider) (bedrock v
     enabled provider false bedrock vertex = false := by
   cases provider <;> rfl
 
+theorem tools_stream_eagerly_only_on_the_default_bedrock_endpoint
+    (defaultEndpoint bedrock vertex : Bool) :
+    enabled .bedrock defaultEndpoint bedrock vertex = (defaultEndpoint && bedrock) := by
+  cases defaultEndpoint <;> cases bedrock <;> rfl
+
 theorem bedrock_reads_only_its_own_flag (bedrock vertex : Bool) :
     enabled .bedrock true bedrock vertex = bedrock := rfl
 
