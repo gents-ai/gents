@@ -1982,252 +1982,219 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
     }
 }
 
-/// Production files that classify an error by its concrete type through a
-/// downcast (`downcast*`, `is::<T>`) or `find_source`. Owner interfaces return
-/// thiserror enums whose classifiers match their variants; a downcast belongs
-/// only where an application (`anyhow`) or erased error reaches an owner
-/// boundary, which then asks the owner enum it finds.
+/// Production sites that classify an error by its concrete type and are not
+/// the owner asking for its own type: a downcast (`downcast*`, `is::<T>`) or a
+/// `find_source` call whose type the function's module does not declare and
+/// export, or that sits in a function that is not handed an error. Each is
+/// debt: the producer returns an owner enum whose variants the caller matches,
+/// or the caller asks the owner's classifier. A third-party type is asked
+/// for in an adapter classifier instead. This list only shrinks.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-client-host/src/editor_store.rs", 1),
-    ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
-    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
-    ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
-    ("crates/gents-desktop-core/src/error.rs", 2),
-    ("crates/gents-desktop-core/src/inference.rs", 2),
-    ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
-    ("crates/gents-protocol/src/database_error.rs", 1),
-    ("crates/gents-protocol/src/error_chain.rs", 1),
-    ("crates/gents-protocol/src/graphql/transport.rs", 3),
-    ("crates/gents/src/runtime/agent/daemon.rs", 1),
-    ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
-    ("crates/gents-session/src/request/seam_error.rs", 1),
-    ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
-    ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
-    ("crates/gents/src/runtime/agent/reconcile.rs", 1),
-    ("crates/gents-toolcalls/src/plugin/application_write/mod.rs", 1),
-    ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
-    ("crates/gents-documents/src/desired_state/plan.rs", 1),
-    ("crates/gents-store/src/config_client/retry.rs", 3),
-    ("crates/gents-store/src/config_client/schema_install.rs", 2),
-    ("crates/gents-tools/src/builtin/defra_query/mod.rs", 1),
-    ("crates/gents/src/eval/documents.rs", 3),
-    ("crates/gents-eval/src/report/mod.rs", 1),
-    ("crates/gents-eval/src/report/store.rs", 1),
-    ("crates/gents-eval/src/runner/freeze.rs", 1),
-    ("crates/gents-eval/src/runner/mod.rs", 1),
+    // CreateGoalForSessionError in create_goal_for_session_inner
     ("crates/gents-automation/src/goal/creation.rs", 2),
-    ("crates/gents-store/src/graphql.rs", 1),
-    ("crates/gents-store/src/local/home.rs", 3),
-    ("crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", 1),
-    ("crates/gents-toolcalls/src/call/hook/persistence/session_message.rs", 1),
-    ("crates/gents-store/src/identity/error.rs", 1),
-    ("crates/gents-session/src/request/lifecycle.rs", 1),
-    ("crates/gents-session/src/request/lifecycle/canonical_recovery.rs", 2),
-    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
-    ("crates/gents-session/src/request/lifecycle/execution_renewal.rs", 1),
-    ("crates/gents-session/src/request/lifecycle/queue/position.rs", 1),
-    ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
-    ("crates/gents-eval/src/optimization/driver.rs", 2),
-    ("crates/gents-eval/src/optimization/job.rs", 1),
-    ("crates/gents-eval/src/optimization/promote.rs", 2),
-    ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    ("crates/gents-pack/src/pack/core_packs.rs", 1),
-    ("crates/gents-pack/src/pack/resolve.rs", 1),
-    ("crates/gents-pack/src/plugin/allowed.rs", 2),
-    ("crates/gents-tools/src/plugin/approval.rs", 2),
-    ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
-    ("crates/gents-pack/src/plugin/http_calls.rs", 1),
-    ("crates/gents-pack/src/plugin/install.rs", 1),
-    ("crates/gents-pack/src/plugin/store.rs", 1),
-    ("crates/gents-toolcalls/src/background/job/driver.rs", 1),
-    ("crates/gents-toolcalls/src/background/job/driver/step.rs", 1),
-    ("crates/gents/src/turn/provider_input/replay.rs", 1),
-    // rmcp erases transport errors behind DynamicTransportError; the pool's
-    // McpAuthRefusal is then asked for on its erased source chain
-    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", 2),
-    ("crates/gents-inference/src/rendered_request/mod.rs", 2),
-    ("crates/gents-session/src/request/admission.rs", 2),
-    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 2),
-    ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
-    ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
-    ("crates/gents-session/src/session/fork.rs", 1),
-    ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
-    ("crates/gents-session/src/session/output/replay_capture.rs", 1),
-    ("crates/gents-session/src/session/output/replay_request.rs", 1),
-    ("crates/gents-session/src/session/request_output.rs", 1),
-    ("crates/gents-store/src/local/storage_backend.rs", 9),
-    ("crates/gents-store/src/local/store_key.rs", 2),
-    ("crates/gents-session/src/request/streaming.rs", 1),
-    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
+    // MaterializeBudgetExhausted in fire_result_from_materialize; MaterializeDuplicate in fire_result_from_materialize
     ("crates/gents-automation/src/triggers/engine/mod.rs", 2),
+    // Error in below
+    ("crates/gents-cli/src/commands/eval/manage.rs", 1),
+    // HistoryUnlockRequired in Provider::failed
+    ("crates/gents-client-host/src/editor_store.rs", 1),
+    // Error in Listener::bind
+    ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
+    // EnrollmentDecisionRejected in enrollment_request_is_not_visible_yet
+    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
+    // TryLockError in reserve_client_listener
+    ("crates/gents-desktop-bridge/src/tauri_commands/lifecycle/single_flight.rs", 1),
+    // BackgroundApprovalPending in NativeLaunch::start; BridgeError in settle_launch_failure; RuntimeStillBooting in launch_managed_server; RuntimeStillBooting in settle_launch_failure
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
+    // UnsupportedNativeServicePlatform in native_error
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
+    // BridgeError in settle_adoption; RefusedStoreKind in refused_kind; RuntimeStillBooting in settle_adoption
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
+    // RemoteP2pAdminError in ClientRouteManager::reconcile_route
+    ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
+    // ModelDiscoveryHttpError in classify_discovery_failure
+    ("crates/gents-desktop-core/src/inference.rs", 1),
+    // BaselineMismatch in freeze_job
+    ("crates/gents-eval/src/optimization/driver.rs", 1),
+    // ClosureDrift in drift_of
+    ("crates/gents-eval/src/optimization/promote.rs", 1),
+    // ActorBackendDiscoveryError in unavailable
+    ("crates/gents-host/src/http/inference_activity.rs", 1),
+    // EnrollmentDecisionRefusal in enrollment_decision_handler
+    ("crates/gents-host/src/http/router/accounts.rs", 1),
+    // ControlFailure in refusal_reason
+    ("crates/gents-host/src/prepare_runtime.rs", 1),
+    // CaptureStoreReadError in preload_isolate_verification_failures
+    ("crates/gents-inference/src/rendered_request/mod.rs", 2),
+    // RegistryError in offline_pack_error
+    ("crates/gents-pack/src/pack/resolve.rs", 1),
+    // NotLinkable in bind
+    ("crates/gents-pack/src/plugin/allowed.rs", 2),
+    // InternalAddress in send_error
+    ("crates/gents-pack/src/plugin/http_calls.rs", 1),
+    // E in any_error
+    ("crates/gents-pack/src/plugin/store.rs", 1),
+    // InvalidQueuePosition in verify_request_input
+    ("crates/gents-session/src/request/admission.rs", 1),
+    // ReconstructionError in recover_expired_generation_with_access_and_facts; ReconstructionError in validate_selection
+    ("crates/gents-session/src/request/lifecycle/canonical_recovery.rs", 2),
+    // PendingQueueChanged in RequestLifecycle::finish_natural_turn; ReconstructionError in select_terminal_output
+    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
+    // RenewalAdmissionExpired in renew_once_with_time
+    ("crates/gents-session/src/request/lifecycle/execution_renewal.rs", 1),
+    // InvalidQueuePosition in effective_slots
+    ("crates/gents-session/src/request/lifecycle/queue/position.rs", 1),
+    // ReconstructionError in definitive_output_corruption; RecoveryPlanError in definitive_output_corruption
+    ("crates/gents-session/src/request/lifecycle/recovery.rs", 2),
+    // PendingInputChanged in DefraStreamWriter::try_publish_steering_message
+    ("crates/gents-session/src/request/streaming.rs", 1),
+    // ReplayEvidenceViolation in load_canonical_assistant_candidates_using
+    ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
+    // CaptureStoreReadError in replay_capture_from_row
+    ("crates/gents-session/src/session/output/replay_capture.rs", 1),
+    // CanonicalOutputReadError in validated_canonical_replay_boundary
+    ("crates/gents-session/src/session/output/replay_request.rs", 1),
+    // CanonicalOutputReadError in classify_terminal_read_error; ReconstructionError in classify_terminal_read_error
+    ("crates/gents-session/src/session/request_output.rs", 2),
+    // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
+    ("crates/gents-store/src/local/storage_backend.rs", 3),
+    // StepFailure in JobDriver::step_once
+    ("crates/gents-toolcalls/src/background/job/driver.rs", 1),
+    // GuestTrap in step_on; RecordError in step_on
+    ("crates/gents-toolcalls/src/background/job/driver/step.rs", 2),
+    // ReconstructionError in caused_request_terminals_in_txn
+    ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
+    // BackgroundSlotRefusal in DefraSessionHook::persist_background_tool_call
+    ("crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", 1),
+    // BackgroundSlotRefusal in DefraSessionHook::session_message_commit
+    ("crates/gents-toolcalls/src/call/hook/persistence/session_message.rs", 1),
+    // RecordError in write_terminal_progress
+    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminal_effects.rs", 1),
+    // PluginWritesFailed in ToolCallLifecycle::terminalize_with_options_at
+    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
+    // WriteRecovery in WriteTool::call
+    ("crates/gents-toolcalls/src/plugin/application_write/mod.rs", 1),
+    // GuestTrap in PluginExecutor::run; PluginAttemptError in plugin_attempt_error
+    ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
+    // CollectionDiscoveryError in DefraQueryTool::call
+    ("crates/gents-tools/src/builtin/defra_query/mod.rs", 1),
+    // EnrollmentDecisionRefusal in P2pTool::call_one
+    ("crates/gents-tools/src/builtin/p2p.rs", 1),
+    // SchemaDigestMismatch in SchemaTool::call_one; SchemaSdlFailure in SchemaTool::call_one
+    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 2),
+    // BatchFailure in ConfigCommandTool::call
+    ("crates/gents-tools/src/builtin/self_config/command.rs", 1),
+    // CommandGuidance in ConfigCommandTool::failure_guidance; MissingAgent in ConfigCommandTool::failure_guidance; MissingConfigDocument in ConfigCommandTool::failure_guidance; MissingReference in ConfigCommandTool::failure_guidance; OutcomeSourceSchemaError in ConfigCommandTool::failure_guidance
+    ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
+    // MissingReference in ConfigCommandTool::validate_saved
+    ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
+    // PathChanged in pending_requests; SelectionChanged in pending_requests
+    ("crates/gents-tools/src/plugin/approval.rs", 2),
+    // ExecutionOwnershipLost in drive_inference_stream
+    ("crates/gents/src/runtime/agent/daemon/inference/drive.rs", 1),
+    // ExecutionOwnershipLost in lost_execution_ownership
+    ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
+    // StaleCompactionGeneration in is_stale_compaction_generation
+    ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
+    // UnselectedDisabledBackend in resolve_agent_factories
+    ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
+    // ActiveSnapshotReceiverClosed in GenerationSupervisor::handle_proposal
+    ("crates/gents/src/runtime/agent/reconcile.rs", 1),
+    // FatalNodeReadinessWrite in is_fatal_node_readiness_write
+    ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
+    // ReplayEvidenceViolation in replay_resolution_error
+    ("crates/gents/src/turn/provider_input/replay.rs", 1),
 ];
 
-#[derive(Default)]
-struct DowncastVisitor {
-    sites: usize,
-}
+/// Owner classifiers: the functions through which an owner asks an erased
+/// error for its own error type. A site is one when its function is
+/// synchronous and takes an error, and the type asked for is an error type
+/// that is declared and exported (any `pub`) in the same file, or, for a file
+/// in `OWNER_MODULES`, in an `OWNER_MODULES` file of the same crate. The chain
+/// walker alone may ask for its own type parameter. These sites are not debt;
+/// a new entry is a reviewed addition.
+#[rustfmt::skip]
+const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
+    ("crates/gents-desktop-core/src/error.rs", &["BridgeError::classify_transport_error"]),
+    ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
+    ("crates/gents-eval/src/optimization/driver.rs", &["job_refused"]),
+    ("crates/gents-eval/src/optimization/job.rs", &["journal_conflict"]),
+    ("crates/gents-eval/src/optimization/promote.rs", &["promote_refused"]),
+    ("crates/gents-eval/src/report/mod.rs", &["report_refused"]),
+    ("crates/gents-eval/src/runner/freeze.rs", &["freeze_refused"]),
+    ("crates/gents-eval/src/runner/mod.rs", &["provider_down"]),
+    ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
+    ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
+    ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
+    ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
+    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
+    ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
+    ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
+    ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),
+    ("crates/gents-session/src/session/fork.rs", &["fork_error"]),
+    ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
+    ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
+    ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
+    ("crates/gents-store/src/local/home.rs", &["store_lock_held"]),
+    ("crates/gents-store/src/local/storage_backend.rs", &["find_incompatible", "find_insecure_key"]),
+    ("crates/gents-store/src/local/store_key.rs", &["store_key_unavailable"]),
+    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["auth_refusal_of"]),
+    ("crates/gents/src/eval/documents.rs", &["already_completed", "already_invalidated", "feedback_off_train"]),
+    ("crates/gents/src/runtime/agent/daemon.rs", &["ShutdownDrainFailure::occurs_in"]),
+];
 
-impl<'ast> Visit<'ast> for DowncastVisitor {
-    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        if !cfg_test(&item.attrs) {
-            visit::visit_item_mod(self, item);
-        }
-    }
+/// The one generic chain walker; every other generic downcast hides the type
+/// it asks for and counts.
+const CHAIN_WALKER: &str = "crates/gents-protocol/src/error_chain.rs";
 
-    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        let test = cfg_test(&item.attrs)
-            || item.attrs.iter().any(|attribute| {
-                attribute
-                    .path()
-                    .segments
-                    .last()
-                    .is_some_and(|segment| segment.ident == "test")
-            });
-        if !test {
-            visit::visit_item_fn(self, item);
-        }
-    }
-
-    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
-        if path_name(call).is_some_and(|name| name.rsplit("::").next() == Some("find_source")) {
-            self.sites += 1;
-        }
-        visit::visit_expr_call(self, call);
-    }
-
-    /// Only an error receiver classifies a failure; `Any` maps, deferred
-    /// write payloads and panic payloads downcast data, not errors.
-    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
-        let method = call.method.to_string();
-        if (matches!(
-            method.as_str(),
-            "downcast" | "downcast_ref" | "downcast_mut"
-        ) || (method == "is" && call.turbofish.is_some()))
-            && expression_names_error(&call.receiver)
-        {
-            self.sites += 1;
-        }
-        visit::visit_expr_method_call(self, call);
-    }
-}
-
-fn downcast_sites(syntax: &syn::File) -> usize {
-    let mut visitor = DowncastVisitor::default();
-    visitor.visit_file(syntax);
-    visitor.sites
-}
-
-#[test]
-fn downcast_classifiers_only_shrink() {
-    let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
-        .into_iter()
-        .filter_map(|(relative, syntax)| {
-            let sites = downcast_sites(&syntax);
-            (sites > 0).then_some((relative, sites))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let allowed = DOWNCAST_CLASSIFIER_ALLOWLIST
-        .iter()
-        .map(|(path, count)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} new downcast classifier site(s); return an owner enum and match its variants"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} downcast classifier sites exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} downcast classifier sites; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    let current = actual
-        .iter()
-        .map(|(path, count)| format!("    (\"{path}\", {count}),"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        violations.is_empty(),
-        "downcast classifier ratchet failed:\n{}\n\ncurrent sites:\n{current}",
-        violations.join("\n")
-    );
-}
-
-#[test]
-fn downcast_fence_counts_type_classification_outside_tests() {
-    for (source, sites) in [
-        ("fn f(e: &anyhow::Error) -> bool { e.downcast_ref::<E>().is_some() }", 1),
-        ("fn f(e: anyhow::Error) { let _ = e.downcast::<E>(); }", 1),
-        ("fn f(e: &anyhow::Error) -> bool { e.is::<E>() }", 1),
-        ("fn f(e: &dyn Error) { find_source::<E>(e); gents_protocol::error_chain::find_source::<F>(e); }", 2),
-        ("fn f(e: &Error) -> bool { e.is_conflict() || e.is(x) }", 0),
-        ("fn f(e: &dyn Error) -> bool { find_map_source(e, |cause| cause.downcast_ref::<E>()).is_some() }", 1),
-        ("fn f(m: &Map) -> Option<&T> { m.get(&id)?.downcast_ref() }", 0),
-        ("fn f(payload: &dyn Any) -> bool { payload.downcast_ref::<String>().is_some() }", 0),
-        ("#[cfg(test)] mod tests { fn f(e: &anyhow::Error) { e.downcast_ref::<E>(); } }", 0),
-        ("#[test] fn f() { error().downcast_ref::<E>(); }", 0),
-        ("#[tokio::test] async fn f() { error().downcast_ref::<E>(); }", 0),
-    ] {
-        let syntax = syn::parse_file(source).expect("parse snippet");
-        assert_eq!(downcast_sites(&syntax), sites, "{source}");
-    }
-}
-
-/// Production files that still decide on an error's text. Each entry is an
-/// adapter-boundary classifier whose external premise its docstring names
-/// (third-party or persisted text that is the only signal), or display-only
-/// composition; owner facts are variants that callers match instead.
+/// Production decisions on an error's text outside an adapter-boundary
+/// classifier. Each is debt: the fact becomes an owner enum variant that
+/// callers match, or the decision moves into an adapter classifier whose
+/// docstring names the external premise. This list only shrinks.
 #[rustfmt::skip]
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    // regolith store-lock messages through the node builder
-    ("crates/gents-cli/src/commands/eval/watch.rs", 1),
-    // provider text through Rig's ProviderError(String) (ProviderReport)
-    ("crates/gents-loop/src/error.rs", 21),
-    // serde_json schema-mismatch message prefixes
-    ("crates/gents-loop/src/tool.rs", 3),
-    // tool errors erased by Rig's ToolCallError
-    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 8),
-    // DefraDB schema validator messages
-    ("crates/gents-migration/src/engine.rs", 1),
-    // DefraDB missing-collection messages
-    ("crates/gents-protocol/src/graphql/response.rs", 4),
-    // replicated AgentRequest failure_reason
-    ("crates/gents-protocol/src/node_readiness.rs", 1),
-    // launchctl print output
-    ("crates/gents-service/src/native_service.rs", 1),
-    // DefraDB HTTP 409 commit body
-    ("crates/gents-store/src/config_client/retry.rs", 3),
-    // JSON-RPC node pruned-history wording
-    // persisted AgentRequest failure_reason
-    ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", 2),
-    // MCP probe transport/OS error text (metric label)
-    ("crates/gents-tools/src/mcp/health.rs", 8),
-    // display only: appends a next-call hint when absent
+    // in P2pTool::call
     ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    // DefraDB SDL parser messages (help page choice)
-    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 6),
-    // serde `invalid type: string` message
-    ("crates/gents-tools/src/builtin/self_config/command/patch.rs", 1),
-    // display only: appends a next-call hint when absent
+    // in SessionHistoryTool::call
     ("crates/gents-tools/src/native/session_history.rs", 1),
-    // persisted AgentRequest failure_reason
-    ("crates/gents-observe/src/observe/trace_export.rs", 6),
-    // serde `unknown variant` message
-    ("crates/gents-session/src/workspace/action_plan.rs", 1),
-    // git show stderr
-    ("crates/gents-session/src/workspace/adapter.rs", 2),
 ];
+
+/// Adapter-boundary classifiers: functions that decide on error text, or ask
+/// an erased error for a third-party type, because third-party or persisted
+/// text or a third-party type is the only signal, which their docstring
+/// states on a line starting `External premise:`. A type is third-party when
+/// it is written out, is no type parameter and no `crate`, `self`, `super`
+/// or `gents_*` path, and either no workspace source declares its name or its
+/// path starts at an external crate. Their decisions are not debt; a new
+/// entry is a reviewed addition.
+#[rustfmt::skip]
+const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
+    ("crates/gents-cli/src/commands/eval/watch.rs", &["store_locked"]),
+    ("crates/gents-desktop-core/src/inference.rs", &["classify_discovery_failure"]),
+    ("crates/gents-eval/src/report/store.rs", &["unresolvable"]),
+    ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", &["provider_reason_from_failure"]),
+    ("crates/gents-loop/src/error.rs", &["ProviderReport::classify_failure_text"]),
+    ("crates/gents-loop/src/tool.rs", &["schema_args_error"]),
+    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", &["classify_error_text"]),
+    ("crates/gents-migration/src/engine.rs", &["collection_already_exists"]),
+    ("crates/gents-observe/src/observe/trace_export.rs", &["looks_like_deadline_or_inference_failure"]),
+    ("crates/gents-pack/src/plugin/install.rs", &["is_not_found"]),
+    ("crates/gents-protocol/src/graphql/response.rs", &["is_collection_missing_error_message"]),
+    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_error_in_chain"]),
+    ("crates/gents-protocol/src/node_readiness.rs", &["is_behavior_unavailable_rejection"]),
+    ("crates/gents-service/src/native_service.rs", &["ensure_launchd_result"]),
+    ("crates/gents-session/src/workspace/action_plan.rs", &["parse_action_plan_json"]),
+    ("crates/gents-session/src/workspace/adapter.rs", &["git_blob_missing"]),
+    ("crates/gents-store/src/config_client/retry.rs", &["ConfigClientError::is_missing_or_denied_write", "is_transaction_conflict_text"]),
+    ("crates/gents-store/src/graphql.rs", &["is_storage_full"]),
+    ("crates/gents-tools/src/builtin/schema_help/mod.rs", &["sdl_help_call"]),
+    ("crates/gents-tools/src/builtin/self_config/command/patch.rs", &["serde_found_string"]),
+    ("crates/gents-tools/src/mcp/health.rs", &["classify_last_error"]),
+    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["classify"]),
+];
+
+const EXTERNAL_PREMISE: &str = "External premise:";
 
 const TEXT_TESTS: &[&str] = &["contains", "starts_with", "ends_with", "eq", "ne"];
 
@@ -2272,13 +2239,14 @@ fn names_error(name: &str) -> bool {
     }
 }
 
-fn expression_names_error(expression: &Expr) -> bool {
+/// An expression that is an error: one named as an error, or a binding in
+/// `bound` that its function received as an error under any name.
+fn expression_is_error(expression: &Expr, bound: &[String]) -> bool {
     match expression {
-        Expr::Path(path) => path
-            .path
-            .segments
-            .last()
-            .is_some_and(|segment| names_error(&segment.ident.to_string())),
+        Expr::Path(path) => path.path.segments.last().is_some_and(|segment| {
+            let name = segment.ident.to_string();
+            names_error(&name) || (path.path.segments.len() == 1 && bound.contains(&name))
+        }),
         // A `cause` field states why a request or event happened; a `cause`
         // binding is an error walked from a source chain.
         Expr::Field(field) => match &field.member {
@@ -2286,50 +2254,611 @@ fn expression_names_error(expression: &Expr) -> bool {
                 let name = name.to_string();
                 name != "cause" && names_error(&name)
             }
-            syn::Member::Unnamed(_) => expression_names_error(&field.base),
+            syn::Member::Unnamed(_) => expression_is_error(&field.base, bound),
         },
-        Expr::Reference(reference) => expression_names_error(&reference.expr),
-        Expr::Paren(paren) => expression_names_error(&paren.expr),
-        Expr::Unary(unary) => expression_names_error(&unary.expr),
+        Expr::Reference(reference) => expression_is_error(&reference.expr, bound),
+        Expr::Paren(paren) => expression_is_error(&paren.expr, bound),
+        Expr::Unary(unary) => expression_is_error(&unary.expr, bound),
         Expr::MethodCall(call) => {
             let method = call.method.to_string();
             names_error(&method)
                 || (ERROR_VIEWS.contains(&method.as_str())
-                    && expression_names_error(&call.receiver))
+                    && expression_is_error(&call.receiver, bound))
         }
         Expr::Call(call) => {
             path_name(call).is_some_and(|name| name.ends_with("ErrorChain"))
-                || call.args.iter().any(expression_names_error)
+                || call
+                    .args
+                    .iter()
+                    .any(|argument| expression_is_error(argument, bound))
         }
         _ => false,
     }
 }
 
-fn macro_renders_error(invocation: &syn::Macro) -> bool {
+fn macro_renders_error(invocation: &syn::Macro, bound: &[String]) -> bool {
     invocation.path.is_ident("format")
         && invocation
             .tokens
             .clone()
             .into_iter()
             .any(|token| match token {
-                proc_macro2::TokenTree::Ident(ident) => names_error(&ident.to_string()),
+                proc_macro2::TokenTree::Ident(ident) => {
+                    let ident = ident.to_string();
+                    names_error(&ident) || bound.contains(&ident)
+                }
                 proc_macro2::TokenTree::Literal(literal) => {
                     let text = literal.to_string();
                     ["{e:", "{e}", "{err", "{error"]
                         .iter()
                         .any(|start| text.contains(start))
+                        || bound.iter().any(|name| {
+                            text.contains(&format!("{{{name}}}"))
+                                || text.contains(&format!("{{{name}:"))
+                        })
                 }
                 _ => false,
             })
 }
 
-#[derive(Default)]
-struct ErrorTextVisitor {
-    sites: Vec<usize>,
-    renderings: Vec<String>,
+fn is_test_fn(attributes: &[syn::Attribute]) -> bool {
+    cfg_test(attributes)
+        || attributes.iter().any(|attribute| {
+            attribute
+                .path()
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "test")
+        })
 }
 
-impl ErrorTextVisitor {
+/// A docstring names its external premise on a line that starts
+/// `External premise:` and goes on to state it.
+fn names_external_premise(attributes: &[syn::Attribute]) -> bool {
+    attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("doc"))
+        .filter_map(|attribute| match &attribute.meta {
+            syn::Meta::NameValue(pair) => match &pair.value {
+                Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(text),
+                    ..
+                }) => Some(text.value()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .any(|text| {
+            text.lines().any(|line| {
+                line.trim_start()
+                    .strip_prefix(EXTERNAL_PREMISE)
+                    .is_some_and(|premise| !premise.trim().is_empty())
+            })
+        })
+}
+
+/// A type that is an error by its name or trait: `anyhow::Error`, an
+/// `...Error`, `dyn Error`, `impl Error`, or a reference or box of one.
+fn names_error_type(ty: &syn::Type) -> bool {
+    let error_bound = |bound: &syn::TypeParamBound| {
+        matches!(bound, syn::TypeParamBound::Trait(bound)
+            if bound.path.segments.last().is_some_and(|segment| segment.ident == "Error"))
+    };
+    match ty {
+        syn::Type::Paren(paren) => names_error_type(&paren.elem),
+        syn::Type::Reference(reference) => names_error_type(&reference.elem),
+        syn::Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
+            let boxed = segment.ident == "Box"
+                && matches!(&segment.arguments, syn::PathArguments::AngleBracketed(arguments)
+                if arguments.args.iter().any(|argument| {
+                    matches!(argument, syn::GenericArgument::Type(inner) if names_error_type(inner))
+                }));
+            boxed || segment.ident.to_string().ends_with("Error")
+        }),
+        syn::Type::TraitObject(object) => object.bounds.iter().any(error_bound),
+        syn::Type::ImplTrait(object) => object.bounds.iter().any(error_bound),
+        _ => false,
+    }
+}
+
+/// The function a classifier site sits in, as the two classifier ratchets
+/// judge it: by its signature and its docstring, never by its name.
+struct FnFrame {
+    name: String,
+    /// Synchronous, with a parameter typed as an error.
+    asks_error: bool,
+    type_parameters: Vec<String>,
+    /// Its docstring names the external premise.
+    premise: bool,
+}
+
+fn fn_frame(
+    owner: Option<&String>,
+    attributes: &[syn::Attribute],
+    signature: &syn::Signature,
+) -> FnFrame {
+    let takes_error = signature
+        .inputs
+        .iter()
+        .any(|input| matches!(input, syn::FnArg::Typed(typed) if names_error_type(&typed.ty)));
+    FnFrame {
+        name: match owner {
+            Some(owner) => format!("{owner}::{}", signature.ident),
+            None => signature.ident.to_string(),
+        },
+        asks_error: takes_error && signature.asyncness.is_none(),
+        type_parameters: signature
+            .generics
+            .type_params()
+            .map(|parameter| parameter.ident.to_string())
+            .collect(),
+        premise: names_external_premise(attributes),
+    }
+}
+
+fn type_name(ty: &syn::Type) -> String {
+    match ty {
+        syn::Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_default(),
+        syn::Type::Paren(paren) => type_name(&paren.elem),
+        syn::Type::Reference(reference) => type_name(&reference.elem),
+        _ => String::new(),
+    }
+}
+
+fn pattern_names(pattern: &syn::Pat, names: &mut Vec<String>) {
+    match pattern {
+        syn::Pat::Ident(binding) => {
+            names.push(binding.ident.to_string());
+            if let Some((_, inner)) = &binding.subpat {
+                pattern_names(inner, names);
+            }
+        }
+        syn::Pat::Type(typed) => pattern_names(&typed.pat, names),
+        syn::Pat::Reference(reference) => pattern_names(&reference.pat, names),
+        syn::Pat::Paren(paren) => pattern_names(&paren.pat, names),
+        syn::Pat::Tuple(tuple) => tuple
+            .elems
+            .iter()
+            .for_each(|inner| pattern_names(inner, names)),
+        syn::Pat::TupleStruct(tuple) => tuple
+            .elems
+            .iter()
+            .for_each(|inner| pattern_names(inner, names)),
+        syn::Pat::Or(cases) => cases
+            .cases
+            .iter()
+            .for_each(|inner| pattern_names(inner, names)),
+        _ => {}
+    }
+}
+
+fn first_type(arguments: &syn::AngleBracketedGenericArguments) -> Option<&syn::Type> {
+    arguments.args.iter().find_map(|argument| match argument {
+        syn::GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    })
+}
+
+/// The Rust expressions a macro invocation holds. Macro input is not parsed
+/// by `syn`, so a site inside `matches!`, `assert!` or `tokio::select!` would
+/// otherwise never count. The input is read as an expression list, then as
+/// statements; where both fail it is split at `,`, `;`, `=>` and `if`, and a
+/// piece that is no expression at its lone `:` (a `json!` key), and each
+/// piece is read alone. Pieces that are still not expressions give up their
+/// groups to the same reading and their remaining tokens to `loose`.
+fn macro_expressions(
+    tokens: proc_macro2::TokenStream,
+    parsed: &mut Vec<Expr>,
+    loose: &mut Vec<proc_macro2::TokenTree>,
+) {
+    use proc_macro2::{Spacing, TokenTree};
+    use syn::parse::Parser;
+    let list = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
+    if let Ok(expressions) = list.parse2(tokens.clone()) {
+        parsed.extend(expressions);
+        return;
+    }
+    if let Ok(stmts) = syn::Block::parse_within.parse2(tokens.clone()) {
+        parsed.push(Expr::Block(syn::ExprBlock {
+            attrs: Vec::new(),
+            label: None,
+            block: syn::Block {
+                brace_token: syn::token::Brace::default(),
+                stmts,
+            },
+        }));
+        return;
+    }
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    let mut pieces = vec![Vec::new()];
+    let mut index = 0;
+    while index < tokens.len() {
+        let arrow = matches!(
+            (&tokens[index], tokens.get(index + 1)),
+            (TokenTree::Punct(equals), Some(TokenTree::Punct(greater)))
+                if equals.as_char() == '='
+                    && equals.spacing() == Spacing::Joint
+                    && greater.as_char() == '>'
+        );
+        // A `,` before `>` ends a generic argument list, not an expression.
+        let closes_generics = matches!(
+            tokens.get(index + 1),
+            Some(TokenTree::Punct(next)) if next.as_char() == '>'
+        );
+        let boundary = arrow
+            || match &tokens[index] {
+                TokenTree::Punct(punct) => match punct.as_char() {
+                    ',' => !closes_generics,
+                    ';' => true,
+                    _ => false,
+                },
+                TokenTree::Ident(ident) => ident == "if",
+                _ => false,
+            };
+        if boundary {
+            pieces.push(Vec::new());
+            index += 1 + usize::from(arrow);
+        } else {
+            if let Some(piece) = pieces.last_mut() {
+                piece.push(tokens[index].clone());
+            }
+            index += 1;
+        }
+    }
+    for piece in pieces {
+        if piece.is_empty() {
+            continue;
+        }
+        if let Ok(expression) = syn::parse2::<Expr>(piece.iter().cloned().collect()) {
+            parsed.push(expression);
+            continue;
+        }
+        let colon = |token: Option<&TokenTree>| matches!(token, Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
+        let mut keyed = vec![Vec::new()];
+        for (index, token) in piece.iter().enumerate() {
+            let lone = colon(Some(token))
+                && !colon(piece.get(index + 1))
+                && !(index > 0 && colon(piece.get(index - 1)));
+            if lone {
+                keyed.push(Vec::new());
+            } else if let Some(part) = keyed.last_mut() {
+                part.push(token.clone());
+            }
+        }
+        for part in keyed {
+            match syn::parse2::<Expr>(part.iter().cloned().collect()) {
+                Ok(expression) => parsed.push(expression),
+                Err(_) => {
+                    for token in part {
+                        match token {
+                            TokenTree::Group(group) => {
+                                macro_expressions(group.stream(), parsed, loose)
+                            }
+                            other => loose.push(other),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Error types by the file that declares them: a `struct` or `enum` that
+/// derives `Error` or has an `impl Error for` it in the same file.
+#[derive(Default)]
+struct DeclaredErrors {
+    /// Declared with any `pub`, by file.
+    exported: BTreeMap<String, BTreeSet<String>>,
+    /// Every declared error type's name, private ones included.
+    names: BTreeSet<String>,
+    /// Every type name a workspace source declares, test code included.
+    workspace: BTreeSet<String>,
+    /// `std`, `core`, `alloc` and the crates the workspace depends on.
+    external: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct TypeNames(BTreeSet<String>);
+
+impl<'ast> Visit<'ast> for TypeNames {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.0.insert(item.ident.to_string());
+    }
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        self.0.insert(item.ident.to_string());
+    }
+
+    fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
+        self.0.insert(item.ident.to_string());
+    }
+
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
+        self.0.insert(item.ident.to_string());
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+        self.0.insert(item.ident.to_string());
+        visit::visit_item_trait(self, item);
+    }
+}
+
+/// The crate names a path may start at that are not this workspace's.
+fn external_crates(root: &Path) -> BTreeSet<String> {
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let mut tables = vec![workspace["workspace"].get("dependencies").cloned()];
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let manifest = toml_file(
+            &root
+                .join(member.as_str().expect("member path"))
+                .join("Cargo.toml"),
+        );
+        tables.push(manifest.get("dependencies").cloned());
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            tables.extend(
+                targets
+                    .values()
+                    .map(|target| target.get("dependencies").cloned()),
+            );
+        }
+    }
+    tables
+        .into_iter()
+        .flatten()
+        .filter_map(|table| table.as_table().cloned())
+        .flat_map(|table| table.into_iter().map(|(key, _)| key.replace('-', "_")))
+        .chain(["std", "core", "alloc"].map(str::to_string))
+        .filter(|name| !name.starts_with("gents"))
+        .collect()
+}
+
+#[derive(Default)]
+struct ErrorDeclarations {
+    /// Name, exported, derives `Error`.
+    types: Vec<(String, bool, bool)>,
+    implemented: BTreeSet<String>,
+}
+
+fn derives_error(attributes: &[syn::Attribute]) -> bool {
+    attributes
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("derive"))
+        .any(|attribute| {
+            let mut found = false;
+            let _ = attribute.parse_nested_meta(|meta| {
+                found |= meta
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "Error");
+                Ok(())
+            });
+            found
+        })
+}
+
+impl<'ast> Visit<'ast> for ErrorDeclarations {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.types.push((
+            item.ident.to_string(),
+            !matches!(item.vis, syn::Visibility::Inherited),
+            derives_error(&item.attrs),
+        ));
+    }
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        self.types.push((
+            item.ident.to_string(),
+            !matches!(item.vis, syn::Visibility::Inherited),
+            derives_error(&item.attrs),
+        ));
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        if let Some((_, path, _)) = &item.trait_ {
+            if path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "Error")
+            {
+                self.implemented.insert(type_name(&item.self_ty));
+            }
+        }
+        visit::visit_item_impl(self, item);
+    }
+}
+
+fn crate_of(path: &str) -> &str {
+    let end = path
+        .match_indices('/')
+        .nth(1)
+        .map_or(path.len(), |(index, _)| index);
+    &path[..end]
+}
+
+fn in_owner_module(path: &str) -> bool {
+    OWNER_MODULES.iter().any(|owner| owned_by(path, owner))
+}
+
+impl DeclaredErrors {
+    fn of(sources: &[(String, syn::File)], external: &BTreeSet<String>) -> Self {
+        let mut declared = Self {
+            external: external.clone(),
+            ..Self::default()
+        };
+        for (path, syntax) in sources {
+            let mut names = TypeNames::default();
+            names.visit_file(syntax);
+            declared.workspace.extend(names.0);
+            let mut declarations = ErrorDeclarations::default();
+            declarations.visit_file(syntax);
+            for (name, exported, derives) in declarations.types {
+                if !derives && !declarations.implemented.contains(&name) {
+                    continue;
+                }
+                declared.names.insert(name.clone());
+                if exported {
+                    declared
+                        .exported
+                        .entry(path.clone())
+                        .or_default()
+                        .insert(name);
+                }
+            }
+        }
+        declared
+    }
+
+    /// The error types `path` owns: those its file exports, and for a file
+    /// in `OWNER_MODULES` those the `OWNER_MODULES` files of its crate export.
+    fn own(&self, path: &str) -> BTreeSet<String> {
+        let owner = in_owner_module(path);
+        self.exported
+            .iter()
+            .filter(|(file, _)| {
+                file.as_str() == path
+                    || (owner && crate_of(file) == crate_of(path) && in_owner_module(file))
+            })
+            .flat_map(|(_, names)| names.iter().cloned())
+            .collect()
+    }
+}
+
+/// The sites of one file: those that count, described for the failure
+/// message, and the functions that hold a compliant one.
+#[derive(Default)]
+struct SiteFindings {
+    debt: Vec<String>,
+    compliant: BTreeMap<String, usize>,
+}
+
+struct ClassifierVisitor<'declared> {
+    declared: &'declared DeclaredErrors,
+    own: BTreeSet<String>,
+    walker: bool,
+    owners: Vec<String>,
+    frames: Vec<FnFrame>,
+    /// Bindings the function received as errors, whatever they are named.
+    errors: Vec<String>,
+    /// Bindings that hold an error's rendering.
+    renderings: Vec<String>,
+    downcasts: SiteFindings,
+    texts: SiteFindings,
+}
+
+impl ClassifierVisitor<'_> {
+    fn function_name(&self) -> String {
+        self.frames
+            .last()
+            .map_or_else(|| "(no function)".to_string(), |frame| frame.name.clone())
+    }
+
+    /// The type a downcast asks for, with `Self` read as the `impl` type.
+    fn asked_name(&self, asked: &syn::Type) -> String {
+        match type_name(asked).as_str() {
+            "Self" => self.owners.last().cloned().unwrap_or_default(),
+            name => name.to_string(),
+        }
+    }
+
+    /// Whether the owner is asking for its own type. A path into another
+    /// workspace crate is never the owner's, whatever its last segment.
+    fn owns(&self, asked: &syn::Type, frame: &FnFrame) -> bool {
+        let path = match asked {
+            syn::Type::Path(path) if path.qself.is_none() => &path.path,
+            _ => return false,
+        };
+        let single = path.segments.len() == 1;
+        let foreign = !single
+            && path
+                .segments
+                .first()
+                .is_some_and(|segment| segment.ident.to_string().starts_with("gents_"));
+        if foreign || !frame.asks_error {
+            return false;
+        }
+        let name = self.asked_name(asked);
+        self.own.contains(&name) || (self.walker && single && frame.type_parameters.contains(&name))
+    }
+
+    /// Whether the type asked for is a third-party one, which no owner here
+    /// can classify. A workspace type never is: not by a `crate`, `self`,
+    /// `super` or `gents_*` path, not as `Self` or a type parameter, and not
+    /// by a name a workspace source declares unless its path starts at an
+    /// external crate.
+    fn third_party(&self, asked: &syn::Type, frame: &FnFrame) -> bool {
+        let path = match asked {
+            syn::Type::Path(path) if path.qself.is_none() => &path.path,
+            _ => return false,
+        };
+        let (Some(first), Some(last)) = (path.segments.first(), path.segments.last()) else {
+            return false;
+        };
+        let (first, last) = (first.ident.to_string(), last.ident.to_string());
+        let single = path.segments.len() == 1;
+        if matches!(first.as_str(), "crate" | "self" | "super" | "Self")
+            || first.starts_with("gents_")
+            || (single && frame.type_parameters.contains(&last))
+        {
+            return false;
+        }
+        (!single && self.declared.external.contains(&first))
+            || !self.declared.workspace.contains(&last)
+    }
+
+    fn downcast_site(&mut self, line: usize, asked: Option<&syn::Type>) {
+        let function = self.function_name();
+        let (owner, adapter) = match (self.frames.last(), asked) {
+            (Some(frame), Some(asked)) => (
+                self.owns(asked, frame),
+                frame.premise && self.third_party(asked, frame),
+            ),
+            _ => (false, false),
+        };
+        if owner {
+            *self.downcasts.compliant.entry(function).or_default() += 1;
+        } else if adapter {
+            *self.texts.compliant.entry(function).or_default() += 1;
+        } else {
+            let asked = asked.map_or_else(|| "an inferred type".to_string(), type_name);
+            self.downcasts
+                .debt
+                .push(format!("{line}: {asked} in {function}"));
+        }
+    }
+
+    fn text_site(&mut self, line: usize) {
+        let function = self.function_name();
+        if self.frames.last().is_some_and(|frame| frame.premise) {
+            *self.texts.compliant.entry(function).or_default() += 1;
+        } else {
+            self.texts.debt.push(format!("{line}: in {function}"));
+        }
+    }
+
+    /// A downcast asks about an error when its receiver is one or the type
+    /// it asks for is an error type, so renaming the receiver hides nothing.
+    fn asks_error_type(&self, asked: Option<&syn::Type>) -> bool {
+        asked.is_some_and(|asked| {
+            let name = self.asked_name(asked);
+            name.ends_with("Error") || self.declared.names.contains(&name)
+        })
+    }
+
     /// Text derived from an error: its `to_string()` or `format!` rendering,
     /// a local bound to one, or an identifier named as error text.
     fn error_text(&self, expression: &Expr, named: bool) -> bool {
@@ -2337,18 +2866,18 @@ impl ErrorTextVisitor {
             Expr::Reference(reference) => self.error_text(&reference.expr, named),
             Expr::Paren(paren) => self.error_text(&paren.expr, named),
             Expr::Unary(unary) => self.error_text(&unary.expr, named),
-            Expr::Macro(invocation) => macro_renders_error(&invocation.mac),
+            Expr::Macro(invocation) => macro_renders_error(&invocation.mac, &self.errors),
             Expr::Path(path) => path.path.get_ident().is_some_and(|ident| {
                 let ident = ident.to_string();
                 self.renderings.contains(&ident) || (named && names_error(&ident))
             }),
-            Expr::Field(_) => named && expression_names_error(expression),
+            Expr::Field(_) => named && expression_is_error(expression, &[]),
             Expr::MethodCall(call) => {
                 let method = call.method.to_string();
                 if TEXT_ADAPTERS.contains(&method.as_str()) {
                     self.error_text(&call.receiver, named)
                 } else {
-                    method == "to_string" && expression_names_error(&call.receiver)
+                    method == "to_string" && expression_is_error(&call.receiver, &self.errors)
                 }
             }
             _ => false,
@@ -2379,46 +2908,107 @@ impl ErrorTextVisitor {
         }
     }
 
-    fn scoped(&mut self, visit: impl FnOnce(&mut Self)) {
-        let depth = self.renderings.len();
+    fn function(
+        &mut self,
+        attributes: &[syn::Attribute],
+        signature: &syn::Signature,
+        visit: impl FnOnce(&mut Self),
+    ) {
+        if is_test_fn(attributes) {
+            return;
+        }
+        let (errors, renderings) = (self.errors.len(), self.renderings.len());
+        self.frames
+            .push(fn_frame(self.owners.last(), attributes, signature));
+        for input in &signature.inputs {
+            if let syn::FnArg::Typed(typed) = input {
+                if names_error_type(&typed.ty) {
+                    pattern_names(&typed.pat, &mut self.errors);
+                }
+            }
+        }
+        self.classifier_parameters(signature);
         visit(self);
-        self.renderings.truncate(depth);
+        self.frames.pop();
+        self.errors.truncate(errors);
+        self.renderings.truncate(renderings);
+    }
+
+    fn owned(&mut self, owner: String, visit: impl FnOnce(&mut Self)) {
+        self.owners.push(owner);
+        visit(self);
+        self.owners.pop();
     }
 }
 
-fn is_test_fn(attributes: &[syn::Attribute]) -> bool {
-    cfg_test(attributes)
-        || attributes.iter().any(|attribute| {
-            attribute
-                .path()
-                .segments
-                .last()
-                .is_some_and(|segment| segment.ident == "test")
-        })
-}
-
-impl<'ast> Visit<'ast> for ErrorTextVisitor {
+impl<'ast> Visit<'ast> for ClassifierVisitor<'_> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if !item_cfg_test(item) {
             visit::visit_item(self, item);
         }
     }
 
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        self.owned(type_name(&item.self_ty), |visitor| {
+            visit::visit_item_impl(visitor, item)
+        });
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+        self.owned(item.ident.to_string(), |visitor| {
+            visit::visit_item_trait(visitor, item)
+        });
+    }
+
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        if !is_test_fn(&item.attrs) {
-            self.scoped(|visitor| {
-                visitor.classifier_parameters(&item.sig);
-                visit::visit_item_fn(visitor, item);
-            });
-        }
+        self.function(&item.attrs, &item.sig, |visitor| {
+            visit::visit_item_fn(visitor, item)
+        });
     }
 
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        if !is_test_fn(&item.attrs) {
-            self.scoped(|visitor| {
-                visitor.classifier_parameters(&item.sig);
-                visit::visit_impl_item_fn(visitor, item);
-            });
+        self.function(&item.attrs, &item.sig, |visitor| {
+            visit::visit_impl_item_fn(visitor, item)
+        });
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
+        self.function(&item.attrs, &item.sig, |visitor| {
+            visit::visit_trait_item_fn(visitor, item)
+        });
+    }
+
+    /// The payload of an `Err(..)` pattern is an error under any name.
+    fn visit_pat_tuple_struct(&mut self, pattern: &'ast syn::PatTupleStruct) {
+        if pattern
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "Err")
+        {
+            for inner in &pattern.elems {
+                pattern_names(inner, &mut self.errors);
+            }
+        }
+        visit::visit_pat_tuple_struct(self, pattern);
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let mut parsed = Vec::new();
+        let mut loose = Vec::new();
+        macro_expressions(invocation.tokens.clone(), &mut parsed, &mut loose);
+        for expression in &parsed {
+            Visit::visit_expr(self, expression);
+        }
+        for token in loose {
+            if let proc_macro2::TokenTree::Ident(ident) = token {
+                if matches!(
+                    ident.to_string().as_str(),
+                    "downcast" | "downcast_ref" | "downcast_mut" | "find_source"
+                ) {
+                    self.downcast_site(ident.span().start().line, None);
+                }
+            }
         }
     }
 
@@ -2431,11 +3021,38 @@ impl<'ast> Visit<'ast> for ErrorTextVisitor {
         }
     }
 
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Expr::Path(function) = call.func.as_ref() {
+            if let Some(segment) = function.path.segments.last() {
+                if segment.ident == "find_source" {
+                    let asked = match &segment.arguments {
+                        syn::PathArguments::AngleBracketed(arguments) => first_type(arguments),
+                        _ => None,
+                    };
+                    self.downcast_site(segment.ident.span().start().line, asked);
+                }
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    /// Only an error classifies a failure; `Any` maps, deferred write
+    /// payloads and panic payloads downcast data, not errors.
     fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
-        if TEXT_TESTS.contains(&call.method.to_string().as_str())
-            && self.error_text(&call.receiver, true)
+        let method = call.method.to_string();
+        let line = call.method.span().start().line;
+        let asked = call.turbofish.as_ref().and_then(first_type);
+        let downcast = matches!(
+            method.as_str(),
+            "downcast" | "downcast_ref" | "downcast_mut"
+        ) || (method == "is" && call.turbofish.is_some());
+        if downcast
+            && (expression_is_error(&call.receiver, &self.errors) || self.asks_error_type(asked))
         {
-            self.sites.push(call.method.span().start().line);
+            self.downcast_site(line, asked);
+        }
+        if TEXT_TESTS.contains(&method.as_str()) && self.error_text(&call.receiver, true) {
+            self.text_site(line);
         }
         visit::visit_expr_method_call(self, call);
     }
@@ -2466,58 +3083,524 @@ impl<'ast> Visit<'ast> for ErrorTextVisitor {
             && ((wording(&binary.right) && self.error_text(&binary.left, true))
                 || (wording(&binary.left) && self.error_text(&binary.right, true)))
         {
-            self.sites.push(binary.op.span().start().line);
+            self.text_site(binary.op.span().start().line);
         }
         visit::visit_expr_binary(self, binary);
     }
 }
 
-fn error_text_sites(syntax: &syn::File) -> Vec<usize> {
-    let mut visitor = ErrorTextVisitor::default();
+/// The downcast sites and the error-text decisions of one file.
+fn classifier_sites(
+    path: &str,
+    syntax: &syn::File,
+    declared: &DeclaredErrors,
+) -> (SiteFindings, SiteFindings) {
+    let mut visitor = ClassifierVisitor {
+        declared,
+        own: declared.own(path),
+        walker: path == CHAIN_WALKER,
+        owners: Vec::new(),
+        frames: Vec::new(),
+        errors: Vec::new(),
+        renderings: Vec::new(),
+        downcasts: SiteFindings::default(),
+        texts: SiteFindings::default(),
+    };
     visitor.visit_file(syntax);
-    visitor.sites
+    (visitor.downcasts, visitor.texts)
+}
+
+/// What a classifier ratchet found: the sites that still count, by file, and
+/// the functions whose sites are the compliant form.
+#[derive(Default)]
+struct ClassifierFindings {
+    debt: BTreeMap<String, Vec<String>>,
+    compliant: BTreeMap<(String, String), usize>,
+}
+
+impl ClassifierFindings {
+    fn record(&mut self, path: &str, sites: SiteFindings) {
+        if !sites.debt.is_empty() {
+            self.debt.insert(path.to_string(), sites.debt);
+        }
+        self.compliant.extend(
+            sites
+                .compliant
+                .into_iter()
+                .map(|(function, sites)| ((path.to_string(), function), sites)),
+        );
+    }
+
+    fn sites(&self) -> usize {
+        self.debt.values().map(Vec::len).sum()
+    }
+
+    fn functions(&self) -> Vec<&str> {
+        self.compliant
+            .keys()
+            .map(|(_, function)| function.as_str())
+            .collect()
+    }
+
+    /// The counted sites must equal the allowlist, which only shrinks, and the
+    /// compliant functions must equal the registry, which is reviewed.
+    fn failures(
+        &self,
+        allowlist: &[(&str, usize)],
+        registry: &[(&str, &[&str])],
+        advice: &str,
+    ) -> Vec<String> {
+        let allowed = allowlist
+            .iter()
+            .map(|(path, count)| (path.to_string(), *count))
+            .collect::<BTreeMap<_, _>>();
+        let mut failures = Vec::new();
+        for path in allowed
+            .keys()
+            .chain(self.debt.keys())
+            .collect::<BTreeSet<_>>()
+        {
+            let sites = self.debt.get(path).cloned().unwrap_or_default();
+            let found = sites.len();
+            let listed = sites.join("\n    ");
+            match allowed.get(path).copied() {
+                None => failures.push(format!(
+                    "{path}: {found} new site(s); {advice}\n    {listed}"
+                )),
+                Some(limit) if found > limit => failures.push(format!(
+                    "{path}: {found} sites exceed the allowlisted {limit}; {advice}\n    {listed}"
+                )),
+                Some(limit) if found < limit => failures.push(format!(
+                    "{path}: {found} sites; lower the allowlist entry from {limit}"
+                )),
+                Some(_) => {}
+            }
+        }
+        let registered = registry
+            .iter()
+            .flat_map(|(path, functions)| {
+                functions
+                    .iter()
+                    .map(|function| (path.to_string(), function.to_string()))
+            })
+            .collect::<BTreeSet<_>>();
+        let compliant = self.compliant.keys().cloned().collect::<BTreeSet<_>>();
+        for (path, function) in compliant.difference(&registered) {
+            failures.push(format!(
+                "{path}: `{function}` is a compliant classifier that is not registered; add it to the registry for review"
+            ));
+        }
+        for (path, function) in registered.difference(&compliant) {
+            failures.push(format!(
+                "{path}: `{function}` is registered but holds no compliant site; remove it from the registry"
+            ));
+        }
+        failures
+    }
+
+    fn current(&self) -> String {
+        let debt = self
+            .debt
+            .iter()
+            .map(|(path, sites)| {
+                let what = sites
+                    .iter()
+                    .map(|site| {
+                        site.split_once(": ")
+                            .map_or(site.as_str(), |(_, what)| what)
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!("    // {what}\n    (\"{path}\", {}),", sites.len())
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut registry = BTreeMap::<&str, Vec<&str>>::new();
+        for (path, function) in self.compliant.keys() {
+            registry.entry(path).or_default().push(function);
+        }
+        let registry = registry
+            .iter()
+            .map(|(path, functions)| format!("    (\"{path}\", &{functions:?}),"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "current allowlist ({} sites in {} files):\n{debt}\n\ncurrent registry ({} sites in {} functions):\n{registry}",
+            self.sites(),
+            self.debt.len(),
+            self.compliant.values().sum::<usize>(),
+            self.compliant.len()
+        )
+    }
+}
+
+fn classifier_findings(
+    sources: &[(String, syn::File)],
+    external: &BTreeSet<String>,
+) -> (ClassifierFindings, ClassifierFindings) {
+    let declared = DeclaredErrors::of(sources, external);
+    let mut downcasts = ClassifierFindings::default();
+    let mut texts = ClassifierFindings::default();
+    for (path, syntax) in sources {
+        let (downcast, text) = classifier_sites(path, syntax, &declared);
+        downcasts.record(path, downcast);
+        texts.record(path, text);
+    }
+    (downcasts, texts)
+}
+
+fn production_classifier_findings() -> (ClassifierFindings, ClassifierFindings) {
+    let root = repo_root();
+    classifier_findings(
+        &parse_production(&root, production_sources(&root)),
+        &external_crates(&root),
+    )
+}
+
+#[test]
+fn downcast_classifiers_only_shrink() {
+    let (downcasts, _) = production_classifier_findings();
+    let failures = downcasts.failures(
+        DOWNCAST_CLASSIFIER_ALLOWLIST,
+        OWNER_CLASSIFIER_REGISTRY,
+        "return an owner enum and match its variants, or ask the owner's classifier",
+    );
+    assert!(
+        failures.is_empty(),
+        "downcast classifier ratchet failed:\n{}\n\n{}",
+        failures.join("\n"),
+        downcasts.current()
+    );
 }
 
 #[test]
 fn error_text_classification_only_shrinks() {
-    let root = repo_root();
-    let actual = parse_production(&root, production_sources(&root))
-        .into_iter()
-        .filter_map(|(relative, syntax)| {
-            let sites = error_text_sites(&syntax);
-            (!sites.is_empty()).then_some((relative, sites))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let allowed = ERROR_TEXT_CLASSIFIER_ALLOWLIST
-        .iter()
-        .map(|(path, count)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let lines = actual.get(path).cloned().unwrap_or_default();
-        let found = lines.len();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}:{lines:?}: {found} new decision(s) on error text; expose the fact as an owner enum variant and match it"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}:{lines:?}: {found} error-text decisions exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} error-text decisions; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    let current = actual
-        .iter()
-        .map(|(path, lines)| format!("    (\"{path}\", {}),", lines.len()))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let (_, texts) = production_classifier_findings();
+    let failures = texts.failures(
+        ERROR_TEXT_CLASSIFIER_ALLOWLIST,
+        ADAPTER_CLASSIFIER_REGISTRY,
+        "expose the fact as an owner enum variant and match it, or decide in an adapter classifier whose docstring states its `External premise:`",
+    );
     assert!(
-        violations.is_empty(),
-        "error text ratchet failed:\n{}\n\ncurrent sites:\n{current}",
-        violations.join("\n")
+        failures.is_empty(),
+        "error text ratchet failed:\n{}\n\n{}",
+        failures.join("\n"),
+        texts.current()
+    );
+}
+
+/// A file that is no owner module, and two owner modules of one crate.
+const APPLICATION_FILE: &str = "crates/gents-cli/src/snippet.rs";
+const OWNER_FILE: &str = "crates/gents-protocol/src/snippet.rs";
+const OWNER_SIBLING: &str = "crates/gents-protocol/src/sibling.rs";
+const OTHER_OWNER: &str = "crates/gents-loop/src/snippet.rs";
+
+fn snippet_findings(files: &[(&str, &str)]) -> (ClassifierFindings, ClassifierFindings) {
+    let sources = files
+        .iter()
+        .map(|(path, source)| {
+            let syntax = syn::parse_file(source)
+                .unwrap_or_else(|error| panic!("parse snippet {source}: {error}"));
+            (path.to_string(), syntax)
+        })
+        .collect::<Vec<_>>();
+    let external: BTreeSet<String> = ["std", "serde_json"].map(str::to_string).into();
+    classifier_findings(&sources, &external)
+}
+
+fn downcast_sites(source: &str) -> usize {
+    snippet_findings(&[(APPLICATION_FILE, source)]).0.sites()
+}
+
+fn error_text_sites(source: &str) -> usize {
+    snippet_findings(&[(APPLICATION_FILE, source)]).1.sites()
+}
+
+#[test]
+fn downcast_fence_counts_type_classification_outside_tests() {
+    for (source, sites) in [
+        ("fn f(e: &anyhow::Error) -> bool { e.downcast_ref::<E>().is_some() }", 1),
+        ("fn f(e: anyhow::Error) { let _ = e.downcast::<E>(); }", 1),
+        ("fn f(e: &anyhow::Error) -> bool { e.is::<E>() }", 1),
+        ("fn f(e: &dyn Error) { find_source::<E>(e); gents_protocol::error_chain::find_source::<F>(e); }", 2),
+        ("fn f(e: &Error) -> bool { e.is_conflict() || e.is(x) }", 0),
+        ("fn f(e: &dyn Error) -> bool { find_map_source(e, |cause| cause.downcast_ref::<E>()).is_some() }", 1),
+        ("fn f(m: &Map) -> Option<&T> { m.get(&id)?.downcast_ref() }", 0),
+        ("fn f(payload: &dyn Any) -> bool { payload.downcast_ref::<String>().is_some() }", 0),
+        ("#[cfg(test)] mod tests { fn f(e: &anyhow::Error) { e.downcast_ref::<E>(); } }", 0),
+        ("#[test] fn f() { error().downcast_ref::<E>(); }", 0),
+        ("#[tokio::test] async fn f() { error().downcast_ref::<E>(); }", 0),
+        // Renaming the receiver hides nothing: an error-typed parameter, an
+        // `Err(..)` payload and a downcast to an error type all count.
+        ("fn f(value: &anyhow::Error) -> bool { value.downcast_ref::<E>().is_some() }", 1),
+        ("fn f(r: Result<(), anyhow::Error>) { if let Err(value) = r { value.is::<E>(); } }", 1),
+        ("fn f(x: &X) -> bool { x.inner.downcast_ref::<ConflictError>().is_some() }", 1),
+        ("#[derive(Debug, thiserror::Error)] struct Marker; fn f(x: &X) -> bool { x.inner.is::<Marker>() }", 1),
+        ("fn f(value: &anyhow::Error) -> Option<&E> { value.downcast_ref() }", 1),
+        // Nor does a macro.
+        ("fn f(e: &anyhow::Error) -> bool { matches!(e.downcast_ref::<E>(), Some(_)) }", 1),
+        ("fn f(r: R) -> bool { matches!(r, Err(e) if e.is::<E>()) }", 1),
+        ("fn f(e: &anyhow::Error) { assert!(e.downcast_ref::<E>().is_some(), \"typed\"); }", 1),
+        ("async fn f() { tokio::select! { r = a() => { if let Err(e) = r { e.is::<E>(); } } _ = b() => {} } }", 1),
+        ("macro_rules! typed { ($e:expr) => { $e.downcast_ref::<E>() }; }", 1),
+        ("fn f(e: &anyhow::Error) -> Value { json!({ \"code\": find_source::<E>(e.as_ref()).map(E::code) }) }", 1),
+        ("fn f(e: &anyhow::Error) -> Value { json!({ \"a\": 1, \"code\": find_source::<E,>(e.as_ref()).map(E::code) }) }", 1),
+    ] {
+        assert_eq!(downcast_sites(source), sites, "{source}");
+    }
+}
+
+const OWN_ERROR: &str =
+    "#[derive(Debug, thiserror::Error)] pub enum OwnError { #[error(\"x\")] X }";
+
+#[test]
+fn downcast_fence_exempts_only_the_owner_asking_for_its_own_type() {
+    let classifier = "pub fn own_error(error: &(dyn std::error::Error + 'static)) -> Option<&OwnError> { find_map_source(error, |cause| cause.downcast_ref::<OwnError>()) }";
+    let declared_here = format!("{OWN_ERROR} {classifier}");
+    let check = |files: &[(&str, &str)]| {
+        let (downcasts, _) = snippet_findings(files);
+        (
+            downcasts.sites(),
+            downcasts
+                .functions()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let compliant = |function: &str| (0, vec![function.to_string()]);
+    let counted = |sites: usize| (sites, Vec::new());
+
+    // The module that declares and exports the type, owner module or not.
+    assert_eq!(
+        check(&[(OWNER_FILE, declared_here.as_str())]),
+        compliant("own_error")
+    );
+    assert_eq!(
+        check(&[(APPLICATION_FILE, declared_here.as_str())]),
+        compliant("own_error")
+    );
+    // Another owner module of the same crate.
+    assert_eq!(
+        check(&[(OWNER_FILE, OWN_ERROR), (OWNER_SIBLING, classifier)]),
+        compliant("own_error")
+    );
+    // The same downcast outside the owner: an application file, a file of the
+    // same crate that is no owner module, and an owner module of another crate.
+    assert_eq!(
+        check(&[(OWNER_FILE, OWN_ERROR), (APPLICATION_FILE, classifier)]),
+        counted(1)
+    );
+    assert_eq!(
+        check(&[
+            (APPLICATION_FILE, OWN_ERROR),
+            ("crates/gents-cli/src/other.rs", classifier)
+        ]),
+        counted(1)
+    );
+    assert_eq!(
+        check(&[(OWNER_FILE, OWN_ERROR), (OTHER_OWNER, classifier)]),
+        counted(1)
+    );
+    let named_crate = "pub fn own_error(error: &anyhow::Error) -> bool { error.is::<gents_protocol::snippet::OwnError>() }";
+    let named_crate = format!("{OWN_ERROR} {named_crate}");
+    assert_eq!(check(&[(OTHER_OWNER, named_crate.as_str())]), counted(1));
+
+    for (source, expected) in [
+        // A method asking for `Self`.
+        (
+            "#[derive(Debug, thiserror::Error)] pub enum OwnError { #[error(\"x\")] X } impl OwnError { pub fn recover(error: anyhow::Error) -> Self { error.downcast::<Self>().unwrap_or(Self::X) } }",
+            compliant("OwnError::recover"),
+        ),
+        // A hand-written `Error` impl declares an error type too.
+        (
+            "#[derive(Debug)] pub struct Refused; impl std::error::Error for Refused {} pub fn refused(error: &anyhow::Error) -> bool { error.is::<Refused>() }",
+            compliant("refused"),
+        ),
+        // A private marker carried through `anyhow` is debt wherever it is asked for.
+        (
+            "#[derive(Debug, thiserror::Error)] struct Marker; fn marked(error: &anyhow::Error) -> bool { error.is::<Marker>() }",
+            counted(1),
+        ),
+        // A function that is not handed an error is not a classifier.
+        (
+            "#[derive(Debug, thiserror::Error)] pub struct OwnError; fn run(job: &Job) -> bool { match job.run() { Err(error) => error.is::<OwnError>(), Ok(()) => false } }",
+            counted(1),
+        ),
+        // Nor is an asynchronous one.
+        (
+            "#[derive(Debug, thiserror::Error)] pub struct OwnError; async fn settle(error: &anyhow::Error) -> bool { error.is::<OwnError>() }",
+            counted(1),
+        ),
+        // A type the module only imports, an inferred type, a third-party type.
+        (
+            "use other::OwnError; fn own_error(error: &anyhow::Error) -> bool { error.is::<OwnError>() }",
+            counted(1),
+        ),
+        (
+            "#[derive(Debug, thiserror::Error)] pub struct OwnError; fn own_error(error: &anyhow::Error) -> Option<&OwnError> { error.downcast_ref() }",
+            counted(1),
+        ),
+        (
+            "fn io(error: &anyhow::Error) -> bool { error.is::<std::io::Error>() }",
+            counted(1),
+        ),
+        // A generic helper hides the type it asks for.
+        (
+            "fn find<T>(error: &(dyn Error + 'static)) -> Option<&T> where T: Error + 'static { error.downcast_ref::<T>() }",
+            counted(1),
+        ),
+        // Wrapping the compliant form in a macro changes nothing either way.
+        (
+            "#[derive(Debug, thiserror::Error)] pub struct OwnError; fn own_error(error: &anyhow::Error) -> bool { matches!(error.downcast_ref::<OwnError>(), Some(_)) }",
+            compliant("own_error"),
+        ),
+    ] {
+        assert_eq!(check(&[(APPLICATION_FILE, source)]), expected, "{source}");
+    }
+
+    // Asking for another module's type beside its own counts that site alone.
+    let mixed = "#[derive(Debug, thiserror::Error)] pub struct OwnError; fn own_error(error: &anyhow::Error) -> bool { error.is::<OwnError>() || error.is::<other::TheirError>() }";
+    assert_eq!(
+        check(&[(APPLICATION_FILE, mixed)]),
+        (1, vec!["own_error".to_string()])
+    );
+
+    // Only the chain walker may ask for its own type parameter.
+    let walker = "pub fn find_source<'a, T>(error: &'a (dyn Error + 'static)) -> Option<&'a T> where T: Error + 'static { find_map_source(error, |cause| cause.downcast_ref::<T>()) }";
+    assert_eq!(check(&[(CHAIN_WALKER, walker)]), compliant("find_source"));
+    assert_eq!(check(&[(OWNER_FILE, walker)]), counted(1));
+}
+
+#[test]
+fn downcast_fence_exempts_third_party_types_only_in_adapter_classifiers() {
+    const PREMISE: &str =
+        "/// External premise: serde reports a decode failure only as its own error type.\n";
+    let check = |files: &[(&str, &str)]| {
+        let (downcasts, adapters) = snippet_findings(files);
+        (
+            downcasts.sites(),
+            adapters
+                .functions()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let adapter = |function: &str| (0, vec![function.to_string()]);
+    let counted = (1, Vec::new());
+    let documented = |body: &str| format!("{PREMISE}{body}");
+
+    for (body, expected) in [
+        // A type no workspace source declares, by an external crate's path
+        // or by an imported name, in a function of any shape.
+        (
+            "fn decode_failed(error: &anyhow::Error) -> bool { error.chain().any(|cause| cause.is::<serde_json::Error>()) }",
+            adapter("decode_failed"),
+        ),
+        (
+            "fn missing(error: &anyhow::Error) -> bool { find_source::<std::io::Error>(error.as_ref()).is_some() }",
+            adapter("missing"),
+        ),
+        (
+            "fn refused(error: &Init) -> bool { error.inner.downcast_ref::<StreamableHttpError<C::Error>>().is_some() }",
+            adapter("refused"),
+        ),
+        // A workspace type in an adapter still counts: by its declaration,
+        // by a workspace path, as `Self`, and as a type parameter.
+        (
+            "#[derive(Debug, thiserror::Error)] struct Marker; fn marked(error: &anyhow::Error) -> bool { error.is::<Marker>() }",
+            counted.clone(),
+        ),
+        (
+            "fn theirs(error: &anyhow::Error) -> bool { error.is::<gents_store::StoreError>() }",
+            counted.clone(),
+        ),
+        (
+            "fn ours(error: &anyhow::Error) -> bool { error.is::<crate::other::OtherError>() }",
+            counted.clone(),
+        ),
+        (
+            "fn any<E>(error: &anyhow::Error) -> bool where E: std::error::Error + 'static { error.is::<E>() }",
+            counted.clone(),
+        ),
+        (
+            "fn inferred(error: &anyhow::Error) -> Option<&std::io::Error> { error.downcast_ref() }",
+            counted.clone(),
+        ),
+    ] {
+        let source = documented(body);
+        assert_eq!(check(&[(APPLICATION_FILE, source.as_str())]), expected, "{body}");
+        // The same downcast in a function without the premise counts.
+        assert_eq!(check(&[(APPLICATION_FILE, body)]), counted.clone(), "{body}");
+    }
+
+    // A name another workspace file declares is a workspace type, even in
+    // test code, unless the path starts at an external crate.
+    let declares = "#[cfg(test)] mod tests { pub struct Error; }";
+    let short = documented("fn io(error: &anyhow::Error) -> bool { error.is::<io::Error>() }");
+    let full = documented("fn io(error: &anyhow::Error) -> bool { error.is::<std::io::Error>() }");
+    assert_eq!(
+        check(&[(OWNER_FILE, declares), (APPLICATION_FILE, short.as_str())]),
+        counted.clone()
+    );
+    assert_eq!(
+        check(&[(OWNER_FILE, declares), (APPLICATION_FILE, full.as_str())]),
+        adapter("io")
+    );
+
+    // The adapter is registered like any other: undocumented it is debt,
+    // documented and unregistered it fails the registry check.
+    let (downcasts, adapters) = snippet_findings(&[(APPLICATION_FILE, full.as_str())]);
+    assert!(downcasts.failures(&[], &[], "advice").is_empty());
+    assert_eq!(adapters.failures(&[], &[], "advice").len(), 1);
+    assert!(adapters
+        .failures(&[], &[(APPLICATION_FILE, &["io"])], "advice")
+        .is_empty());
+}
+
+#[test]
+fn classifier_ratchet_checks_the_allowlist_and_the_registry() {
+    let source = format!(
+        "{OWN_ERROR} fn own_error(error: &anyhow::Error) -> bool {{ error.is::<OwnError>() }} fn other(error: &anyhow::Error) -> bool {{ error.is::<std::io::Error>() }}"
+    );
+    let (downcasts, _) = snippet_findings(&[(APPLICATION_FILE, source.as_str())]);
+    let failures = |allowlist: &[(&str, usize)], registry: &[(&str, &[&str])]| {
+        downcasts.failures(allowlist, registry, "advice").len()
+    };
+    assert_eq!(
+        failures(
+            &[(APPLICATION_FILE, 1)],
+            &[(APPLICATION_FILE, &["own_error"])]
+        ),
+        0
+    );
+    // An unlisted site, an entry that is too high or too low.
+    assert_eq!(failures(&[], &[(APPLICATION_FILE, &["own_error"])]), 1);
+    assert_eq!(
+        failures(
+            &[(APPLICATION_FILE, 2)],
+            &[(APPLICATION_FILE, &["own_error"])]
+        ),
+        1
+    );
+    assert_eq!(
+        failures(
+            &[(APPLICATION_FILE, 0)],
+            &[(APPLICATION_FILE, &["own_error"])]
+        ),
+        1
+    );
+    // A compliant classifier that is not registered, and a stale registration.
+    assert_eq!(failures(&[(APPLICATION_FILE, 1)], &[]), 1);
+    assert_eq!(
+        failures(
+            &[(APPLICATION_FILE, 1)],
+            &[(APPLICATION_FILE, &["own_error", "other"])]
+        ),
+        1
     );
 }
 
@@ -2590,9 +3673,123 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
             r#"#[test] fn f() { error().to_string().contains("x"); }"#,
             0,
         ),
+        // Renaming the error hides nothing: an error-typed parameter and an
+        // `Err(..)` payload render error text under any name.
+        (
+            r#"fn f(value: &anyhow::Error) -> bool { value.to_string().contains("x") }"#,
+            1,
+        ),
+        (
+            r#"fn f(r: R) -> bool { match r { Err(value) => value.to_string().contains("x"), Ok(()) => false } }"#,
+            1,
+        ),
+        (
+            r#"fn f(value: &anyhow::Error) -> bool { let text = format!("{value:#}"); text.contains("x") }"#,
+            1,
+        ),
+        // Nor does a macro.
+        (
+            r#"fn f(e: &E) -> bool { matches!(e.to_string().contains("x"), true) }"#,
+            1,
+        ),
+        (
+            r#"fn f(e: &E) { assert!(e.to_string().contains("x"), "worded"); }"#,
+            1,
+        ),
+        (
+            r#"async fn f() { tokio::select! { r = a() => { if let Err(e) = r { let _ = e.to_string() == "x"; } } _ = b() => {} } }"#,
+            1,
+        ),
     ] {
-        let syntax = syn::parse_file(source).expect("parse snippet");
-        assert_eq!(error_text_sites(&syntax).len(), sites, "{source}");
+        assert_eq!(error_text_sites(source), sites, "{source}");
+    }
+}
+
+#[test]
+fn error_text_fence_exempts_only_adapter_classifiers_that_name_their_premise() {
+    let decision = r#"fn unknown_variant(error: &serde_json::Error) -> bool { error.to_string().contains("unknown variant") }"#;
+    let check = |docstring: &str| {
+        let source = format!("{docstring}\n{decision}");
+        let (_, texts) = snippet_findings(&[(APPLICATION_FILE, source.as_str())]);
+        (
+            texts.sites(),
+            texts
+                .functions()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let compliant = || (0, vec!["unknown_variant".to_string()]);
+    let counted = || (1, Vec::new());
+
+    assert_eq!(
+        check(
+            "/// External premise: `serde_json::Error` names an unknown tag only in its message."
+        ),
+        compliant()
+    );
+    assert_eq!(
+        check("/// Whether the tag was unknown.\n///\n/// External premise: serde says so only in its message."),
+        compliant()
+    );
+    // The same decision without the docstring, and with docstrings that do
+    // not state the premise in the required form.
+    assert_eq!(check(""), counted());
+    assert_eq!(check("/// Whether serde met an unknown tag."), counted());
+    assert_eq!(check("/// External premise:"), counted());
+    assert_eq!(
+        check("/// On the external premise that serde says so only in text."),
+        counted()
+    );
+    assert_eq!(
+        check("/// See the External premise: of the caller."),
+        counted()
+    );
+    assert_eq!(
+        check("// External premise: an ordinary comment is not a docstring."),
+        counted()
+    );
+
+    for (source, expected) in [
+        // A closure belongs to its function; a nested function and a caller do not.
+        (
+            "/// External premise: git says so only on stderr.\nfn missing(stderr: &str) -> bool { stderr.lines().any(|message| message.contains(\"exists on disk\")) }",
+            (0, vec!["missing".to_string()]),
+        ),
+        (
+            "/// External premise: git says so only on stderr.\nfn outer(stderr: &str) -> bool { fn inner(stderr: &str) -> bool { stderr.contains(\"x\") } inner(stderr) }",
+            (1, Vec::new()),
+        ),
+        (
+            "/// External premise: git says so only on stderr.\nfn missing(stderr: &str) -> bool { stderr.contains(\"x\") } fn caller(e: &E) -> bool { missing(&e.to_string()) || e.to_string().contains(\"y\") }",
+            (1, vec!["missing".to_string()]),
+        ),
+        // The premise belongs to the function, not to its `impl`.
+        (
+            "/// External premise: git says so only on stderr.\nimpl Git { fn missing(stderr: &str) -> bool { stderr.contains(\"x\") } }",
+            (1, Vec::new()),
+        ),
+        (
+            "impl Git {\n/// External premise: git says so only on stderr.\nfn missing(stderr: &str) -> bool { stderr.contains(\"x\") } }",
+            (0, vec!["Git::missing".to_string()]),
+        ),
+        // Wrapping the compliant form in a macro changes nothing either way.
+        (
+            "/// External premise: git says so only on stderr.\nfn missing(stderr: &str) -> bool { matches!(stderr.contains(\"x\"), true) }",
+            (0, vec!["missing".to_string()]),
+        ),
+    ] {
+        let (_, texts) = snippet_findings(&[(APPLICATION_FILE, source)]);
+        let found = (
+            texts.sites(),
+            texts
+                .functions()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(found, expected, "{source}");
     }
 }
 

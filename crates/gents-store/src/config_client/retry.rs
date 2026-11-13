@@ -121,8 +121,9 @@ where
 }
 
 impl ConfigClientError {
-    /// The pinned DefraDB mutation adapter reports an inaccessible or missing
-    /// document with this shared GraphQL message and no structured error code.
+    /// External premise: the pinned DefraDB mutation adapter reports an
+    /// inaccessible or missing document with this shared GraphQL message and
+    /// no structured error code.
     /// Both cases are permanent for this attempted write, not storage failures,
     /// and the adapter does not say which one occurred.
     pub fn is_missing_or_denied_write(&self) -> bool {

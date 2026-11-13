@@ -633,6 +633,9 @@ pub fn response_has_documents(value: &serde_json::Value) -> bool {
 
 /// Storage exhaustion retains its native or structured wire cause through
 /// context wrappers. It never grants automatic mutation replay authority.
+///
+/// External premise: the embedded store reports exhaustion as DefraDB's
+/// `storage::corekv::Error`, erased in the chain.
 pub fn is_storage_full(error: &(dyn std::error::Error + 'static)) -> bool {
     gents_protocol::database_error::is_storage_full(error)
         || std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
