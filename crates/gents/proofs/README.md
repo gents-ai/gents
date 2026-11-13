@@ -896,9 +896,13 @@ Operational meaning:
   expiry; post-claim provider failure, retry exhaustion, tool failure, and
   deadline expiry are terminal `failed`. Corrupt-generation revocation is the
   one exception: it terminalizes an expired `claimed`/`processing` request with
-  corrupt canonical output as `dead` (`CanonicalOutput.Execution.revokeCorrupt`),
-  published in the contract as `recoveryReachable` under
-  `boundary.request.recovery-sweep-reachable`
+  corrupt canonical output as `dead` (`CanonicalOutput.Execution.revokeCorrupt`).
+  `Conformance.RequestTransition.classify` classifies such a change
+  `recoveryReachable`: no single request action takes it, an execution-lease
+  authority does. Latest-only trigger supersession of a running or parked
+  request and the re-park of an expired resume are the others. Production's
+  owner is `RequestLifecycleState::transition_to`, which every
+  `lifecycle_state` writer consults
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
 
