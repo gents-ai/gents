@@ -14,6 +14,7 @@ import Proofs.Conformance.Identity.DelegatedPublicationRecovery
 import Proofs.Conformance.SelfConfigStructured
 import Proofs.Conformance.Recovery.PeriodicRegistry
 import Proofs.Conformance.ProcessControlTerminal
+import Proofs.Conformance.ProcessStop
 import Proofs.Conformance.ToolCallTimeoutAfterSweep
 import Proofs.Conformance.PluginJobCallerInterrupt
 import Proofs.Conformance.BackgroundDiagnostics
@@ -417,8 +418,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"managed_exec_tool_boundary_cases\":"
       ++ jsonArray
         (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
-    ++ "\"process_stop_cases\":"
-      ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
 

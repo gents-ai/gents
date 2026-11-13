@@ -115,9 +115,6 @@ impl LiveProcessEvidenceOwner {
 }
 
 impl ProcessObservation {
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; 3] = [Self::Running, Self::Exited, Self::Unowned];
-
     #[cfg(any(test, feature = "test-fixtures"))]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -791,5 +788,50 @@ mod conformance {
         families::background_process_control_may_settle_terminal::replay(|i| {
             may_settle_native(i.intent, i.evidence)
         });
+    }
+
+    #[test]
+    fn process_stop_host_verdicts_match_lean() {
+        gents_lean_vocab::families::process_stop_host::replay::<
+            CancelProcessReply,
+            ProcessObservation,
+            ProcessStopOutcome,
+        >(|i| {
+            let outcome = ProcessStopOutcome::from_observations(i.before, i.after);
+            gents_lean_vocab::families::process_stop_host::HostOutput {
+                outcome,
+                may_terminate: i.before.may_terminate(),
+                retain_record: i.after.retain_process_record(),
+                cancel_reply: outcome.cancel_reply(),
+            }
+        });
+    }
+
+    #[test]
+    fn process_stop_live_settlement_matches_lean() {
+        gents_lean_vocab::families::process_stop_live_settlement::replay::<
+            LiveProcessEvidence,
+            ProcessStopOutcome,
+        >(
+            |i| gents_lean_vocab::families::process_stop_live_settlement::LiveOutput {
+                outcome: settle_live_cancel(i.worker_released, i.live_evidence),
+                settle_completed: may_settle_native(
+                    NativeTerminalIntent::Completed,
+                    i.live_evidence,
+                ),
+                settle_cancelled: may_settle_native(
+                    NativeTerminalIntent::Cancelled,
+                    i.live_evidence,
+                ),
+                settle_timed_out: may_settle_native(
+                    NativeTerminalIntent::TimedOut,
+                    i.live_evidence,
+                ),
+                settle_failed: may_settle_native(NativeTerminalIntent::Failed, i.live_evidence),
+                settle_panicked: may_settle_native(NativeTerminalIntent::Panicked, i.live_evidence),
+                retire_before_commit: retire_stop_receipt(false),
+                retire_after_commit: retire_stop_receipt(true),
+            },
+        );
     }
 }

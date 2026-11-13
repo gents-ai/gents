@@ -33,10 +33,6 @@ pub fn lean_managed_exec_tool_boundary_cases() -> &'static [LeanManagedExecToolB
     &lean_contract_snapshot().managed_exec_tool_boundary_cases
 }
 
-pub fn lean_process_stop_cases() -> &'static [LeanProcessStopCase] {
-    &lean_contract_snapshot().process_stop_cases
-}
-
 pub fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
     &lean_contract_snapshot().r6_backgrounding_cases
 }
@@ -460,7 +456,6 @@ pub struct LeanContractSnapshot {
     #[serde(deserialize_with = "required_nullable")]
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
-    pub process_stop_cases: Vec<LeanProcessStopCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
@@ -966,34 +961,6 @@ pub enum LeanPresentation {
 pub enum LeanPresentationPart {
     Range { start: u64, end: u64 },
     Literal { bytes: Vec<u8> },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanProcessStopCase {
-    pub name: String,
-    pub live_evidence: String,
-    pub worker_released: bool,
-    pub settle_completed: bool,
-    pub settle_cancelled: bool,
-    pub settle_timed_out: bool,
-    pub settle_failed: bool,
-    pub settle_panicked: bool,
-    pub retire_before_commit: bool,
-    pub retire_after_commit: bool,
-    pub preserve_timeout: bool,
-    pub preserve_failure: bool,
-    pub pending_failure_beats_cancel: bool,
-    pub pending_failure_resolves: bool,
-    pub retained_completion_notified: bool,
-    pub retired_completion_notified: bool,
-    pub before: String,
-    pub after: String,
-    pub may_terminate: bool,
-    pub retain_record: bool,
-    pub outcome: String,
-    pub cancel_reply: String,
-    pub durable_state: String,
 }
 
 #[derive(Debug, Deserialize)]

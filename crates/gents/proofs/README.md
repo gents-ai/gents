@@ -817,8 +817,8 @@ process-tree termination, and bounded output drain for `list_files`, `glob`,
 `ManagedExec.Ownership` models host process ownership after the volatile
 worker is gone: a durable host record's pid and start identity prove
 ownership, a signal is admissible only for a proven-owned running group, and
-a cancellation is reported only for an observed stop. `process_stop_cases`
-carry every observation pair; the restart and orphan classifiers take the
+a cancellation is reported only for an observed stop. The `process_stop_*`
+families carry every observation pair; the restart and orphan classifiers take the
 resulting verdict as input and settle an unobserved stop as `processLost`.
 
 The Lean `pendingSpawn` state is intentionally one step finer than the Rust

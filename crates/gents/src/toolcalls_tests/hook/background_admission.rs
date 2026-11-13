@@ -8,143 +8,160 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
         return;
     }
-    let expected = gents_lean_vocab::lean_process_stop_cases()
-        .iter()
-        .find(|case| case.live_evidence == "never_spawned" && case.worker_released)
-        .unwrap();
-    let mut harness = admission_harness(|_, root, _, _| {
-        BackgroundToolRegistry::from_tools(
-            vec![gents_tools::native::write_capable_bash_for_test(root)],
-            &["bash_unrestricted".into()],
-        )
-    })
-    .await;
-    let executions = BackgroundExecutionRegistry::default();
-    harness.hook = harness
-        .hook
-        .with_background_execution_registry(executions.clone());
-    let root = harness.root.path().canonicalize().unwrap();
-    let agent = hook_managed_identity(&harness.hook, &harness.request_id).await;
-    let key = workspace::WorkspaceKey::canonical(
-        &harness.hook.node_did,
-        &harness.user_did,
-        agent.did(),
-        &root,
-    )
-    .unwrap();
-    let selection = workspace::ReviewTaskSelection {
-        task_id: "review-cancel".into(),
-        policy_digest: "fixture-policy".into(),
-    };
-    workspace::save_mode(
-        harness._dir.path(),
-        &key,
-        0,
-        workspace::Mode::AutoReview,
-        Some(&selection),
-    )
-    .unwrap();
-    let entered = Arc::new(tokio::sync::Notify::new());
-    let signal = entered.clone();
-    let context = workspace::for_request(
-        Some(harness._dir.path()),
-        &key.node_did,
-        Some(&key.requester_did),
-        &key.agent_did,
-        Some(&root),
-        None,
-    )
-    .unwrap()
-    .unwrap()
-    .with_reviewer(Arc::new(move |_| {
-        let signal = signal.clone();
-        Box::pin(async move {
-            signal.notify_one();
-            std::future::pending().await
+    for case in gents_lean_vocab::families::process_stop_approval_wait_stop::cases::<
+        String,
+        String,
+        String,
+    >() {
+        let mut harness = admission_harness(|_, root, _, _| {
+            BackgroundToolRegistry::from_tools(
+                vec![gents_tools::native::write_capable_bash_for_test(root)],
+                &["bash_unrestricted".into()],
+            )
         })
-    }));
-    let args = json!({"tool_name":"bash_unrestricted", "args":{"command":"/bin/sh", "args":["-c", "exit 0"]}}).to_string();
-    accept_hook_tool_call(&harness.hook, "approval-stop", "spawn_process", &args, None).await;
-    let action = workspace::scope(
-        Some(context),
-        harness
+        .await;
+        let executions = BackgroundExecutionRegistry::default();
+        harness.hook = harness
             .hook
-            .on_tool_call("spawn_process", None, "approval-stop", &args),
-    )
-    .await;
-    let ToolCallHookAction::Skip { reason } = action else {
-        panic!("{action:?}")
-    };
-    let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
-    let child = receipt["tool_call_id"].as_str().unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(60), entered.notified())
+            .with_background_execution_registry(executions.clone());
+        let root = harness.root.path().canonicalize().unwrap();
+        let agent = hook_managed_identity(&harness.hook, &harness.request_id).await;
+        let key = workspace::WorkspaceKey::canonical(
+            &harness.hook.node_did,
+            &harness.user_did,
+            agent.did(),
+            &root,
+        )
+        .unwrap();
+        let selection = workspace::ReviewTaskSelection {
+            task_id: "review-cancel".into(),
+            policy_digest: "fixture-policy".into(),
+        };
+        workspace::save_mode(
+            harness._dir.path(),
+            &key,
+            0,
+            workspace::Mode::AutoReview,
+            Some(&selection),
+        )
+        .unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let signal = entered.clone();
+        let context = workspace::for_request(
+            Some(harness._dir.path()),
+            &key.node_did,
+            Some(&key.requester_did),
+            &key.agent_did,
+            Some(&root),
+            None,
+        )
+        .unwrap()
+        .unwrap()
+        .with_reviewer(Arc::new(move |_| {
+            let signal = signal.clone();
+            Box::pin(async move {
+                signal.notify_one();
+                std::future::pending().await
+            })
+        }));
+        let args = json!({"tool_name":"bash_unrestricted", "args":{"command":"/bin/sh", "args":["-c", "exit 0"]}}).to_string();
+        accept_hook_tool_call(&harness.hook, "approval-stop", "spawn_process", &args, None).await;
+        let action = workspace::scope(
+            Some(context),
+            harness
+                .hook
+                .on_tool_call("spawn_process", None, "approval-stop", &args),
+        )
+        .await;
+        let ToolCallHookAction::Skip { reason } = action else {
+            panic!("{action:?}")
+        };
+        let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        let child = receipt["tool_call_id"].as_str().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(60), entered.notified())
+            .await
+            .expect("approval was not reached");
+        let session = harness.hook.session_id().await.unwrap();
+        let row = gents_toolcalls::test_support::background_hook::tool_row(
+            &harness.access,
+            &session,
+            child,
+        )
+        .await;
+        let request = gents_protocol::process_control::OperatorProcessControlRequest {
+            node_did: key.node_did.clone(),
+            session_id: session.clone(),
+            tool_call_id: child.to_owned(),
+            tool_call_doc_id: row["_docID"].as_str().unwrap().to_owned(),
+        };
+        let agent_did = ::identity::Did::new(harness.access.actor_did().unwrap()).unwrap();
+        let outcome = gents_toolcalls::call::control::client::apply_claimed(
+            &harness.node,
+            &harness.access,
+            &executions,
+            &agent_did,
+            gents_toolcalls::call::control::client::ClaimedTarget {
+                node_did: &request.node_did,
+                session_id: &request.session_id,
+                requester_did: Some(&key.requester_did),
+                tool_call_id: &request.tool_call_id,
+                tool_call_doc_id: &request.tool_call_doc_id,
+                action: "process_stop",
+            },
+        )
         .await
-        .expect("approval was not reached");
-    let session = harness.hook.session_id().await.unwrap();
-    let row =
-        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
-            .await;
-    let request = gents_protocol::process_control::OperatorProcessControlRequest {
-        node_did: key.node_did.clone(),
-        session_id: session.clone(),
-        tool_call_id: child.to_owned(),
-        tool_call_doc_id: row["_docID"].as_str().unwrap().to_owned(),
-    };
-    let agent_did = ::identity::Did::new(harness.access.actor_did().unwrap()).unwrap();
-    let outcome = gents_toolcalls::call::control::client::apply_claimed(
-        &harness.node,
-        &harness.access,
-        &executions,
-        &agent_did,
-        gents_toolcalls::call::control::client::ClaimedTarget {
-            node_did: &request.node_did,
-            session_id: &request.session_id,
-            requester_did: Some(&key.requester_did),
-            tool_call_id: &request.tool_call_id,
-            tool_call_doc_id: &request.tool_call_doc_id,
-            action: "process_stop",
-        },
-    )
-    .await
-    .unwrap();
-    let gents_protocol::process_control::ToolControlReceiptOutcome::Process(outcome) = outcome
-    else {
-        panic!("process stop produced {outcome:?}")
-    };
-    assert!(matches!(
-        outcome,
-        gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::Cancelled {
-            live_execution_cancelled: true
-        } | gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
-    ));
-    let row =
-        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
-            .await;
-    assert_eq!(row["lifecycle_state"], expected.durable_state);
-    assert!(executions
-        .process_record(child, &request.tool_call_doc_id)
-        .is_none());
-    gents_toolcalls::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
-        &harness.node,
-        &key.node_did,
-        std::slice::from_ref(&agent),
-        &executions,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
-            .await["lifecycle_state"],
-        expected.durable_state
-    );
-    hook_execution_fixtures()
-        .lock()
-        .await
-        .remove(&hook_execution_fixture_key(
-            &harness.hook,
-            &harness.request_id,
+        .unwrap();
+        let gents_protocol::process_control::ToolControlReceiptOutcome::Process(outcome) = outcome
+        else {
+            panic!("process stop produced {outcome:?}")
+        };
+        assert!(matches!(
+            outcome,
+            gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::Cancelled {
+                live_execution_cancelled: true
+            } | gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
         ));
-    harness.node.shutdown().await.expect("shut down test node");
+        let row = gents_toolcalls::test_support::background_hook::tool_row(
+            &harness.access,
+            &session,
+            child,
+        )
+        .await;
+        let durable_state = row["lifecycle_state"].as_str().unwrap().to_owned();
+        assert!(executions
+            .process_record(child, &request.tool_call_doc_id)
+            .is_none());
+        gents_toolcalls::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+            &harness.node,
+            &key.node_did,
+            std::slice::from_ref(&agent),
+            &executions,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gents_toolcalls::test_support::background_hook::tool_row(
+                &harness.access,
+                &session,
+                child
+            )
+            .await["lifecycle_state"],
+            durable_state.as_str()
+        );
+        case.check(
+            gents_lean_vocab::families::process_stop_approval_wait_stop::DurableOutput {
+                durable_state,
+            },
+        );
+        hook_execution_fixtures()
+            .lock()
+            .await
+            .remove(&hook_execution_fixture_key(
+                &harness.hook,
+                &harness.request_id,
+            ));
+        harness.node.shutdown().await.expect("shut down test node");
+    }
 }
 
 #[cfg(unix)]
