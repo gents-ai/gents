@@ -184,5 +184,6 @@
     "xlsx",
     "plugin"
   ],
-  "version": "1.0.1"
+  "version": "1.0.2",
+  "plugin_interface": 1
 }

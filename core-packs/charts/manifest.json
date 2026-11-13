@@ -35,6 +35,7 @@
   "manifest_version": 1,
   "name": "charts",
   "namespace": "gents",
+  "plugin_interface": 1,
   "plugins": [
     {
       "artifact": "plugins/charts.afb",
@@ -362,5 +363,5 @@
     "visualization",
     "plugin"
   ],
-  "version": "1.0.1"
+  "version": "1.0.2"
 }

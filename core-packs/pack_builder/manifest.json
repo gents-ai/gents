@@ -25,11 +25,12 @@
   "manifest_version": 1,
   "name": "pack_builder",
   "namespace": "gents",
+  "plugin_interface": 1,
   "schemas": [],
   "tags": [
     "skills",
     "engineer",
     "authoring"
   ],
-  "version": "0.7.0"
+  "version": "0.7.1"
 }
