@@ -540,7 +540,13 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family" "callback_parent_actor")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases")
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_trace")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_durable_trace")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_reopened_acknowledgement")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_racing_proposals")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"

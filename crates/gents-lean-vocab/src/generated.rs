@@ -1156,7 +1156,6 @@ pub struct LeanContractSnapshot {
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub goal_create_cases: Vec<LeanGoalCreateCase>,
-    pub goal_client_delivery_cases: Vec<serde_json::Value>,
     pub goal_client_control_cases: Vec<LeanGoalClientControlCase>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
     pub goal_client_receipt_cases: Vec<LeanGoalClientReceiptCase>,
