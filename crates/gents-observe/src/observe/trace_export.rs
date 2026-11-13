@@ -479,8 +479,7 @@ fn classify_request_failure_text(text: Option<&str>) -> Option<ToolFailureClass>
 /// [`classify_request_failure_text`] reads words a deadline or an inference
 /// failure only in its text.
 fn looks_like_deadline_or_inference_failure(lower: &str) -> bool {
-    lower.contains("request deadline exceeded")
-        || lower.contains("deadline exceeded")
+    lower.contains("deadline exceeded")
         || lower.contains("inference timed out")
         || lower.contains("stream liveness timeout")
         || lower.contains("completion failed")

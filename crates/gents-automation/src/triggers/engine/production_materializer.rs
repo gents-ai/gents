@@ -8,7 +8,7 @@ use tokio::sync::watch;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::triggers::engine::MaterializerHandle;
+use crate::triggers::engine::{MaterializeError, MaterializerHandle};
 use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_documents::automation::ResolvedTask;
 use gents_documents::task_delivery::TriggerKind;
@@ -266,14 +266,13 @@ impl MaterializerHandle for ProductionMaterializer {
         durable_fire_key: &str,
         delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
         prepared_ids: Option<(&str, &str)>,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, MaterializeError>> + Send + '_>>
+    {
         if matches!(trigger_kind, TriggerKind::Manual)
             && (trigger_id.is_some() || trigger_doc_id.is_some())
         {
             return Box::pin(async {
-                Err(anyhow!(
-                    "Manual trigger materialization must not carry trigger_id"
-                ))
+                Err(anyhow!("Manual trigger materialization must not carry trigger_id").into())
             });
         }
 
@@ -297,7 +296,7 @@ impl MaterializerHandle for ProductionMaterializer {
 
         let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
 
-        Box::pin(async move {
+        let outcome = async move {
             let (agent_did, node_did, _deadline_secs, _backend_id, agent_identity) = resolved?;
             let agent_actor = identity::Did::new(agent_did.clone())?;
             gents_session::request::lifecycle::TriggerExecutionContext::parse(
@@ -390,15 +389,18 @@ impl MaterializerHandle for ProductionMaterializer {
                     }
                 });
                 let create = gents_session::request::lifecycle::materialize::build_request(spec)?;
-                let admission =
-                    crate::triggers::engine::durable::write_trigger_delivery_with_identity(
-                        &node,
-                        agent_actor,
-                        &prepared,
-                        &create,
-                        Some(agent_identity.as_ref()),
-                    )
-                    .await?;
+                let admission = match crate::triggers::engine::durable::admit_trigger_delivery(
+                    &node,
+                    agent_actor,
+                    &prepared,
+                    &create,
+                    Some(agent_identity.as_ref()),
+                )
+                .await?
+                {
+                    Ok(admission) => admission,
+                    Err(stop) => return Ok(Err(stop.into())),
+                };
                 duplicate = admission.duplicate;
                 (admission.request, title)
             } else if let Some(objective) = rendered_goal_objective.as_deref() {
@@ -508,15 +510,15 @@ impl MaterializerHandle for ProductionMaterializer {
                 conversation_title = %conversation_title,
                 "enqueued AgentRequest for trigger fire"
             );
-            if duplicate {
-                Err(super::MaterializeDuplicate {
+            Ok::<_, anyhow::Error>(if duplicate {
+                Err(MaterializeError::Duplicate(super::MaterializeDuplicate {
                     request_id: enqueued.request_id,
-                }
-                .into())
+                }))
             } else {
                 Ok(enqueued.request_id)
-            }
-        })
+            })
+        };
+        Box::pin(async move { outcome.await? })
     }
 
     fn has_active_runtime_request_for_trigger(

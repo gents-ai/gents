@@ -463,7 +463,13 @@ impl MaterializerHandle for PanicMaterializer {
         _durable_fire_key: &str,
         _delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
         _prepared_ids: Option<(&str, &str)>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<String, crate::triggers::engine::MaterializeError>>
+                + Send
+                + '_,
+        >,
+    > {
         Box::pin(async { panic!("injected materializer panic") })
     }
 

@@ -87,7 +87,7 @@ impl BoundDir {
         Ok(bound)
     }
 
-    pub(crate) fn for_file(file: &Path, access: BindAccess) -> Result<Self> {
+    pub(crate) fn for_file(file: &Path, access: BindAccess) -> Result<Self, BindFileError> {
         let name = file
             .file_name()
             .with_context(|| format!("{} has no file name", file.display()))?;
@@ -101,15 +101,17 @@ impl BoundDir {
                     continue;
                 }
             };
-            let dir = private.path().canonicalize()?;
+            let dir = private.path().canonicalize().map_err(anyhow::Error::from)?;
             let link = dir.join(name);
             match std::fs::hard_link(file, &link) {
                 Ok(()) => {
-                    anyhow::ensure!(
-                        identity == identity_of(&link),
-                        "{} changed while it was being shared",
-                        file.display()
-                    );
+                    if identity != identity_of(&link) {
+                        return Err(anyhow::anyhow!(
+                            "{} changed while it was being shared",
+                            file.display()
+                        )
+                        .into());
+                    }
                     return Ok(Self {
                         dir,
                         target: link,
@@ -197,6 +199,14 @@ impl std::fmt::Display for NotLinkable {
 }
 
 impl std::error::Error for NotLinkable {}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BindFileError {
+    #[error(transparent)]
+    NotLinkable(#[from] NotLinkable),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
 type Identity = Option<(u64, u64)>;
 
