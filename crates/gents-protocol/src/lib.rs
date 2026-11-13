@@ -28,6 +28,8 @@ pub mod node_readiness;
 pub mod operations;
 pub mod output;
 pub mod owed_delivery;
+pub mod owner_staged;
+pub mod pairing_reader;
 pub mod peer_schema;
 pub mod plugin;
 pub mod plugin_tool_call_limits;

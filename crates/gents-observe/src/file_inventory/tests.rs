@@ -155,11 +155,16 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
             .await
             .unwrap()
             .unwrap();
-        fixture
-            .client
-            .add_actor_relationship("AgentSession", &session.doc_id, "reader", &reader_did)
-            .await
-            .unwrap();
+        gents_store::test_support::relationships::actor_in_txn(
+            &fixture.client,
+            "AgentSession",
+            &session.doc_id,
+            "reader",
+            &reader_did,
+            false,
+        )
+        .await
+        .unwrap();
         let reader_access = ConfigAccess::local_as(node.clone(), reader_did.clone());
         let mut admission = FileInventoryAdmission {
             request: FileInventoryRequest {
@@ -208,26 +213,32 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                     })
                 }).await.unwrap();
             for subject in [&reader_did, &user_did] {
-                projection_access
-                    .add_actor_relationship("ToolFileInventory", &id, "reader", subject)
-                    .await
-                    .unwrap();
+                gents_store::test_support::relationships::actor_in_txn(
+                    &projection_access,
+                    "ToolFileInventory",
+                    &id,
+                    "reader",
+                    subject,
+                    false,
+                )
+                .await
+                .unwrap();
             }
         }
         let denies_session = case["source"]["catalog"]["session_reads"]
             .as_array()
             .is_some_and(|reads| reads.iter().any(|read| read["visible"] == false));
         if denies_session {
-            fixture
-                .client
-                .delete_actor_relationship(
-                    "AgentSession",
-                    &admission.session_doc_id,
-                    "reader",
-                    &reader_did,
-                )
-                .await
-                .unwrap();
+            gents_store::test_support::relationships::actor_in_txn(
+                &fixture.client,
+                "AgentSession",
+                &admission.session_doc_id,
+                "reader",
+                &reader_did,
+                true,
+            )
+            .await
+            .unwrap();
         }
         let access = if case["actor"] == "" {
             ConfigAccess::local(node.clone())
@@ -285,16 +296,16 @@ async fn generated_direct_inventory_uses_native_reader_and_agent_owner() {
                 .await
                 .unwrap()
                 .is_some());
-            fixture
-                .client
-                .delete_actor_relationship(
-                    "AgentSession",
-                    &original_session_doc_id,
-                    "reader",
-                    &reader_did,
-                )
-                .await
-                .unwrap();
+            gents_store::test_support::relationships::actor_in_txn(
+                &fixture.client,
+                "AgentSession",
+                &original_session_doc_id,
+                "reader",
+                &reader_did,
+                true,
+            )
+            .await
+            .unwrap();
             let after = super::read_direct_inventory(&access, &direct).await;
             assert!(
                 matches!(after, Ok(None) | Err(_)),

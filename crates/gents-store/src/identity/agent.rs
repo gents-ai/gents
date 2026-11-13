@@ -329,6 +329,39 @@ pub async fn provision_agent_identity_for_agent(
     provision_agent_identity(runtime).map_err(Into::into)
 }
 
+/// Proof of which Agent identities a runtime controls: the one thing a store
+/// owner may ask of the runtime key it is handed explicitly
+/// (`Identity.OwnerStaged.derivedAgents`). It never signs.
+#[derive(Clone)]
+pub struct RuntimeAgentProof(Arc<dyn NodeIdentity>);
+
+impl std::fmt::Debug for RuntimeAgentProof {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("RuntimeAgentProof")
+            .field(&self.0.did())
+            .finish()
+    }
+}
+
+impl RuntimeAgentProof {
+    pub fn new(runtime: Arc<dyn NodeIdentity>) -> Self {
+        Self(runtime)
+    }
+
+    /// The DID of the runtime key this proof derives from.
+    pub fn runtime_did(&self) -> &str {
+        self.0.did()
+    }
+
+    /// Whether `binding`'s DID derives from this runtime key and its creation
+    /// nonce. Only the derived DID is compared; no signer is built.
+    pub fn derives(&self, binding: &AgentIdentityBinding) -> bool {
+        derive_agent_key(self.0.as_ref(), &binding.creation_nonce)
+            .is_ok_and(|derived| derived.did() == binding.agent_did)
+    }
+}
+
 pub fn resolve_agent_identity(
     node: &dyn NodeIdentity,
     binding: &AgentIdentityBinding,

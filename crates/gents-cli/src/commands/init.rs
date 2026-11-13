@@ -339,7 +339,13 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         .with_node_acp_enabled();
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let graphql_url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
-    node_builder = node_builder.with_http(gents::defra_node::HttpConfig::with_listener(listener)?);
+    // Init publishes through this loopback endpoint as the client, so its
+    // owner-staged changes are decided by the node's own route.
+    let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    node_builder = node_builder.with_http(
+        gents::defra_node::HttpConfig::with_listener(listener)?
+            .with_extra_routes(owner_staged.router()),
+    );
     let node_arc = std::sync::Arc::new(
         node_builder
             .build()
@@ -373,6 +379,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     let result: Result<Value> = async {
         gents_store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
         gents_store::local::store_key::upgrade::finish(&data_dir)?;
+        owner_staged.serve(&init_node, initialized_identity.identity.clone());
         let binding = if fresh_store {
             Some(provision_fresh_home(&init_node, initialized_identity.identity.as_ref(), client_identity.did()).await?)
         } else {

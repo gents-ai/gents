@@ -1829,7 +1829,12 @@ async fn schema_obligation_publication_matches_lean() -> Result<()> {
 
 #[tokio::test]
 async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection() -> Result<()> {
-    let node = Arc::new(gents_store::test_support::node_builder().build().await?);
+    let node = Arc::new(
+        gents_store::test_support::node_builder()
+            .with_node_acp_enabled()
+            .build()
+            .await?,
+    );
     gents_store::schema::ensure_runtime_schemas(&node).await?;
     node.add_collection(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",

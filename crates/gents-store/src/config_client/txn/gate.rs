@@ -40,6 +40,9 @@ pub struct LocalConfigAccess {
     /// The client-signed endpoint served by this same node; writes that
     /// require client signing travel through it as the endpoint's principal.
     pub(super) client_endpoint: Option<crate::config_client::GraphqlEndpoint>,
+    /// The runtime key's derivation proof, held only by an access its host
+    /// built with that key; staging as an Agent requires it.
+    pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
 }
 
 impl LocalConfigAccess {
@@ -52,7 +55,20 @@ impl LocalConfigAccess {
             agent_signer: None,
             client_signed_writes: false,
             client_endpoint: None,
+            agent_proof: None,
         }
+    }
+
+    /// Attach the runtime key's derivation proof when it is this node's key.
+    pub(crate) fn attach_agent_proof(
+        &mut self,
+        proof: crate::identity::RuntimeAgentProof,
+    ) -> bool {
+        if self.node.node_identity_did() != Some(proof.runtime_did()) {
+            return false;
+        }
+        self.agent_proof = Some(proof);
+        true
     }
 
     pub(crate) fn with_identity(mut self, identity: identity::Did) -> Self {
@@ -131,6 +147,7 @@ impl LocalConfigAccess {
             agent_signer: None,
             client_signed_writes: false,
             client_endpoint: None,
+            agent_proof: None,
         })
     }
 

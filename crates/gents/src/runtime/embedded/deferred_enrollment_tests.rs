@@ -92,6 +92,14 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
                 .await?;
         }
     }
+    // Public relationship routes require `get-collection`, which production
+    // Users hold (`GrantSets.operatorUser`).
+    runtime_access
+        .grant_node_permission(
+            &identity::Did::new(user.did())?,
+            NodePermission::CollectionGet,
+        )
+        .await?;
     let user_access = access(&user)?;
     let actor = identity::Did::new(runtime.did())?;
     let offer = gents_protocol::enrollment::EnrollmentOfferRecord {

@@ -189,7 +189,7 @@ impl EmbeddedHome {
         .preflight(&store_key, Some(&did))
         .await?;
         let served = ServedNode::default();
-        let (http, client_endpoint) = trial_http(served.clone()).await?;
+        let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
         let (node, backend_admission) = crate::runtime::node_start::start_node(
             protected,
             &store_key,
@@ -201,6 +201,7 @@ impl EmbeddedHome {
         )
         .await?;
         let _ = served.set((Arc::downgrade(&node), identity.clone()));
+        owner_staged.serve(&node, identity.clone());
         if initialize_schemas {
             ensure_runtime_schemas(&node)
                 .await
@@ -332,7 +333,7 @@ impl EmbeddedHome {
         .preflight(&self.store_key, Some(&self.did))
         .await?;
         let served = ServedNode::default();
-        let (http, client_endpoint) = trial_http(served.clone()).await?;
+        let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
         let (node, admission) = crate::runtime::node_start::start_node(
             protected,
             &self.store_key,
@@ -344,6 +345,7 @@ impl EmbeddedHome {
         )
         .await?;
         let _ = served.set((Arc::downgrade(&node), self.identity.clone()));
+        owner_staged.serve(&node, self.identity.clone());
         self.node = node;
         self.backend_admission = admission;
         self.client_endpoint = Some(client_endpoint);
@@ -402,12 +404,21 @@ fn release_unstopped_node<H>(node: Arc<EmbeddedNode>, held: H) {
 /// dropped home's node (and its threads and descriptors) alive.
 type ServedNode = Arc<std::sync::OnceLock<(std::sync::Weak<EmbeddedNode>, Arc<dyn NodeIdentity>)>>;
 
-async fn trial_http(served: ServedNode) -> Result<(crate::defra_node::HttpConfig, String)> {
+/// A trial endpoint serves the runtime's client routes: Agent identity
+/// provisioning and owner-staged relationship changes.
+async fn trial_http(
+    served: ServedNode,
+) -> Result<(
+    crate::defra_node::HttpConfig,
+    String,
+    gents_store::config_client::OwnerStagedRoute,
+)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
     let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_extra_routes(agent_identity_routes(served));
-    Ok((config, endpoint))
+        .with_extra_routes(agent_identity_routes(served).merge(owner_staged.router()));
+    Ok((config, endpoint, owner_staged))
 }
 
 /// A trial home serves Agent identity provisioning and agent admission facts

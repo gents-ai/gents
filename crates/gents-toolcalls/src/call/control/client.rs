@@ -223,6 +223,7 @@ pub async fn submit(
                 gents_protocol::schemas::AGENT_TOOL_CONTROL,
             ).await?;
             let doc_id = gents_store::graphql::created_doc_id(&created, "AgentToolControl")?;
+            txn.add_actor_relationship("AgentToolControl", &doc_id, "working_agent", &identity::Did::new(&intent.agent_did)?).await?;
             Ok::<_, anyhow::Error>(Some((doc_id, true)))
         })
     }).await.map_err(ClientControlError::Unavailable)?.ok_or(ClientControlError::NotFound)?;
@@ -232,19 +233,6 @@ pub async fn submit(
             source: anyhow::anyhow!("an existing signed intent requires observation"),
         });
     }
-    access
-        .add_actor_relationship(
-            "AgentToolControl",
-            &document,
-            "working_agent",
-            &identity::Did::new(&intent.agent_did)
-                .map_err(|error| ClientControlError::Unavailable(error.into()))?,
-        )
-        .await
-        .map_err(|error| ClientControlError::Unconfirmed {
-            intent_doc_id: document.clone(),
-            source: error.into(),
-        })?;
     Ok(document)
 }
 

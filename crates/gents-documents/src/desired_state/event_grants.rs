@@ -280,11 +280,12 @@ async fn rebind_cursor(
         if let Some(cursor) =
             crate::event_source_cursor::load_for_source(txn, owner, consumer, collection).await?
         {
-            txn.delete_actor_relationship(
-                "EventSourceCursor",
-                &cursor.doc_id,
-                "writer",
-                &identity::Did::new(agent)?,
+            txn.request_owner_staged(
+                &gents_protocol::owner_staged::OwnerStagedChange::EventCursorWriter {
+                    cursor_doc_id: cursor.doc_id.clone(),
+                    agent_did: identity::Did::new(agent)?.to_string(),
+                },
+                false,
             )
             .await?;
         }
@@ -293,11 +294,12 @@ async fn rebind_cursor(
         if let Some(cursor) =
             crate::event_source_cursor::load_for_source(txn, owner, consumer, collection).await?
         {
-            txn.add_actor_relationship(
-                "EventSourceCursor",
-                &cursor.doc_id,
-                "writer",
-                &identity::Did::new(agent)?,
+            txn.request_owner_staged(
+                &gents_protocol::owner_staged::OwnerStagedChange::EventCursorWriter {
+                    cursor_doc_id: cursor.doc_id.clone(),
+                    agent_did: identity::Did::new(agent)?.to_string(),
+                },
+                true,
             )
             .await?;
         }

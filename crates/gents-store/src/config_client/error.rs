@@ -185,6 +185,44 @@ pub enum ConfigClientError {
     TransactionAuthorizationUnsupported,
     #[error("invalid resource relationship target")]
     InvalidResourceRelationshipTarget,
+    #[error("{collection} {doc_id} is not owned by this runtime or one of its Agents")]
+    OwnerStagedRelationshipUnmanaged { collection: String, doc_id: String },
+    #[error("the requesting actor may not change relationships of {collection} {doc_id}")]
+    OwnerStagedRelationshipDenied { collection: String, doc_id: String },
+    /// The grant names a target its operation does not admit
+    /// (`Identity.OwnerStaged.out_of_kind_grant_is_refused`).
+    #[error("{collection} {doc_id} may not grant that target through the runtime")]
+    OwnerStagedTargetRefused { collection: String, doc_id: String },
+    /// An HTTP apply revoked its planned owner-staged relations, but the
+    /// transaction that then wrote its documents derived different
+    /// revocations (`Identity.OwnerStaged.changed_plan_is_refused_and_no_wider`).
+    /// Nothing was committed; the completed revocations stay.
+    #[error(
+        "the configuration changed while it was applied: {revoked} owner-staged \
+         revocation(s) were completed, but the apply now needs different ones; \
+         nothing was committed, apply it again"
+    )]
+    OwnerStagedPlanChanged { revoked: usize },
+    /// The planning transaction of an HTTP apply could not be confirmed
+    /// discarded, so none of its owner-staged revocations was sent and the
+    /// apply was not run again.
+    #[error(
+        "the configuration was not applied: its planning transaction could not be \
+         confirmed discarded, so no relationship was changed; apply it again"
+    )]
+    OwnerStagedPlanUnconfirmed,
+    /// The planning pass of an HTTP apply dispatched a client-signed graph and
+    /// its caller did not authorize rerunning it, so nothing was revoked.
+    #[error(
+        "the configuration was not applied: it needs owner-staged revocations, \
+         and its caller does not allow its signed writes to be rebuilt; nothing was changed"
+    )]
+    OwnerStagedPlanReplayUnauthorized,
+    #[error("owner-staged route refused the command ({status}): {body}")]
+    OwnerStagedRouteStatus {
+        status: reqwest::StatusCode,
+        body: String,
+    },
     #[error("document relationship request failed ({status}): {body}")]
     DocumentRelationshipStatus {
         status: reqwest::StatusCode,
@@ -463,14 +501,7 @@ impl ConfigClientError {
             ),
             // A local relationship change the actor may not manage is the
             // native counterpart of the HTTP relationship endpoint's 401/403.
-            Self::Node(error) => matches!(
-                error.as_ref(),
-                defra_node::Error::Transaction(query::TransactionError::Storage(
-                    storage::corekv::Error::ProjectionPermissionDenied
-                )) | defra_node::Error::Acp(
-                    acp::Error::NotManager { .. } | acp::Error::NotOwner { .. }
-                )
-            ),
+            Self::Node(error) => native_permission_denied(error),
             Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
                 error.code() == Some(gents_protocol::database_error::PERMISSION_DENIED_CODE)
             }),
@@ -698,6 +729,21 @@ impl ConfigClientError {
 #[error("DefraDB transaction conflict")]
 pub struct TransactionConflict {
     pub(super) origin: ConflictSource,
+}
+
+/// Native wraps a refused relationship change in `RelationshipAcp`, naming the
+/// add or delete it refused; the refusal itself is the wrapped source.
+fn native_permission_denied(error: &defra_node::Error) -> bool {
+    match error {
+        defra_node::Error::Transaction(query::TransactionError::Storage(
+            storage::corekv::Error::ProjectionPermissionDenied,
+        ))
+        | defra_node::Error::Acp(acp::Error::NotManager { .. } | acp::Error::NotOwner { .. }) => {
+            true
+        }
+        defra_node::Error::RelationshipAcp { source, .. } => native_permission_denied(source),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

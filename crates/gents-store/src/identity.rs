@@ -21,6 +21,7 @@ pub use agent::{
     derive_agent_identity, observe_agent_admission, provision_agent_identity,
     provision_agent_identity_authorized, provision_agent_identity_for_agent,
     resolve_agent_identity, AgentAdmissionObservationError, AgentProvisionError,
+    RuntimeAgentProof,
 };
 pub use enrollment_approval::{
     approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep, EnrollmentApproval,

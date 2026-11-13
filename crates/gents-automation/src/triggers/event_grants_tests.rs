@@ -151,16 +151,16 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
             .unwrap()
     };
     let directory = tempfile::tempdir()?;
-    let root = gents_store::identity::KeyIdentity::load_or_create(
+    let root = Arc::new(gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("node.key"),
         None,
-    )?;
-    let owner_binding = gents_store::identity::provision_agent_identity(&root)?;
-    let first_binding = gents_store::identity::provision_agent_identity(&root)?;
-    let second_binding = gents_store::identity::provision_agent_identity(&root)?;
-    let owner = gents_store::identity::resolve_agent_identity(&root, &owner_binding)?;
-    let first = gents_store::identity::resolve_agent_identity(&root, &first_binding)?;
-    let second = gents_store::identity::resolve_agent_identity(&root, &second_binding)?;
+    )?);
+    let owner_binding = gents_store::identity::provision_agent_identity(root.as_ref())?;
+    let first_binding = gents_store::identity::provision_agent_identity(root.as_ref())?;
+    let second_binding = gents_store::identity::provision_agent_identity(root.as_ref())?;
+    let owner = gents_store::identity::resolve_agent_identity(root.as_ref(), &owner_binding)?;
+    let first = gents_store::identity::resolve_agent_identity(root.as_ref(), &first_binding)?;
+    let second = gents_store::identity::resolve_agent_identity(root.as_ref(), &second_binding)?;
     let node = Arc::new(
         defra_node::Node::builder()
             .with_node_identity_did(root.did())
@@ -172,7 +172,8 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         node.clone(),
         identity::Did::new(owner.did())?,
         owner.as_ref(),
-    )?;
+    )?
+    .with_runtime_agent_proof(gents_store::identity::RuntimeAgentProof::new(root.clone()));
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
     for did in [owner.did(), first.did(), second.did()] {
         for permission in [

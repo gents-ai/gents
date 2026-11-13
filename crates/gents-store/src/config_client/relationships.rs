@@ -18,6 +18,11 @@ pub enum ConfigRelationshipGrant {
         target_resource: String,
         target_doc_id: String,
     },
+    /// An owner-staged change, decided by the runtime's owner-staged route
+    /// after the documents that imply it commit.
+    OwnerStaged {
+        change: gents_protocol::owner_staged::OwnerStagedChange,
+    },
 }
 
 impl ConfigAccess {
@@ -62,6 +67,9 @@ impl ConfigAccess {
                     )
                     .await
                 }
+                ConfigRelationshipGrant::OwnerStaged { change } => {
+                    self.request_owner_staged(change, true).await
+                }
             };
             if let Err(source) = result {
                 return Err(ConfigClientError::CommittedRelationshipsIncomplete {
@@ -73,6 +81,28 @@ impl ConfigAccess {
         }
         Ok(())
     }
+    /// Request one owner-staged change as this access's actor
+    /// (`Identity.OwnerStaged.request`). Over HTTP it is one signed command to
+    /// the runtime's owner-staged route; locally it is decided in its own
+    /// transaction.
+    pub async fn request_owner_staged(
+        &self,
+        change: &gents_protocol::owner_staged::OwnerStagedChange,
+        grant: bool,
+    ) -> Result<(), ConfigClientError> {
+        match self.write_route() {
+            WriteRoute::Http(endpoint) => {
+                super::owner_staged_route::request(endpoint, change, grant).await
+            }
+            WriteRoute::Local(_) => {
+                self.transact_write("config.request_owner_staged", |txn| {
+                    Box::pin(async move { txn.request_owner_staged(change, grant).await })
+                })
+                .await
+            }
+        }
+    }
+
     /// Grant an actor a document relationship as this access's authenticated actor.
     /// A relationship that already exists is successful.
     pub async fn add_actor_relationship(

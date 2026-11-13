@@ -1441,6 +1441,22 @@ def caseCoverage : List CoverageEntry :=
       "workspace_callback_selection_visibility")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
+      "family"
+      "owner_staged_relations")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "owner_staged_pairing")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "owner_staged_route_commands")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "owner_staged_http_apply")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
       "pack_placement_reader_cases"
       "PackPlacementReaderCases")
       "identity-permission" [Surface.runtimeInternal, Surface.api]

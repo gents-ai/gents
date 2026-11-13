@@ -2485,6 +2485,7 @@ mod tests {
                 admission_saturated_total: 29,
                 recovery_saturated_total: 1_611_171,
                 rejection_dropped_total: 12,
+                gossip_refusals_dropped_total: 0,
             },
             push_backlog: gents_p2p::p2p::observability::P2pPushBacklogSnapshot {
                 enqueued_total: 512_729,

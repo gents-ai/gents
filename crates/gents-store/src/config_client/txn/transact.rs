@@ -8,6 +8,7 @@ use futures::future::BoxFuture;
 use super::fault_injection::retry_backoff_reached_for_test;
 use super::finalize::{CommitCleanup, CommitFailure};
 use super::native::ACTIVE_EMBEDDED_TRANSACTION;
+use super::owner_staged::OwnerStagedCheckpoint;
 use super::telemetry::{AttemptReport, AttemptTelemetry, AttemptTelemetryState};
 use super::{
     embedded_phase_timeout, retry, ConfigApplyTxn, ConfigClientError, Result, TransactionFailure,
@@ -264,6 +265,10 @@ where
         let mut max_attempts = mode.max_attempts();
         let mut attempt = 0;
         let mut rerun_notes: Vec<RerunNote> = Vec::new();
+        // `Identity.OwnerStaged.applyOverHttp`: `None` while planning, then
+        // the revocations sent before the WRITE attempts.
+        let mut owner_staged_plan: Option<Vec<gents_protocol::owner_staged::OwnerStagedChange>> =
+            None;
         while attempt < max_attempts {
             attempt += 1;
             let ordinal =
@@ -314,6 +319,7 @@ where
                 }
             };
             txn.rerun_notes = rerun_notes.clone();
+            txn.drive_owner_staged(owner_staged_plan.as_deref());
             telemetry.cancelled_rollback = match backend {
                 WriteBackend::Embedded => RollbackStatus::NotNeeded,
                 WriteBackend::Http => RollbackStatus::Scheduled,
@@ -333,6 +339,61 @@ where
                     })
                     .and_then(|result| result),
                 WriteBackend::Http => callback(&txn).await,
+            };
+            let callback_result = match callback_result {
+                Ok(value) => match txn.owner_staged_checkpoint() {
+                    Ok(OwnerStagedCheckpoint::Commit) => Ok(value),
+                    Ok(OwnerStagedCheckpoint::Revoke(planned)) => {
+                        // PLAN read what the revocations change; discard it
+                        // before they are sent so no open transaction has read
+                        // those documents, then WRITE in a fresh transaction.
+                        let endpoint = txn
+                            .http_endpoint()
+                            .cloned()
+                            .ok_or(ConfigClientError::LocalAccessRequired)?;
+                        // A confirmed discard proves the PLAN transaction did not
+                        // commit, not that a client-signed graph it dispatched is
+                        // invalid. So the callback reruns only after a confirmed
+                        // discard and, once it dispatched a signed graph, only
+                        // with its owner's replay authorization: the residual is
+                        // `SignedConflictRebuild`'s (`Identity.OwnerStaged.applyOverHttp`).
+                        let dispatched = txn.client_signed_write_dispatched.load(Ordering::Acquire);
+                        let replay_authorized =
+                            matches!(mode, TransactionMode::SignedConflictRebuild)
+                                || txn.planned_replay_authorized.load(Ordering::Acquire);
+                        let discarded = txn.rollback_inner().await.is_ok();
+                        telemetry.record(AttemptReport {
+                            outcome: if discarded {
+                                WriteOutcome::Retrying
+                            } else {
+                                WriteOutcome::Failed
+                            },
+                            conflict_source: ConflictSource::None,
+                            backoff: None,
+                            affected_documents: Some(0),
+                            rollback: if discarded {
+                                RollbackStatus::Succeeded
+                            } else {
+                                RollbackStatus::Scheduled
+                            },
+                        });
+                        if !discarded {
+                            return Err(E::from(ConfigClientError::OwnerStagedPlanUnconfirmed));
+                        }
+                        if !client_signed_write_may_retry(dispatched, discarded, replay_authorized)
+                        {
+                            return Err(E::from(
+                                ConfigClientError::OwnerStagedPlanReplayUnauthorized,
+                            ));
+                        }
+                        ConfigApplyTxn::send_planned_revocations(&endpoint, &planned).await?;
+                        owner_staged_plan = Some(planned);
+                        attempt -= 1;
+                        continue;
+                    }
+                    Err(error) => Err(E::from(error)),
+                },
+                Err(error) => Err(error),
             };
             let attempt_result: Result<(), TransactionAttemptFailure<E>> = match callback_result {
                 Ok(value) => {

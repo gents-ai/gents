@@ -269,42 +269,47 @@ async fn process_command_with_clock(
         })
     }).await?;
     if let Some((receipt_doc, requester_did)) = pending_receipt {
+        let requester = ::identity::Did::new(&requester_did)?;
         access
-            .add_resource_relationship(
-                "AgentSessionGoalReceipt",
-                &receipt_doc,
-                "parent",
-                "goal_controls",
-                doc_id,
-            )
+            .transact_write("goal.receipt_relationships_published", |txn| {
+                let (receipt_doc, requester) = (&receipt_doc, &requester);
+                Box::pin(async move {
+                    txn.add_resource_relationship(
+                        "AgentSessionGoalReceipt",
+                        receipt_doc,
+                        "parent",
+                        "goal_controls",
+                        doc_id,
+                    )
+                    .await?;
+                    txn.add_actor_relationship(
+                        "AgentSessionGoalReceipt",
+                        receipt_doc,
+                        "reader",
+                        requester,
+                    )
+                    .await?;
+                    let rendered = Update::doc(
+                        receipt_doc.as_str(),
+                        Input::new().set(
+                            fields::agent_session_goal_receipt::RELATIONSHIPS_PENDING,
+                            false,
+                        ),
+                    )
+                    .render();
+                    let updated = txn
+                        .execute_with_variables(&rendered.document, &rendered.variables)
+                        .await?;
+                    anyhow::ensure!(
+                        updated["data"]["update_AgentSessionGoalReceipt"]
+                            .as_array()
+                            .is_some_and(|rows| rows.len() == 1),
+                        "pending goal receipt was not updated"
+                    );
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
             .await?;
-        access
-            .add_actor_relationship(
-                "AgentSessionGoalReceipt",
-                &receipt_doc,
-                "reader",
-                &::identity::Did::new(&requester_did)?,
-            )
-            .await?;
-        let updated = access
-            .write_rendered(
-                "goal.receipt_relationships_published",
-                &Update::doc(
-                    receipt_doc.as_str(),
-                    Input::new().set(
-                        fields::agent_session_goal_receipt::RELATIONSHIPS_PENDING,
-                        false,
-                    ),
-                )
-                .render(),
-            )
-            .await?;
-        anyhow::ensure!(
-            updated["data"]["update_AgentSessionGoalReceipt"]
-                .as_array()
-                .is_some_and(|rows| rows.len() == 1),
-            "pending goal receipt was not updated"
-        );
     }
     Ok(deferred)
 }
