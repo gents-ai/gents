@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Headless native host for Gents clients"
 
 [features]
-runtime-e2e = ["gents/test-fixtures"]
+runtime-e2e = []
 editor-e2e = ["runtime-e2e"]
 
 [[test]]
@@ -56,7 +56,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-gents = { path = "../gents", features = ["test-home-guard"] }
+gents = { path = "../gents", features = ["test-fixtures"] }
 defra-node.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
