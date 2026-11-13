@@ -47,7 +47,11 @@ impl Tool for PostStatusTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Ok(PostStatusOutput { posted: true })
     }
 }
@@ -111,7 +115,7 @@ async fn post_status_json_single_backslash_escape_recovers_and_posts() {
     );
     let tool = PostStatusTool;
 
-    let output = ToolDyn::call(&tool, args)
+    let output = ToolDyn::call(&tool, args, &gents_loop::tool::ToolCallEnvelope::ambient())
         .await
         .expect("a single-backslash escape in a large post_status body should be repaired client-side and the tool should run");
     assert!(
@@ -125,7 +129,7 @@ async fn post_status_json_truncated_body_is_rejected_not_posted() {
     let args = arguments_truncated_mid_object(5_037);
     let tool = PostStatusTool;
 
-    let error = ToolDyn::call(&tool, args)
+    let error = ToolDyn::call(&tool, args, &gents_loop::tool::ToolCallEnvelope::ambient())
         .await
         .expect_err("a truncated post_status arguments string must NOT post; it must be rejected");
 
@@ -152,7 +156,7 @@ async fn post_status_json_incomplete_input_is_rejected_at_every_offset() {
     let tool = PostStatusTool;
     for cut_at in [4_096usize, 5_037, 6_500, 8_000] {
         let args = arguments_truncated_mid_object(cut_at);
-        let error = ToolDyn::call(&tool, args)
+        let error = ToolDyn::call(&tool, args, &gents_loop::tool::ToolCallEnvelope::ambient())
             .await
             .err()
             .unwrap_or_else(|| panic!("cut at {cut_at} should error, not post"));

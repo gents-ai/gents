@@ -101,6 +101,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
                 None,
                 "premature-goal-complete",
                 r#"{"status":"complete","reason":"text alone is not output"}"#,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await,
         ToolCallHookAction::Skip { .. }
@@ -132,7 +133,13 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     .await;
     assert!(matches!(
         persistence_hook
-            .on_tool_call("write_scan_result", None, "required-output", "{}")
+            .on_tool_call(
+                "write_scan_result",
+                None,
+                "required-output",
+                "{}",
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
             .await,
         ToolCallHookAction::Continue
     ));
@@ -163,6 +170,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
                 None,
                 "acknowledged-goal-complete",
                 r#"{"status":"complete","reason":"required scan output is durable"}"#,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await,
         ToolCallHookAction::Skip { .. }
@@ -263,7 +271,8 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                         .await
                         .unwrap();
                 }
-                let call = hook.on_tool_call("read", None, "receipt-call", "{}");
+                let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+                let call = hook.on_tool_call("read", None, "receipt-call", "{}", &envelope);
                 let action = if input.acknowledged {
                     call.await
                 } else {
@@ -410,7 +419,15 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             hook.adopt_accepted_tool_calls(vec![("receipt-call".into(), accepted.clone())])
                 .await
                 .unwrap();
-            let replay = hook.on_tool_call("read", None, "receipt-call", "{}").await;
+            let replay = hook
+                .on_tool_call(
+                    "read",
+                    None,
+                    "receipt-call",
+                    "{}",
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await;
             assert_eq!(
                 matches!(replay, ToolCallHookAction::Continue),
                 recovery.dispatchable,

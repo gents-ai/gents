@@ -496,7 +496,15 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     for case in cases {
         assert_eq!(case.input.collection, "WorkspaceBinding");
         let args = args.take().context("one modeled hidden-binding call")?;
-        case.check(gents_loop::tool::Tool::call(&tool, args).await.is_ok());
+        case.check(
+            gents_loop::tool::Tool::call(
+                &tool,
+                args,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .is_ok(),
+        );
     }
     let response = writer_access
         .write(

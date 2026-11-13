@@ -160,7 +160,11 @@ impl Tool for AgentNewTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         let agent = args.agent.trim();
         if self.config.target(agent).is_none() {
             return Err(structured_error(serde_json::json!({
@@ -214,7 +218,11 @@ impl Tool for AgentMessageTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         if args.session_id.trim().is_empty() {
             return Err(invalid_arguments_error(
                 Self::NAME,
@@ -255,7 +263,11 @@ impl Tool for AgentInterruptTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         if args.session_id.trim().is_empty() {
             return Err(invalid_arguments_error(
                 Self::NAME,
@@ -286,7 +298,11 @@ impl Tool for AgentStopTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         if args.session_id.trim().is_empty() {
             return Err(invalid_arguments_error(
                 Self::NAME,
@@ -317,7 +333,11 @@ impl Tool for AgentResumeTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         if args.session_id.trim().is_empty() {
             return Err(invalid_arguments_error(
                 Self::NAME,
@@ -345,7 +365,11 @@ impl Tool for AgentListTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Err(not_yet_executable_error(Self::NAME))
     }
 }
@@ -384,7 +408,11 @@ impl Tool for AgentSessionListTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         args.validate()
             .map_err(|error| invalid_arguments_error(Self::NAME, "/", error.to_string()))?;
         Err(not_yet_executable_error(Self::NAME))
@@ -415,7 +443,11 @@ impl Tool for AgentSessionReadTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         args.validate()
             .map_err(|error| invalid_arguments_error(Self::NAME, "/", error.to_string()))?;
         Err(not_yet_executable_error(Self::NAME))
@@ -453,7 +485,11 @@ impl Tool for SpawnProcessTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         self.validate(&args)?;
         Err(background_not_yet_executable_error(Self::NAME))
     }
@@ -491,7 +527,11 @@ impl Tool for WaitProcessTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         validate_tool_call_id(WAIT_PROCESS_TOOL_NAME, &args.tool_call_id)?;
         Err(background_not_yet_executable_error(Self::NAME))
     }
@@ -529,7 +569,11 @@ impl Tool for ListProcessesTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         let _ = args.validated_limit();
         Err(background_not_yet_executable_error(Self::NAME))
     }
@@ -580,7 +624,11 @@ false. Pages are contiguous from the cursor; nothing in the middle is dropped."
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         validate_tool_call_id(Self::NAME, &args.tool_call_id)?;
         let _ = args.validated_max_bytes();
         Err(background_not_yet_executable_error(Self::NAME))
@@ -615,7 +663,11 @@ impl Tool for CancelProcessTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         validate_tool_call_id(CANCEL_PROCESS_TOOL_NAME, &args.tool_call_id)?;
         if args
             .reason

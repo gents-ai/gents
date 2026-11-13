@@ -233,7 +233,14 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
     let executor =
         gents_toolcalls::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
     let installed = executor.resolve("fixture/double", None).unwrap();
-    let call = executor.call(&installed, json!({"n": 2})).await.unwrap();
+    let call = executor
+        .call(
+            &installed,
+            json!({"n": 2}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     assert_eq!(call.coordinate, "fixture/double");
     assert!(
         format!("{:?}", call.outcome).contains("4"),

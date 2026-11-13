@@ -17,9 +17,13 @@ async fn seed(
 
 async fn call(tool: &SessionHistoryTool, params: Value) -> Value {
     serde_json::from_str(
-        &Tool::call(tool, serde_json::from_value(params).unwrap())
-            .await
-            .unwrap(),
+        &Tool::call(
+            tool,
+            serde_json::from_value(params).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap(),
     )
     .unwrap()
 }
@@ -108,6 +112,7 @@ resources:
     let error = Tool::call(
         &denied_tool,
         serde_json::from_value(json!({"action":"get","session_id":"shared"})).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err();
@@ -118,6 +123,7 @@ resources:
         &denied_tool,
         serde_json::from_value(json!({"action":"output","session_id":"shared","call_id":"any"}))
             .unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err();
@@ -201,6 +207,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     let recovery = Tool::call(
         &tool,
         serde_json::from_value(json!({"action":"get","session_id":"atlas-typo"})).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err();
@@ -210,6 +217,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     let other_node = Tool::call(
         &tool,
         serde_json::from_value(json!({"action":"get","session_id":"foreign-session"})).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err();
@@ -295,6 +303,7 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
             json!({"action":"search","filter":{"text":"retry decision","tag":"release"},"limit":1}),
         )
         .unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err();
@@ -320,10 +329,14 @@ async fn transcript_search_reconstructs_canonical_text_and_pages_hits() {
         json!({"action":"transcript"}),
         json!({"action":"output"}),
     ] {
-        let error = Tool::call(&tool, serde_json::from_value(missing.clone()).unwrap())
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = Tool::call(
+            &tool,
+            serde_json::from_value(missing.clone()).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("next call: sessions"), "{missing}: {error}");
     }
     let validator = jsonschema::validator_for(&definition.parameters).unwrap();

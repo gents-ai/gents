@@ -2285,6 +2285,7 @@ mod tests {
         config
             .call(
                 json!({"argv":["profile","edit","execution","--set","max_turns=250"]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .expect("a freshly initialized home binds an execution the configurator can edit");

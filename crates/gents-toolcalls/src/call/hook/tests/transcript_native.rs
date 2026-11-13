@@ -83,8 +83,14 @@ async fn accept_turn(
 async fn dispatch(hook: &DefraSessionHook, call_id: usize, provider_id: &str) {
     let internal = format!("internal-{call_id}");
     assert!(matches!(
-        hook.on_tool_call("read", Some(provider_id.into()), &internal, ARGS)
-            .await,
+        hook.on_tool_call(
+            "read",
+            Some(provider_id.into()),
+            &internal,
+            ARGS,
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 }

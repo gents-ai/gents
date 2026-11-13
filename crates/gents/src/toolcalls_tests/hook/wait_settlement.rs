@@ -44,11 +44,12 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
         if during_completion {
             let reached = Arc::new(tokio::sync::Notify::new());
             let release = Arc::new(tokio::sync::Notify::new());
+            let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
             let mut pending = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
                 2,
                 reached.clone(),
                 release,
-                hook.on_tool_call("wait_process", None, call, args),
+                hook.on_tool_call("wait_process", None, call, args, &envelope),
             ));
             tokio::time::timeout(Duration::from_secs(30), async {
                 tokio::select! {
@@ -62,7 +63,9 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             drop(pending);
         } else {
             let handles = hook.in_flight_lifecycles.lock().await;
-            let mut pending = Box::pin(hook.on_tool_call("wait_process", None, call, args));
+            let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+            let mut pending =
+                Box::pin(hook.on_tool_call("wait_process", None, call, args, &envelope));
             let committed = async {
                 loop {
                     let row = gents_toolcalls::test_support::background_hook::tool_row(

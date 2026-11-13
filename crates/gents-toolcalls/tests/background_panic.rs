@@ -26,7 +26,11 @@ impl ToolDyn for PanickingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async { panic!("intentional background tool panic") })
     }
 }
@@ -103,7 +107,13 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
     let args = r#"{"tool_name":"panicking_tool","args":{}}"#;
     accept_hook_tool_call(&hook, "meta-background-panic", "spawn_process", args, None).await;
     let action = hook
-        .on_tool_call("spawn_process", None, "meta-background-panic", args)
+        .on_tool_call(
+            "spawn_process",
+            None,
+            "meta-background-panic",
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await;
     let ToolCallHookAction::Skip { reason } = action else {
         panic!("expected spawn receipt")

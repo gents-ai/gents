@@ -649,8 +649,14 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
     accept_hook_tool_call(&hook, "list-call", "list_processes", "{}", None).await;
 
     assert!(matches!(
-        hook.on_tool_call("list_processes", None, "list-call", "{}")
-            .await,
+        hook.on_tool_call(
+            "list_processes",
+            None,
+            "list-call",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Skip { .. }
     ));
 
@@ -723,7 +729,15 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     let mut skipped = Vec::new();
     for (id, name, args) in &cases {
         accept_hook_tool_call(&hook, id, name, args, None).await;
-        let action = hook.on_tool_call(name, None, id, args).await;
+        let action = hook
+            .on_tool_call(
+                name,
+                None,
+                id,
+                args,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await;
         let ToolCallHookAction::Skip { reason } = action else {
             panic!("{name} should return its durable result to the provider; got {action:?}")
         };

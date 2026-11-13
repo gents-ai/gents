@@ -79,7 +79,11 @@ impl gents_loop::tool::Tool for LoadSkillTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> std::result::Result<Self::Output, Self::Error> {
         match find_skill(&self.skills, &args.name) {
             Some(skill) => {
                 if let Some(selection) = &self.selection {

@@ -52,6 +52,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-create-forged",
             r#"{"objective":"ship","node_did":"did:test:other","session_id":"other"}"#,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
     assert!(
@@ -84,6 +85,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-create-valid",
             r#"{"objective":"ship","token_budget":1000}"#,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
     assert!(matches!(created, ToolCallHookAction::Skip { .. }));
@@ -117,6 +119,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-update-forged",
             r#"{"status":"complete","session_id":"other"}"#,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
     assert!(matches!(forged_update, ToolCallHookAction::Skip { .. }));
@@ -168,7 +171,8 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
                 gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
                 None,
                 id,
-                args
+                args,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await,
             ToolCallHookAction::Skip { .. }
@@ -208,6 +212,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-get-valid",
             "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await,
         ToolCallHookAction::Skip { .. }
@@ -226,6 +231,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             None,
             "goal-update-valid",
             r#"{"status":"complete","reason":"done"}"#,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await,
         ToolCallHookAction::Skip { .. }
@@ -293,7 +299,7 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                 let (action, trace) =
                     gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_and_trace(
                         completion_mutation,
-                        hook.on_tool_call("create_goal", None, "control-call", &args),
+                        hook.on_tool_call("create_goal", None, "control-call", &args, &gents_loop::tool::ToolCallEnvelope::ambient()),
                     )
                     .await;
                 let mutations = trace.len();
@@ -326,7 +332,13 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                         "{row}"
                     );
                     let again = hook
-                        .on_tool_call("create_goal", None, "control-call", &args)
+                        .on_tool_call(
+                            "create_goal",
+                            None,
+                            "control-call",
+                            &args,
+                            &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        )
                         .await;
                     assert_eq!(
                         matches!(again, ToolCallHookAction::Continue),

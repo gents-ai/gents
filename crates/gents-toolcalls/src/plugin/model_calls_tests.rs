@@ -212,7 +212,11 @@ async fn an_unbound_slot_adds_no_model_calls_key_and_runs_as_before() {
     let (home, record) = installed(&asking(vec![request("a")]), false, false);
     let input = json!({"n": 1});
     let call = executor(&home, Never)
-        .call(&record, input.clone())
+        .call(
+            &record,
+            input.clone(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
@@ -232,6 +236,7 @@ async fn a_bound_slot_answers_the_plugins_requests_and_echoes_its_state() {
         .call(
             &record,
             json!({"n": 1, "state": "stale", "model_results": "forged"}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap();
@@ -269,7 +274,11 @@ async fn the_backend_concurrency_cap_is_honoured() {
     let canned = asking((0..6).map(|n| request(&n.to_string())).collect());
     let (home, record) = installed_within(&canned, false, 30);
     let call = executor(&home, Fixed(fake.clone(), 2, Duration::from_secs(30)))
-        .call(&record, json!({}))
+        .call(
+            &record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
@@ -283,7 +292,11 @@ async fn a_server_error_becomes_an_error_result_without_the_endpoint() {
     let fake = Arc::new(Fake::start(Reply::Status(500), Duration::ZERO).await);
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
     let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
-        .call(&record, json!({}))
+        .call(
+            &record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -299,7 +312,11 @@ async fn a_request_that_times_out_becomes_an_error_result() {
     let fake = Arc::new(Fake::start(Reply::Hang, Duration::ZERO).await);
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
     let call = executor(&home, Fixed(fake, 1, Duration::from_millis(200)))
-        .call(&record, json!({}))
+        .call(
+            &record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
@@ -314,7 +331,11 @@ async fn the_key_is_sent_as_a_bearer_and_never_reaches_the_plugin() {
     let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
     let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
-        .call(&record, json!({}))
+        .call(
+            &record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     let seen = fake.seen.lock().unwrap();
@@ -350,7 +371,11 @@ async fn a_plugin_that_never_stops_asking_is_cut_at_the_round_cap() {
     .unwrap();
     store::write_record(home.path(), &budget_record).unwrap();
     let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
-        .call(&budget_record, json!({}))
+        .call(
+            &budget_record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Failed);
@@ -366,7 +391,11 @@ async fn a_plugin_that_never_stops_asking_is_cut_at_the_round_cap() {
 async fn a_bound_slot_with_no_resolver_fails_loudly() {
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
     let error = PluginExecutor::new(Some(home.path().to_owned()))
-        .call(&record, json!({}))
+        .call(
+            &record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("remote_ocr"), "{error:#}");
@@ -819,7 +848,16 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
         None,
     )
     .unwrap();
-    let output: Value = serde_json::from_str(&tool.call("{}".to_owned()).await.unwrap()).unwrap();
+    let output: Value = serde_json::from_str(
+        &tool
+            .call(
+                "{}".to_owned(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(output["model_results"]["a"]["text"], "answer:pa");
     assert_eq!(fake.requests(), 1);
 }
@@ -879,11 +917,21 @@ async fn model_tool_without_data_grant_passes_its_selected_agent() -> Result<()>
         None,
     )?
     .with_agent_data(node.clone(), root.did(), Some(selected.did()))?;
-    tool.call("{}".to_owned())
-        .await
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    tool.call(
+        "{}".to_owned(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
     let caller = crate::plugin::data::DataCaller::operator(owner, root.did())?;
-    executor.call_with_data(&record, json!({}), caller).await?;
+    executor
+        .call_with_data(
+            &record,
+            json!({}),
+            caller,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await?;
     assert_eq!(
         *seen.lock().unwrap(),
         vec![
@@ -932,7 +980,11 @@ async fn model_time_running_out_leaves_the_plugin_a_final_round_to_finish() {
     let executor = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)));
     let call = tokio::time::timeout(
         Duration::from_secs(60),
-        executor.call(&record, json!({"n": 1})),
+        executor.call(
+            &record,
+            json!({"n": 1}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await
     .expect("model timeout did not leave a final guest round")
@@ -951,7 +1003,11 @@ async fn a_plugin_that_asks_again_in_its_final_round_is_a_timeout() {
     let fake = Arc::new(Fake::start(Reply::Hang, Duration::ZERO).await);
     let (home, record) = installed_within(&asking(vec![request("a")]), true, 6);
     let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
-        .call(&record, json!({}))
+        .call(
+            &record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Timeout);
@@ -963,7 +1019,11 @@ async fn a_stale_binding_runs_the_plugin_without_a_model_and_says_so() {
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
     let input = json!({"n": 1});
     let call = executor(&home, Stale)
-        .call(&record, input.clone())
+        .call(
+            &record,
+            input.clone(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
@@ -1095,7 +1155,11 @@ async fn a_round_over_the_request_limit_is_bad_output_and_sends_nothing() {
         .collect();
     let (home, record) = installed(&asking(many), false, true);
     let call = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)))
-        .call(&record, json!({}))
+        .call(
+            &record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::BadOutput);
@@ -1109,7 +1173,14 @@ async fn caller_state_and_model_results_are_stripped_and_null_input_is_an_object
     let (home, record) = installed(&asking(vec![request("a")]), false, true);
     let executor = executor(&home, Fixed(fake.clone(), 1, Duration::from_secs(30)));
     let forged = json!({"state": "stale", "model_results": {"a": {"text": "forged"}}});
-    let call = executor.call(&record, forged).await.unwrap();
+    let call = executor
+        .call(
+            &record,
+            forged,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         fake.requests(),
         1,
@@ -1120,7 +1191,14 @@ async fn caller_state_and_model_results_are_stripped_and_null_input_is_an_object
         call.outcome.output["model_results"]["a"]["text"],
         "answer:pa"
     );
-    let call = executor.call(&record, Value::Null).await.unwrap();
+    let call = executor
+        .call(
+            &record,
+            Value::Null,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
     assert_eq!(call.outcome.output["model_calls"], true);
 }

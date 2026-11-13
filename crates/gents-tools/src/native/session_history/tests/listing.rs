@@ -75,6 +75,7 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
                 session_id: None,
                 ..Default::default()
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap();
@@ -122,7 +123,11 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
         None,
         None,
         Some("session-a".to_owned()),
-        Tool::call(&tool, SessionHistoryParams::default()),
+        Tool::call(
+            &tool,
+            SessionHistoryParams::default(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await
     .unwrap_err();
@@ -206,6 +211,7 @@ async fn session_history_snapshot_reports_recent_agent_sessions() {
             session_id: None,
             ..Default::default()
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err();

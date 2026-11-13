@@ -53,7 +53,11 @@ impl Tool for DiscoverToolsTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         let services = crate::mcp::registry::configured_mcp_services_on(
             &gents_store::config_client::ConfigAccess::local_as(
                 self.ctx.node.clone(),
@@ -174,7 +178,10 @@ mod tests {
         let tool = DiscoverToolsTool::new(context);
 
         let output = tool
-            .call(DiscoverToolsArgs { query: None })
+            .call(
+                DiscoverToolsArgs { query: None },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .expect("discover should return model-readable text");
 
@@ -259,8 +266,13 @@ mod tests {
         });
 
         let tool = DiscoverToolsTool::new(test_context(node, pool, ServiceHealthMap::new()));
-        let discovery =
-            tokio::spawn(async move { tool.call(DiscoverToolsArgs { query: None }).await });
+        let discovery = tokio::spawn(async move {
+            tool.call(
+                DiscoverToolsArgs { query: None },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+        });
         tokio::time::timeout(Duration::from_secs(30), async {
             tokio::join!(blackholed.notified(), answered.notified())
         })
@@ -325,7 +337,10 @@ mod tests {
 
             let tool = DiscoverToolsTool::new(test_context(Arc::clone(&node), pool, health));
             let output = tool
-                .call(DiscoverToolsArgs { query: None })
+                .call(
+                    DiscoverToolsArgs { query: None },
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
                 .await
                 .expect("discover returns model-readable text");
 
@@ -362,7 +377,10 @@ mod tests {
         let tool = DiscoverToolsTool::new(test_context(node, pool, ServiceHealthMap::new()));
 
         let output = tool
-            .call(DiscoverToolsArgs { query: None })
+            .call(
+                DiscoverToolsArgs { query: None },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .expect("discover returns model-readable text");
 

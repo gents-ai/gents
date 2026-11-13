@@ -56,7 +56,11 @@ impl ToolDyn for CliTool {
         admit_argv_policy(&self.config, &args.argv).map_err(LocalToolError::into_dispatch_error)
     }
 
-    fn call(&self, args: String) -> BoxFuture<'_, Result<String, ToolError>> {
+    fn call(
+        &self,
+        args: String,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'_, Result<String, ToolError>> {
         let config = self.config.clone();
         Box::pin(async move {
             deny_artifact_scope().map_err(LocalToolError::into_dispatch_error)?;
@@ -170,6 +174,7 @@ async fn run_cli_command(
         environment: Some(cli_tool_environment(config)),
         tool_name: Some(config.name.clone()),
         live_output: bounds.live_output.clone(),
+        process_recorder: None,
     })
     .await;
 
@@ -321,7 +326,8 @@ mod tests {
                 let args = serde_json::json!({"argv": argv}).to_string();
                 let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
                     "sh",
-                    tool.call(args).await,
+                    tool.call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+                        .await,
                 );
                 assert!(matches!(
                     outcome,

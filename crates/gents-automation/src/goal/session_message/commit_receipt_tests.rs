@@ -88,6 +88,7 @@ async fn a_goal_task_with_a_lost_receipt_is_decided_by_the_durable_row_and_inher
             None,
             "goal-call",
             &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ),
     )
     .await;

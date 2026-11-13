@@ -184,6 +184,7 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
             None,
             "unadvertised-update",
             r#"{"status":"complete"}"#,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
     assert!(
@@ -200,6 +201,7 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
             None,
             "unadvertised-create",
             r#"{"objective":"unauthorized"}"#,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
     assert!(
@@ -463,8 +465,14 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
 
     accept_hook_tool_call(&hook, "internal-deadline", "read", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("read", None, "internal-deadline", "{}")
-            .await,
+        hook.on_tool_call(
+            "read",
+            None,
+            "internal-deadline",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 
@@ -700,8 +708,14 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
 
     accept_hook_tool_call(&hook, "internal-timeout", "never", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("never", None, "internal-timeout", "{}")
-            .await,
+        hook.on_tool_call(
+            "never",
+            None,
+            "internal-timeout",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let action = hook
@@ -763,14 +777,26 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
 
     accept_hook_tool_call(&hook, "internal-unknown", "ghost_tool", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("ghost_tool", None, "internal-unknown", "{}")
-            .await,
+        hook.on_tool_call(
+            "ghost_tool",
+            None,
+            "internal-unknown",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 
-    let dispatched =
-        gents_loop::loop_stream::dispatch_tool(&[], "ghost_tool", "{}".to_string(), None, None)
-            .await;
+    let dispatched = gents_loop::loop_stream::dispatch_tool(
+        &[],
+        "ghost_tool",
+        "{}".to_string(),
+        None,
+        None,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await;
 
     let _ = hook
         .on_tool_result("ghost_tool", None, "internal-unknown", "{}", &dispatched)
@@ -833,8 +859,14 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
 
     accept_hook_tool_call(&hook, "internal-oversized", "oversized", tool_args, None).await;
     assert!(matches!(
-        hook.on_tool_call("oversized", None, "internal-oversized", tool_args,)
-            .await,
+        hook.on_tool_call(
+            "oversized",
+            None,
+            "internal-oversized",
+            tool_args,
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     assert!(matches!(
@@ -892,7 +924,14 @@ async fn hook_interrupts_cancel_only_their_own_calls_as_the_lean_model_says() {
                 let id = format!("internal-{label}-{call}");
                 accept_hook_tool_call(&hook, &id, "slow", "{}", None).await;
                 assert!(matches!(
-                    hook.on_tool_call("slow", None, &id, "{}").await,
+                    hook.on_tool_call(
+                        "slow",
+                        None,
+                        &id,
+                        "{}",
+                        &gents_loop::tool::ToolCallEnvelope::ambient()
+                    )
+                    .await,
                     ToolCallHookAction::Continue
                 ));
                 ids.push(id);
@@ -1017,6 +1056,7 @@ async fn interruption_leaves_background_workers_running() {
             environment: None,
             tool_name: Some(name),
             live_output: None,
+            process_recorder: None,
         })
         .await
     });
@@ -1281,7 +1321,14 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
 
     accept_hook_tool_call(&hook, "internal-fail", "slow", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("slow", None, "internal-fail", "{}").await,
+        hook.on_tool_call(
+            "slow",
+            None,
+            "internal-fail",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     assert_eq!(
@@ -1355,8 +1402,14 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     };
     publish_and_adopt_tool_turn(&hook, "internal-1", Some("call-1"), streamed_assistant_turn).await;
     assert!(matches!(
-        hook.on_tool_call("read", Some("call-1".to_string()), "internal-1", tool_args,)
-            .await,
+        hook.on_tool_call(
+            "read",
+            Some("call-1".to_string()),
+            "internal-1",
+            tool_args,
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 
@@ -1540,6 +1593,7 @@ async fn read_file_result_persists_raw_output() {
             Some("call-read".to_string()),
             "internal-read",
             tool_args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await,
         ToolCallHookAction::Continue
@@ -1634,6 +1688,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await,
         ToolCallHookAction::Continue
@@ -1759,8 +1814,14 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
     for result_id in ["result-1", "result-2"] {
         accept_hook_tool_call(&hook, result_id, "echo", "{}", Some(result_id)).await;
         assert!(matches!(
-            hook.on_tool_call("echo", Some(result_id.to_string()), result_id, "{}")
-                .await,
+            hook.on_tool_call(
+                "echo",
+                Some(result_id.to_string()),
+                result_id,
+                "{}",
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
+            .await,
             ToolCallHookAction::Continue
         ));
         assert!(matches!(
@@ -1820,12 +1881,26 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
 
     accept_hook_tool_call(&hook, "internal-1", "first", "{}", Some("call-1")).await;
     assert!(matches!(
-        hook.on_tool_call("first", None, "internal-1", "{}").await,
+        hook.on_tool_call(
+            "first",
+            None,
+            "internal-1",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     accept_hook_tool_call(&hook, "internal-2", "second", "{}", Some("call-2")).await;
     assert!(matches!(
-        hook.on_tool_call("second", None, "internal-2", "{}").await,
+        hook.on_tool_call(
+            "second",
+            None,
+            "internal-2",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     assert!(matches!(
@@ -1920,8 +1995,14 @@ async fn remote_presentations_persist_the_same_selected_identity() {
         };
         accept_hook_tool_call(&hook, &format!("remote-call-{index}"), &name, args, None).await;
         assert!(matches!(
-            hook.on_tool_call(&name, None, &format!("remote-call-{index}"), args)
-                .await,
+            hook.on_tool_call(
+                &name,
+                None,
+                &format!("remote-call-{index}"),
+                args,
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
+            .await,
             ToolCallHookAction::Continue
         ));
         let data = hook_query(
@@ -2103,8 +2184,14 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
 
     accept_hook_tool_call(&hook, "internal-forgery", "cat_log", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("cat_log", None, "internal-forgery", "{}")
-            .await,
+        hook.on_tool_call(
+            "cat_log",
+            None,
+            "internal-forgery",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 
@@ -2177,8 +2264,14 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
 
     accept_hook_tool_call(&hook, "internal-reported-failure", "bash", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("bash", None, "internal-reported-failure", "{}")
-            .await,
+        hook.on_tool_call(
+            "bash",
+            None,
+            "internal-reported-failure",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 
@@ -2243,8 +2336,14 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
 
     accept_hook_tool_call(&hook, "internal-cancelled", "slow", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("slow", None, "internal-cancelled", "{}")
-            .await,
+        hook.on_tool_call(
+            "slow",
+            None,
+            "internal-cancelled",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 
@@ -2313,8 +2412,14 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
 
     accept_hook_tool_call(&hook, "internal-real-denial", "bash", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("bash", None, "internal-real-denial", "{}")
-            .await,
+        hook.on_tool_call(
+            "bash",
+            None,
+            "internal-real-denial",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 
@@ -2329,6 +2434,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         r#"{"command":"git","args":["commit"]}"#.to_string(),
         None,
         None,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await;
     let gents_loop::tool_call_lifecycle::ToolOutcome::Failed { text, .. } = &dispatched else {
@@ -2408,16 +2514,35 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
     hook.set_request_deadline_at(Some(claimed_deadline)).await;
     accept_hook_tool_call(&hook, "plugin-parent", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "plugin-parent", "{}")
-            .await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "plugin-parent",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let child = hook
-        .admit_tool_effect("plugin-parent", 1, "query", "{}")
+        .admit_tool_effect(
+            "plugin-parent",
+            1,
+            "query",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("query", None, &child, "{}").await,
+        hook.on_tool_call(
+            "query",
+            None,
+            &child,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 
@@ -2478,16 +2603,35 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
     hook.set_request_deadline_at(Some(claimed_deadline)).await;
     accept_hook_tool_call(&hook, "plugin-parent", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "plugin-parent", "{}")
-            .await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "plugin-parent",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let child = hook
-        .admit_tool_effect("plugin-parent", 1, "query", "{}")
+        .admit_tool_effect(
+            "plugin-parent",
+            1,
+            "query",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("query", None, &child, "{}").await,
+        hook.on_tool_call(
+            "query",
+            None,
+            &child,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     assert!(matches!(
@@ -2583,12 +2727,24 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
     hook.set_request_deadline_at(Some(claimed_deadline)).await;
     accept_hook_tool_call(&hook, "plugin-parent", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "plugin-parent", "{}")
-            .await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "plugin-parent",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let child = hook
-        .admit_tool_effect("plugin-parent", 1, "workflow_run", "{}")
+        .admit_tool_effect(
+            "plugin-parent",
+            1,
+            "workflow_run",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(hook.effect_tool_calls.lock().await.contains_key(&child));

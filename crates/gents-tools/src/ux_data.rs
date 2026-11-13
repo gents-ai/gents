@@ -278,13 +278,23 @@ pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Re
                 };
                 tool = tool.with_ux_client_schema(schema);
             }
-            Tool::call(&tool, BoundedWriteParams(args)).await?
+            Tool::call(
+                &tool,
+                BoundedWriteParams(args),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await?
         }
         SurfaceToolDecl::Query(decl) => {
             let tool = BoundedQueryTool::new(access.clone(), decl.clone())
                 .declared_by(Some(surface.clone()))
                 .with_visible_surface_owner(node_did.clone());
-            Tool::call(&tool, BoundedQueryParams(args)).await?
+            Tool::call(
+                &tool,
+                BoundedQueryParams(args),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await?
         }
     };
     let output: Value = serde_json::from_str(&output)

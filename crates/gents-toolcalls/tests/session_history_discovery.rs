@@ -19,18 +19,26 @@ async fn seed(
 
 async fn call(tool: &SessionHistoryTool, params: Value) -> Value {
     serde_json::from_str(
-        &Tool::call(tool, serde_json::from_value(params).unwrap())
-            .await
-            .unwrap(),
+        &Tool::call(
+            tool,
+            serde_json::from_value(params).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap(),
     )
     .unwrap()
 }
 
 async fn call_error(tool: &SessionHistoryTool, params: Value) -> String {
-    Tool::call(tool, serde_json::from_value(params).unwrap())
-        .await
-        .unwrap_err()
-        .to_string()
+    Tool::call(
+        tool,
+        serde_json::from_value(params).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap_err()
+    .to_string()
 }
 
 /// Completes `lifecycle` with a 9 000-line output behind a bounded view
@@ -97,9 +105,13 @@ async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
         json!({"action":"output","session_id":session,"call_id":"spawn-provider-call"});
     let mut recovered = String::new();
     loop {
-        let text = Tool::call(&tool, serde_json::from_value(params.clone()).unwrap())
-            .await
-            .unwrap();
+        let text = Tool::call(
+            &tool,
+            serde_json::from_value(params.clone()).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
         let page: Value = serde_json::from_str(&text).unwrap();
         recovered.push_str(page["text"].as_str().unwrap());
         assert_eq!(page["tool_call_doc_id"], lifecycle.doc_id().unwrap());
@@ -141,9 +153,13 @@ async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
         let mut recovered = String::new();
         let mut pages = 0;
         loop {
-            let text = Tool::call(&tool, serde_json::from_value(params.clone()).unwrap())
-                .await
-                .unwrap();
+            let text = Tool::call(
+                &tool,
+                serde_json::from_value(params.clone()).unwrap(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap();
             assert!(
                 text.starts_with("{\"text\":"),
                 "answer first: {}",

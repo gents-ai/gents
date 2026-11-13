@@ -68,6 +68,7 @@ impl Fixture {
                         timeout_secs: None,
                         raw_json: true,
                     },
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
                 ),
             ),
         )

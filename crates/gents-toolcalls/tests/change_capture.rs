@@ -72,7 +72,7 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
         None,
         None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
         Default::default(), false,
-        call_tool_managed(&tool, serde_json::json!({"path": "source.txt", "raw_json": true}).to_string()),
+        call_tool_managed(&tool, serde_json::json!({"path": "source.txt", "raw_json": true}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient()),
     ).await;
     let ToolOutcome::Completed(output) = outcome else {
         panic!("read failed: {outcome:?}")
@@ -115,6 +115,7 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     let failed = gents_loop::tool::ToolDyn::call_with_receipt(
         &tool,
         serde_json::json!({"path": "missing.txt"}).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await;
     assert!(failed.result.is_err());
@@ -152,7 +153,7 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
         tool.call(WriteFileArgs {
             path: "maximum.txt".into(), content: after.clone(), raw_json: true,
             expected_content_hash: None, overwrite: true,
-        }),
+        }, &gents_loop::tool::ToolCallEnvelope::ambient()),
     ).await.unwrap();
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     call.complete(&output).await.unwrap();
