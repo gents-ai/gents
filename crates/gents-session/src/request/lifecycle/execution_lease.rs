@@ -298,7 +298,7 @@ impl RequestLifecycle {
         pending_request_doc_ids: &[String],
     ) -> Result<bool> {
         let generation = self.execution_generation()?.to_owned();
-        let result = terminalize_execution_with_access(
+        let result = terminalize_execution(
             &self.access()?,
             TerminalizeSpec {
                 request_doc_id: &self.request.doc_id,
@@ -315,8 +315,8 @@ impl RequestLifecycle {
         )
         .await;
         match result {
-            Err(error) if error.is::<PendingQueueChanged>() => Ok(false),
-            Err(error) => Err(error),
+            Err(TerminalizeError::PendingQueueChanged) => Ok(false),
+            Err(error) => Err(error.into_anyhow()),
             Ok(TerminalizeResult::Lost) => {
                 anyhow::bail!("natural completion lost execution ownership")
             }
@@ -515,6 +515,15 @@ async fn terminalize_execution_with_access(
     access: &gents_store::config_client::ConfigAccess,
     spec: TerminalizeSpec<'_>,
 ) -> Result<TerminalizeResult> {
+    terminalize_execution(access, spec)
+        .await
+        .map_err(TerminalizeError::into_anyhow)
+}
+
+async fn terminalize_execution(
+    access: &gents_store::config_client::ConfigAccess,
+    spec: TerminalizeSpec<'_>,
+) -> std::result::Result<TerminalizeResult, TerminalizeError> {
     let fresh_generation = spec
         .fixture_fresh_generation
         .map_or_else(ExecutionGeneration::fresh, |generation| {
@@ -561,6 +570,7 @@ pub async fn stage_revoke_execution_preserving_output(
         &ExecutionGeneration::fresh(),
     )
     .await
+    .map_err(TerminalizeError::into_anyhow)
 }
 
 /// A parked row has no lease to revoke; the parked terminal owner settles it
@@ -590,13 +600,14 @@ pub async fn stage_supersede_parked_execution(
         &ExecutionGeneration::fresh(),
     )
     .await
+    .map_err(TerminalizeError::into_anyhow)
 }
 
 async fn terminalize_execution_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     spec: &TerminalizeSpec<'_>,
     fresh_generation: &ExecutionGeneration,
-) -> Result<TerminalizeResult> {
+) -> std::result::Result<TerminalizeResult, TerminalizeError> {
     let request_doc_id = spec.request_doc_id;
     let authority = spec.authority;
     let outcome = spec.outcome;
@@ -633,16 +644,18 @@ async fn terminalize_execution_in_txn(
         .render();
         txn.run_local_response(&rendered).await?
     };
-    let row = gents_store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
+    let row = gents_store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")
+        .map_err(anyhow::Error::from)?
         .context("execution request disappeared")?;
     let purpose = row.purpose.context("execution request purpose missing")?;
     let auxiliary = purpose.is_auxiliary();
-    if auxiliary {
-        anyhow::ensure!(
-            selection
-                .as_ref()
-                .is_none_or(|selected| *selected == TerminalOutput::NoMessage),
-            "auxiliary execution cannot select a transcript message"
+    if auxiliary
+        && !selection
+            .as_ref()
+            .is_none_or(|selected| *selected == TerminalOutput::NoMessage)
+    {
+        return Err(
+            anyhow::anyhow!("auxiliary execution cannot select a transcript message").into(),
         );
     }
     let owner = row
@@ -675,10 +688,11 @@ async fn terminalize_execution_in_txn(
     let expiry = row.execution_lease_expires_at.as_deref();
     let lease_deadline = expiry
         .map(DateTime::parse_from_rfc3339)
-        .transpose()?
+        .transpose()
+        .map_err(anyhow::Error::from)?
         .map(|time| time.timestamp_millis());
-    if !matches!(authority, TerminalAuthority::Parked { .. }) {
-        anyhow::ensure!(lease_deadline.is_some(), "missing execution expiry");
+    if !matches!(authority, TerminalAuthority::Parked { .. }) && lease_deadline.is_none() {
+        return Err(anyhow::anyhow!("missing execution expiry").into());
     }
     let now = fixture_now.unwrap_or_else(Utc::now);
     let observed = LeaseObservation {
@@ -696,7 +710,8 @@ async fn terminalize_execution_in_txn(
             .deadline
             .as_deref()
             .map(DateTime::parse_from_rfc3339)
-            .transpose()?
+            .transpose()
+            .map_err(anyhow::Error::from)?
             .map(|deadline| deadline.with_timezone(&Utc)),
     };
     if !authorize_terminal_transition(
@@ -854,15 +869,16 @@ async fn validate_pending_fence(
     agent: &str,
     session_id: &str,
     pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
-) -> Result<()> {
+) -> std::result::Result<(), TerminalizeError> {
     if let Some((expected, request_deadline)) = pending_fence {
-        anyhow::ensure!(
-            request_deadline.is_none_or(|deadline| Utc::now() < deadline),
-            "request deadline expired before natural completion"
-        );
+        if !request_deadline.is_none_or(|deadline| Utc::now() < deadline) {
+            return Err(
+                anyhow::anyhow!("request deadline expired before natural completion").into(),
+            );
+        }
         let actual = super::queue::pending_ids_in_txn(txn, agent, session_id).await?;
         if actual != expected {
-            return Err(PendingQueueChanged.into());
+            return Err(TerminalizeError::PendingQueueChanged);
         }
     }
     Ok(())
@@ -1192,9 +1208,50 @@ pub(super) fn validate_auxiliary_sources_decided(
 #[cfg(test)]
 mod tests;
 
+/// Why a terminal transition did not commit. An erased failure keeps its own
+/// representation, so callers handed it as `anyhow` classify it as before.
 #[derive(Debug, thiserror::Error)]
-#[error("pending input changed before natural completion")]
-struct PendingQueueChanged;
+enum TerminalizeError {
+    #[error("pending input changed before natural completion")]
+    PendingQueueChanged,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl TerminalizeError {
+    fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Other(error) => error,
+            changed @ Self::PendingQueueChanged => anyhow::Error::new(changed),
+        }
+    }
+}
+
+impl From<gents_store::config_client::ConfigClientError> for TerminalizeError {
+    fn from(error: gents_store::config_client::ConfigClientError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl gents_store::config_client::TransactionFailure for TerminalizeError {
+    fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
+        match self {
+            Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::PendingQueueChanged => None,
+        }
+    }
+
+    fn rerun_requested(&self) -> Option<&gents_store::config_client::RerunNote> {
+        match self {
+            Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::PendingQueueChanged => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod conformance {

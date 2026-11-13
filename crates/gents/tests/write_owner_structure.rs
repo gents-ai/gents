@@ -2023,8 +2023,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-pack/src/plugin/http_calls.rs", 1),
     // E in any_error
     ("crates/gents-pack/src/plugin/store.rs", 1),
-    // PendingQueueChanged in RequestLifecycle::finish_natural_turn
-    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 1),
     // PendingInputChanged in DefraStreamWriter::try_publish_steering_message
     ("crates/gents-session/src/request/streaming.rs", 1),
     // ReplayEvidenceViolation in load_canonical_assistant_candidates_using
