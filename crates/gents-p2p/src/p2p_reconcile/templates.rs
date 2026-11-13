@@ -583,35 +583,6 @@ mod tests {
             MemoryZanzibarStore, ZanzibarDocumentACP, ZanzibarStore,
         };
         use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
-        for contract in gents_lean_vocab::lean_identity_contracts() {
-            assert_eq!(
-                contract.schema_actor, contract.runtime_actor,
-                "schema installation and updates use the modeled runtime actor"
-            );
-            for collection in &contract.node_local_collections {
-                let schema = match collection.as_str() {
-                    "Agent" => gents_protocol::schemas::AGENT,
-                    "CallbackBinding" => gents_protocol::schemas::CALLBACK_BINDING,
-                    "CallbackInvocation" => gents_protocol::schemas::CALLBACK_INVOCATION,
-                    "CallbackResult" => gents_protocol::schemas::CALLBACK_RESULT,
-                    other => anyhow::bail!("unknown modeled local collection {other}"),
-                };
-                assert!(
-                    !schema.contains("@branchable"),
-                    "{collection} must remain local"
-                );
-                assert!(gents_protocol::schemas::is_local_only_collection(
-                    collection
-                ));
-                for template in builtin_templates() {
-                    assert!(
-                        !template.collections.contains(&collection.as_str()),
-                        "{} must not replicate {collection}",
-                        template.id
-                    );
-                }
-            }
-        }
         let cases = lean_identity_household_cases();
         assert!(!cases.is_empty());
         for case in cases {

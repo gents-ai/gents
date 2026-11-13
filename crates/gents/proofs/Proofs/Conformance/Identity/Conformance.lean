@@ -77,10 +77,6 @@ def selectedAgent : AgentCase := ⟨"general", agentDid, creationA, runtimeDid, 
 def siblingAgent : AgentCase := ⟨"general", siblingDid, creationB, runtimeDid, true⟩
 def remoteAgent : AgentCase := ⟨"general", otherAgentDid, creationA, otherRuntimeDid, true⟩
 
-def agentCaseJson (c : AgentCase) : Json := Json.mkObj
-  [("label", toJson c.label), ("did", toJson c.did), ("creation_nonce", toJson c.creationId),
-   ("node", toJson c.node), ("enabled", toJson c.enabled)]
-
 structure IdentityStructuralCase where
   name : String
   nodes : List NodeCase
@@ -168,21 +164,6 @@ theorem same_node_isolation_and_no_fallback_pinned :
     (identityPermissionCases.take 2).map (fun c => (c.allowed c.actor, c.allowed c.peer)) =
     [(false, false), (true, false)] := by native_decide
 
-def identityPermissionCaseJson (c : IdentityPermissionCase) : Json := Json.mkObj
-  [("name", toJson c.name), ("nodes", toJson c.nodes), ("agents", toJson (c.agents.map agentCaseJson)),
-   ("grants", toJson c.grants), ("permission", toJson c.permission), ("row_owner", toJson c.rowOwner),
-   ("actor_node", toJson c.actorNode), ("actor_did", toJson c.actorDid),
-   ("peer_node", toJson c.peerNode), ("peer_did", toJson c.peerDid),
-   ("expected_actor_did", toJson (c.actor.map (·.did))),
-   ("expected_peer_did", toJson (c.peer.map (·.did))),
-   ("expected_actor_allowed", toJson (c.allowed c.actor)),
-   ("expected_peer_allowed", toJson (c.allowed c.peer)),
-   ("same_node", toJson (c.actor.any fun a => c.peer.any (fun b => a.node == b.node))),
-   ("expected_decisions_equal", toJson (c.allowed c.actor == c.allowed c.peer))]
-
-def identityPermissionCasesJson : String :=
-  (toJson (identityPermissionCases.map identityPermissionCaseJson)).compress
-
 structure DerivationInput where
   nodeKey : String
   creationNonce : String
@@ -217,10 +198,6 @@ def derivationCases : List (String × DerivationInput × DerivationInput) :=
   , ("reopen-preserves-did", ⟨"runtime-a", creationA, "general"⟩,
       ⟨"runtime-a", creationA, "general"⟩) ]
 
-def derivationInputJson (input : DerivationInput) : Json := Json.mkObj
-  [("node_key", toJson input.nodeKey), ("creation_nonce", toJson input.creationNonce),
-   ("label", toJson input.label)]
-
 /-- A claimed Agent DID names an independent key or a derivation input. -/
 inductive ClaimedDid where
   | key (name : String)
@@ -253,10 +230,6 @@ def managedToolIdentityCaseJson : Option ClaimedDid × String × Option String �
      ("creation_nonce", toJson creation),
      ("allowed", toJson (Configuration.managedToolIdentityAllowed renderedDerivation
         ((claimed.map ClaimedDid.render).getD "") nodeKey creation))]
-
-def derivationCasesJson : String := (toJson (derivationCases.map fun (name, left, right) =>
-  Json.mkObj [("name", toJson name), ("left", derivationInputJson left),
-    ("right", derivationInputJson right), ("expected_same_did", toJson (sameDerivedDid left right))])).compress
 
 namespace HouseholdFixture
 open Household
@@ -2214,14 +2187,5 @@ end SecretConfigurationFixture
 
 def householdCasesJson : String := (toJson [HouseholdFixture.json, OperationsFixture.json,
   ConfigurationFixture.json, SecretConfigurationFixture.json]).compress
-
-def identityContractsJson : String := (toJson [Json.mkObj
-  [("name", toJson "identity.agent_owned_data"),
-   ("statement", toJson "User keys stay on clients. Node keys serve P2P and own node-local operational data not caused by agents; operational data inherits user read access through Node. Agent work never falls back to runtime authority. Agent DIDs derive from immutable creation nonces and select all agent work. Users own Node configuration and transitively administer Agents. User-created sessions are user-owned; unattended sessions are agent-owned with configured user access and deletion. Agents own session children with parent-session user access and control."),
-   ("node_local_collections", toJson nodeLocalCollections),
-   ("replicated_protocol_collections", toJson replicatedProtocolCollections),
-   ("schema_actor", toJson (schemaActor { did := runtimeDid, displayName := none, enabled := true } .createSchema)),
-   ("runtime_actor", toJson runtimeDid),
-   ("enforced", toJson false), ("tracked_by", toJson "#3485")]]).compress
 
 end Identity.Conformance

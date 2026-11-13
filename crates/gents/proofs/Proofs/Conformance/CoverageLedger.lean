@@ -2603,28 +2603,23 @@ def caseCoverage : List CoverageEntry :=
       "transcript_conformance_cases"
       "TranscriptConformanceCases")
       "transcript" [Surface.operatorUi]
-  , tagged (consumerWithFollowUp
-      "identity_permission_cases"
-      "IdentityPermissionCases"
-      "Checks native Defra ACP using the selected agent DID after explicit node-scoped resolution. Unknown-DID and duplicate-DID selector rejection require the canonical registry owner; no test-local ID map remains.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "identity_permission_cases"
-      "IdentityPermissionCases")
+  , tagged (consumerCoverage "family" "agent_identity_permission_decide")
       "identity-permission" [Surface.api]
+  , tagged (followUpCoverage "family" "agent_identity_permission_selection_unreached"
+      "model-production-gap: production has no node-scoped Agent selector over Agent rows to replay; foreign-node, unknown and duplicate DIDs are rejected only by the model before /identity/decide, which receives an already selected DID.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_household_cases"
       "IdentityHouseholdCases")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "identity_derivation_cases"
-      "IdentityDerivationCases")
+  , tagged (consumerCoverage "family" "agent_identity_derivation")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "identity_contracts"
-      "IdentityContracts"
-      "Route through the canonical DID registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
+  , tagged (consumerCoverage "family" "agent_identity_collection_locality")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "agent_identity_replication_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "agent_identity_desktop_subscription")
+      "identity-permission" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "family"
       "worker_capacity_contracts_transition"
