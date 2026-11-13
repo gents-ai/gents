@@ -80,7 +80,7 @@ impl PolicyFixture {
         crate::test_support::grant_modeled_direct_sets(
             &self.db.node,
             self.db.node_identity.did(),
-            "default-agent",
+            gents_store::identity::Recipient::DefaultAgent,
             &self.agent_did,
         )
         .await;

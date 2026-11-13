@@ -2,19 +2,6 @@ use super::test_support::*;
 use super::*;
 use crate::identity::NodeIdentity;
 
-pub(crate) fn recipient_sets(name: &str) -> Vec<GrantSet> {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .identity_grant_recipient_cases
-        .iter()
-        .find(|case| case.recipient == name)
-        .unwrap_or_else(|| panic!("Lean recipient {name:?}"));
-    case.direct
-        .iter()
-        .chain(&case.projected)
-        .map(|set| set_named(set))
-        .collect()
-}
-
 #[test]
 fn sets_match_lean_owner() {
     use gents_lean_vocab::families;
