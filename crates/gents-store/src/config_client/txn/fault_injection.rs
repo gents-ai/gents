@@ -14,10 +14,83 @@ pub(super) struct SuccessfulMutationFault {
     pub(super) write_gate_observation: Option<Arc<WriteGateObservation>>,
     pub(super) read_storage_failure: Option<&'static str>,
     pub(super) read_pause: Option<(&'static str, Arc<tokio::sync::Notify>)>,
-    pub(super) native_pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    pub(super) native_pause: Option<Arc<NativeOperationPause>>,
     fail_rollback: bool,
     retry_backoff_reached: Option<Arc<tokio::sync::Notify>>,
     cleanup_scheduled: Option<Arc<AtomicBool>>,
+}
+
+pub(super) struct NativeOperationPause {
+    pub(super) reached: Arc<tokio::sync::Notify>,
+    pub(super) release: Arc<tokio::sync::Notify>,
+    pub(super) observation: Option<Arc<NativeOperationObservation>>,
+}
+
+/// The transaction owner's native operation registry, handed to a driver that
+/// cannot reach it otherwise: the execution-renewal owner creates the registry
+/// for itself, so a caller of that owner never holds the tracker whose state
+/// the model's observations describe.
+#[derive(Default)]
+pub struct NativeOperationObservation {
+    tracker: std::sync::Mutex<Option<Arc<super::NativeOperationTracker>>>,
+    published: tokio::sync::Notify,
+}
+
+impl NativeOperationObservation {
+    fn slot(
+        &self,
+    ) -> std::sync::MutexGuard<'_, Option<Arc<super::NativeOperationTracker>>> {
+        self.tracker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Keeps the first registry a scope admits, so a renewal that runs again
+    /// after the observed attempt drains cannot replace it.
+    pub(super) fn publish(&self, tracker: &Arc<super::NativeOperationTracker>) {
+        let mut slot = self.slot();
+        if slot.is_none() {
+            *slot = Some(Arc::clone(tracker));
+            drop(slot);
+            self.published.notify_waiters();
+        }
+    }
+
+    fn tracker(&self) -> Option<Arc<super::NativeOperationTracker>> {
+        self.slot().clone()
+    }
+
+    /// Resolves once the owner has abandoned the registry, the state the Lean
+    /// model observes as `callerAbandonmentObserved`. Both waits register
+    /// before they read, so neither publication nor abandonment is lost by
+    /// landing first.
+    pub async fn abandoned(&self) {
+        let tracker = loop {
+            let notified = self.published.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(tracker) = self.tracker() {
+                break tracker;
+            }
+            notified.await;
+        };
+        tracker.wait_abandoned().await;
+    }
+
+    pub fn is_abandoned(&self) -> bool {
+        self.tracker()
+            .is_some_and(|tracker| tracker.is_abandoned())
+    }
+
+    pub fn in_flight(&self) -> usize {
+        self.tracker().map_or(0, |tracker| {
+            tracker
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .in_flight
+        })
+    }
 }
 
 pub(super) struct LocalOperationPause {
@@ -543,6 +616,32 @@ impl ConfigApplyTxn<'_> {
     where
         F: Future,
     {
+        Self::with_paused_native_operation(reached, release, None, future).await
+    }
+
+    /// The pause plus the registry the owner admits under it, for a driver
+    /// whose owner creates that registry internally.
+    pub async fn with_observed_native_operation_pause<F>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        observation: Arc<NativeOperationObservation>,
+        future: F,
+    ) -> F::Output
+    where
+        F: Future,
+    {
+        Self::with_paused_native_operation(reached, release, Some(observation), future).await
+    }
+
+    async fn with_paused_native_operation<F>(
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        observation: Option<Arc<NativeOperationObservation>>,
+        future: F,
+    ) -> F::Output
+    where
+        F: Future,
+    {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
@@ -553,7 +652,11 @@ impl ConfigApplyTxn<'_> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
-            native_pause: Some((reached, release)),
+            native_pause: Some(Arc::new(NativeOperationPause {
+                reached,
+                release,
+                observation,
+            })),
             fail_rollback: false,
             retry_backoff_reached: None,
             cleanup_scheduled: None,

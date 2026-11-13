@@ -888,6 +888,59 @@ pub async fn initialize_local_standard_peer(
         .await
 }
 
+/// Retires this desktop's pairing with a node whose own store is being
+/// retired. The node's identity and the desktop's client store go in the same
+/// locked operation, so there is no live route to tear down and no authority to
+/// withdraw: the record is dropped outright rather than queued for removal,
+/// which would retry forever against a node that cannot answer. If a reset ever
+/// stops retiring the desktop's node store, this must queue a removal instead.
+/// Records for other nodes are untouched.
+pub async fn retire_local_node_records(
+    path: &Path,
+    node_home: &Path,
+    node_did: Option<&str>,
+) -> Result<Vec<PeerRecord>> {
+    let home = std::fs::canonicalize(node_home).unwrap_or_else(|_| node_home.to_path_buf());
+    let node_did = node_did.map(str::trim).filter(|did| !did.is_empty());
+    let retires = |record: &PeerRecord| {
+        node_did.is_some_and(|did| record.node_did == did)
+            || record
+                .local_node_home
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some_and(|value| {
+                    let value = Path::new(value);
+                    value == home || std::fs::canonicalize(value).is_ok_and(|value| value == home)
+                })
+    };
+    let mut directory = PeerDirectory::open_writer(path).await?;
+    let retired: Vec<PeerRecord> = directory
+        .peers
+        .iter()
+        .filter(|record| retires(record))
+        .cloned()
+        .collect();
+    if retired.is_empty() {
+        return Ok(retired);
+    }
+    let mut candidate = directory.clone();
+    candidate.peers.retain(|record| !retires(record));
+    candidate.pending_removals.retain(|record| !retires(record));
+    candidate.ended_access.retain(|ended| {
+        !retired
+            .iter()
+            .any(|record| record.node_did == ended.node_did)
+    });
+    candidate.enrollment_endpoints.retain(|endpoint| {
+        !retired
+            .iter()
+            .any(|record| endpoint.names_node(&record.node_did))
+    });
+    directory.commit(candidate).await?;
+    Ok(retired)
+}
+
 pub async fn load_peer_records(path: &Path) -> Result<Vec<PeerRecord>> {
     let mut records = read_stored_directory(path).await?.peers;
     sort_peer_records(&mut records);
@@ -1222,6 +1275,37 @@ pub(crate) mod tests {
             ended_access: Vec::new(),
         })
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn retiring_a_node_drops_only_its_own_pairing() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let home = tempdir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let mut local = PeerRecord::new("Forge", "iroh://forge", "did:key:old");
+        local.source = Some("enrollment".to_string());
+        local.graphql = Some("http://127.0.0.1:9191/api/v0/graphql".to_string());
+        local.local_node_home = Some(home.to_string_lossy().into_owned());
+        directory.upsert(local.clone()).await.unwrap();
+        let remote = PeerRecord::new("Mandrake", "iroh://mandrake", "did:key:remote");
+        directory.upsert(remote.clone()).await.unwrap();
+        drop(directory);
+
+        let retired = retire_local_node_records(&path, &home, Some("did:key:old"))
+            .await
+            .unwrap();
+        assert_eq!(retired.len(), 1);
+        assert_eq!(retired[0].node_did, "did:key:old");
+        let left = load_peer_records(&path).await.unwrap();
+        assert_eq!(
+            left.iter().map(|r| r.node_did.clone()).collect::<Vec<_>>(),
+            vec!["did:key:remote".to_string()]
+        );
+        let reopened = PeerDirectory::load(&path).await.unwrap();
+        assert!(reopened.pending_removals().is_empty());
+        assert!(reopened.retired_enrollment_digests().is_empty());
     }
 
     #[tokio::test]

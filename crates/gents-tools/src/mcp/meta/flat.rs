@@ -36,9 +36,9 @@ pub(crate) fn presented_tool_names(remote: &RemoteTools, allowed: &[String]) -> 
     let mut names = Vec::new();
     let mut discovery = false;
     for service in &remote.services {
-        if !allowed.contains(&service.mcp_service_id) || service.tool_names.is_empty() {
+        let Some(service) = remote.selected_service(&service.mcp_service_id, allowed) else {
             continue;
-        }
+        };
         match service.style {
             RemoteToolStyle::Discovery => discovery = true,
             RemoteToolStyle::Flat => names.extend(

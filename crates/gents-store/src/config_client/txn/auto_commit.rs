@@ -445,9 +445,9 @@ impl ConfigAccess {
                     completed: false,
                 };
                 #[cfg(any(test, feature = "test-fixtures"))]
-                if let Some((reached, release)) = native_pause {
-                    reached.notify_one();
-                    release.notified().await;
+                if let Some(pause) = native_pause {
+                    pause.reached.notify_one();
+                    pause.release.notified().await;
                 }
                 let started = Instant::now();
                 native_completion.started = true;

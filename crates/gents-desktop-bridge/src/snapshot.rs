@@ -97,6 +97,13 @@ async fn build_bootstrap_summary_raw(
         diagnostics_hint: crate::logging::diagnostics_hint(&dirs::home_dir().unwrap_or_default()),
         node_home_exists,
         client_state_exists: desktop_paths.client_state_exists(),
+        local_setup_unfinished: node_home.is_some_and(|home| {
+            gents_desktop_core::home_reset::local_setup_unfinished(
+                home,
+                init.as_ref().map(|config| config.node_did.as_str()),
+                peer_records.iter().map(|peer| peer.node_did.as_str()),
+            )
+        }),
         saved_peers: saved_peer_views(&peer_records),
     })
 }

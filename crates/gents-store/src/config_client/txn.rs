@@ -30,6 +30,8 @@ use super::{
 pub use apply_txn::ConfigApplyTxn;
 pub use cursor::ConfigCursor;
 pub use gate::LocalConfigAccess;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use fault_injection::NativeOperationObservation;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 pub use owner_staged::CallbackAgentSelection;
 pub(super) use owner_staged::OwnerStagedRevocations;

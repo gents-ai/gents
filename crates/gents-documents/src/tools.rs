@@ -278,6 +278,35 @@ pub struct RemoteTools {
     pub services: Vec<RemoteServiceTools>,
 }
 
+impl RemoteTools {
+    /// The single admission predicate for one service's selection: the one
+    /// place that decides whether a selection may be presented to a model or
+    /// invoked. A missing, duplicated or unpermitted service reference, an
+    /// empty `tool_names`, and a background name outside `tool_names` each
+    /// select nothing, in either presentation style.
+    pub fn selected_service(
+        &self,
+        mcp_service_id: &str,
+        allowed_mcp_service_ids: &[String],
+    ) -> Option<&RemoteServiceTools> {
+        let mut matches = self
+            .services
+            .iter()
+            .filter(|service| service.mcp_service_id == mcp_service_id);
+        let service = matches.next()?;
+        (matches.next().is_none()
+            && allowed_mcp_service_ids
+                .iter()
+                .any(|allowed| allowed == mcp_service_id)
+            && !service.tool_names.is_empty()
+            && service
+                .background_tool_names
+                .iter()
+                .all(|name| service.tool_names.contains(name)))
+        .then_some(service)
+    }
+}
+
 /// Tool selection and presentation for one MCP service.
 /// Service connectivity remains owned by the existing MCP service document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]

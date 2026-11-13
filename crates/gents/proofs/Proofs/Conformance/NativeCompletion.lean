@@ -84,6 +84,8 @@ where
     "{\"caller\":" ++ jsonString (callerName state.caller) ++
     ",\"native_outstanding\":" ++ toString state.nativeOutstanding ++
     ",\"poisoned\":" ++ boolJson state.poisoned ++
+    ",\"caller_abandonment_observed\":" ++
+      boolJson (callerAbandonmentObserved state) ++
     ",\"registry_abandoned\":" ++ boolJson state.registryAbandoned ++
     ",\"rollback_returned\":" ++ boolJson state.rollbackReturned ++
     ",\"gate_held\":" ++ boolJson state.gateHeld ++
