@@ -1157,6 +1157,7 @@ pub struct LeanContractSnapshot {
     pub goal_client_receipt_cases: Vec<LeanGoalClientReceiptCase>,
     pub plugin_approval_cases: Vec<LeanPluginApprovalCase>,
     pub task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
+    #[serde(deserialize_with = "required_nullable")]
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
