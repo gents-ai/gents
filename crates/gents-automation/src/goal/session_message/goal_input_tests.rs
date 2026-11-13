@@ -7,6 +7,7 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_session::session::message::plan::{plan, target_goal_assignment};
+use gents_session::session::message::MessageContent;
 use gents_session::session::message::{stage_planned_write_in_txn, RenderedBody};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
@@ -203,11 +204,13 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 &SessionGoals,
                 &cause,
                 &target,
-                RenderedBody {
-                    content: "Follow up".into(),
-                    goal: None,
+                MessageContent {
+                    rendered: RenderedBody {
+                        content: "Follow up".into(),
+                        goal: None,
+                    },
+                    title: None,
                 },
-                None,
                 false,
                 &signer,
             )
@@ -230,11 +233,13 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 &SessionGoals,
                 &cause,
                 &target,
-                RenderedBody {
-                    content: "Follow up".into(),
-                    goal: None,
+                MessageContent {
+                    rendered: RenderedBody {
+                        content: "Follow up".into(),
+                        goal: None,
+                    },
+                    title: None,
                 },
-                None,
                 false,
                 &signer,
             )

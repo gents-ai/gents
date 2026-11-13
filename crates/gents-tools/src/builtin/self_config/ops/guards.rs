@@ -62,7 +62,7 @@ pub fn guard_tools_keep_control(
     Ok(())
 }
 
-pub async fn guard_compaction_choice_in_txn(
+pub(crate) async fn guard_compaction_choice_in_txn(
     txn: &ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
     anchor: &AgentAnchor,

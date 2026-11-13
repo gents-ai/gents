@@ -1844,11 +1844,13 @@ pub async fn install_prepared_document_graph(
         access,
         owner,
         stages,
-        policy,
+        DocumentGraphPolicy {
+            drift: policy,
+            profiles: profile_policy,
+        },
         home,
         consent,
         prepared.node_binding.clone(),
-        profile_policy,
     )
     .await?;
     Ok((assemble_document_graph_report(prepared, reports)?, plugins))
@@ -2053,9 +2055,11 @@ pub async fn apply_hosted_document_graph(
             &graph.identities,
             graph.documents.clone(),
             &graph.records,
-            policy,
+            DocumentGraphPolicy {
+                drift: policy,
+                profiles: profile_policy,
+            },
             graph.node_binding.as_ref(),
-            profile_policy,
         )
         .await
         .map_err(PackChangeError::into_anyhow);
@@ -2082,9 +2086,11 @@ pub async fn apply_hosted_document_graph(
         dependencies,
         dependency_documents.to_vec(),
         dependency_records,
-        policy,
+        DocumentGraphPolicy {
+            drift: policy,
+            profiles: profile_policy,
+        },
         graph.node_binding.as_ref(),
-        profile_policy,
     )
     .await
     .map_err(PackChangeError::into_anyhow)?;
@@ -2153,15 +2159,20 @@ pub(super) async fn stage_document_plugins(
     ))
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct DocumentGraphPolicy {
+    pub(super) drift: DriftPolicy,
+    pub(super) profiles: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+}
+
 pub(super) async fn apply_document_graph_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     identities: &[PackIdentity],
     documents: Vec<Vec<gents_documents::DesiredStateApplyDocument>>,
     records: &[StageRecord],
-    policy: DriftPolicy,
+    policy: DocumentGraphPolicy,
     node_binding: Option<&gents_documents::ConfigurationNodeBinding>,
-    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<Vec<InstallReport>, PackChangeError> {
     if records.len() != identities.len() {
         return Err(anyhow::anyhow!("pack stage records do not match the document graph").into());
@@ -2194,11 +2205,11 @@ pub(super) async fn apply_document_graph_in_txn(
                 owner,
                 identity,
                 documents,
-                policy,
+                policy.drift,
                 node_binding,
                 record.source.as_ref(),
                 record.variables.as_ref(),
-                profile_policy,
+                policy.profiles,
                 &record.installer_root_tools,
             )
             .await?,
@@ -2212,11 +2223,10 @@ pub(super) async fn install_document_graph(
     access: &ConfigAccess,
     owner: &str,
     stages: Vec<DocumentPackStage>,
-    policy: DriftPolicy,
+    policy: DocumentGraphPolicy,
     home: Option<&Path>,
     consent: bool,
     node_binding: Option<gents_documents::ConfigurationNodeBinding>,
-    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<
     (
         Vec<InstallReport>,
@@ -2377,7 +2387,7 @@ pub(super) async fn install_document_graph(
                         documents,
                         records,
                         policy,
-                        node_binding.as_ref(), profile_policy,
+                        node_binding.as_ref(),
                     )
                     .await
                 })
@@ -2460,11 +2470,13 @@ pub async fn install_documents_with_plugins(
         access,
         owner,
         vec![stage],
-        policy,
+        DocumentGraphPolicy {
+            drift: policy,
+            profiles: profile_policy,
+        },
         home,
         consent,
         None,
-        profile_policy,
     )
     .await?;
     Ok((

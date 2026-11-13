@@ -1141,13 +1141,6 @@ impl RequestLifecycle {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-}
-
-#[cfg(test)]
 #[test]
 fn the_executed_binding_round_trips_through_defradb_mutation_parser() {
     for generation in [Some(4), None] {

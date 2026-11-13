@@ -2156,7 +2156,7 @@ enum Entry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Fault {
+enum Failure {
     CommitConflictText,
     CommitConflictUnreceipted,
     CommitConflictAborted,
@@ -2183,11 +2183,11 @@ struct FakeTxnState {
     discarded_ids: Arc<Mutex<Vec<String>>>,
     stage_observed: Arc<Notify>,
     discard_observed: Arc<Notify>,
-    faults: Arc<Vec<Fault>>,
+    faults: Arc<Vec<Failure>>,
 }
 
 impl FakeTxnState {
-    fn new(faults: Vec<Fault>) -> Self {
+    fn new(faults: Vec<Failure>) -> Self {
         Self {
             next_id: Arc::new(AtomicUsize::new(0)),
             active_ids: Arc::new(Mutex::new(RapidHashSet::new())),
@@ -2231,19 +2231,19 @@ async fn commit_transaction(
     }
     lock(&state.committed_ids).push(id.clone());
     match id.parse().ok().and_then(|id: usize| state.faults.get(id)) {
-        Some(Fault::CommitConflictText) => (
+        Some(Failure::CommitConflictText) => (
             StatusCode::CONFLICT,
             "transaction conflict; please retry the transaction",
         ),
-        Some(Fault::CommitConflictAborted) => (
+        Some(Failure::CommitConflictAborted) => (
             StatusCode::CONFLICT,
             r#"{"error":"transaction conflict. Please retry","outcome":"transaction_conflict_aborted"}"#,
         ),
-        Some(Fault::CommitConflictUnreceipted) => (
+        Some(Failure::CommitConflictUnreceipted) => (
             StatusCode::CONFLICT,
             r#"{"error":"transaction conflict. Please retry"}"#,
         ),
-        Some(Fault::CommitServerError) => {
+        Some(Failure::CommitServerError) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "storage unavailable")
         }
         _ => (StatusCode::OK, ""),
@@ -2265,7 +2265,7 @@ async fn discard_transaction(
 }
 
 async fn fake_transaction_server(
-    faults: Vec<Fault>,
+    faults: Vec<Failure>,
 ) -> (String, FakeTxnState, tokio::task::JoinHandle<()>) {
     let state = FakeTxnState::new(faults);
     let app = Router::new()
@@ -2309,7 +2309,7 @@ where
 type ReplayObserved = gents_lean_vocab::families::transaction_replay_http::Observed<Outcome>;
 
 async fn replay_http_scenario(
-    scenario: &gents_lean_vocab::families::transaction_replay_http::Scenario<Entry, Fault>,
+    scenario: &gents_lean_vocab::families::transaction_replay_http::Scenario<Entry, Failure>,
 ) -> ReplayObserved {
     let (endpoint, state, server) = fake_transaction_server(scenario.faults.clone()).await;
     let access = if scenario.held_signer {
@@ -2332,15 +2332,15 @@ async fn replay_http_scenario(
             .ok()
             .and_then(|id: usize| faults.get(id).copied());
         let result: Result = match fault {
-            Some(Fault::CallbackConflict) => Err(super::retry::transaction_conflict(
+            Some(Failure::CallbackConflict) => Err(super::retry::transaction_conflict(
                 crate::config_client::write_telemetry::ConflictSource::StructuredCode,
             )
             .into()),
-            Some(Fault::CallbackStorageFault) => Err(super::retry::transaction_storage_failure(
+            Some(Failure::CallbackStorageFault) => Err(super::retry::transaction_storage_failure(
                 crate::config_client::ConfigClientError::InjectedReadStorageFailure,
             )
             .into()),
-            Some(Fault::CallbackRejection) => Err("stale domain state".into()),
+            Some(Failure::CallbackRejection) => Err("stale domain state".into()),
             _ => Ok(()),
         };
         Box::pin(async move { result })
@@ -2400,7 +2400,7 @@ async fn replay_http_scenario(
 #[tokio::test]
 async fn http_transaction_replay_matches_the_lean_model() {
     let cases = tokio::task::spawn_blocking(
-        gents_lean_vocab::families::transaction_replay_http::cases::<Entry, Fault, Outcome>,
+        gents_lean_vocab::families::transaction_replay_http::cases::<Entry, Failure, Outcome>,
     )
     .await
     .unwrap();

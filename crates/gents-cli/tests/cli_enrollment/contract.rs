@@ -713,7 +713,7 @@ impl ReadinessProbe {
                 .ok()
                 .and_then(|response| highest_commit(response.pointer("/data/_commits")));
             let client_heads = gents_store::graphql::graphql_with_transaction_retry(
-                &node,
+                node,
                 &heads,
                 "test.readiness_heads",
             )

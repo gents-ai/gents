@@ -8,6 +8,11 @@ use gents_store::config_client::ConfigAccess;
 
 use super::{AgentMessageDelivery, Delivery, RenderedBody, SessionMessageGoals};
 
+pub struct MessageContent<'a> {
+    pub rendered: RenderedBody,
+    pub title: Option<&'a str>,
+}
+
 pub enum PlannedWrite {
     Request {
         create: gents_protocol::request_admission::AgentRequestCreate,
@@ -141,8 +146,7 @@ pub async fn plan(
     goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
-    rendered: RenderedBody,
-    title: Option<&str>,
+    content: MessageContent<'_>,
     interrupt: bool,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) -> Result<Result<Plan, String>> {
@@ -151,8 +155,7 @@ pub async fn plan(
         goals,
         cause,
         target,
-        rendered,
-        title,
+        content,
         if interrupt {
             AgentMessageDelivery::Interrupt
         } else {
@@ -168,11 +171,11 @@ pub async fn plan_with_delivery(
     goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
-    rendered: RenderedBody,
-    title: Option<&str>,
+    content: MessageContent<'_>,
     delivery: AgentMessageDelivery,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) -> Result<Result<Plan, String>> {
+    let MessageContent { rendered, title } = content;
     let request_id = uuid::Uuid::new_v4().to_string();
     if target.node_did != cause.caller_node_did {
         return Ok(Err(

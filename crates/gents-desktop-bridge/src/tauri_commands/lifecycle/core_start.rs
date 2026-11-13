@@ -29,7 +29,7 @@ pub(super) type ClientStartDelivery<T> = (anyhow::Result<T>, ClientLifecycleGuar
 
 pub(super) type ClientStartFailure = (
     BridgeError,
-    Option<gents_protocol::operations::install_repair::IncompatibleStore>,
+    Option<Box<gents_protocol::operations::install_repair::IncompatibleStore>>,
 );
 
 /// Open the embedded node on a large-stack OS thread without blocking a Tokio
@@ -152,7 +152,7 @@ pub(super) fn classify_client_start_error(
     match gents_store::local::storage_backend::incompatible_store(error.as_ref(), node_data_dir) {
         Some(store) => (
             BridgeError::new(BridgeErrorCode::IncompatibleLocalStore, store.to_string()),
-            Some(store),
+            Some(Box::new(store)),
         ),
         None => (
             BridgeError::untyped(

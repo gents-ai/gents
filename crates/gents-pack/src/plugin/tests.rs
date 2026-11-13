@@ -1,13 +1,15 @@
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub mod call_bound;
 #[cfg(test)]
 #[cfg(target_os = "macos")]
 mod trap_handler;
 
+use super::test_fixtures::filled_output_wat;
+#[cfg(test)]
 use super::test_fixtures::{
-    build_plugin_afb, build_plugin_pack, filled_output_wat, ECHO_WAT, IMPORTING_WAT,
-    PLUGIN_ARTIFACT,
+    build_plugin_afb, build_plugin_pack, ECHO_WAT, IMPORTING_WAT, PLUGIN_ARTIFACT,
 };
+#[cfg(test)]
 use super::*;
 
 #[test]
@@ -300,6 +302,7 @@ fn a_wide_declared_manifold_is_still_narrowed_to_this_runners_ceiling() {
     assert_eq!(runner.manifold, Manifold::sealed());
 }
 
+#[cfg(test)]
 fn source_only_afb(name: &str, language: &str, entry: &str, body: &[u8]) -> Vec<u8> {
     use afterburner_afb::manifest::{Format, Manifest, Package, Runtime};
     use afterburner_afb::pack::Builder;
@@ -339,6 +342,7 @@ fn source_only_afb(name: &str, language: &str, entry: &str, body: &[u8]) -> Vec<
     bytes
 }
 
+#[cfg(test)]
 fn plugin_named(name: &str, language: &str) -> PackPlugin {
     PackPlugin {
         name: name.to_owned(),
@@ -480,6 +484,7 @@ fn a_call_over_the_default_output_cap_succeeds_once_the_declared_limit_covers_it
     );
 }
 
+#[cfg(test)]
 fn overflow_stdout_capture_pipe_wat(chunks: u32) -> String {
     const CHUNK_BYTES: u32 = 65536;
     let iovec_ptr = CHUNK_BYTES;
@@ -717,6 +722,7 @@ fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
     assert!(crate::pack::tool_instructions("lint", &oversized).is_err());
 }
 
+#[cfg(test)]
 fn limit_axis(limits: &mut crate::pack::PluginLimits, axis: usize) -> &mut Option<u32> {
     match axis {
         0 => &mut limits.memory_mib,
@@ -772,6 +778,7 @@ fn limit_budget_follows_the_lean_model() {
     });
 }
 
+#[cfg(all(test, unix))]
 fn path_open_probe(path: &str, create: bool) -> String {
     let flags = if create { 1 } else { 0 };
     let rights = if create { 64 } else { 2 };
@@ -828,6 +835,7 @@ fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
 
 // ---- the `gents::run_script` host import -----------------------------------
 
+#[cfg(test)]
 fn importing_plugin(declares: bool) -> PackPlugin {
     PackPlugin {
         name: "plugin".into(),
@@ -845,6 +853,7 @@ fn importing_plugin(declares: bool) -> PackPlugin {
     }
 }
 
+#[cfg(test)]
 fn importing_runner(declares: bool) -> Result<PluginRunner> {
     PluginRunner::compile(
         &build_plugin_afb(IMPORTING_WAT),
@@ -943,6 +952,7 @@ fn an_undeclared_plugin_that_imports_run_script_does_not_start() {
 
 /// Calls `run_script` once with its stdin, then again with an invalid pointer,
 /// and writes whatever `read_result` returns after the second call.
+#[cfg(test)]
 const TWICE_WAT: &str = r#"(module
   (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))

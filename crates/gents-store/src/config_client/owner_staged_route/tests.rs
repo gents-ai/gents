@@ -470,7 +470,7 @@ fn error_outcome(result: &Result<(), ConfigClientError>, doc: &str) -> &'static 
 async fn owner_staged_route_replays_generated_cases_over_signed_http() {
     let f = Fixture::start().await;
     let mut denied_bodies: Vec<(String, StatusCode, Value)> = Vec::new();
-    for case in generated(|| gents_lean_vocab::families::owner_staged_pairing::cases()).await {
+    for case in generated(gents_lean_vocab::families::owner_staged_pairing::cases).await {
         let input = &case.input;
         let key = f.requester(&input.requester).clone();
         let doc = f.document(&input.document).to_owned();
@@ -526,7 +526,7 @@ async fn owner_staged_route_replays_generated_cases_over_signed_http() {
     // `decideCommand`: the command must address this endpoint, the bearer
     // must be the signer and the signature valid.
     let user = f.user.clone();
-    for case in generated(|| gents_lean_vocab::families::owner_staged_route_commands::cases()).await {
+    for case in generated(gents_lean_vocab::families::owner_staged_route_commands::cases).await {
         let input = &case.input;
         let mut command = f.command(user.as_ref(), &f.route, true).await;
         if !input.authority_matches {
@@ -608,7 +608,7 @@ async fn owner_staged_route_replays_generated_cases_over_signed_http() {
 #[tokio::test]
 async fn http_apply_orders_revocations_before_and_grants_after_commit() {
     let f = Fixture::start().await;
-    for case in generated(|| gents_lean_vocab::families::owner_staged_http_apply::cases()).await {
+    for case in generated(gents_lean_vocab::families::owner_staged_http_apply::cases).await {
         let input = &case.input;
         let key = f.requester(&input.requester).clone();
         let direction = input.direction.as_str();
@@ -921,7 +921,7 @@ async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
             .is_err(),
         "a second local row for a genuine Agent must be refused by its unique index"
     );
-    for case in generated(|| gents_lean_vocab::families::owner_staged_agent_rows::cases()).await {
+    for case in generated(gents_lean_vocab::families::owner_staged_agent_rows::cases).await {
         let input = &case.input;
         let owner = match input.path.as_str() {
             "forged_agent_row" => &victim,
@@ -1093,7 +1093,7 @@ async fn owner_staged_targets_follow_their_operation_kind() {
     let outsider = did(f.outsider.did());
     let sibling_did = did(sibling.did());
     for (transport, cursor) in ["http", "embedded"].into_iter().zip(&documents) {
-        for case in generated(|| gents_lean_vocab::families::owner_staged_targets::cases()).await {
+        for case in generated(gents_lean_vocab::families::owner_staged_targets::cases).await {
             let input = &case.input;
             let (change, subject, collection, doc) = match input.path.as_str() {
                 "event_cursor_rebind" => (
@@ -1243,7 +1243,7 @@ async fn host_access_stages_only_controlled_cursor_writers() {
     )
     .unwrap();
     let foreign_access = ConfigAccess::local_as(f.node.clone(), requester_did.clone());
-    for case in generated(|| gents_lean_vocab::families::owner_staged_host_access::cases()).await {
+    for case in generated(gents_lean_vocab::families::owner_staged_host_access::cases).await {
         let input = &case.input;
         let target = did(match input.target.as_str() {
             "sibling" => sibling.did(),

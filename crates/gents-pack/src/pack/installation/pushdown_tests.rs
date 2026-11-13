@@ -429,7 +429,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
             observed.push(
                 gents_lean_vocab::families::pack_placement_readers_readers::ReaderObservation {
                     actor: (*actor).to_owned(),
-                    read: readable(*actor, access.clone()).await,
+                    read: readable(actor, access.clone()).await,
                 },
             );
         }

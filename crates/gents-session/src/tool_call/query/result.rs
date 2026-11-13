@@ -5,8 +5,6 @@ use gents_protocol::output::{
     StreamPayload, ToolResultPart, TranscriptMessage,
 };
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
-#[cfg(test)]
-use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -1119,9 +1117,4 @@ fn verify_exact_call_identity(
         tool_result.call_id
     );
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }

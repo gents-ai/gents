@@ -11,9 +11,7 @@ use crate::builtin::self_config::{
     reselection_keeps_grants, OperatorGrants,
 };
 use crate::native::CommandNetworkMode;
-use gents_documents::patch::{
-    apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
-};
+use gents_documents::patch::{apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget};
 use gents_lean_vocab::families::contracts_self_config_case::{
     BackendWire, FieldValueWire, SelfConfigCaseInput, SelfConfigCaseOutput,
 };

@@ -128,7 +128,7 @@ pub struct BridgeError {
     pub retryable: bool,
     pub endpoint: Option<String>,
     pub operation_code: Option<String>,
-    pub next_call: Option<BridgeNextCall>,
+    pub next_call: Option<Box<BridgeNextCall>>,
     #[serde(skip)]
     #[ts(skip)]
     transport_source: Option<std::sync::Arc<reqwest::Error>>,
@@ -167,7 +167,7 @@ impl BridgeError {
     ) -> Self {
         Self {
             operation_code: Some(operation_code.to_owned()),
-            next_call: Some(next_call.into()),
+            next_call: Some(Box::new(next_call.into())),
             ..Self::new(code, message)
         }
     }

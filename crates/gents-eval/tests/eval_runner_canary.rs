@@ -3,17 +3,22 @@ use gents::support;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gents::eval::{load_trials, load_verdicts, Anchor, OutcomeKind, ProviderReason, TrialRecord};
+#[cfg(feature = "live-e2e")]
+use gents::eval::Anchor;
+use gents::eval::{load_trials, load_verdicts, OutcomeKind, ProviderReason, TrialRecord};
 use gents::DocumentRuntimeOptions;
 use gents_documents::apply_desired_state_plan;
+use gents_documents::EvalSplit;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents_documents::{EvalSplit, InferenceBackend, InferenceProfile};
+#[cfg(feature = "live-e2e")]
+use gents_documents::{InferenceBackend, InferenceProfile};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
 use gents_eval::runner::{
-    freeze_refused, run, Capture, CaptureResult, CellRequest, CellSource, RunOptions, RunRequest,
-    TrialExecutor, TrialLocator,
+    freeze_refused, run, Capture, CellRequest, CellSource, RunOptions, RunRequest,
 };
+#[cfg(feature = "live-e2e")]
+use gents_eval::runner::{CaptureResult, TrialExecutor, TrialLocator};
 use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -25,6 +30,7 @@ const SOLO_MARKER: &str = "canary-solo";
 const REPORT_MARKER: &str = "canary-report";
 const CONFIRM_MARKER: &str = "canary-confirm";
 const CANARY_ITEM_SDL: &str = "type CanaryItem {\n  item_id: String\n  label: String\n}\n";
+#[cfg(feature = "live-e2e")]
 const SEED_MARKER: &str = "Seeded item: wh-1";
 const SEED_ITEM_SDL: &str = "type SeedItem {\n  label: String\n}\n";
 const QUIET_ITEM_SDL: &str = "type QuietItem {\n  label: String\n}\n";
@@ -993,6 +999,7 @@ fn quiet_seed_definition_document(owner: &str, definition_id: &str, schemas: &[&
         }],
     })
 }
+#[cfg(feature = "live-e2e")]
 fn seed_definition_document(owner: &str) -> Value {
     json!({
         "definition_id": "seed",
@@ -1095,6 +1102,7 @@ fn trial<'a>(trials: &'a [TrialRecord], case_id: &str) -> &'a TrialRecord {
         .unwrap_or_else(|| panic!("no {case_id} trial in {trials:#?}"))
 }
 
+#[cfg(feature = "live-e2e")]
 fn locator(trial: &TrialRecord) -> TrialLocator {
     TrialLocator {
         trial_node_did: trial.identity.trial_node_did.clone(),
@@ -1102,6 +1110,7 @@ fn locator(trial: &TrialRecord) -> TrialLocator {
         home_hint: trial.identity.home_hint.clone(),
     }
 }
+#[cfg(feature = "live-e2e")]
 fn anchors(trials: &[TrialRecord]) -> Vec<(String, Anchor)> {
     let mut anchors = trials
         .iter()
@@ -1120,6 +1129,7 @@ fn anchors(trials: &[TrialRecord]) -> Vec<(String, Anchor)> {
     anchors.sort_by(|left, right| left.0.cmp(&right.0));
     anchors
 }
+#[cfg(feature = "live-e2e")]
 fn evidence_records(runs_dir: &Path, run_id: &str, trials: &[TrialRecord]) -> Vec<(String, Value)> {
     let mut records = trials
         .iter()
