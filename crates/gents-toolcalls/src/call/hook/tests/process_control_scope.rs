@@ -3,46 +3,43 @@ use super::*;
 #[cfg(unix)]
 #[tokio::test]
 async fn unowned_live_process_group_keeps_the_retained_owner_record() {
-    use gents_lean_vocab::lean_process_stop_cases;
     use gents_session::exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
 
-    // The current test process proves the group is live; the impossible pid
-    // models a recorded leader that exited or was reused. No signal is sent.
-    let pgid = unsafe { libc::getpgid(0) };
-    assert!(pgid > 0);
-    let identity = ProcessIdentity {
-        pid: i32::MAX,
-        pgid,
-        start: "gone-leader".to_owned(),
-    };
-    let observed = identity.observe();
-    let case = lean_process_stop_cases()
-        .iter()
-        .find(|case| case.after == observed.as_str())
-        .expect("Lean has a process observation case");
-    assert_eq!(observed, ProcessObservation::Unowned);
-    assert!(
-        case.retain_record,
-        "Lean requires unverified ownership to persist"
-    );
-    assert_eq!(observed.retain_process_record(), case.retain_record);
+    for case in gents_lean_vocab::families::process_stop_gone_leader::cases::<String, String>() {
+        // The current test process proves the group is live; the impossible pid
+        // models a recorded leader that exited or was reused. No signal is sent.
+        let pgid = unsafe { libc::getpgid(0) };
+        assert!(pgid > 0);
+        let identity = ProcessIdentity {
+            pid: i32::MAX,
+            pgid,
+            start: "gone-leader".to_owned(),
+        };
+        let observed = identity.observe();
+        assert_eq!(observed, ProcessObservation::Unowned);
+        assert_eq!(observed.as_str(), case.input.after, "{}", case.input.name);
 
-    let registry = BackgroundExecutionRegistry::default();
-    registry
-        .process_records
-        .write(&ProcessRecord {
-            tool_call_id: "stale-call".to_owned(),
-            tool_call_doc_id: "stale-doc".to_owned(),
-            identity,
-        })
-        .unwrap();
-    registry
-        .release_process_record("stale-call", "stale-doc")
-        .await;
-    assert!(registry.process_record("stale-call", "stale-doc").is_some());
-    registry.forget_process_record("stale-call", "stale-doc");
-    assert!(registry.process_record("stale-call", "stale-doc").is_some());
-    registry.process_records.remove("stale-doc");
+        let registry = BackgroundExecutionRegistry::default();
+        registry
+            .process_records
+            .write(&ProcessRecord {
+                tool_call_id: "stale-call".to_owned(),
+                tool_call_doc_id: "stale-doc".to_owned(),
+                identity,
+            })
+            .unwrap();
+        registry
+            .release_process_record("stale-call", "stale-doc")
+            .await;
+        let retain_record = registry.process_record("stale-call", "stale-doc").is_some();
+        assert_eq!(retain_record, observed.retain_process_record());
+        case.check(
+            gents_lean_vocab::families::process_stop_gone_leader::RetainOutput { retain_record },
+        );
+        registry.forget_process_record("stale-call", "stale-doc");
+        assert!(registry.process_record("stale-call", "stale-doc").is_some());
+        registry.process_records.remove("stale-doc");
+    }
 }
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_store::identity::NodeIdentity;
@@ -778,63 +775,70 @@ mod job_control {
 
     #[tokio::test]
     async fn model_cancel_keeps_running_when_native_stop_is_unverified() {
-        let expected = gents_lean_vocab::lean_process_stop_cases()
-            .iter()
-            .find(|case| case.live_evidence == "spawned_unverified" && case.worker_released)
-            .unwrap();
-        let hook = JobHook::new().await;
-        let lifecycle = {
-            let mut fixtures = hook_execution_fixtures().lock().await;
-            let fixture = fixtures
-                .get_mut(&hook_execution_fixture_key(&hook.owner, &hook.request_id))
+        for case in gents_lean_vocab::families::process_stop_model_cancel_unverified::cases::<
+            gents_session::exec::CancelProcessReply,
+            String,
+            String,
+            String,
+        >() {
+            let hook = JobHook::new().await;
+            let lifecycle = {
+                let mut fixtures = hook_execution_fixtures().lock().await;
+                let fixture = fixtures
+                    .get_mut(&hook_execution_fixture_key(&hook.owner, &hook.request_id))
+                    .unwrap();
+                let turn = fixture.turn;
+                fixture.turn += 1;
+                publish_accepted_on_claimed_request(
+                    hook.node.clone(),
+                    &mut fixture.lifecycle,
+                    &hook.owner.node_did,
+                    turn,
+                    "bash",
+                    "unverified-native",
+                    json!({}),
+                    AwaitMode::Background,
+                    true,
+                )
+                .await
+                .unwrap()
+            };
+            let doc = lifecycle.doc_id().unwrap().to_owned();
+            let token = tokio_util::sync::CancellationToken::new();
+            let reservation = hook
+                .executions
+                .reserve("unverified-native".into(), doc, token.clone())
                 .unwrap();
-            let turn = fixture.turn;
-            fixture.turn += 1;
-            publish_accepted_on_claimed_request(
-                hook.node.clone(),
-                &mut fixture.lifecycle,
-                &hook.owner.node_did,
-                turn,
-                "bash",
-                "unverified-native",
-                json!({}),
-                AwaitMode::Background,
-                true,
-            )
-            .await
-            .unwrap()
-        };
-        let doc = lifecycle.doc_id().unwrap().to_owned();
-        let token = tokio_util::sync::CancellationToken::new();
-        let reservation = hook
-            .executions
-            .reserve("unverified-native".into(), doc, token.clone())
-            .unwrap();
-        let owner = hook.owner.clone();
-        let mut control = tokio::spawn(async move {
-            invoke(
-                &owner,
-                "model-unverified",
-                "cancel_process",
-                r#"{"tool_call_id":"unverified-native"}"#,
-            )
-            .await
-        });
-        tokio::select! {
-            result = &mut control => panic!("model control ended before cancellation: {result:?}"),
-            _ = token.cancelled() => {}
+            let owner = hook.owner.clone();
+            let mut control = tokio::spawn(async move {
+                invoke(
+                    &owner,
+                    "model-unverified",
+                    "cancel_process",
+                    r#"{"tool_call_id":"unverified-native"}"#,
+                )
+                .await
+            });
+            tokio::select! {
+                result = &mut control => panic!("model control ended before cancellation: {result:?}"),
+                _ = token.cancelled() => {}
+            }
+            tokio::time::pause();
+            tokio::time::advance(std::time::Duration::from_secs(10)).await;
+            tokio::time::resume();
+            let result = control.await.unwrap();
+            case.check(
+                gents_lean_vocab::families::process_stop_model_cancel_unverified::ReplyOutput {
+                    cancel_reply: serde_json::from_value(result["status"].clone()).unwrap(),
+                    durable_state: hook.stored("unverified-native").await["lifecycle_state"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                },
+            );
+            drop(reservation);
+            hook.finish().await;
         }
-        tokio::time::pause();
-        tokio::time::advance(std::time::Duration::from_secs(10)).await;
-        tokio::time::resume();
-        let result = control.await.unwrap();
-        assert_eq!(result["status"], "unverified");
-        assert_eq!(
-            hook.stored("unverified-native").await["lifecycle_state"],
-            expected.durable_state
-        );
-        drop(reservation);
-        hook.finish().await;
     }
 
     #[tokio::test]

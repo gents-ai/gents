@@ -352,11 +352,79 @@ def vocabularyCoverage : List CoverageEntry :=
       "family"
       "managed_exec_cancel_reply_vocabulary")
       "managed-exec" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "process_stop_cases"
-      "ProcessStopCases"
-      "Each generated verdict is checked against the native mapping, and the reachable observations (a recorded running group, the same group after the owner's stop, a reused start identity) are produced by real test-owned process groups. A group that survives SIGKILL cannot be constructed on a test host, so stillRunning is checked only through the mapping.")
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_host")
       "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_live_settlement")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "family"
+      "process_stop_owned_process"
+      "Real test-owned process groups produce the reachable observations (a recorded running group, the same group after the owner's stop, a reused start identity). A group that survives SIGKILL cannot be constructed on a test host, so stillRunning is checked only through process_stop_host.")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_unrecorded_cancel")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_client_unverified")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_client_released_native")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_model_cancel_unverified")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_approval_wait_stop")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_unverified_worker")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_unverified_foreground")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_gone_leader")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_later_stop")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_timeout_before_cleanup")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_interrupt_sweep")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_terminal_write_failure")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_failed_handoff_receipt")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_pending_failure")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_early_confirmation")
+      "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
       "tool_execution_failure_class_vocabulary")
