@@ -65,6 +65,7 @@ import type { InstalledPacksView } from "./InstalledPacksView.js";
 import type { InterruptRequestResult } from "./InterruptRequestResult.js";
 import type { JobControlOutcome } from "./JobControlOutcome.js";
 import type { JoinHistoryView } from "./JoinHistoryView.js";
+import type { JoinInvitationView } from "./JoinInvitationView.js";
 import type { JoinMemberView } from "./JoinMemberView.js";
 import type { JoinRequestDecideRequest } from "./JoinRequestDecideRequest.js";
 import type { JoinRequestDecisionView } from "./JoinRequestDecisionView.js";
@@ -205,6 +206,7 @@ export type DesktopCommands = {
   desktop_interrupt_request: { args: { request: DesktopInterruptRequest }; result: InterruptRequestResult };
   desktop_job_control: { args: { request: DesktopJobControlRequest }; result: JobControlOutcome };
   desktop_join_history_read: { args: { nodeDid: string }; result: JoinHistoryView };
+  desktop_join_invitation_create: { args: { nodeDid: string }; result: JoinInvitationView };
   desktop_join_members_list: { args: { nodeDid: string }; result: Array<JoinMemberView> };
   desktop_join_request_decide: { args: { request: JoinRequestDecideRequest }; result: JoinRequestDecisionView };
   desktop_join_requests_list: { args: { nodeDid: string }; result: Array<JoinRequestView> };

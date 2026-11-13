@@ -198,13 +198,15 @@ describe("the tabs", () => {
 });
 
 describe("nothing shared yet", () => {
-  it("shows one empty state in place of the tabs", async () => {
+  it("shows one empty state in place of the tabs, under a way to invite", async () => {
     show("sharing-empty");
     const empty = await screen.findByTestId("sharing-empty");
     expect(empty.textContent).toContain("Nothing is shared yet.");
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByRole("region", { name: "Requests to join" })).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Create invitation",
+    ]);
   });
 });
 

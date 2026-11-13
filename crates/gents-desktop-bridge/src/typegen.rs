@@ -387,6 +387,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         JoinRequestDecideRequest,
         JoinRequestDecision,
         JoinRequestDecisionView,
+        JoinInvitationView,
         JoinMemberView,
         JoinHistoryState,
         JoinHistoryEntryView,

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BridgeInvokeError,
   type JoinHistoryView,
+  type JoinInvitationView,
   type JoinMemberView,
   type JoinRequestDecideRequest,
   type JoinRequestDecisionView,
@@ -66,6 +67,13 @@ const recorded = (
   ...overrides,
 });
 
+let minted = 0;
+/* a fresh token each time, valid as long as the runtime's status offer */
+const invitation = (expiresAt = lapsesIn(5 * 60)): JoinInvitationView => ({
+  link: `gents://invite/3vQB7B6MrGQZ${++minted}`,
+  expiresAt,
+});
+
 const tooOld = () =>
   new BridgeInvokeError({
     code: "unsupported",
@@ -89,6 +97,7 @@ function show({
     state: "approved",
     deliveryPending: false,
   })),
+  invite = vi.fn(async () => invitation()),
 }: {
   requests?: JoinRequestView[];
   members?: JoinMemberView[];
@@ -99,12 +108,14 @@ function show({
   clientDid?: string;
   initNodeDid?: string;
   decide?: (request: unknown) => Promise<JoinRequestDecisionView>;
+  invite?: (nodeDid: string) => Promise<JoinInvitationView>;
 } = {}) {
   withFlags({ sharing: true });
   let listed = requests;
   let active = members;
   let history = records;
   const api = {
+    createJoinInvitation: vi.fn(invite),
     listJoinRequests: vi.fn(async () => listed),
     listJoinMembers: vi.fn(async () => {
       if (olderRuntime) throw tooOld();
@@ -507,5 +518,75 @@ describe("the Sharing page", () => {
 
   it("isn't a page of its own", () => {
     expect(parseRoute("/sharing")).not.toEqual({ name: "sharing" });
+  });
+});
+
+describe("an invitation to ask to join", () => {
+  it("creates one for the node, shows its link to copy, and when it lasts", async () => {
+    const api = show({ requests: [] });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Create invitation" }),
+    );
+    expect(api.createJoinInvitation).toHaveBeenCalledWith(OWN);
+    const card = screen.getByRole("region", { name: "Invitation" });
+    const link = within(card).getByLabelText("Invitation link");
+    expect(link.textContent).toMatch(/^gents:\/\/invite\/3vQB7B6MrGQZ\d+$/);
+    expect(card.textContent).toContain("Invitation to Local Agent");
+    expect(card.textContent).toContain("can ask to join Local Agent until");
+    expect(card.textContent).toContain(
+      "It works for one node; you approve its request here.",
+    );
+    expect(within(card).getByRole("button", { name: "Copy link" })).toBeTruthy();
+  });
+
+  it("makes a fresh one on request, and closes with Done", async () => {
+    const api = show({ requests: [] });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Create invitation" }),
+    );
+    const first = screen.getByLabelText("Invitation link").textContent;
+    await userEvent.click(screen.getByRole("button", { name: "Create another" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Invitation link").textContent).not.toBe(first),
+    );
+    expect(api.createJoinInvitation).toHaveBeenCalledTimes(2);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.queryByLabelText("Invitation link")).toBeNull();
+    expect(screen.getByRole("button", { name: "Create invitation" })).toBeTruthy();
+  });
+
+  it("says when one has expired and can't be copied", async () => {
+    show({ requests: [], invite: async () => invitation(lapsesIn(-60)) });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Create invitation" }),
+    );
+    const card = screen.getByRole("region", { name: "Invitation" });
+    expect(card.textContent).toContain("This invitation expired");
+    expect(card.textContent).toContain("Create another to send.");
+    expect(
+      (within(card).getByRole("button", { name: "Copy link" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("names why the node couldn't make one", async () => {
+    show({
+      requests: [],
+      invite: async () => {
+        throw new BridgeInvokeError({
+          code: "runtimeStillBooting",
+          message: "The node is still starting; try again in a moment.",
+          retryable: true,
+          endpoint: null,
+        });
+      },
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Create invitation" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Couldn't create an invitation: The node is still starting; try again in a moment.",
+    );
+    expect(screen.getByRole("button", { name: "Create invitation" })).toBeTruthy();
   });
 });

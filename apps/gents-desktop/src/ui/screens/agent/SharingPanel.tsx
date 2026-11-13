@@ -4,11 +4,13 @@ import type { SharingState } from "../../../hooks/sharing";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useSharing } from "@/hooks/useSharing";
 import { historyNote } from "../sharing/History";
+import { InvitationAction } from "../sharing/Invitation";
 import { RequestsStrip } from "../sharing/Requests";
 import { missingText, SharingTabs } from "../sharing/SharingTabs";
 
-/** Who may use the node: requests waiting for a decision at the top, then
-    who has access and what was decided, one at a time. The desktop decides
+/** Who may use the node: an invitation to ask to join, requests waiting for
+    a decision, then who has access and what was decided, one at a time. The
+    desktop decides
     for the node it runs; what the node's runtime doesn't offer yet is named
     in one line rather than shown empty. */
 export function SharingPanel({ deployment }: { deployment: NodeView }) {
@@ -56,6 +58,7 @@ function Shared({
     requests.length + members.length + history.length === 0 && historyLeftOut === null;
   return (
     <>
+      <InvitationAction nodeDid={nodeDid} name={name} />
       <RequestsStrip nodeDid={nodeDid} nodeName={name} requests={requests} />
       {nothing ? (
         <>

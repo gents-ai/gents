@@ -42,6 +42,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_open_login_items", "runtime-admin"),
         ("desktop_join_requests_list", "runtime-admin"),
         ("desktop_join_request_decide", "runtime-admin"),
+        ("desktop_join_invitation_create", "runtime-admin"),
         ("desktop_join_members_list", "runtime-admin"),
         ("desktop_join_history_read", "runtime-admin"),
         ("desktop_open_db_explorer", "runtime-admin"),
@@ -461,6 +462,7 @@ mod tests {
             // sits with that node's administration
             ("desktop_join_requests_list", "mutate"),
             ("desktop_join_request_decide", "mutate"),
+            ("desktop_join_invitation_create", "mutate"),
             ("desktop_join_members_list", "mutate"),
             ("desktop_join_history_read", "mutate"),
             ("desktop_open_db_explorer", "mutate"),

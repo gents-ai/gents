@@ -90,6 +90,17 @@ impl From<ManagedEnrollmentDecisionOutcome> for JoinRequestDecisionView {
     }
 }
 
+/// An invitation to ask to join the node this desktop co-hosts. Holding it only
+/// lets one node ask; approval stays with this node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct JoinInvitationView {
+    /// `gents://invite/` and the runtime's signed offer token.
+    pub link: String,
+    /// When the offer stops admitting requests, as the runtime signed it.
+    pub expires_at: String,
+}
+
 /// Someone with access to the node this desktop co-hosts, known by the
 /// approved request that let them in. Expired leases aren't listed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]

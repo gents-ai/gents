@@ -1219,6 +1219,32 @@ Denies the desktop_join_history_read command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-join-invitation-create`
+
+</td>
+<td>
+
+Enables the desktop_join_invitation_create command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-invitation-create`
+
+</td>
+<td>
+
+Denies the desktop_join_invitation_create command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-join-members-list`
 
 </td>

@@ -78,6 +78,10 @@ const historyLimits = (scenario: SharingScenario): SharingHistoryLimits | null =
 const NODE: ShareScope = { kind: "node" };
 /* the one profile the runtime admits, named as it names it */
 const CLIENT: ShareProfile = { id: "client", name: "client", grants: [] };
+/** a stand-in offer token, numbered per invitation */
+export const HARNESS_INVITATION = "3vQB7B6MrGQZaxCuFg4oh";
+/** the runtime's validity for a status offer */
+export const HARNESS_INVITATION_MS = 5 * 60 * 1000;
 /** the approved request behind Bruno's access */
 export const HARNESS_BRUNO = "request-harness-bruno";
 
@@ -106,6 +110,7 @@ export function createHarnessSharing(
     if (!found) throw new Error("They no longer have access.");
     return found;
   };
+  let invitations = 0;
   const decide = (decision: Omit<SharingDecision, "at" | "by">) =>
     state.history.unshift({ ...decision, by: HARNESS_ME, at: at(0) });
 
@@ -148,6 +153,14 @@ export function createHarnessSharing(
       state.members = state.members.filter((x) => x !== m);
       decide({ kind: "revoked", party: m.party, scope: m.scope });
       changed();
+    },
+    /* a fresh stand-in each time, lasting as long as the runtime's */
+    async invite() {
+      invitations += 1;
+      return {
+        link: `gents://invite/${HARNESS_INVITATION}${invitations}`,
+        expiresAt: at(HARNESS_INVITATION_MS),
+      };
     },
   };
 }

@@ -556,6 +556,16 @@ async fn read_runtime_status(
     ))
 }
 
+/// The runtime's public `/status` as it serves it, for the enrollment offer it
+/// mints on each read; the offer's own signature, not this read, is its
+/// authority.
+pub async fn fetch_public_runtime_status(endpoint: &str) -> Result<Value> {
+    let client = runtime_http_client()
+        .await
+        .context("building runtime status HTTP client")?;
+    http_get_json(client, &runtime_status_url(endpoint)?).await
+}
+
 pub async fn fetch_runtime_connection_payload(endpoint: &str) -> Result<Value> {
     let client = runtime_http_client()
         .await

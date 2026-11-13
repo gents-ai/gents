@@ -94,6 +94,13 @@ const DAY_SECONDS = 24 * 60 * 60;
 export const DEFAULT_LEASE_SECONDS = 30 * DAY_SECONDS;
 export const MAX_LEASE_SECONDS = 90 * DAY_SECONDS;
 
+/** what another node needs to ask to join: holding it only lets one node
+    ask, until it expires; approval stays here */
+export type SharingInvitation = {
+  link: string;
+  expiresAt: string;
+};
+
 export interface SharingAdapter {
   /** the node's sharing as it stands, or null when its runtime can't share */
   read(nodeDid: string): Promise<SharingState | null>;
@@ -103,6 +110,8 @@ export interface SharingAdapter {
   deny(nodeDid: string, requestId: string): Promise<void>;
   /** ends the access a member's approved request gave */
   revoke(nodeDid: string, requestId: string): Promise<void>;
+  /** a fresh invitation to ask to join the node */
+  invite(nodeDid: string): Promise<SharingInvitation>;
 }
 
 const UNAVAILABLE = "Sharing needs a newer runtime on this node.";
@@ -115,6 +124,7 @@ export const unavailableSharing: SharingAdapter = {
   approve: refuseSharing,
   deny: refuseSharing,
   revoke: refuseSharing,
+  invite: refuseSharing,
 };
 
 /** refuses a sharing action the node's runtime doesn't offer */

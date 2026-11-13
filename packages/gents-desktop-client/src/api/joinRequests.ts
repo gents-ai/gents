@@ -13,5 +13,7 @@ export function createJoinRequestCommands(
       invokeDesktop("desktop_join_members_list", { nodeDid }),
     readJoinHistory: (nodeDid) =>
       invokeDesktop("desktop_join_history_read", { nodeDid }),
+    createJoinInvitation: (nodeDid) =>
+      invokeDesktop("desktop_join_invitation_create", { nodeDid }),
   };
 }

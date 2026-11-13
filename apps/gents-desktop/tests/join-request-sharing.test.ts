@@ -79,6 +79,10 @@ const CANT_ANSWER = "This node can't say who has access.";
 
 function binding(list: JoinRequestView[] = [pending()]) {
   const api = {
+    createJoinInvitation: vi.fn(async (_nodeDid: string) => ({
+      link: "gents://invite/token",
+      expiresAt: "2026-11-05T12:05:00Z",
+    })),
     listJoinRequests: vi.fn(async (_nodeDid: string) => list),
     listJoinMembers: vi.fn(async (_nodeDid: string) => [member()]),
     readJoinHistory: vi.fn(async (_nodeDid: string) => historyOf()),
@@ -203,6 +207,17 @@ describe("the runtime's join requests as sharing", () => {
       refusal("unknown", "enrollment authority is not ready"),
     );
     await expect(sharing.read(OWN)).rejects.toThrow("not ready");
+  });
+
+  it("invites to the node this desktop runs, and refuses any other", async () => {
+    const { api, sharing } = binding();
+    expect(await sharing.invite(OWN)).toEqual({
+      link: "gents://invite/token",
+      expiresAt: "2026-11-05T12:05:00Z",
+    });
+    expect(api.createJoinInvitation).toHaveBeenCalledWith(OWN);
+    await expect(sharing.invite(OTHER)).rejects.toThrow("newer runtime");
+    expect(api.createJoinInvitation).toHaveBeenCalledTimes(1);
   });
 
   it("reads another node as unavailable without asking the bridge", async () => {

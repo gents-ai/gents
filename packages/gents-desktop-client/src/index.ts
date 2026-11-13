@@ -30,6 +30,7 @@ export type {
   ManagedServerResetResult,
   HomeResetDisposition,
   JoinHistoryView,
+  JoinInvitationView,
   JoinMemberView,
   JoinRequestDecideRequest,
   JoinRequestDecisionView,

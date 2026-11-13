@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-join-invitation-create"
+description = "Enables the desktop_join_invitation_create command without any pre-configured scope."
+commands.allow = ["desktop_join_invitation_create"]
+
+[[permission]]
+identifier = "deny-desktop-join-invitation-create"
+description = "Denies the desktop_join_invitation_create command without any pre-configured scope."
+commands.deny = ["desktop_join_invitation_create"]

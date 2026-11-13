@@ -34,6 +34,7 @@ import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
 import type { AgentWorkspaceRoot } from "../generated/AgentWorkspaceRoot.js";
 import type { JoinHistoryView } from "../generated/JoinHistoryView.js";
+import type { JoinInvitationView } from "../generated/JoinInvitationView.js";
 import type { JoinMemberView } from "../generated/JoinMemberView.js";
 import type { JoinRequestDecideRequest } from "../generated/JoinRequestDecideRequest.js";
 import type { JoinRequestDecisionView } from "../generated/JoinRequestDecisionView.js";
@@ -216,6 +217,9 @@ export type DesktopApiAdapter = {
   /** who has access to the node this desktop runs, and what was decided; the
    *  bridge answers `unsupported` for any other node */
   listJoinMembers?: (nodeDid: string) => Promise<JoinMemberView[]>;
+  /** a fresh single-use invitation to ask to join the node this desktop
+   *  runs; the bridge answers `unsupported` for any other node */
+  createJoinInvitation?: (nodeDid: string) => Promise<JoinInvitationView>;
   readJoinHistory?: (nodeDid: string) => Promise<JoinHistoryView>;
   /** Opens a URL in the person's browser. The bridge strips the packaged
    *  build's own libraries and display backend from the environment the
@@ -249,10 +253,7 @@ export type DesktopApiAdapter = {
       limit?: number;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
-  reloadSession: (
-    sessionId: string,
-    nodeDid?: string | null,
-  ) => Promise<void>;
+  reloadSession: (sessionId: string, nodeDid?: string | null) => Promise<void>;
   /** A stretch of a session's display rows by message number, without the
    *  session's request state. */
   fetchSessionRows: (request: {
@@ -488,7 +489,9 @@ export type DesktopApiAdapter = {
   /** the packs the Engineer starts with on the local node, and how each stands */
   listDefaultPacks: () => Promise<DefaultPacks>;
   /** installs the approved packs; the local node restarts around the install */
-  approveDefaultPacks: (packs: DefaultPackApproval[]) => Promise<DefaultPacksApproval>;
+  approveDefaultPacks: (
+    packs: DefaultPackApproval[],
+  ) => Promise<DefaultPacksApproval>;
   listDynamicWorkflows: () => Promise<DynamicWorkflows>;
   getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
   promoteWorkflow: (
@@ -515,7 +518,10 @@ export type DesktopApiAdapter = {
   listUxPlugins: (
     nodeDid?: string | null,
   ) => Promise<{ plugins: UxPluginListing[]; pagesError?: string | null }>;
-  readUxPluginSource: (id: string, nodeDid?: string | null) => Promise<UxPluginSource>;
+  readUxPluginSource: (
+    id: string,
+    nodeDid?: string | null,
+  ) => Promise<UxPluginSource>;
   callPackPlugin: (
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;
@@ -553,7 +559,8 @@ export type JoinRequestCommand =
   | "listJoinRequests"
   | "decideJoinRequest"
   | "listJoinMembers"
-  | "readJoinHistory";
+  | "readJoinHistory"
+  | "createJoinInvitation";
 
 export type HostAccessCommand =
   | "listAllowedFolders"
@@ -574,6 +581,7 @@ export type UxPluginCommand =
 export type {
   HomeResetDisposition,
   JoinHistoryView,
+  JoinInvitationView,
   JoinMemberView,
   JoinRequestDecideRequest,
   JoinRequestDecisionView,

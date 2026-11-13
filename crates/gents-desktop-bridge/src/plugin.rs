@@ -161,6 +161,7 @@ where
             tauri_commands::managed_server::desktop_managed_server_open_login_items,
             tauri_commands::join_requests::desktop_join_requests_list,
             tauri_commands::join_requests::desktop_join_request_decide,
+            tauri_commands::join_requests::desktop_join_invitation_create,
             tauri_commands::join_requests::desktop_join_members_list,
             tauri_commands::join_requests::desktop_join_history_read,
             tauri_commands::db_explorer::desktop_open_db_explorer,

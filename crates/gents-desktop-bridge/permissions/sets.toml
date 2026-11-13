@@ -184,6 +184,7 @@ permissions = [
   "allow-desktop-managed-server-open-login-items",
   "allow-desktop-join-requests-list",
   "allow-desktop-join-request-decide",
+  "allow-desktop-join-invitation-create",
   "allow-desktop-join-members-list",
   "allow-desktop-join-history-read",
   "allow-desktop-open-db-explorer",

@@ -22,7 +22,8 @@ type JoinRequestApi = Required<
     DesktopApiAdapter,
     "listJoinRequests" | "decideJoinRequest" | "listJoinMembers" | "readJoinHistory"
   >
->;
+> &
+  Pick<DesktopApiAdapter, "createJoinInvitation">;
 
 /* the runtime announces no new requests, so an open page reads them again
    this often */
@@ -30,7 +31,7 @@ export const JOIN_REQUESTS_REFRESH_MS = 15_000;
 
 /** Sharing as the runtime this desktop runs offers it: requests to join,
     approved with a lease or denied, who has access, revoked by their request,
-    and what was decided. Members or history the bridge says it can't answer
+    what was decided, and invitations to ask to join. Members or history the bridge says it can't answer
     read as unavailable, and the requests are still offered; any other failure
     fails the read with the runtime's error. Another node's sharing isn't
     reachable from here, so it reads as unavailable and its actions are
@@ -110,6 +111,10 @@ export function createJoinRequestSharing({
       decide(nodeDid, () =>
         api.decideJoinRequest({ nodeDid, requestId, decision: { kind: "revoke" } }),
       ),
+    async invite(nodeDid) {
+      if (!runs(nodeDid) || !api.createJoinInvitation) return refuseSharing();
+      return api.createJoinInvitation(nodeDid);
+    },
   };
 }
 
@@ -184,6 +189,7 @@ export function sharingFor(
     decideJoinRequest: decide,
     listJoinMembers: members,
     readJoinHistory: history,
+    createJoinInvitation: invite,
   } = api;
   if (!list || !decide || !members || !history) return unavailableSharing;
   return createJoinRequestSharing({
@@ -192,6 +198,9 @@ export function sharingFor(
       decideJoinRequest: (request) => decide.call(api, request),
       listJoinMembers: (nodeDid) => members.call(api, nodeDid),
       readJoinHistory: (nodeDid) => history.call(api, nodeDid),
+      ...(invite && {
+        createJoinInvitation: (nodeDid: string) => invite.call(api, nodeDid),
+      }),
     },
     ownNodeDid,
   });

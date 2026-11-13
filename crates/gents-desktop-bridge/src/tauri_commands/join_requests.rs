@@ -4,8 +4,8 @@ use super::managed_server::co_hosted_runtime;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{
-    JoinHistoryView, JoinMemberView, JoinRequestDecideRequest, JoinRequestDecisionView,
-    JoinRequestView,
+    JoinHistoryView, JoinInvitationView, JoinMemberView, JoinRequestDecideRequest,
+    JoinRequestDecisionView, JoinRequestView,
 };
 
 /// Join requests are decided with the operator identity of the runtime this
@@ -13,6 +13,19 @@ use crate::types::{
 const NOT_CO_HOSTED: &str =
     "Join requests can only be read and decided for the node this desktop runs.";
 const NOT_PENDING: &str = "That request was already decided or has expired.";
+/// The prefix the joining desktop strips before decoding an invitation.
+const INVITATION_SCHEME: &str = "gents://invite/";
+
+/// A fresh invitation to ask to join the node this desktop co-hosts. The
+/// runtime mints and signs a new single-use offer on every `/status` read; its
+/// validity window is the runtime's.
+#[tauri::command]
+pub async fn desktop_join_invitation_create(
+    node_did: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<JoinInvitationView, BridgeError> {
+    create_join_invitation(&state, &node_did).await
+}
 
 #[tauri::command]
 pub async fn desktop_join_requests_list(
@@ -117,6 +130,65 @@ async fn decide_join_request(
         .map_err(decision_error)
 }
 
+async fn create_join_invitation(
+    state: &DesktopAppState,
+    node_did: &str,
+) -> Result<JoinInvitationView, BridgeError> {
+    let Some((_, target)) = co_hosted_runtime(state, node_did).await? else {
+        return Err(not_co_hosted());
+    };
+    let status = gents_desktop_core::local_runtime::fetch_public_runtime_status(&target.graphql)
+        .await
+        .map_err(BridgeError::classify_transport_error)?;
+    invitation_from_status(&status, &target.node_did)
+}
+
+/// The offer in a `/status` payload as an invitation link. The joining side
+/// verifies the offer's signature; this only refuses another node's status so
+/// a misrouted read is never handed out as this node's invitation.
+fn invitation_from_status(
+    status: &serde_json::Value,
+    node_did: &str,
+) -> Result<JoinInvitationView, BridgeError> {
+    if status.get("node_did").and_then(serde_json::Value::as_str) != Some(node_did) {
+        return Err(BridgeError::untyped(
+            "The node answering here isn't the one this desktop runs.",
+        ));
+    }
+    let enrollment = status.get("enrollment");
+    let token = enrollment
+        .and_then(|enrollment| enrollment.get("token"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty());
+    let Some(token) = token else {
+        return Err(
+            match enrollment
+                .and_then(|enrollment| enrollment.get("reason"))
+                .and_then(serde_json::Value::as_str)
+            {
+                Some("runtime_not_ready") => BridgeError::new(
+                    BridgeErrorCode::RuntimeStillBooting,
+                    "The node is still starting; try again in a moment.",
+                ),
+                Some(reason) => BridgeError::untyped(format!(
+                    "The node couldn't make an invitation ({reason})."
+                )),
+                None => BridgeError::new(
+                    BridgeErrorCode::Unsupported,
+                    "This node's runtime doesn't make invitations.",
+                ),
+            },
+        );
+    };
+    let offer = gents_protocol::enrollment::decode_offer(token)
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+    Ok(JoinInvitationView {
+        link: format!("{INVITATION_SCHEME}{token}"),
+        expires_at: offer.expires_at,
+    })
+}
+
 fn not_co_hosted() -> BridgeError {
     BridgeError::new(BridgeErrorCode::Unsupported, NOT_CO_HOSTED)
 }
@@ -185,6 +257,75 @@ mod tests {
         .await
         .expect_err("no co-hosted runtime");
         assert_eq!(decided.code, BridgeErrorCode::Unsupported);
+        let invitation = create_join_invitation(&state, "did:key:z6MkElsewhere")
+            .await
+            .expect_err("no co-hosted runtime");
+        assert_eq!(invitation.code, BridgeErrorCode::Unsupported);
+    }
+
+    fn offer_token(expires_at: &str) -> String {
+        gents_protocol::enrollment::encode_offer(
+            &gents_protocol::enrollment::EnrollmentOfferRecord {
+                version: gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION,
+                offer_id: "offer".into(),
+                challenge: "challenge".into(),
+                network_id: "network".into(),
+                admin_did: "did:key:z6MkNode".into(),
+                server_peer: "peer".into(),
+                server_ticket: "ticket".into(),
+                owner_node_did: "did:key:z6MkNode".into(),
+                profile: "client".into(),
+                schema_fingerprint: "schema".into(),
+                live_schema_digest: format!("sha256:{}", "a".repeat(64)),
+                issued_at: "2030-01-01T00:00:00Z".into(),
+                expires_at: expires_at.into(),
+                admin_sig: vec![1; 64],
+            },
+        )
+        .expect("token")
+    }
+
+    #[test]
+    fn a_status_offer_becomes_an_invitation_link_with_its_expiry() {
+        let token = offer_token("2030-01-01T00:05:00Z");
+        let status = serde_json::json!({
+            "node_did": "did:key:z6MkNode",
+            "enrollment": { "state": "available", "token": token, "offer": {} },
+        });
+        assert_eq!(
+            invitation_from_status(&status, "did:key:z6MkNode").expect("invitation"),
+            JoinInvitationView {
+                link: format!("gents://invite/{token}"),
+                expires_at: "2030-01-01T00:05:00Z".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn no_invitation_from_another_node_or_without_an_offer() {
+        let token = offer_token("2030-01-01T00:05:00Z");
+        let elsewhere = serde_json::json!({
+            "node_did": "did:key:z6MkElsewhere",
+            "enrollment": { "state": "available", "token": token },
+        });
+        invitation_from_status(&elsewhere, "did:key:z6MkNode").expect_err("another node");
+        let starting = serde_json::json!({
+            "node_did": "did:key:z6MkNode",
+            "enrollment": { "state": "unavailable", "reason": "runtime_not_ready" },
+        });
+        assert_eq!(
+            invitation_from_status(&starting, "did:key:z6MkNode")
+                .expect_err("not ready")
+                .code,
+            BridgeErrorCode::RuntimeStillBooting
+        );
+        let older = serde_json::json!({ "node_did": "did:key:z6MkNode" });
+        assert_eq!(
+            invitation_from_status(&older, "did:key:z6MkNode")
+                .expect_err("no offer")
+                .code,
+            BridgeErrorCode::Unsupported
+        );
     }
 
     #[test]
