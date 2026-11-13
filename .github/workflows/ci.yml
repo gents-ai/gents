@@ -159,10 +159,12 @@ jobs:
       fail-fast: false
       matrix:
         suite: ${{ fromJSON(inputs.rust_suite != '' && inputs.rust_suite != 'all' && format('["{0}"]', inputs.rust_suite) || '["runtime","support","desktop","cli"]') }}
-    # Each job starts from an empty RUNNER_TEMP target tree; the size-capped
-    # host sccache service supplies cached rlibs. Binaries, test harnesses,
-    # proc macros, and build scripts are not cacheable and relink every run.
+    # Each runner process keeps its Cargo target tree between jobs, capped at
+    # CARGO_TARGET_MAX_GIB, so a job relinks only what its change touched; the
+    # size-capped host sccache service supplies rlibs after a cap reset.
     timeout-minutes: 180
+    env:
+      CARGO_TARGET_MAX_GIB: ${{ vars.CARGO_TARGET_MAX_GIB || '150' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -220,7 +222,7 @@ jobs:
         run: bash .github/scripts/setup-cmake.sh
 
       - name: Prepare disk-backed Rust build cache
-        run: .github/scripts/setup-rust-build-cache.sh
+        run: .github/scripts/setup-rust-build-cache.sh --persistent
 
       - name: Install Go for Afterburner compiler tests
         if: matrix.suite == 'cli' && github.event_name != 'pull_request'
@@ -482,14 +484,18 @@ jobs:
       (github.event.pull_request.draft == false &&
       (github.event.pull_request.stack == null ||
       github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
-    # Reuse the warm proof cache on studio-1's light support slot. This keeps
-    # the runtime slot free once repository-guard releases the Rust matrix.
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    # GENTS_CI_PORTABLE_RUNNER moves this job off studio-1's support slot to
+    # a Linux runner once one is proven; the Studio keeps a warm proof cache.
+    runs-on: ${{ fromJSON(vars.GENTS_CI_PORTABLE_RUNNER || '["self-hosted","macOS","ARM64","studio","studio-1","ci-support"]') }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Use the runner account's Lean cache
+        if: runner.os == 'Linux' && startsWith(env.LEAN_CACHE_ROOT, '/Users/')
+        run: echo "LEAN_CACHE_ROOT=${HOME}/.cache/gents-lean" >> "${GITHUB_ENV}"
 
       - name: Install elan
         run: .github/scripts/setup-elan.sh
@@ -718,13 +724,10 @@ jobs:
       (github.event.pull_request.draft == false &&
       (github.event.pull_request.stack == null ||
       github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
-    # Bombadil's exact Linux failure trace passes on macOS. Keep this small
-    # platform-specific smoke on a Studio while the portable UI suite runs on
-    # hosted Linux; it normally releases the slot before Rust becomes ready.
-    # Keep the heavier desktop Rust slot available; the CLI shard is short and
-    # can wait for this platform-specific smoke test to release its runner.
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-cli]
-    timeout-minutes: 10
+    # Bombadil's exact Linux failure trace passes on macOS. The smoke needs
+    # macOS but no Studio cache, so it runs on a hosted macOS runner.
+    runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -733,7 +736,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install workspace frontend dependencies
         run: npm ci

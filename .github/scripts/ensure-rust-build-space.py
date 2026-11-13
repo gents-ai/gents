@@ -33,9 +33,26 @@ def initialize_cache_tag(target):
                 raise ValueError("Cargo cache tag has an invalid signature")
 
 
-def ensure_build_space(target, minimum_gib):
+def tree_size(target):
+    """Allocated bytes under the target, counting each hard-linked file once."""
+    seen = set()
+    total = 0
+    for directory, _, files in os.walk(target):
+        for name in files:
+            status = os.lstat(os.path.join(directory, name))
+            if status.st_nlink > 1:
+                if (status.st_dev, status.st_ino) in seen:
+                    continue
+                seen.add((status.st_dev, status.st_ino))
+            total += status.st_blocks * 512
+    return total
+
+
+def ensure_build_space(target, minimum_gib, maximum_gib=None):
     if minimum_gib <= 0:
         raise ValueError("CARGO_BUILD_MIN_FREE_GIB must be positive")
+    if maximum_gib is not None and maximum_gib <= 0:
+        raise ValueError("CARGO_TARGET_MAX_GIB must be positive")
     if not target.is_absolute() or target.is_symlink() or not target.is_dir():
         raise ValueError("Cargo target must be an existing absolute directory, not a symlink")
     if target.resolve() in (Path("/"), Path.home().resolve(), Path.cwd().resolve()):
@@ -46,9 +63,14 @@ def ensure_build_space(target, minimum_gib):
 
     def has_space():
         free = shutil.disk_usage(target).free
-        print(f"Cargo build volume: {free / 1024**3:.1f} GiB free; "
-              f"{minimum_gib} GiB required", flush=True)
-        return free >= required
+        report = f"Cargo build volume: {free / 1024**3:.1f} GiB free; {minimum_gib} GiB required"
+        fits = free >= required
+        if maximum_gib is not None:
+            used = tree_size(target)
+            report += f"; target holds {used / 1024**3:.1f} GiB of {maximum_gib} GiB allowed"
+            fits = fits and used <= maximum_gib * 1024**3
+        print(report, flush=True)
+        return fits
 
     if has_space():
         return
@@ -64,11 +86,17 @@ def ensure_build_space(target, minimum_gib):
                        "free additional space on the host before retrying")
 
 
+def optional_gib(name):
+    value = os.environ.get(name, "")
+    return int(value) if value else None
+
+
 if __name__ == "__main__":
     try:
         if len(sys.argv) != 2:
             raise ValueError(f"usage: {sys.argv[0]} <runner-cargo-target>")
-        ensure_build_space(Path(sys.argv[1]), int(os.environ.get("CARGO_BUILD_MIN_FREE_GIB", "64")))
+        ensure_build_space(Path(sys.argv[1]), int(os.environ.get("CARGO_BUILD_MIN_FREE_GIB", "64")),
+                           optional_gib("CARGO_TARGET_MAX_GIB"))
     except (ValueError, RuntimeError, OSError, subprocess.CalledProcessError) as error:
         print(f"::error::{error}", file=sys.stderr)
         sys.exit(1)
