@@ -133,11 +133,11 @@ mod background_transcript;
 mod canonical_execution;
 mod canonical_output;
 pub mod canonical_presentation;
+pub mod claude_replay;
 mod compaction_canonical_projection;
 mod compaction_projection_join;
 pub mod consumer_scan;
 pub mod family;
-mod prompt_assembly;
 mod request_execution_lease;
 mod title;
 
@@ -152,7 +152,6 @@ pub use canonical_presentation::native_adapter::native_presentation;
 pub use canonical_presentation::*;
 pub use compaction_canonical_projection::*;
 pub use compaction_projection_join::*;
-pub use prompt_assembly::*;
 pub use request_execution_lease::*;
 pub use title::*;
 

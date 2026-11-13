@@ -21,28 +21,21 @@ fn user_msg(text: &str) -> Message {
 
 #[test]
 fn mcp_discovery_guidance_matches_presented_operations_model() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().discovery_guidance_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
+    gents_lean_vocab::families::contracts_discovery_guidance_presented::replay(|case| {
         let tools = case
             .presented
             .iter()
-            .map(|name| name.as_str())
+            .map(String::as_str)
             .collect::<Vec<_>>();
         let preamble = build_preamble("Instructions", "worker", &tools, case.enabled);
-        assert_eq!(
-            preamble.contains("## Tool Discovery"),
-            case.expected,
-            "{}",
-            case.name
-        );
-        for name in tools {
+        for name in &tools {
             assert!(
                 preamble.contains(name),
                 "direct tool {name} must remain visible"
             );
         }
-    }
+        preamble.contains("## Tool Discovery")
+    });
 }
 
 #[test]

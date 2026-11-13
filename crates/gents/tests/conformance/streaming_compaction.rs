@@ -222,32 +222,6 @@ fn compaction_messages_for_rows(
         .collect()
 }
 
-pub(super) fn compaction_messages_for_count(count: usize) -> Vec<Message> {
-    match count {
-        0 => Vec::new(),
-        1 => vec![compaction_tool_result_message(
-            "call-1",
-            "large terminal payload",
-        )],
-        2 => vec![
-            compaction_tool_call_message("call-1"),
-            compaction_tool_result_message("call-1", "large tool payload"),
-        ],
-        3 => vec![
-            compaction_text_message("user", "first"),
-            compaction_tool_call_message("call-1"),
-            compaction_tool_result_message("call-1", "large tool payload"),
-        ],
-        4 => vec![
-            compaction_text_message("user", "first"),
-            compaction_tool_call_message("call-1"),
-            compaction_tool_result_message("call-1", "large tool payload"),
-            compaction_text_message("assistant", "reply"),
-        ],
-        other => panic!("unsupported compaction message_count {other}"),
-    }
-}
-
 fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()

@@ -1,4 +1,8 @@
 use super::*;
+use gents_lean_vocab::{
+    LeanGoalWakeReceiptCaseClaimScope, LeanGoalWakeReceiptCaseNotificationsItem,
+    LeanGoalWakeReceiptCaseNotificationsItemScope, LeanGoalWakeReceiptCasePriorItemClaimScope,
+};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -6,10 +10,6 @@ use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSourc
 use gents_protocol::row::AgentRequestRow;
 use gents_session::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
-};
-use gents_lean_vocab::{
-    LeanGoalWakeReceiptCaseClaimScope, LeanGoalWakeReceiptCaseNotificationsItem,
-    LeanGoalWakeReceiptCaseNotificationsItemScope, LeanGoalWakeReceiptCasePriorItemClaimScope,
 };
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{collections::BTreeMap, sync::Arc};
@@ -486,7 +486,10 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         terminal_source(&fixture, &parent).await;
         let notifications = &case.notifications;
         let mut roots = BTreeMap::new();
-        let claim_scope = case.retry_parent.is_none().then(|| ClaimScope::from(&case.claim.scope));
+        let claim_scope = case
+            .retry_parent
+            .is_none()
+            .then(|| ClaimScope::from(&case.claim.scope));
         for scope in notifications
             .iter()
             .map(|row| ClaimScope::from(&row.scope))

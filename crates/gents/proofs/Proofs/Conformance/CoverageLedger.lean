@@ -2503,13 +2503,13 @@ def caseCoverage : List CoverageEntry :=
       "contracts_service_tier_transport")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_responses_storage_cases"
-      "PromptAssemblyResponsesStorageCases"
+      "family"
+      "contracts_prompt_assembly_responses_storage"
       "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, so wire params and accounting are checked together. Premise: reasoning unset and a non-empty preamble. The OAuth transports' own HTTP store patch is fenced by its unit tests, not by this case family.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_responses_effort_cases"
-      "PromptAssemblyResponsesEffortCases"
+      "family"
+      "contracts_prompt_assembly_responses_effort"
       "The generated cases drive loop_config and the loop's own ProviderInputCounter projection, comparing the projected reasoning.effort. Premise: OpenAiCompatible on the Responses wire; kind and wire are not modelled, so these cases cannot catch a wrong kind/wire guard (pinned by inference_setup::tests::sent_reasoning_effort_leaves_other_kinds_and_wires_alone).")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2535,8 +2535,7 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the identity reducer exists only in the model; no production compaction path evaluates its validity gate.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "protected_replay_compaction_cases"
-      "ProtectedReplayCompactionCases"
+      "family" "contracts_protected_replay_compaction"
       "Native replay association and reduction ceilings preserve the entire captured prefix of required reasoning. A nonempty required set refuses summarization with CannotFit; an empty set preserves the ordinary retention policy. Retirement of older requirements remains deferred. Generated cases bind modeled assistant blocks to native ceiling and split selection; the summary-provider refusal has separate native coverage.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -2557,12 +2556,10 @@ def caseCoverage : List CoverageEntry :=
       "Binds canonical header classification and selection to CurrentInput. Full reconstructed-history regression additionally covers retaining a current-request tool result; arbitrary imported-seed reachability is not claimed.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "wake_input_cases"
-      "WakeInputCases")
+      "family" "contracts_wake_input_projection")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_sanitize_cases"
-      "PromptAssemblySanitizeCases")
+      "family" "contracts_prompt_assembly_sanitize")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2581,8 +2578,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_prompt_assembly_turn_budget")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "prompt_assembly_compaction_trigger_cases"
-      "PromptAssemblyCompactionTriggerCases")
+      "family"
+      "contracts_prompt_assembly_compaction_trigger")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "prompt_assembly_retention_cases"
@@ -2639,45 +2636,37 @@ def caseCoverage : List CoverageEntry :=
       "Drives modeled nonempty thinking-start text through the native parser and canonical accumulator, checking exact sealed content. Owned-loop persistence and provider continuation remain unbound.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_replay_cases"
-      "PromptAssemblyClaudeReplayCases"
+      "family" "contracts_prompt_assembly_claude_replay"
       "Reconstructs native assistant blocks and checks exact Claude body replay or fail-closed error, including empty text and unsupported assistant image. Actual HTTP transport and request budgeting are not exercised here.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_replay_cases"
-      "PromptAssemblyClaudeReplayCases"
+      "family" "contracts_prompt_assembly_claude_replay_round_trip"
       "Drives the streamed-signed-redacted-tool case through the owned loop: its canonical blocks become turn-1 SSE, the persisted message must retain their exact grouping and payloads, and the turn-2 capture must equal the modeled replay. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_reasoning_suffix_cases"
-      "PromptAssemblyReasoningSuffixCases"
+      "family" "contracts_prompt_assembly_reasoning_suffix"
       "Binds native two-phase selection (provenance suffix, stage assembly, turn location and capture-derived admissible suffix) over the model's row cases and every step of the replay scenarios (compaction, repair, strip-and-retry, tool and issuer changes, interruption, restart, Claude signatures and redaction, Responses ciphertext). Native flattening of real provider bodies is bound by gents-loop replay_frontier tests, not by these cases.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_replay_shape_cases"
-      "PromptAssemblyReplayShapeCases"
+      "family" "contracts_prompt_assembly_replay_shape"
       "Binds original-index block shaping and misaligned-sidecar rejection. Complete compaction-history carriage is exercised through native request assembly tests.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_replay_prefix_cases"
-      "PromptAssemblyReplayPrefixCases"
+      "family" "contracts_prompt_assembly_replay_prefix"
       "Binds the two capture checks and their agreement with leading-reasoning removal on flat items. Provider acceptance itself is an external premise documented on ReplayFrontier.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_checkpoint_cases"
-      "PromptAssemblyClaudeCheckpointCases"
+      "family" "contracts_prompt_assembly_claude_checkpoint"
       "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage "provider_tool_identity_cases" "ProviderToolIdentityCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_assistant_order_cases"
-      "PromptAssemblyAssistantOrderCases"
+      "family" "contracts_prompt_assembly_assistant_order"
       "Checks the mode-selected native assistant-content ordering helper. It does not establish that every provider dispatch selects the correct mode.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_mode_sanitize_cases"
-      "PromptAssemblyModeSanitizeCases"
+      "family" "contracts_prompt_assembly_mode_sanitize"
       "Checks the composed native provider-view sanitizer on finite coherent, unique-call-id witnesses, and that the tagged association view is the native-order view whose send-boundary ordering is that composed view. General native reachability and arbitrary transcript premises remain outside this fence.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2886,7 +2875,7 @@ def caseCoverage : List CoverageEntry :=
       "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through contracts_callback_recovery.")
       "triggers" [Surface.runtimeInternal]
 
-  , tagged (consumerCoverage "discovery_guidance_cases" "DiscoveryGuidanceCases")
+  , tagged (consumerCoverage "family" "contracts_discovery_guidance_presented")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (followUpCoverage "family" "node_provisioning_reservation_unreached"
       "model-production-gap: no production path reaches these emitted cases yet (file-sync-failed: no production path makes the file sync of a newly created bootstrap marker fail)")

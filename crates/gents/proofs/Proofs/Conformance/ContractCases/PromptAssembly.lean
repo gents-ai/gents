@@ -110,19 +110,9 @@ structure PromptAssemblyRowCase where
   content : List PromptAssemblyItemCase
   deriving Repr
 
-/-- The same shape with an unpaired call between reasoning and text: pairing
-drops that block, so the retained persisted indices are not contiguous. -/
-structure PromptAssemblySplitCase where
-  index : Nat
-  expected : List PromptAssemblyRowCase
-  deriving Repr
-
 structure PromptAssemblySanitizeCase where
   name : String
   input : List PromptAssemblyRowCase
-  expected : List PromptAssemblyRowCase
-  expectedTwice : List PromptAssemblyRowCase
-  splits : List PromptAssemblySplitCase
   deriving Repr
 
 structure PromptAssemblyLayerCase where
@@ -171,28 +161,6 @@ structure PromptAssemblyTurnBudgetCase where
   turnCanDispatch : List Bool
   deriving Repr
 
-/-- One compaction-trigger witness: the calibration state, a raw estimate
-and the budget inputs, with the trigger's decision derived by
-`ContextCalibration.State.admission`. -/
-structure PromptAssemblyCompactionTriggerCase where
-  name : String
-  contextWindow : Nat
-  maxOutputTokens : Nat
-  thresholdBasisPoints : Nat
-  priorBasisPoints : Nat
-  seededObservations : List Nat
-  observed : List (Nat × Nat)
-  anchor : Option PromptAssembly.ContextCalibration.Anchor
-  invalidate : Bool
-  rawInputTokens : Nat
-  ratioBasisPoints : Nat
-  calibratedTokens : Nat
-  anchoredTokens : Option Nat
-  contextTokens : Nat
-  compactionInputBudget : Nat
-  admission : Option PromptAssembly.ContextCalibration.Admission
-  deriving Repr
-
 structure PromptAssemblyRetentionCase where
   name : String
   configuredKeepRecent : Nat
@@ -205,30 +173,21 @@ structure PromptAssemblyRetentionCase where
   rollingSummaryInputBudget : Nat
   deriving Repr
 
-private def itemCase : Item → PromptAssemblyItemCase
+def itemCase : Item → PromptAssemblyItemCase
   | .text index => { item := "text", value := index }
   | .other index => { item := "other", value := index }
   | .call callId => { item := "call", value := callId }
 
 structure PromptAssemblyAssistantOrderCase where
   name : String
-  orderMode : String
+  orderMode : PromptAssembly.Content.OrderMode
   input : List PromptAssemblyItemCase
-  expected : List PromptAssemblyItemCase
-  expectedTwice : List PromptAssemblyItemCase
   deriving Repr
 
 private def assistantOrderCase (name : String)
     (mode : PromptAssembly.Content.OrderMode) (items : List Item) :
     PromptAssemblyAssistantOrderCase :=
-  let once := PromptAssembly.Content.normalizeFor mode items
-  { name
-  , orderMode := match mode with
-      | .grouped => "grouped"
-      | .nativePreserved => "nativePreserved"
-  , input := items.map itemCase
-  , expected := once.map itemCase
-  , expectedTwice := (PromptAssembly.Content.normalizeFor mode once).map itemCase }
+  { name, orderMode := mode, input := items.map itemCase }
 
 def promptAssemblyAssistantOrderCases : List PromptAssemblyAssistantOrderCase :=
   [ assistantOrderCase "interleaved-grouped" .grouped
@@ -241,14 +200,14 @@ def promptAssemblyAssistantOrderCases : List PromptAssemblyAssistantOrderCase :=
       [.text 4, .other 5, .call 13, .other 6]
   ]
 
-private def announcedIds (content : List Item) : List Nat :=
+def announcedIds (content : List Item) : List Nat :=
   content.filterMap Item.callId?
 
-private def roleName : Transcript.MessageRole → String
+def roleName : Transcript.MessageRole → String
   | .user => "user"
   | .assistant => "assistant"
 
-private def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
+def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
   match pr.row.kind with
   | .ordinary =>
     { role := roleName pr.row.role
@@ -266,7 +225,7 @@ private def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
     , callIds := [callId]
     , content := pr.content.map itemCase }
 
-private def rowCases (rows : List ProviderRow) : List PromptAssemblyRowCase :=
+def rowCases (rows : List ProviderRow) : List PromptAssemblyRowCase :=
   rows.map rowCase
 
 private def mkRow (sequence : Nat) (role : Transcript.MessageRole)
@@ -289,15 +248,11 @@ private def assistantText (sequence : Nat) (index : Nat) : ProviderRow :=
 
 structure PromptAssemblyModeSanitizeCase where
   name : String
-  orderMode : String
+  orderMode : PromptAssembly.Content.OrderMode
   input : List PromptAssemblyRowCase
-  expected : List PromptAssemblyRowCase
-  expectedTwice : List PromptAssemblyRowCase
-  association : List PromptAssemblyRowCase
-  associationIndices : List (List Nat)
   deriving Repr
 
-private def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) :
+def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) :
     List Nat :=
   match out.row.role, input.find? (fun pr => pr.row.sequence == out.row.sequence) with
   | .assistant, some source => out.content.map fun item => source.content.idxOf item
@@ -306,20 +261,7 @@ private def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) 
 private def modeSanitizeCase (name : String)
     (mode : PromptAssembly.Content.OrderMode) (rows : List ProviderRow) :
     PromptAssemblyModeSanitizeCase :=
-  let once := PromptAssembly.Provider.sanitizeForProviderGlobalFor mode rows
-  { name
-  , orderMode := match mode with
-      | .grouped => "grouped"
-      | .nativePreserved => "nativePreserved"
-  , input := rowCases rows
-  , expected := rowCases once
-  , expectedTwice := rowCases
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor mode once)
-  , association := rowCases
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor .nativePreserved rows)
-  , associationIndices :=
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor .nativePreserved rows).map
-        (retainedBlockIndices rows) }
+  { name, orderMode := mode, input := rowCases rows }
 
 private def interleavedCoherentRows : List ProviderRow :=
   [ mkRow 0 .assistant (.assistantToolCalls [1].toFinset)
@@ -431,20 +373,9 @@ theorem witnessOutputsAreProviderValid :
     (witnessesHaveUniqueCallIds witness hwitness)
     (witnessesAreCoherent witness hwitness)
 
-private def splitCases (rows : List ProviderRow) : List PromptAssemblySplitCase :=
-  (List.range (rows.length + 1)).map fun index =>
-    { index := index
-    , expected := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal (rows.drop index)) }
-
 private def sanitizeCase (witness : String × List ProviderRow) :
     PromptAssemblySanitizeCase :=
-  let rows := witness.2
-  let once := PromptAssembly.Provider.sanitizeForProviderGlobal rows
-  { name := witness.1
-  , input := rowCases rows
-  , expected := rowCases once
-  , expectedTwice := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal once)
-  , splits := splitCases rows }
+  { name := witness.1, input := rowCases witness.2 }
 
 def promptAssemblySanitizeCases : List PromptAssemblySanitizeCase :=
   witnessTranscripts.map sanitizeCase
@@ -702,7 +633,9 @@ def turnBudgetCase
 def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
   turnBudgetWitnesses.map turnBudgetCase
 
-private structure TriggerWitness where
+/-- One compaction-trigger witness: the calibration state, a raw estimate
+and the budget inputs. -/
+structure PromptAssemblyCompactionTriggerCase where
   name : String
   contextWindow : Nat := 1000000
   maxOutputTokens : Nat := 32000
@@ -715,7 +648,7 @@ private structure TriggerWitness where
   invalidate : Bool := false
   rawInputTokens : Nat
 
-private def triggerWitnesses : List TriggerWitness :=
+private def triggerWitnesses : List PromptAssemblyCompactionTriggerCase :=
   [ { name := "unit-prior-below-budget", rawInputTokens := 700000 }
   , { name := "unit-prior-at-budget", rawInputTokens := 750000 }
   , { name := "unit-prior-one-over-budget", rawInputTokens := 750001 }
@@ -765,35 +698,8 @@ private def triggerWitnesses : List TriggerWitness :=
     , thresholdBasisPoints := 7500, priorBasisPoints := 20000, rawInputTokens := 376 }
   ]
 
-open PromptAssembly.ContextCalibration in
-private def triggerCase (witness : TriggerWitness) : PromptAssemblyCompactionTriggerCase :=
-  let seeded := { seed witness.priorBasisPoints witness.seededObservations with
-    anchor := witness.anchor }
-  let observedState := witness.observed.foldl
-    (fun state (provider, estimate) => state.observe provider estimate) seeded
-  let state := if witness.invalidate then observedState.invalidate else observedState
-  { name := witness.name
-  , contextWindow := witness.contextWindow
-  , maxOutputTokens := witness.maxOutputTokens
-  , thresholdBasisPoints := witness.thresholdBasisPoints
-  , priorBasisPoints := witness.priorBasisPoints
-  , seededObservations := witness.seededObservations
-  , observed := witness.observed
-  , anchor := witness.anchor
-  , invalidate := witness.invalidate
-  , rawInputTokens := witness.rawInputTokens
-  , ratioBasisPoints := state.ratio
-  , calibratedTokens := calibrated witness.rawInputTokens state.ratio
-  , anchoredTokens := state.anchor.bind fun anchor =>
-      anchored anchor witness.rawInputTokens state.ratio
-  , contextTokens := state.tokens witness.rawInputTokens
-  , compactionInputBudget := PromptAssembly.Budget.compactionInputBudget
-      witness.contextWindow witness.thresholdBasisPoints witness.maxOutputTokens
-  , admission := state.admission witness.rawInputTokens witness.contextWindow
-      witness.thresholdBasisPoints witness.maxOutputTokens }
-
 def promptAssemblyCompactionTriggerCases : List PromptAssemblyCompactionTriggerCase :=
-  triggerWitnesses.map triggerCase
+  triggerWitnesses
 
 private structure RetentionWitness where
   name : String
@@ -1467,6 +1373,7 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
 
 structure PromptAssemblyReasoningSuffixCase where
   name : String
+  context : List UInt8
   issuer : PromptAssembly.ClaudeMap.ReplayIssuer
   wire : PromptAssembly.ClaudeMap.ReplayWire
   rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
@@ -1476,7 +1383,7 @@ structure PromptAssemblyReasoningSuffixCase where
   replay : List PromptAssembly.ClaudeMap.TaggedReplayRow
   deriving Repr
 
-private def resolveFrom (resolutions : List PromptAssemblyClaudeCheckpointResolution)
+def resolveFrom (resolutions : List PromptAssemblyClaudeCheckpointResolution)
     (tag : PromptAssembly.ClaudeMap.ReplayTag) :
     List PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
   (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
@@ -1490,7 +1397,7 @@ private def reasoningSuffixCase (name : String) (context : List UInt8)
   let resolve := resolveFrom resolutions
   let projected := rows.map (PromptAssembly.ClaudeMap.projectRecoveredPrefix resolve)
   let stage := PromptAssembly.ClaudeMap.replayStage projected issuer wire resolve
-  { name, issuer, wire, rows, resolutions, stage,
+  { name, context, issuer, wire, rows, resolutions, stage,
     assembled := replayCaseAssemble wire context stage,
     replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix projected issuer wire
       resolve (replayCaseAssemble wire context) }
@@ -1859,7 +1766,7 @@ structure PromptAssemblyReplayPrefixCase where
   leadingRemoval : Bool
   deriving Repr
 
-private def replayPrefixCase (name : String)
+def replayPrefixCase (name : String)
     (captured current : List PromptAssembly.ClaudeMap.ReplayFlatItem) :
     PromptAssemblyReplayPrefixCase :=
   let anchoredCaptured := PromptAssembly.ReplayFrontier.anchored captured

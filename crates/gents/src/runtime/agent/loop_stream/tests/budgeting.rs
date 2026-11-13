@@ -299,66 +299,52 @@ fn prompt_budgets_follow_the_lean_model() {
 #[test]
 fn generated_compaction_trigger_cases_drive_the_production_trigger() {
     use crate::turn::provider_input::budget::{ContextAnchor, ContextCalibration};
-    let cases = gents_lean_vocab::lean_prompt_assembly_compaction_trigger_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no compaction trigger cases"
-    );
-
-    for case in cases {
+    let native = |tokens: u64| usize::try_from(tokens).expect("modeled tokens fit");
+    let modeled = |tokens: usize| u64::try_from(tokens).expect("native tokens fit");
+    gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::replay(|case| {
         let calibration = ContextCalibration::with_observations(
             case.prior_basis_points,
             case.seeded_observations.iter().copied(),
         );
-        if let Some(anchor) = case.anchor {
+        if let Some(anchor) = &case.anchor {
             calibration.anchor_accepted(ContextAnchor {
                 input_tokens: anchor.input_tokens,
                 output_tokens: anchor.output_tokens,
-                estimated_input_tokens: anchor.estimated_input_tokens,
+                estimated_input_tokens: native(anchor.estimated_input_tokens),
             });
         }
-        for (provider, estimate) in &case.observed {
-            calibration.observe(*provider, *estimate);
+        for count in &case.observed {
+            calibration.observe(count.provider, native(count.estimate));
         }
         if case.invalidate {
             calibration.invalidate_anchor();
         }
-        let context = calibration.context(case.raw_input_tokens);
-        assert_eq!(
-            (
-                context.ratio_basis_points,
-                context.calibrated,
-                context.anchored,
-                context.tokens,
-            ),
-            (
-                case.ratio_basis_points,
-                case.calibrated_tokens,
-                case.anchored_tokens,
-                case.context_tokens,
-            ),
-            "{}: production context size drifted from Lean",
-            case.name
-        );
+        let context = calibration.context(native(case.raw_input_tokens));
         let budget = crate::turn::provider_input::budget::compaction_input_budget(
-            case.context_window,
+            native(case.context_window),
             case.threshold_basis_points as f64 / 10_000.0,
-            case.max_output_tokens,
+            native(case.max_output_tokens),
         );
-        assert_eq!(
-            budget, case.compaction_input_budget,
-            "{}: compaction input budget drifted from Lean",
-            case.name
-        );
-        let admission =
-            gents_inference::compaction::ReductionAdmission::for_context(context, budget)
-                .map(|admission| (admission.input_tokens(), admission.effective_input_budget()));
-        assert_eq!(
+        let ratio_basis_points = context.ratio_basis_points;
+        let calibrated_tokens = modeled(context.calibrated);
+        let anchored_tokens = context.anchored.map(modeled);
+        let context_tokens = modeled(context.tokens);
+        let admission = gents_inference::compaction::ReductionAdmission::for_context(
+            context, budget,
+        )
+        .map(|admission| {
+            gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::Admission {
+                input_tokens: modeled(admission.input_tokens()),
+                input_budget: modeled(admission.effective_input_budget()),
+            }
+        });
+        gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::CompactionTriggerOutput {
+            ratio_basis_points,
+            calibrated_tokens,
+            anchored_tokens,
+            context_tokens,
+            compaction_input_budget: modeled(budget),
             admission,
-            case.admission
-                .map(|admission| (admission.input_tokens, admission.input_budget)),
-            "{}: production compaction trigger drifted from Lean",
-            case.name
-        );
-    }
+        }
+    });
 }

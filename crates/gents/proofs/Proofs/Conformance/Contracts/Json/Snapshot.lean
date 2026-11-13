@@ -320,20 +320,6 @@ def snapshotPromptTailJson : String :=
   ""
     ++ "\"prompt_assembly_retention_cases\":"
       ++ promptAssemblyRetentionCasesJson ++ ","
-    ++ "\"prompt_assembly_compaction_trigger_cases\":"
-      ++ promptAssemblyCompactionTriggerCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_replay_cases\":"
-      ++ promptAssemblyClaudeReplayCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_checkpoint_cases\":"
-    ++ promptAssemblyClaudeCheckpointCasesJson ++ ","
-    ++ "\"prompt_assembly_reasoning_suffix_cases\":"
-    ++ promptAssemblyReasoningSuffixCasesJson ++ ","
-    ++ "\"prompt_assembly_replay_shape_cases\":"
-    ++ promptAssemblyReplayShapeCasesJson ++ ","
-    ++ "\"prompt_assembly_replay_prefix_cases\":"
-    ++ promptAssemblyReplayPrefixCasesJson ++ ","
-    ++ "\"protected_replay_compaction_cases\":"
-    ++ protectedReplayCompactionCasesJson ++ ","
 
 def snapshotCaptureTailJson : String :=
   ""
@@ -824,23 +810,9 @@ def snapshotFileCasesJson : String :=
       (StreamingResponse.ReasoningDeltas.cases.map reasoningDeltaCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
-    ++ "\"prompt_assembly_responses_storage_cases\":" ++
-      promptAssemblyResponsesStorageCasesJson ++ ","
-    ++ "\"prompt_assembly_responses_effort_cases\":" ++
-      promptAssemblyResponsesEffortCasesJson ++ ","
-    ++ "\"retry_frontier_cases\":" ++ retryFrontierCasesJson ++ ","
-    ++ "\"retry_entry_cases\":" ++ retryEntryCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
-    ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
-    ++ "\"prompt_assembly_sanitize_cases\":"
-      ++ promptAssemblySanitizeCasesJson ++ ","
     ++ "\"provider_tool_identity_cases\":" ++ providerToolIdentityCasesJson ++ ","
 
-    ++ "\"discovery_guidance_cases\":" ++ discoveryGuidanceCasesJson ++ ","
-    ++ "\"prompt_assembly_assistant_order_cases\":"
-      ++ promptAssemblyAssistantOrderCasesJson ++ ","
-    ++ "\"prompt_assembly_mode_sanitize_cases\":"
-      ++ promptAssemblyModeSanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_repair_cases\":"
       ++ promptAssemblyRepairCasesJson ++ ","
 
