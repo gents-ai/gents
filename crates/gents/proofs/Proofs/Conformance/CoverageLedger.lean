@@ -1415,8 +1415,8 @@ def caseCoverage : List CoverageEntry :=
       "storage_failure_contracts_host_error")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_request_closure_cases"
-      "ClientRequestClosureCases")
+      "family"
+      "client_request_closure_closed")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -1431,8 +1431,16 @@ def caseCoverage : List CoverageEntry :=
       "client_shell_contracts_desktop")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_session_turn_cases"
-      "ClientSessionTurnCases")
+      "family"
+      "client_shell_contracts_session_turn_cases_selection")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_shell_contracts_session_turn_cases_read")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_shell_contracts_session_turn_cases_projection")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"

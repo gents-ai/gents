@@ -25,10 +25,6 @@ pub fn lean_canonical_payload_presentation_cases() -> &'static [LeanPayloadPrese
     &lean_contract_snapshot().canonical_payload_presentation_cases
 }
 
-pub fn lean_client_session_turn_cases() -> &'static [LeanSessionTurnCase] {
-    &lean_contract_snapshot().client_session_turn_cases
-}
-
 pub fn lean_compaction_canonical_projection_cases() -> &'static [LeanCanonicalCompactionCase] {
     &lean_contract_snapshot().compaction_canonical_projection_cases
 }
@@ -1152,7 +1148,6 @@ pub struct LeanContractSnapshot {
     pub goal_link_cases: Vec<LeanGoalLinkCase>,
     pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
-    pub client_request_closure_cases: Vec<serde_json::Value>,
     pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
@@ -1167,7 +1162,6 @@ pub struct LeanContractSnapshot {
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
-    pub client_session_turn_cases: Vec<LeanSessionTurnCase>,
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
@@ -4045,23 +4039,6 @@ pub enum LeanSessionInputEditor {
     WorkingAgent,
     Admin,
     Other,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionTurnCase {
-    pub name: String,
-    pub rows: Vec<LeanSessionTurnRow>,
-    pub selected_doc: usize,
-    pub page_request_docs: Vec<usize>,
-    pub seed_docs: Vec<usize>,
-    pub native_completion_premise: bool,
-    pub expected_display_turn_doc: usize,
-    pub expected_read_docs: Vec<usize>,
-    pub expected_turn_doc: usize,
-    pub expected_answer_doc: usize,
-    pub expected_queued_docs: Vec<usize>,
-    pub expected_folded_requests: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

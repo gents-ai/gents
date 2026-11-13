@@ -5,18 +5,128 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::json;
-use serde_json::Value;
 use std::sync::Arc;
+
+use gents_lean_vocab::families::client_request_closure_closed as closed_family;
+use gents_lean_vocab::families::client_shell_contracts_session_turn_cases_read as read_family;
+
+async fn seed_modeled_rows(
+    node: &Arc<defra_node::Node>,
+    session: &str,
+    modeled: &[closed_family::Row<String>],
+    missing_doc: &str,
+) -> RapidHashMap<u64, String> {
+    let mut docs: RapidHashMap<u64, String> = RapidHashMap::new();
+    for (index, row) in modeled.iter().enumerate() {
+        let requester = (row.requester != 1).then(|| format!("requester-{}", row.requester));
+        let state = match row.state.as_str() {
+            "unclaimed" => "pending",
+            "active" => "processing",
+            "terminal" if row.folded_into.is_some() || row.replaced_by.is_some() => "superseded",
+            "terminal" if row.completed => "completed",
+            "terminal" => "failed",
+            other => panic!("unknown modeled state {other}"),
+        };
+        let input = (row.queued_after.is_some() || row.background_wake).then(|| RequestInput {
+            queue: Some(RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source: if row.background_wake {
+                    QueueSource::BackgroundCompletion
+                } else {
+                    QueueSource::User
+                },
+                policy: QueuePolicy::Append,
+                key: None,
+                queued_after_request_id: row.queued_after.map(|after| format!("request-{after}")),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            }),
+            ..Default::default()
+        });
+        let retry_parent_doc = row.retry_parent_doc.map(|id| {
+            docs.get(&id)
+                .expect("modeled physical parent precedes its retry")
+                .clone()
+        });
+        let value = json!({
+            "request_id": format!("request-{}", row.request), "node_did":"closure-node",
+            "session_id":session, "requester_did":requester,
+            "purpose": if row.public_input {
+                gents_protocol::request_admission::RequestPurpose::Normal.as_str()
+            } else {
+                gents_protocol::request_admission::RequestPurpose::TitleAudit.as_str()
+            },
+            "lifecycle_state":state,
+            "created_at":format!("2026-10-15T00:00:00.{index:06}Z"), "input":input,
+            "retry_parent_request":row.retry_parent.map(|id| format!("request-{id}")),
+            "retry_parent_request_doc_id":retry_parent_doc,
+        });
+        let input = graphql_input_literal(&value).unwrap();
+        let result = ConfigAccess::write_local(
+            node,
+            "test.seed_closure",
+            &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+        docs.insert(
+            row.doc,
+            gents_store::graphql::created_doc_id(&result, "AgentRequest").unwrap(),
+        );
+    }
+    for row in modeled {
+        let Some(owner) = row.folded_into.or(row.replaced_by) else {
+            continue;
+        };
+        let owner_request = modeled
+            .iter()
+            .find(|candidate| candidate.doc == owner)
+            .map_or(owner, |candidate| candidate.request);
+        let doc = escape_graphql_string(&docs[&row.doc]);
+        let update = graphql_input_literal(&json!({
+            "superseded_by_request":format!("request-{owner_request}"),
+            "superseded_by_request_doc_id":docs.get(&owner).cloned().unwrap_or_else(|| missing_doc.to_owned()),
+            "failure_reason":if row.folded_into.is_some() {
+                gents_session::request::lifecycle::FOLDED_REASON
+            } else {
+                gents_session::request::lifecycle::REPLACED_REASON
+            },
+        }))
+        .unwrap();
+        ConfigAccess::write_local(node, "test.seed_fold_owner", &format!(
+            "mutation {{ update_AgentRequest(filter: {{_docID: {{_eq: \"{doc}\"}}}}, input: {update}) {{ _docID }} }}"
+        )).await.unwrap();
+    }
+    docs
+}
+
+async fn session_rows(access: &ConfigAccess, session: &str) -> Vec<AgentRequestRow> {
+    access
+        .read_view(
+            &RequestRows::new(gents_session::views::transcript::Scope::Node(
+                "closure-node".into(),
+            ))
+            .session_id(Some(session.to_owned())),
+        )
+        .await
+        .unwrap()
+}
+
+fn modeled_docs(docs: &RapidHashMap<u64, String>, rows: &[AgentRequestRow]) -> Vec<u64> {
+    rows.iter()
+        .map(|row| {
+            let doc = row.doc_id.as_deref().unwrap();
+            docs.iter()
+                .find(|(_, seeded)| seeded.as_str() == doc)
+                .map(|(modeled, _)| *modeled)
+                .unwrap_or_else(|| panic!("closure returned unseeded row {doc}"))
+        })
+        .collect()
+}
 
 #[tokio::test]
 async fn generated_request_closures_use_exact_database_dependencies() {
-    let contract = gents_lean_contract::load_contract_snapshot::<Value>()
-        .expect("executed Lean request closure contract");
-    let cases = contract["client_request_closure_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .chain(contract["client_session_turn_cases"].as_array().unwrap());
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::client::schema::ensure_runtime_schemas(&node)
         .await
@@ -33,199 +143,73 @@ async fn generated_request_closures_use_exact_database_dependencies() {
     .await
     .unwrap();
     let missing_doc = gents_store::graphql::created_doc_id(&outside_scope, "AgentRequest").unwrap();
-    let mut seeded = Vec::new();
-    for (case_index, case) in cases.enumerate() {
-        let session = format!("{case_index}-{}", case["name"].as_str().unwrap());
-        let modeled = case["rows"].as_array().unwrap();
-        let mut docs: RapidHashMap<u64, String> = RapidHashMap::new();
-        for (index, row) in modeled.iter().enumerate() {
-            let request = format!("request-{}", row["request"].as_u64().unwrap());
-            let requester = row["requester"].as_u64().unwrap();
-            let requester = (requester != 1).then(|| format!("requester-{requester}"));
-            let state = match row["state"].as_str().unwrap() {
-                "unclaimed" => "pending",
-                "active" => "processing",
-                "terminal" if row["folded_into"].is_number() || row["replaced_by"].is_number() => {
-                    "superseded"
-                }
-                "terminal" if row["completed"] == true => "completed",
-                "terminal" => "failed",
-                other => panic!("unknown modeled state {other}"),
-            };
-            let background_wake = row["background_wake"] == true;
-            let input =
-                (row["queued_after"].is_number() || background_wake).then(|| RequestInput {
-                    queue: Some(RequestQueue {
-                        delivery: Default::default(),
-                        position: None,
-                        source: if background_wake {
-                            QueueSource::BackgroundCompletion
-                        } else {
-                            QueueSource::User
-                        },
-                        policy: QueuePolicy::Append,
-                        key: None,
-                        queued_after_request_id: row["queued_after"]
-                            .as_u64()
-                            .map(|after| format!("request-{after}")),
-                        interrupted_request_id: None,
-                        background_completion_wake_version: None,
-                    }),
-                    ..Default::default()
-                });
-            let retry_parent = row["retry_parent"]
-                .as_u64()
-                .map(|id| format!("request-{id}"));
-            let retry_parent_doc = row["retry_parent_doc"].as_u64().map(|id| {
-                docs.get(&id)
-                    .expect("modeled physical parent precedes its retry")
-                    .clone()
-            });
-            let value = json!({
-                "request_id": request, "node_did":"closure-node", "session_id":session,
-                "requester_did":requester,
-                "purpose": if row["public_input"] == false {
-                    gents_protocol::request_admission::RequestPurpose::TitleAudit.as_str()
-                } else { gents_protocol::request_admission::RequestPurpose::Normal.as_str() },
-                "lifecycle_state":state,
-                "created_at":format!("2026-10-15T00:00:00.{index:06}Z"), "input":input,
-                "retry_parent_request":retry_parent, "retry_parent_request_doc_id":retry_parent_doc,
-            });
-            let input = graphql_input_literal(&value).unwrap();
-            let result = ConfigAccess::write_local(
-                &node,
-                "test.seed_closure",
-                &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
-            )
-            .await
-            .unwrap();
-            docs.insert(
-                row["doc"].as_u64().unwrap(),
-                gents_store::graphql::created_doc_id(&result, "AgentRequest").unwrap(),
-            );
-        }
-        for row in modeled {
-            let Some(owner) = row["folded_into"].as_u64().or(row["replaced_by"].as_u64()) else {
-                continue;
-            };
-            let owner_request = modeled
-                .iter()
-                .find(|row| row["doc"].as_u64() == Some(owner))
-                .and_then(|row| row["request"].as_u64())
-                .unwrap_or(owner);
-            let doc = escape_graphql_string(&docs[&row["doc"].as_u64().unwrap()]);
-            let update = graphql_input_literal(&json!({
-                "superseded_by_request":format!("request-{owner_request}"),
-                "superseded_by_request_doc_id":docs.get(&owner).cloned().unwrap_or_else(|| missing_doc.clone()),
-                "failure_reason":if row["folded_into"].is_number() {
-                    gents_session::request::lifecycle::FOLDED_REASON
-                } else {
-                    gents_session::request::lifecycle::REPLACED_REASON
-                },
-            }))
-            .unwrap();
-            ConfigAccess::write_local(&node, "test.seed_fold_owner", &format!(
-                "mutation {{ update_AgentRequest(filter: {{_docID: {{_eq: \"{doc}\"}}}}, input: {update}) {{ _docID }} }}"
-            )).await.unwrap();
-        }
-        seeded.push((case, docs, session));
-    }
-    let mut excluded_sql_cases = Vec::new();
-    let mut sql_case_count = 0;
-    for (case, docs, session) in seeded {
-        let all = access
-            .read_view(
-                &RequestRows::new(gents_session::views::transcript::Scope::Node(
-                    "closure-node".into(),
-                ))
-                .session_id(Some(session.clone())),
-            )
-            .await
-            .unwrap();
-        let seed_docs = case["seed_docs"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+    for (case_index, case) in
+        gents_lean_vocab::families::client_request_closure_closed::cases::<String>()
             .iter()
-            .map(|id| docs[&id.as_u64().unwrap()].as_str())
+            .enumerate()
+    {
+        let session = format!("closed-{case_index}-{}", case.input.name);
+        let docs = seed_modeled_rows(&node, &session, &case.input.rows, &missing_doc).await;
+        let seed_docs = case
+            .input
+            .seed_docs
+            .iter()
+            .map(|doc| docs[doc].as_str())
             .collect::<RapidHashSet<_>>();
-        let mut seeds = all
-            .iter()
+        let seeds = session_rows(&access, &session)
+            .await
+            .into_iter()
             .filter(|row| {
                 row.doc_id
                     .as_deref()
                     .is_some_and(|doc| seed_docs.contains(doc))
             })
-            .cloned()
             .collect::<Vec<_>>();
-        if let Some(selected_doc) = case["selected_doc"]
-            .as_u64()
-            .filter(|_| case["native_completion_premise"] == true)
-        {
-            sql_case_count += 1;
-            let selected = all
-                .iter()
-                .find(|row| row.doc_id.as_ref() == Some(&docs[&selected_doc]))
-                .unwrap()
-                .clone();
-            let page_docs = case["page_request_docs"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|doc| docs[&doc.as_u64().unwrap()].clone())
-                .collect::<Vec<_>>();
-            let scopes = super::super::request_seed_scopes(std::slice::from_ref(&selected));
-            seeds = access
-                .transact_readonly("test.request_seed_views", |txn| {
-                    let selected = selected.clone();
-                    let scopes = &scopes;
-                    let page_docs = &page_docs;
-                    Box::pin(async move {
-                        super::super::read_request_seeds_in_txn(
-                            txn,
-                            vec![selected],
-                            scopes,
-                            page_docs,
-                        )
-                        .await
-                    })
-                })
-                .await
-                .unwrap();
-        } else if case["selected_doc"].is_number() {
-            excluded_sql_cases.push(case["name"].as_str().unwrap());
-        }
-        let actual = close_request_rows_on(&access, seeds).await.unwrap();
-        let expected = case
-            .get("expected_read_docs")
-            .unwrap_or(&case["expected_docs"])
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|id| docs[&id.as_u64().unwrap()].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            actual
-                .iter()
-                .map(|row| row.doc_id.clone().unwrap())
-                .collect::<Vec<_>>(),
-            expected,
-            "{}",
-            case["name"]
-        );
+        let closed_rows = close_request_rows_on(&access, seeds).await.unwrap();
+        case.check(closed_family::ClosedOutput {
+            docs: modeled_docs(&docs, &closed_rows),
+        });
     }
-    assert_eq!(
-        excluded_sql_cases,
-        ["completed_without_authored_input_is_retained"]
-    );
-    assert_eq!(
-        sql_case_count + excluded_sql_cases.len(),
-        contract["client_session_turn_cases"]
-            .as_array()
+    for (case_index, case) in
+        gents_lean_vocab::families::client_shell_contracts_session_turn_cases_read::cases::<String>(
+        )
+        .iter()
+        .enumerate()
+    {
+        let session = format!("read-{case_index}-{}", case.input.name);
+        let modeled: Vec<closed_family::Row<String>> =
+            gents_lean_vocab::family::recode(&case.input.rows);
+        let docs = seed_modeled_rows(&node, &session, &modeled, &missing_doc).await;
+        let all = session_rows(&access, &session).await;
+        let selected = all
+            .iter()
+            .find(|row| row.doc_id.as_ref() == Some(&docs[&case.input.selected_doc]))
             .unwrap()
-            .len(),
-        "every modeled session query case binds SQL or its explicit publication-premise refusal"
-    );
+            .clone();
+        let page_docs = case
+            .input
+            .page_request_docs
+            .iter()
+            .map(|doc| docs[doc].clone())
+            .collect::<Vec<_>>();
+        let scopes = super::super::request_seed_scopes(std::slice::from_ref(&selected));
+        let seeds = access
+            .transact_readonly("test.request_seed_views", |txn| {
+                let selected = selected.clone();
+                let scopes = &scopes;
+                let page_docs = &page_docs;
+                Box::pin(async move {
+                    super::super::read_request_seeds_in_txn(txn, vec![selected], scopes, page_docs)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        let read_rows = close_request_rows_on(&access, seeds).await.unwrap();
+        case.check(read_family::ReadOutput {
+            read_docs: modeled_docs(&docs, &read_rows),
+        });
+    }
 }
 
 #[tokio::test]
