@@ -77,8 +77,6 @@ pub use readiness_gate::{goal_reconcile_settled, GoalReconcileSettled};
 pub(crate) use request_assignment::latest_assignment_goals;
 pub use request_assignment::RequestAssignmentObservation;
 pub use request_assignment::{load_request_assignment, load_request_assignment_scopes};
-#[cfg(test)]
-pub(crate) use request_head::assignment_allows;
 pub use request_head::authenticated_goal_request_members;
 pub(crate) use request_head::{
     assignment_request_id_in_txn, goal_session_is_idle, latest_goal_request, load_session_requests,

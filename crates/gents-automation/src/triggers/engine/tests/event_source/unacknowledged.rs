@@ -265,27 +265,8 @@ impl Delivery {
     }
 }
 
-fn lean_cursor_case(name: &str) -> serde_json::Value {
-    gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap()
-        ["trigger_delivery_cursor_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == name)
-        .unwrap_or_else(|| panic!("Lean cursor case {name} is missing"))
-        .clone()
-}
-
 #[tokio::test]
 async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfiguration() {
-    let model = lean_cursor_case("unadmitted_match_cannot_checkpoint");
-    assert_eq!(model["post_cursor"], model["pre_cursor"]);
-    assert!(model["journal_after"]
-        .as_array()
-        .unwrap()
-        .contains(&model["entry"]));
-    assert!(model["post"]["receipts"].as_array().unwrap().is_empty());
-
     let (mut delivery, intent) = first_delivery(true).await;
     let before = delivery.cursor().await;
     match delivery.engine.dispatch(intent).await {

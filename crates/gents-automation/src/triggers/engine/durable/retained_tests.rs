@@ -112,7 +112,7 @@ async fn outcome_rows(access: &ConfigAccess) -> Vec<Value> {
 
 #[tokio::test]
 async fn retained_task_outcomes_follow_modeled_assignment_history() {
-    for case in gents_lean_vocab::families::trigger_delivery_retained_outcome_recovery::cases::<String>() {
+    for case in gents_lean_vocab::families::trigger_delivery_retained_outcome_recovery::cases() {
         let name = case.input.name.as_str();
         let directory = tempfile::tempdir().unwrap();
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();

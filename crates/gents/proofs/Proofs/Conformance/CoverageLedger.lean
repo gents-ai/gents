@@ -584,8 +584,8 @@ def caseCoverage : List CoverageEntry :=
       "ProcessTransitions")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_admission_cases"
-      "Triggers.Durable")
+      "family"
+      "trigger_delivery_fire_admission")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -596,8 +596,16 @@ def caseCoverage : List CoverageEntry :=
       "trigger_delivery_fire_budget_admission")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_queue_cases"
-      "Triggers.Queue")
+      "family"
+      "trigger_delivery_queue_claims")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "trigger_delivery_queue_paged_claims")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "trigger_delivery_queue_dispatch_claims")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -608,16 +616,24 @@ def caseCoverage : List CoverageEntry :=
       "trigger_delivery_observed_claim")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_cursor_cases"
-      "EventDelivery.Durable")
+      "family"
+      "trigger_delivery_arrival_cursor")
+      "event-delivery" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "trigger_delivery_arrival_cursor_pending"
+      "model-production-gap: production returns no list of the arrivals a consumer still owes; the durable event-source scan decides each arrival's delivery inside its loop.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_callback_cursor_cases"
-      "EventDelivery.Durable")
+      "family"
+      "trigger_delivery_callback_cursor")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_outcome_cases"
-      "Triggers.Durable.Outcomes")
+      "family"
+      "trigger_delivery_outcome_reasons")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "trigger_delivery_outcome_recovery")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
