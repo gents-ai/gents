@@ -483,6 +483,7 @@ async fn discharge_completion_obligation(
 }
 
 async fn run_generated_wait_observations() {
+    let mut abandoned_follow_ups = 0;
     for generated in
         gents_lean_vocab::families::goal_claimed_publication_contracts_wait_observation::cases::<
             String,
@@ -911,6 +912,7 @@ async fn run_generated_wait_observations() {
                     }
                     assert!(rescan(wrapup).await.unwrap().is_none(), "{}", case.name);
                     assert_eq!(fixture.observe().await, published, "{}", case.name);
+                    abandoned_follow_ups += 1;
                 }
             }
             _ => {}
@@ -921,6 +923,10 @@ async fn run_generated_wait_observations() {
         });
         fixture.node.shutdown().await.expect("node shutdown");
     }
+    assert_eq!(
+        abandoned_follow_ups, 1,
+        "the budget wrap-up case drives its follow-up scans"
+    );
 }
 
 #[tokio::test]
