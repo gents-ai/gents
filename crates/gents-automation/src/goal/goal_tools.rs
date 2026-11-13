@@ -1,14 +1,16 @@
+use anyhow::Context as _;
 use chrono::Utc;
 use serde_json::json;
 
 use crate::goal::{
-    create_goal_for_request_from_access, load_goal_tool_context, refresh_goal_usage_from_access,
-    CreateGoalForSessionError, RequestAssignmentObservation, BLOCKED_AUDIT_THRESHOLD,
+    create_goal_for_request_from_access, load_goal_tool_context, load_goal_tool_context_with_usage,
+    refresh_goal_usage_observed, CreateGoalForSessionError, GoalUsageObservation,
+    RequestAssignmentObservation, BLOCKED_AUDIT_THRESHOLD,
 };
 use crate::operations::goal::set_as_working_agent;
-use gents_protocol::operations::goal::{GoalOperationError, GoalSetInput};
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_protocol::goal_status::GoalStatus;
+use gents_protocol::operations::goal::{GoalOperationError, GoalSetInput};
 use gents_toolcalls::call::hook::persistence::goal_tools::{
     GoalTool, GoalToolCall, GoalToolReply, GoalTools,
 };
@@ -125,7 +127,7 @@ async fn get_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
         json_string(json!({"error": "get_goal expects an empty object"}))
     } else {
         let context = async {
-            let mut context = load_goal_tool_context(
+            let (mut context, usage) = load_goal_tool_context_with_usage(
                 &call.actor_access(),
                 call.node_did(),
                 session_id,
@@ -133,18 +135,25 @@ async fn get_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
                 call.request_doc_id(),
             )
             .await?;
-            if context.can_write() {
-                if let RequestAssignmentObservation::Assigned(goal) = &context.assignment {
-                    refresh_goal_usage_from_access(&call.access()?, goal).await?;
+            let writable = match &context.assignment {
+                RequestAssignmentObservation::Assigned(goal) if context.can_write() => {
+                    Some(goal.clone())
                 }
-                context = load_goal_tool_context(
-                    &call.actor_access(),
-                    call.node_did(),
-                    session_id,
-                    request_id,
-                    call.request_doc_id(),
+                _ => None,
+            };
+            if let Some(goal) = writable {
+                let charged = usage
+                    .context("Goal usage is missing for a caller that may write it")?
+                    .total;
+                let (_, observation) = refresh_goal_usage_observed(
+                    &call.access()?,
+                    &goal,
+                    Some(i64::try_from(charged).unwrap_or(i64::MAX)),
                 )
                 .await?;
+                if let GoalUsageObservation::Observed(current) = observation {
+                    context.observe_current(current.map(|current| *current));
+                }
             }
             Ok::<_, anyhow::Error>(context)
         }
@@ -158,7 +167,7 @@ async fn get_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
             }
             Ok(context) => {
                 let read_only = !context.can_write();
-                match context.assignment {
+                match &context.assignment {
                     RequestAssignmentObservation::None => json_string(json!({"goal": null})),
                     RequestAssignmentObservation::Unknown => {
                         attribution_unavailable = true;
@@ -166,8 +175,9 @@ async fn get_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
                             json!({"error": "Goal caller attribution is unknown; continue from a verified request"}),
                         )
                     }
-                    RequestAssignmentObservation::Assigned(goal) => {
-                        let mut observed = crate::goal::snapshot(&goal, Utc::now());
+                    RequestAssignmentObservation::Assigned(assigned) => {
+                        let goal = context.observed_goal().unwrap_or(assigned);
+                        let mut observed = crate::goal::snapshot(goal, Utc::now());
                         if read_only {
                             observed.active_time_seconds =
                                 goal.active_time_seconds.unwrap_or_default().max(0);
@@ -279,8 +289,7 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
     let unmet = match (status, call.output_obligation_gate()) {
         (Some(GoalStatus::Complete), Some(gate)) => {
             let unmet = gate.unmet().await?;
-            (!unmet.is_empty())
-                .then(|| gents_loop::output_obligation::continuation_message(&unmet))
+            (!unmet.is_empty()).then(|| gents_loop::output_obligation::continuation_message(&unmet))
         }
         _ => None,
     };
@@ -335,7 +344,9 @@ async fn write_through_handler(
         Err(GoalOperationError::Stale) => Ok(Err(
             json!({"accepted": false, "error": "goal changed since this request observed it; reload with get_goal"}),
         )),
-        Err(refusal) => Ok(Err(json!({"accepted": false, "error": refusal.to_string()}))),
+        Err(refusal) => Ok(Err(
+            json!({"accepted": false, "error": refusal.to_string()}),
+        )),
     }
 }
 

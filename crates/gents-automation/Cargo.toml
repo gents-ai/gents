@@ -56,6 +56,7 @@ tokio-util = "0.7"
 tempfile = "3"
 
 [dev-dependencies]
+tracing-subscriber.workspace = true
 gents-automation = { path = ".", features = ["test-fixtures"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }

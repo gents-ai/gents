@@ -587,3 +587,72 @@ impl ConfigApplyTxn<'_> {
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 }
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct StatementCounts {
+    statements: Vec<(Option<&'static str>, String)>,
+}
+
+impl StatementCounts {
+    pub fn total(&self) -> usize {
+        self.statements.len()
+    }
+
+    pub fn mutations(&self) -> usize {
+        self.statements
+            .iter()
+            .filter(|(_, document)| document.trim_start().starts_with("mutation"))
+            .count()
+    }
+
+    pub fn for_operation(&self, operation: &str) -> usize {
+        self.statements
+            .iter()
+            .filter(|(label, _)| *label == Some(operation))
+            .count()
+    }
+
+    pub fn transactions(&self, operation: &str) -> usize {
+        let mut count = 0;
+        let mut inside = false;
+        for (label, _) in &self.statements {
+            let matches = *label == Some(operation);
+            if matches && !inside {
+                count += 1;
+            }
+            inside = matches;
+        }
+        count
+    }
+
+    pub fn statements(&self) -> impl Iterator<Item = (Option<&'static str>, &str)> {
+        self.statements
+            .iter()
+            .map(|(label, document)| (*label, document.as_str()))
+    }
+}
+
+tokio::task_local! {
+    static STATEMENT_LOG: Arc<std::sync::Mutex<Vec<(Option<&'static str>, String)>>>;
+}
+
+pub(super) fn record_statement(operation: Option<&'static str>, document: &str) {
+    let _ = STATEMENT_LOG.try_with(|log| {
+        log.lock()
+            .expect("statement log lock is never poisoned")
+            .push((operation, document.to_owned()))
+    });
+}
+
+pub async fn count_statements<F>(future: F) -> (F::Output, StatementCounts)
+where
+    F: Future,
+{
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let output = STATEMENT_LOG.scope(log.clone(), future).await;
+    let statements = log
+        .lock()
+        .expect("statement log lock is never poisoned")
+        .clone();
+    (output, StatementCounts { statements })
+}

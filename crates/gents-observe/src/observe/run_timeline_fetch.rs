@@ -958,9 +958,17 @@ mod tests {
         )
         .await
         .expect("create goal");
-        gents_automation::goal::refresh_goal_usage_from_access(&access, &active)
+        assert!(
+            gents_automation::goal::update_goal_fields_if_status_from_access(
+                &access,
+                &active,
+                gents_protocol::goal_status::GoalStatus::Active,
+                r#"tokens_used: 1200, active_time_seconds: 4, updated_at: "2026-08-14T12:00:01Z""#,
+            )
             .await
-            .expect("refresh usage");
+            .expect("write usage"),
+            "the usage-only commit under test must be written"
+        );
         gents_automation::goal::seed_goal_from_access(
             &access,
             root.did(),
