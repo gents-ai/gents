@@ -108,6 +108,15 @@ impl Fixture {
         .expect("file operation did not request consent")
     }
 
+    async fn pending_question(&self) {
+        loop {
+            if !approval::pending(self.home.path()).unwrap().is_empty() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     fn assert_clear(&self) {
         assert!(approval::pending_requests(self.home.path())
             .unwrap()
@@ -300,21 +309,48 @@ async fn cancelling_a_file_wait_removes_the_question_without_creating_directorie
 }
 
 #[tokio::test]
-async fn previews_and_callers_without_preferences_keep_their_existing_access() {
-    let fixture = Fixture::new(None);
-    let path = fixture.outside();
-    fixture.write(&path).await.unwrap();
-    workspace::save_mode(
-        fixture.home.path(),
-        &fixture.key,
-        0,
-        workspace::Mode::Ask,
-        None,
-    )
-    .unwrap();
-    fixture.edit(&path, true, None).await.unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world");
-    fixture.assert_clear();
+async fn file_tools_match_the_lean_consent_model() {
+    for case in gents_lean_vocab::families::workspace_file_consent_file_tools::cases() {
+        let mode: Option<workspace::Mode> = case.input.mode.as_deref().map(|wire| {
+            serde_json::from_value(serde_json::Value::String(wire.to_owned())).unwrap()
+        });
+        let fixture = Fixture::new(mode);
+        let path = if case.input.inside {
+            fixture.key.path.join("nested/file.txt")
+        } else {
+            fixture.outside()
+        };
+        let before = if case.input.dry_run {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "hello world").unwrap();
+            Some("hello world".to_owned())
+        } else {
+            None
+        };
+        let call = async {
+            if case.input.dry_run {
+                fixture.edit(&path, true, None).await
+            } else {
+                fixture.write(&path).await
+            }
+        };
+        let (asked, completed) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::select! {
+                biased;
+                result = call => (false, result.is_ok()),
+                () = fixture.pending_question() => (true, false),
+            }
+        })
+        .await
+        .expect("file operation neither finished nor asked for consent");
+        let after = std::fs::read_to_string(&path).ok();
+        fixture.assert_clear();
+        case.check(gents_lean_vocab::families::workspace_file_consent_file_tools::ConsentOutput {
+            asked,
+            completed,
+            changed: after != before,
+        });
+    }
 }
 
 #[tokio::test]

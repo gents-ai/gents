@@ -579,4 +579,58 @@ theorem sample_recovery_remaining_cleanup :
         ["second"] := by
   decide
 
+/-- The Task a request's fire lineage names, as the request's execution owner
+finds it before any hook or agent step. -/
+inductive TaskBinding where | missing | disabled | enabled
+  deriving DecidableEq, Repr
+
+inductive BindingRefusal where | missing | disabled
+  deriving DecidableEq, Repr
+
+/-- A request fired from a Task runs only with that Task's hooks, so a Task
+that is gone or disabled refuses the request instead of running the agent
+without them. -/
+def bindingRefusal : TaskBinding → Option BindingRefusal
+  | .missing => some .missing
+  | .disabled => some .disabled
+  | .enabled => none
+
+structure BoundRequest where
+  agentRan : Bool
+  requestState : RequestState
+  refusal : Option BindingRefusal
+  deriving DecidableEq, Repr
+
+/-- A refused binding fails the request before preparation; an admitted one
+runs the Task's hooks around the agent as `runOrReject` does. -/
+def boundRequest (binding : TaskBinding) (hooks : List TaskHook) (exec : HookExec)
+    (agent : AgentResult) : BoundRequest :=
+  match bindingRefusal binding, runOrReject hooks exec agent with
+  | some refusal, _ => { agentRan := false, requestState := .failed, refusal := some refusal }
+  | none, none => { agentRan := false, requestState := .failed, refusal := none }
+  | none, some run =>
+    { agentRan := run.agentResult.isSome, requestState := run.finalOutcome.toRequestState,
+      refusal := none }
+
+def hooklessBoundRequest (binding : TaskBinding) : BoundRequest :=
+  boundRequest binding [] okExec .success
+
+theorem refused_binding_never_runs_the_agent (binding : TaskBinding) (hooks : List TaskHook)
+    (exec : HookExec) (agent : AgentResult) (h : bindingRefusal binding ≠ none) :
+    (boundRequest binding hooks exec agent).agentRan = false ∧
+      (boundRequest binding hooks exec agent).requestState = .failed := by
+  cases binding <;> simp_all [bindingRefusal, boundRequest]
+
+theorem a_request_bound_to_a_missing_task_fails_closed :
+    hooklessBoundRequest .missing =
+      { agentRan := false, requestState := .failed, refusal := some .missing } := by decide
+
+theorem a_request_bound_to_a_disabled_hookless_task_fails_closed :
+    hooklessBoundRequest .disabled =
+      { agentRan := false, requestState := .failed, refusal := some .disabled } := by decide
+
+theorem an_enabled_hookless_task_runs_the_agent :
+    hooklessBoundRequest .enabled =
+      { agentRan := true, requestState := .completed, refusal := none } := by decide
+
 end TaskHooks

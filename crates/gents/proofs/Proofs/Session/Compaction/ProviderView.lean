@@ -111,4 +111,59 @@ theorem strip_providerView (msgs : List MessageRow) :
   unfold providerViewGlobal
   rw [strip_sanitize_commute, strip_idempotent]
 
+/-! ## Call keys scoped to their turn
+
+A result closes an announcement only inside its own turn, so a key reused by a
+later turn is resolved there and nowhere else. -/
+
+inductive ProviderViewStep where
+  | calls (callIds : List ToolExecution.ToolCallId)
+  | result (callId : ToolExecution.ToolCallId)
+  | ordinary
+
+def callScopeRowsFrom (index : Nat) : List ProviderViewStep → List MessageRow
+  | [] => []
+  | .calls callIds :: rest =>
+      ⟨index, 0, index, .assistant, .assistantToolCalls callIds.toFinset⟩
+        :: callScopeRowsFrom (index + 1) rest
+  | .result callId :: rest =>
+      ⟨index, 0, index, .user, .toolResult callId ⟨0, 0, 0⟩⟩
+        :: callScopeRowsFrom (index + 1) rest
+  | .ordinary :: rest =>
+      ⟨index, 0, index, .user, .ordinary⟩ :: callScopeRowsFrom (index + 1) rest
+
+def callScopeRows (steps : List ProviderViewStep) : List MessageRow :=
+  callScopeRowsFrom 0 steps
+
+def callCountOf : List MessageRow → Nat
+  | [] => 0
+  | row :: rest =>
+      (match row.kind with
+        | .assistantToolCalls callIds => callIds.card
+        | _ => 0) + callCountOf rest
+
+def resultCountOf : List MessageRow → Nat
+  | [] => 0
+  | row :: rest =>
+      (match row.kind with
+        | .toolResult _ _ => 1
+        | _ => 0) + resultCountOf rest
+
+def callKeyReuseAcrossTurns : List ProviderViewStep :=
+  [.calls [1], .result 1, .calls [1], .result 1]
+
+def incompleteSecondTurnReusingAKey : List ProviderViewStep :=
+  [.calls [1], .result 1, .calls [1]]
+
+theorem callKeyReuseAcrossTurnsSurvives :
+    sanitizeTurn (callScopeRows callKeyReuseAcrossTurns)
+      = callScopeRows callKeyReuseAcrossTurns := by
+  native_decide
+
+theorem incompleteSecondTurnReusingAKeyIsNotResolvedByTheFirst :
+    (callCountOf (sanitizeTurn (callScopeRows incompleteSecondTurnReusingAKey)),
+      resultCountOf (sanitizeTurn (callScopeRows incompleteSecondTurnReusingAKey)))
+      = (1, 1) := by
+  native_decide
+
 end Compaction

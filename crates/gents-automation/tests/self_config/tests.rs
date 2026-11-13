@@ -158,97 +158,109 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
 }
 
 #[tokio::test]
-async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
-    let fixture = gents_automation::test_support::self_config_fixture("root-policy").await;
-    fixture.grant_selected_configuration().await;
-    let owner = fixture.node_did().to_owned();
-    let agent_did = fixture.agent_did().to_owned();
-    let access = fixture.user_access();
-    let ceiling = tempfile::tempdir().unwrap();
-    let selected = ceiling.path().join("selected");
-    let sibling = ceiling.path().join("sibling");
-    std::fs::create_dir_all(&selected).unwrap();
-    std::fs::create_dir_all(&sibling).unwrap();
-    let selected_text = selected.to_string_lossy();
-    gents_tools::surface::set_workspace_root_with_readers(
-        access,
-        &owner,
-        &selected_text,
-        None,
-        true,
-        std::slice::from_ref(&agent_did),
-    )
-    .await
-    .unwrap();
-    let core =
-        fixture
-            .core()
-            .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
-                file_mode: gents_documents::FileToolMode::ReadOnly,
-                bash_mode: gents_documents::BashMode::Off,
-                root: Some(ceiling.path().to_path_buf()),
-            });
-    let patch = |root: &std::path::Path| {
-        vec![(
-            "host".into(),
-            Some(json!({
-                "root": root.to_string_lossy(),
-                "files": {"mode": "ReadOnly"}
-            })),
-        )]
-    };
-
-    let authored_inside = selected.join("detour").join("..");
-    let preview = core
-        .preview(tools_request(&core, patch(&authored_inside)))
-        .await
-        .expect("preview admits a descendant and does not persist it");
-    assert!(!preview.committed);
-    assert!(core
-        .preview(tools_request(&core, patch(&sibling)))
-        .await
-        .is_err());
-    assert!(core
-        .apply(tools_request(&core, patch(&sibling)))
-        .await
-        .is_err());
-
-    core.apply(tools_request(&core, patch(&authored_inside)))
-        .await
-        .expect("apply admits the selected root");
-    let tools_id = format!("{agent_did}:tools");
-    let persisted: gents_documents::Tools = core
-        .access()
-        .unwrap()
-        .transact_write("test.self_config.read_tools", |txn| {
-            let owner = owner.clone();
-            let tools_id = tools_id.clone();
-            Box::pin(async move {
-                let value = gents_documents::read_desired_state_document_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Tools,
-                    &owner,
-                    &tools_id,
-                )
-                .await?
-                .context("persisted Tools")?;
-                Ok::<_, anyhow::Error>(serde_json::from_value(value)?)
-            })
-        })
+async fn direct_tools_root_saves_follow_the_lean_model() {
+    for case in gents_lean_vocab::families::self_config_tools_root_outcomes::cases::<String>() {
+        let fixture = gents_automation::test_support::self_config_fixture("root-policy").await;
+        fixture.grant_selected_configuration().await;
+        let owner = fixture.node_did().to_owned();
+        let agent_did = fixture.agent_did().to_owned();
+        let access = fixture.user_access();
+        let ceiling = tempfile::tempdir().unwrap();
+        let selected = ceiling.path().join("selected");
+        std::fs::create_dir_all(selected.join("project")).unwrap();
+        std::fs::create_dir_all(ceiling.path().join("sibling")).unwrap();
+        gents_tools::surface::set_workspace_root_with_readers(
+            access,
+            &owner,
+            &selected.to_string_lossy(),
+            None,
+            true,
+            std::slice::from_ref(&agent_did),
+        )
         .await
         .unwrap();
-    assert_eq!(
-        persisted
-            .host
-            .as_ref()
-            .and_then(|host| host.root.as_deref()),
-        Some(
-            std::fs::canonicalize(&selected)
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
-        )
-    );
+        let core =
+            fixture
+                .core()
+                .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
+                    file_mode: gents_documents::FileToolMode::ReadOnly,
+                    bash_mode: gents_documents::BashMode::Off,
+                    root: Some(ceiling.path().to_path_buf()),
+                });
+        let authored = case
+            .input
+            .authored
+            .iter()
+            .fold(ceiling.path().to_path_buf(), |path, component| {
+                path.join(component)
+            });
+        let request = tools_request(
+            &core,
+            vec![(
+                "host".into(),
+                Some(json!({
+                    "root": authored.to_string_lossy(),
+                    "files": {"mode": "ReadOnly"}
+                })),
+            )],
+        );
+        let saved = match case.input.operation.as_str() {
+            "preview" => core.preview(request).await,
+            "apply" => core.apply(request).await,
+            other => panic!("unknown operation {other}"),
+        };
+        let (admitted, committed) = match saved {
+            Ok(outcome) => (true, outcome.committed),
+            Err(error) => {
+                let error = format!("{error:#}");
+                assert!(
+                    error.contains("is not admitted by published WorkspaceRoot policy"),
+                    "{:?}: {error}",
+                    case.input
+                );
+                (false, false)
+            }
+        };
+        let tools_id = format!("{agent_did}:tools");
+        let persisted: Option<gents_documents::Tools> = core
+            .access()
+            .unwrap()
+            .transact_write("test.self_config.read_tools", |txn| {
+                let owner = owner.clone();
+                let tools_id = tools_id.clone();
+                Box::pin(async move {
+                    let value = gents_documents::read_desired_state_document_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Tools,
+                        &owner,
+                        &tools_id,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(value.map(serde_json::from_value).transpose()?)
+                })
+            })
+            .await
+            .unwrap();
+        let canonical_ceiling = std::fs::canonicalize(ceiling.path()).unwrap();
+        let persisted = persisted
+            .and_then(|tools| tools.host)
+            .and_then(|host| host.root)
+            .map(|root| {
+                std::path::Path::new(&root)
+                    .strip_prefix(&canonical_ceiling)
+                    .unwrap_or_else(|_| panic!("{root} is outside the ceiling"))
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            });
+        case.check(
+            gents_lean_vocab::families::self_config_tools_root_outcomes::Outcome {
+                admitted,
+                committed,
+                persisted,
+            },
+        );
+    }
 }
 
 #[tokio::test]

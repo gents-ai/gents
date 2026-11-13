@@ -210,98 +210,140 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
 }
 
 #[tokio::test]
-async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
-    let (db, _user, user_access, binding) =
-        crate::test_support::root::signed_test_node("runtime-router").await;
-    let node = db.node.clone();
-    let node_did = db.node_identity.did().to_owned();
-    let agent_did = binding.agent_did;
-    create_user_agent_session(
-        &user_access,
-        &node_did,
-        None,
-        "blocked-dispatch",
-        &agent_did,
-        Some(&agent_did),
-    )
-    .await;
-    let (old_dispatcher, mut old_rx) = mpsc::channel(1);
-    old_dispatcher
-        .send(request(Some(&agent_did), "already-queued"))
-        .await
-        .unwrap();
-    let (new_dispatcher, mut new_rx) = mpsc::channel(1);
-    let initial_snapshot = routed_snapshot(1, &agent_did, old_dispatcher);
-    let updated_snapshot = routed_snapshot(2, &agent_did, new_dispatcher);
-    let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (request_tx, request_rx) = mpsc::channel(1);
-    let (status_owner, status) =
-        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.clone());
-    status.initialize_startup(&agent_did).await.unwrap();
-    status
-        .readiness()
-        .register_slot(&agent_did, 1)
-        .await
-        .unwrap();
-    status
-        .readiness()
-        .publish_snapshot(initial_snapshot.as_ref())
-        .await
-        .unwrap();
-    status
-        .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
-        .await
-        .unwrap();
-    let gate = RuntimeAdmissionGate::closed();
-    gate.open().await;
+async fn blocked_dispatch_follows_the_lean_model() {
+    for case in
+        gents_lean_vocab::families::router_dispatch_blocked_dispatch::cases::<String, String>()
+    {
+        let (db, _user, user_access, binding) =
+            crate::test_support::root::signed_test_node("runtime-router").await;
+        let node = db.node.clone();
+        let node_did = db.node_identity.did().to_owned();
+        let agent_did = binding.agent_did;
+        create_user_agent_session(
+            &user_access,
+            &node_did,
+            None,
+            "blocked-dispatch",
+            &agent_did,
+            Some(&agent_did),
+        )
+        .await;
+        let (old_dispatcher, mut old_rx) = mpsc::channel(1);
+        old_dispatcher
+            .send(request(Some(&agent_did), "already-queued"))
+            .await
+            .unwrap();
+        let (new_dispatcher, mut new_rx) = mpsc::channel(1);
+        let initial_snapshot = routed_snapshot(1, &agent_did, old_dispatcher);
+        let updated_snapshot = routed_snapshot(2, &agent_did, new_dispatcher);
+        let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (request_tx, request_rx) = mpsc::channel(1);
+        let (status_owner, status) =
+            RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.clone());
+        status.initialize_startup(&agent_did).await.unwrap();
+        status
+            .readiness()
+            .register_slot(&agent_did, 1)
+            .await
+            .unwrap();
+        status
+            .readiness()
+            .publish_snapshot(initial_snapshot.as_ref())
+            .await
+            .unwrap();
+        status
+            .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
+            .await
+            .unwrap();
+        let gate = RuntimeAdmissionGate::closed();
+        gate.open().await;
 
-    let mut routed = request(Some(&agent_did), "blocked-dispatch");
-    routed.node_did = node_did.to_string();
-    request_tx.send(Ok(routed)).await.unwrap();
-    let gate_for_router = gate.clone();
-    let router_node = node.clone();
-    let status_for_router = status.clone();
-    let router_node_did = node_did.clone();
-    let router = tokio::spawn(async move {
-        super::super::router::run_router_with_watcher(RouterInputs {
-            node: router_node,
-            node_did: router_node_did,
-            watcher: ScriptedWatcher { rx: request_rx },
-            active_snapshot_rx: active_rx,
-            shutdown: shutdown_rx,
-            admission_gate: gate_for_router,
-            runtime_status: status_for_router,
-            runtime_snapshot_observer: None,
-        })
-        .await
-    });
+        let mut routed = request(Some(&agent_did), "blocked-dispatch");
+        routed.node_did = node_did.to_string();
+        request_tx.send(Ok(routed)).await.unwrap();
+        let gate_for_router = gate.clone();
+        let router_node = node.clone();
+        let status_for_router = status.clone();
+        let router_node_did = node_did.clone();
+        let mut router = tokio::spawn(async move {
+            super::super::router::run_router_with_watcher(RouterInputs {
+                node: router_node,
+                node_did: router_node_did,
+                watcher: ScriptedWatcher { rx: request_rx },
+                active_snapshot_rx: active_rx,
+                shutdown: shutdown_rx,
+                admission_gate: gate_for_router,
+                runtime_status: status_for_router,
+                runtime_snapshot_observer: None,
+            })
+            .await
+        });
 
-    tokio::time::timeout(Duration::from_secs(1), gate.wait_for_entry_for_test())
-        .await
-        .expect("router must reach the full queue");
-    status
-        .readiness()
-        .publish_snapshot(updated_snapshot.as_ref())
-        .await
-        .unwrap();
-    active_tx.send(updated_snapshot).unwrap();
-    let dispatched = tokio::time::timeout(Duration::from_secs(1), new_rx.recv())
-        .await
-        .expect("router must leave the old full queue")
-        .expect("updated executor must receive the request");
-    assert_eq!(dispatched.session_id, "blocked-dispatch");
-    assert_eq!(old_rx.recv().await.unwrap().session_id, "already-queued");
-    assert!(old_rx.try_recv().is_err());
-
-    shutdown_tx.send(true).unwrap();
-    tokio::time::timeout(Duration::from_secs(1), router)
-        .await
-        .expect("router must shut down")
-        .unwrap()
-        .unwrap();
-    status_owner.close().await.unwrap();
-    node.shutdown().await.expect("node shutdown");
+        tokio::time::timeout(Duration::from_secs(1), gate.wait_for_entry_for_test())
+            .await
+            .expect("router must reach the full queue");
+        match case.input.event.as_str() {
+            "snapshot_changed" => {
+                status
+                    .readiness()
+                    .publish_snapshot(updated_snapshot.as_ref())
+                    .await
+                    .unwrap();
+                active_tx.send(updated_snapshot.clone()).unwrap();
+            }
+            "admission_closed" => {
+                tokio::time::timeout(Duration::from_secs(1), gate.close())
+                    .await
+                    .expect("gate close must cancel the blocked executor send");
+            }
+            _ => {}
+        }
+        let newest = tokio::time::timeout(Duration::from_secs(1), new_rx.recv())
+            .await
+            .ok()
+            .flatten()
+            .map(|request| request.session_id);
+        let stopped = tokio::time::timeout(Duration::from_millis(500), &mut router).await;
+        let router_stopped = stopped.is_ok();
+        match stopped {
+            Ok(joined) => joined.unwrap().unwrap(),
+            Err(_) => {
+                shutdown_tx.send(true).unwrap();
+                tokio::time::timeout(Duration::from_secs(1), router)
+                    .await
+                    .expect("router must shut down")
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+        let mut routed_queue = Vec::new();
+        while let Ok(queued) = old_rx.try_recv() {
+            routed_queue.push(queued.session_id);
+        }
+        assert_eq!(
+            routed_queue.first().map(String::as_str),
+            Some("already-queued")
+        );
+        let on_routed = routed_queue
+            .iter()
+            .any(|session| session == "blocked-dispatch");
+        let on_newest = newest.as_deref() == Some("blocked-dispatch");
+        let destination = match (on_routed, on_newest) {
+            (true, false) => "routed_executor",
+            (false, true) => "newest_executor",
+            (false, false) => "undispatched",
+            (true, true) => panic!("{:?}: the request reached two executors", case.input),
+        };
+        case.check(
+            gents_lean_vocab::families::router_dispatch_blocked_dispatch::BlockedDispatch {
+                destination: destination.to_owned(),
+                router_stopped,
+            },
+        );
+        status_owner.close().await.unwrap();
+        node.shutdown().await.expect("node shutdown");
+    }
 }
 
 #[tokio::test]

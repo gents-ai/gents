@@ -121,7 +121,6 @@ mod conformance {
         lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
     };
     use gents_documents::FileToolMode;
-    use gents_lean_vocab::lean_lsp_action_cases;
 
     #[test]
     fn lsp_actions_mutate_exactly_as_the_lean_model() {
@@ -130,7 +129,14 @@ mod conformance {
         });
     }
 
-    fn file_from_rank(rank: u8) -> FileToolMode {
+    #[test]
+    fn lsp_actions_cold_start_exactly_as_the_lean_model() {
+        gents_lean_vocab::families::lsp_lsp_action_may_cold_start::replay(|i| {
+            LspAction::may_cold_start(i.lsp_action)
+        });
+    }
+
+    fn file_from_rank(rank: u64) -> FileToolMode {
         match rank {
             0 => FileToolMode::Off,
             1 => FileToolMode::ReadOnly,
@@ -170,39 +176,18 @@ mod conformance {
     }
 
     #[test]
-    fn generated_lsp_action_cases_match_rust_authorization() {
-        let cases = lean_lsp_action_cases();
-        assert!(
-            !cases.is_empty(),
-            "no lsp_action_cases emitted by Lean; regenerate the contract snapshot"
-        );
-        for case in cases {
-            let file = file_from_rank(case.file_rank);
-            let action = action_from_lean(&case.action);
-            let source = source_from_lean(&case.source);
-            assert_eq!(
-                action.mutates(),
-                case.mutates,
-                "case {}: mutates mismatch",
-                case.name
-            );
-            assert_eq!(
-                lsp_advertised(case.lsp, file),
-                case.advertised,
-                "case {}: advertised mismatch",
-                case.name
-            );
-            assert_eq!(
-                lsp_action_authorized(case.lsp, file, action),
-                case.action_authorized,
-                "case {}: action_authorized mismatch",
-                case.name
-            );
-            assert_eq!(
-                lsp_apply_authorized(case.lsp, file, source),
-                case.apply_authorized,
-                "case {}: apply_authorized mismatch",
-                case.name
+    fn lsp_authorization_follows_the_lean_model() {
+        for case in gents_lean_vocab::families::contracts_lsp_action_authorization::cases() {
+            let file = file_from_rank(case.input.file_rank);
+            let action = action_from_lean(&case.input.action);
+            let source = source_from_lean(&case.input.source);
+            case.check(
+                gents_lean_vocab::families::contracts_lsp_action_authorization::LspAuthorization {
+                    mutates: action.mutates(),
+                    advertised: lsp_advertised(case.input.lsp, file),
+                    action_authorized: lsp_action_authorized(case.input.lsp, file, action),
+                    apply_authorized: lsp_apply_authorized(case.input.lsp, file, source),
+                },
             );
         }
     }

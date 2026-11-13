@@ -270,6 +270,50 @@ mod tests {
     use super::background_change_relevant;
 
     #[test]
+    fn background_wait_classifies_changes_and_wakes_as_the_lean_model_says() {
+        use super::observation::{classify, Observation};
+        use gents_lean_vocab::families::background_wait_change_classification::Observed;
+
+        gents_lean_vocab::families::background_wait_change_classification::replay::<
+            super::observation::Change,
+            super::observation::Wake,
+        >(|poll| {
+            let batch = events::DocumentChangeBatch {
+                changes: poll
+                    .changes
+                    .iter()
+                    .map(|change| events::DocumentChange {
+                        collection_id: change.collection.clone(),
+                        doc_id: change.doc_id.clone(),
+                        has_local_write: false,
+                    })
+                    .collect(),
+                resync_required: poll.resync_required,
+                updates: 1,
+            };
+            let change = classify((!poll.feed_closed).then_some(&batch), |batch| {
+                background_change_relevant(
+                    batch,
+                    &poll.tool_collection,
+                    &poll.tool_doc_id,
+                    &poll.request_collection,
+                    poll.caller_doc_id.as_deref(),
+                )
+            });
+            let now = tokio::time::Instant::now();
+            let later = now + std::time::Duration::from_secs(60);
+            let mut observation = Observation::new(later, poll.feed_open);
+            let wake = observation.wake(now, later, false, change);
+            observation.observe_change(change);
+            Observed {
+                change,
+                wake,
+                feed_open: observation.feed_open(),
+            }
+        });
+    }
+
+    #[test]
     fn background_invalidations_preserve_exact_scope_and_resync() {
         for (collection_id, doc_id, caller, resync, relevant) in [
             ("tools", "tool", Some("caller"), false, true),

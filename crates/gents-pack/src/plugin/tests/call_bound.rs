@@ -64,16 +64,32 @@ fn bound_dir_refuses_a_symlink_inside_within_pointing_outside() {
 }
 
 #[test]
-fn call_bound_refuses_a_plugin_that_declares_no_bind_dir() {
-    let (plugin, afb) = build_plugin_pack("no_bind_pack", ECHO_WAT, None);
-    let runner = PluginRunner::compile(&afb, &plugin).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let bound = BoundDir::new(dir.path(), None).unwrap();
+fn call_bound_admission_conforms_to_the_model() {
+    use gents_lean_vocab::families::plugin_bind_admission as family;
 
-    let error = runner
-        .call_bound(&serde_json::json!({}), &PluginBudget::default(), &bound)
-        .expect_err("a plugin with no bind_dir cannot be bound");
-    assert!(format!("{error:#}").contains("bind_dir"));
+    family::replay(|input| {
+        let (mut plugin, afb) = build_plugin_pack("bind_pack", ECHO_WAT, None);
+        if input.declares_bind_dir {
+            plugin.bind_dir = Some(crate::pack::PluginDirBinding {
+                input_field: "root".to_owned(),
+                original_field: None,
+                description: "a directory".to_owned(),
+                access: Default::default(),
+                write_fields: Vec::new(),
+            });
+        }
+        let runner = PluginRunner::compile(&afb, &plugin).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bound = BoundDir::new(dir.path(), None).unwrap();
+
+        let result = runner.call_bound(&serde_json::json!({}), &PluginBudget::default(), &bound);
+        family::BindOutput {
+            refused: result.is_err(),
+            names_bind_dir: result
+                .err()
+                .is_some_and(|error| format!("{error:#}").contains("bind_dir")),
+        }
+    });
 }
 
 #[test]

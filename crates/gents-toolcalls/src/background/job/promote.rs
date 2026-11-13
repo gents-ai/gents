@@ -156,11 +156,30 @@ pub async fn load_dynamic_run(
     })?;
     let owner = view.scope.node_did.clone();
     let agent_did = session.agent_did.clone();
-    let tools = access
+    let pinned_target_ids = ceiling.targets.clone();
+    let (tools, pinned_targets) = access
         .transact_readonly("plugin_job.promote.caller_tools", move |txn| {
             let (owner, agent_did) = (owner.clone(), agent_did.clone());
+            let pinned_target_ids = pinned_target_ids.clone();
             Box::pin(async move {
-                gents_documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await
+                let tools =
+                    gents_documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await?;
+                let mut targets = Vec::new();
+                for id in pinned_target_ids {
+                    if let Some(value) = gents_documents::read_desired_state_document_in_txn(
+                        txn,
+                        gents_store::collection::Collection::AgentTarget,
+                        &owner,
+                        &id,
+                    )
+                    .await?
+                    {
+                        targets.push(serde_json::from_value::<
+                            gents_documents::AgentTargetDocument,
+                        >(value)?);
+                    }
+                }
+                Ok::<_, anyhow::Error>((tools, targets))
             })
         })
         .await
@@ -174,11 +193,25 @@ pub async fn load_dynamic_run(
         .and_then(|plugin| plugin.job)
         .map(|job| job.policy)
         .unwrap_or_default();
-    let children: Vec<String> = view
-        .children
-        .iter()
-        .map(|child| child.target.clone())
-        .collect();
+    let mut children = Vec::new();
+    for child in &row.children {
+        let mut matching = pinned_targets.iter().filter(|target| {
+            target.target_node_did == child.target.0 && target.agent_did == child.target.1
+        });
+        let target = matching.next().ok_or_else(|| {
+            PromoteRefusal::Unreadable(format!(
+                "child {} has no matching pinned AgentTarget; restore the pinned target configuration before promoting",
+                child.slot
+            ))
+        })?;
+        if matching.next().is_some() {
+            return Err(PromoteRefusal::Unreadable(format!(
+                "child {} matches multiple pinned AgentTargets; its authored target reference cannot be recovered unambiguously",
+                child.slot
+            )));
+        }
+        children.push(target.target_id.clone());
+    }
     let targets = effective_targets(&children, &policy.dynamic_targets, &ceiling.targets);
     let node = &view.scope.node_did;
     let mut shipped = Vec::new();
