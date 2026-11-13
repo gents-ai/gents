@@ -63,3 +63,13 @@ fn covered_tool_operations_follow_executable_identity_model() {
         }
     }
 }
+
+#[test]
+fn p2p_grants_install_the_modeled_pairing_sources() {
+    for case in gents_lean_vocab::families::application_pairing_operation_source_cases::cases() {
+        let mut surface = ToolPolicySurface::secure_minimal();
+        surface.p2p_read = case.input.p2p_read;
+        surface.p2p_mutate = case.input.p2p_mutate;
+        case.check(serde_json::from_value(projection(&surface, false)).expect("modeled sources"));
+    }
+}

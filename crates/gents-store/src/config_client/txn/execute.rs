@@ -34,6 +34,15 @@ impl ConfigApplyTxn<'_> {
         super::delete_confirmation::confirm_configuration_delete(&response, collection, doc_id)
     }
 
+    pub(crate) async fn delete_application_pairing(&self, doc_id: &str) -> Result<()> {
+        self.delete_document_with_schema(
+            gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED_NAME,
+            doc_id,
+            gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED,
+        )
+        .await
+    }
+
     /// Delete an explicitly supported bundled document and require native confirmation.
     pub async fn delete_configuration_document(
         &self,

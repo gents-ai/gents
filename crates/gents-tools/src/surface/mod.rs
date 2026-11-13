@@ -448,6 +448,7 @@ impl ToolSurface {
             let mut tool = crate::builtin::p2p::P2pTool::new(
                 runtime.node.clone(),
                 runtime.identity.clone(),
+                runtime.agent_identity.clone(),
                 self.enable_p2p_mutations,
             );
             if let Some(agent) = runtime

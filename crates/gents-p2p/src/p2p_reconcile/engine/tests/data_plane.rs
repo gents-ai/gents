@@ -29,6 +29,7 @@ macro_rules! row_codec {
                 peer_id: row.route_key.clone(),
                 node_did: row.node_did.clone(),
                 replicator_addresses: (!row.addresses.is_empty()).then(|| row.addresses.clone()),
+                collections: None,
                 template: row.template.clone(),
                 source: row.source.clone(),
                 enrollment_request_digest: row.request_digest.clone(),
@@ -100,6 +101,9 @@ fn data_plane_desired_matches_lean() {
                     DataPlaneRefusal::MissingRouteKey => Refusal::MissingRouteKey,
                     DataPlaneRefusal::UndirectedRouteKey(_) => Refusal::UndirectedRouteKey,
                     DataPlaneRefusal::UnsignedPeer { .. } => Refusal::UnsignedPeer,
+                    DataPlaneRefusal::ApplicationCollections { .. } => {
+                        panic!("a modeled row names no application collections")
+                    }
                 }),
                 desired: None,
             },

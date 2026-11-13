@@ -8,7 +8,7 @@
 # access: reading a capture's body means reading every block it names. Blocks
 # dedupe within a physical session. Indexes are deliberately few:
 # blocks are the highest-volume collection.
-type RenderedRequestBlock @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "children") @index(fields: ["session_doc_id", "content_key"], unique: true) {
+type RenderedRequestBlock @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "children") @index(fields: ["session_doc_id", "content_key"], unique: true) {
     session_doc_id: String @index @immutable
     agent_did: String @immutable
     content_key: String @index @immutable
