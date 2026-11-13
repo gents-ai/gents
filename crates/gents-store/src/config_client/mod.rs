@@ -124,14 +124,15 @@ pub use schema_install::{
     schema_install_refusal, schema_request_admitted, SchemaInstallError, SchemaInstallMismatch,
     SchemaInstallPlan,
 };
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use txn::NativeOperationObservation;
 pub use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use txn::{count_statements, StatementCounts};
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use txn::NativeOperationObservation;
 pub use txn::{
-    CallbackAgentSelection, ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
-    NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite, TransactionFinalityError,
+    CallbackAgentSelection, ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry,
+    LocalConfigAccess, NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite,
+    TransactionFinalityError,
 };
 
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
@@ -470,8 +471,12 @@ impl ConfigAccess {
 
     /// The runtime host's own access as its node: it holds the runtime key,
     /// so it carries the key's proof (`Identity.OwnerStaged.KeyCarrier.hostAccess`).
-    pub fn local_runtime(node: Arc<Node>, runtime: Arc<dyn crate::identity::NodeIdentity>) -> Result<Self> {
-        let actor = identity::Did::new(runtime.did()).map_err(ConfigClientError::RelationshipTargetIdentity)?;
+    pub fn local_runtime(
+        node: Arc<Node>,
+        runtime: Arc<dyn crate::identity::NodeIdentity>,
+    ) -> Result<Self> {
+        let actor = identity::Did::new(runtime.did())
+            .map_err(ConfigClientError::RelationshipTargetIdentity)?;
         let access = Self::local_as(node, actor);
         Ok(access.with_runtime_agent_proof(crate::identity::RuntimeAgentProof::new(runtime)))
     }

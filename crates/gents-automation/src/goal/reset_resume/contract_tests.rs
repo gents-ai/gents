@@ -110,7 +110,9 @@ pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
 
 #[tokio::test]
 async fn generated_goal_reset_resume_cases_drive_real_transactions() {
-    for modeled in gents_lean_vocab::families::goal_reset_resume_contracts_reset::cases::<String, String>() {
+    for modeled in
+        gents_lean_vocab::families::goal_reset_resume_contracts_reset::cases::<String, String>()
+    {
         let case = &modeled.input;
         let before = serde_json::to_value(&case.before).unwrap();
         let f = Fixture::new(&before).await;
@@ -213,7 +215,11 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
                 let expected =
                     goal_continuation_identity(&goal.goal_id, stopped, sequence).unwrap();
                 assert_eq!(receipt.request_id, expected.request_id);
-                if receipt.created { "created" } else { "recovered" }
+                if receipt.created {
+                    "created"
+                } else {
+                    "recovered"
+                }
             }
             ResetResume::Deferred => "deferred",
             ResetResume::NotUsageLimited => "illegal",

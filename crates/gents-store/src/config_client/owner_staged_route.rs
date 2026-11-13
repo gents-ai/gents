@@ -102,11 +102,7 @@ impl OwnerStagedRoute {
     /// key's derivation proof (`Identity.OwnerStaged.derivedAgents`). Only the
     /// first binding counts, and a key that is not the node's own identity
     /// leaves the route answering `starting`.
-    pub fn serve(
-        &self,
-        node: &Arc<EmbeddedNode>,
-        runtime: Arc<dyn crate::identity::NodeIdentity>,
-    ) {
+    pub fn serve(&self, node: &Arc<EmbeddedNode>, runtime: Arc<dyn crate::identity::NodeIdentity>) {
         if node.node_identity_did() != Some(runtime.did()) {
             tracing::error!(
                 runtime_did = runtime.did(),
@@ -129,7 +125,12 @@ impl OwnerStagedRoute {
         )
     }
 
-    fn node(&self) -> Option<(Arc<EmbeddedNode>, Option<crate::identity::RuntimeAgentProof>)> {
+    fn node(
+        &self,
+    ) -> Option<(
+        Arc<EmbeddedNode>,
+        Option<crate::identity::RuntimeAgentProof>,
+    )> {
         let (node, proof) = self.served.get()?;
         Some((node.upgrade()?, proof.clone()))
     }
@@ -188,8 +189,7 @@ pub async fn consume_signed_command_nonce(
             let (mutation, runtime) = (&mutation, &runtime);
             Box::pin(async move {
                 let response = txn.execute(mutation).await?;
-                let doc =
-                    crate::graphql::created_doc_id(&response, "EnrollmentOperatorNonce")?;
+                let doc = crate::graphql::created_doc_id(&response, "EnrollmentOperatorNonce")?;
                 super::maybe_link_deferred_operation_in_txn(
                     txn,
                     "EnrollmentOperatorNonce",

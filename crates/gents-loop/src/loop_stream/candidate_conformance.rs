@@ -22,7 +22,10 @@ struct Response {
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct TypedReply {
-    #[expect(dead_code, reason = "the field exists for the structured-output schema")]
+    #[expect(
+        dead_code,
+        reason = "the field exists for the structured-output schema"
+    )]
     answer: String,
 }
 impl rig::completion::GetTokenUsage for Response {

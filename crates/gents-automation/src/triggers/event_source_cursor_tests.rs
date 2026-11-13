@@ -71,7 +71,9 @@ async fn trigger_cursor_traces_match_the_durable_model() -> Result<()> {
         )?;
         let create = gents_session::request::lifecycle::build_signed_request(
             spec,
-            gents_session::request::lifecycle::RequestSigner::Identity(fixture.agent_identity.as_ref()),
+            gents_session::request::lifecycle::RequestSigner::Identity(
+                fixture.agent_identity.as_ref(),
+            ),
         )
         .await?;
         let generation = gents_documents::automation::event_admission_generation(
@@ -126,7 +128,8 @@ async fn trigger_cursor_traces_match_the_durable_model() -> Result<()> {
                     let admission = match result {
                         Err(_) => "refused",
                         Ok(delivery) => {
-                            let first = admitted_request.get_or_insert(delivery.request.doc_id.clone());
+                            let first =
+                                admitted_request.get_or_insert(delivery.request.doc_id.clone());
                             assert_eq!(*first, delivery.request.doc_id, "{:?}", case.input);
                             if delivery.duplicate {
                                 "duplicate"
@@ -141,8 +144,14 @@ async fn trigger_cursor_traces_match_the_durable_model() -> Result<()> {
                     let accepted = agent
                         .transact_write("test.cursor.checkpoint", |txn| {
                             Box::pin(async move {
-                                exclude_arrival(txn, PIN_FIXED_DID, &trigger_consumer(), "WorkA", "1")
-                                    .await
+                                exclude_arrival(
+                                    txn,
+                                    PIN_FIXED_DID,
+                                    &trigger_consumer(),
+                                    "WorkA",
+                                    "1",
+                                )
+                                .await
                             })
                         })
                         .await

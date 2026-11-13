@@ -1488,10 +1488,7 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
                         scenario.name
                     );
                     assert!(
-                        matches!(
-                            step.event.as_deref(),
-                            Some("storage_returned" | "release")
-                        ),
+                        matches!(step.event.as_deref(), Some("storage_returned" | "release")),
                         "{}: unexpected modeled event {:?}",
                         scenario.name,
                         step.event

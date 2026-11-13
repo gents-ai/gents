@@ -1,5 +1,5 @@
 use gents_protocol::message::{
-    AssistantContent, Message, ToolCall, ToolFunction, ToolResult, ToolResultContent, Text,
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
 

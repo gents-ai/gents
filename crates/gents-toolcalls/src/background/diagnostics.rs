@@ -710,11 +710,10 @@ mod tests {
             let created = DateTime::parse_from_rfc3339(failed.created_at.as_deref().unwrap())
                 .unwrap()
                 .with_timezone(&Utc);
-            let terminalized = DateTime::parse_from_rfc3339(
-                failed.terminalized_at.as_deref().unwrap(),
-            )
-            .unwrap()
-            .with_timezone(&Utc);
+            let terminalized =
+                DateTime::parse_from_rfc3339(failed.terminalized_at.as_deref().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
             let now = created + chrono::Duration::seconds(case.age_seconds as i64);
             let notifications = (0..case.notifications)
                 .map(|index| notification("wake-1", &format!("child-{index}")))
@@ -739,7 +738,9 @@ mod tests {
                     .map(|age| age as u64),
                 last_failure: epoch.last_failure.clone(),
                 next_retry_delay_seconds: epoch.next_retry_at.as_deref().map(|at| {
-                    let at = DateTime::parse_from_rfc3339(at).unwrap().with_timezone(&Utc);
+                    let at = DateTime::parse_from_rfc3339(at)
+                        .unwrap()
+                        .with_timezone(&Utc);
                     (at - terminalized).num_seconds() as u64
                 }),
             }

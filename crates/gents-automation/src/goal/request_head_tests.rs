@@ -15,7 +15,9 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
     ];
-    for modeled in gents_lean_vocab::families::goal_wake_ancestry_contracts_ancestry::cases::<InputDisposition>() {
+    for modeled in gents_lean_vocab::families::goal_wake_ancestry_contracts_ancestry::cases::<
+        InputDisposition,
+    >() {
         let value = &modeled.input;
         let rows = &value.rows;
         let case = Case {
@@ -174,7 +176,12 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
         .ok()
         .and_then(|row| row.doc_id.clone());
         let number = |doc: Option<String>| {
-            doc.map(|doc| doc.strip_prefix("physical-").unwrap().parse::<u64>().unwrap())
+            doc.map(|doc| {
+                doc.strip_prefix("physical-")
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+            })
         };
         modeled.check(ancestry::AncestryOutput {
             entry: number(actual),

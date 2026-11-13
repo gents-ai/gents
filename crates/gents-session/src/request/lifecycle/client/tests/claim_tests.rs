@@ -100,7 +100,10 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         submit_client_request(&user_access, &create).await.unwrap();
         if !input.requester_node_permission {
             admin
-                .revoke_node_permission(&user.did().parse().unwrap(), NodePermission::DocumentUpdate)
+                .revoke_node_permission(
+                    &user.did().parse().unwrap(),
+                    NodePermission::DocumentUpdate,
+                )
                 .await
                 .unwrap();
         }

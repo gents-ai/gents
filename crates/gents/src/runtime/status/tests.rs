@@ -723,9 +723,9 @@ async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() 
         match input.action.as_str() {
             "publish" => {
                 status
-                    .publish_applied(&reconcile_snapshot(
-                        crate::runtime::agent::next_generation(input.pre_active_generation),
-                    ))
+                    .publish_applied(&reconcile_snapshot(crate::runtime::agent::next_generation(
+                        input.pre_active_generation,
+                    )))
                     .await;
                 let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
                 assert_eq!(row.last_reconcile_result, "applied", "{}", input.name);

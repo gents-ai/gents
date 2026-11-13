@@ -8,7 +8,8 @@ use gents_protocol::goal_control::GoalRevision;
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::operations::goal::{
     GoalActor, GoalClaim, GoalExisting, GoalExpected, GoalFieldChange, GoalOperationError,
-    GoalReason, GoalSession, GoalSetDecision, GoalSetInput, GoalStartDecision, GoalStartInput, GoalTarget,
+    GoalReason, GoalSession, GoalSetDecision, GoalSetInput, GoalStartDecision, GoalStartInput,
+    GoalTarget,
 };
 use gents_protocol::operations::inference::InferenceActor;
 use gents_protocol::request_admission::AgentRequestCreate;
@@ -217,7 +218,8 @@ pub async fn observe_revision(
     access
         .transact_readonly("goal.observe_revision", |txn| {
             Box::pin(async move {
-                let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await? else {
+                let Some(goal) = load_canonical_goal_in_txn(txn, node_did, session_id).await?
+                else {
                     return Ok(None);
                 };
                 let current = gents_store::graphql::newest_document_composite_commit_in_txn(
@@ -536,9 +538,7 @@ fn plan_set(
     };
     let post = match action {
         None => pre,
-        Some(action) => pre
-            .step(action)
-            .ok_or(illegal)?,
+        Some(action) => pre.step(action).ok_or(illegal)?,
     };
     Ok(GoalSetPlan {
         goal: goal.clone(),

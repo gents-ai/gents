@@ -639,7 +639,9 @@ async fn write_owned_request(
 async fn owned_test_hook_with_identity_policy(
     attributed: bool,
     policy: FailurePolicy,
-    folded_case: Option<&gents_lean_vocab::families::fold_queue_contracts_turn_input::TurnInputCase>,
+    folded_case: Option<
+        &gents_lean_vocab::families::fold_queue_contracts_turn_input::TurnInputCase,
+    >,
     signature: RequestSignature,
 ) -> (
     TestDb,

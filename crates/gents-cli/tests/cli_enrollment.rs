@@ -21,9 +21,9 @@ use std::fs;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
 #[cfg(feature = "live-e2e")]
 use anyhow::anyhow;
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use gents::support::snapshots::{SnapshotChanges, SnapshotReader};
 #[cfg(feature = "live-e2e")]
@@ -34,9 +34,9 @@ use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 #[cfg(feature = "live-e2e")]
 use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
-use gents_protocol::output::TerminalOutput;
 #[cfg(feature = "live-e2e")]
 use gents_protocol::output::MessageRole;
+use gents_protocol::output::TerminalOutput;
 #[cfg(feature = "live-e2e")]
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 #[cfg(feature = "live-e2e")]

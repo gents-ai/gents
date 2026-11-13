@@ -118,10 +118,7 @@ fn merged(row: &Row, input: Option<&serde_json::Value>) -> Row {
     next
 }
 
-async fn request_rows(
-    identity: &KeyIdentity,
-    case: &wire::GoalResumeInput<String>,
-) -> Vec<Row> {
+async fn request_rows(identity: &KeyIdentity, case: &wire::GoalResumeInput<String>) -> Vec<Row> {
     let mut rows = Vec::new();
     for (index, request) in case.requests.iter().enumerate() {
         assert!(
@@ -195,7 +192,10 @@ fn decision(
             create: created(effects).map(|create| {
                 assert_eq!(
                     create.caused_by_trigger_kind.as_deref(),
-                    create.caused_by_trigger_id.as_ref().map(|_| GOAL_TRIGGER_KIND),
+                    create
+                        .caused_by_trigger_id
+                        .as_ref()
+                        .map(|_| GOAL_TRIGGER_KIND),
                     "a requested continuation names the Goal trigger kind"
                 );
                 wire::ResumeCreateWire {
