@@ -61,7 +61,9 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             return report;
         }
     };
-    let archive = match pack_dir(dir).and_then(|(bytes, _)| PackArchive::from_bytes(&bytes)) {
+    let archive = match pack_dir(dir)
+        .and_then(|(bytes, _)| PackArchive::from_bytes(&bytes).map_err(anyhow::Error::from))
+    {
         Ok(archive) => archive,
         Err(error) => {
             report.problems.push(format!("{error:#}"));

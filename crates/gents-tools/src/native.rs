@@ -245,6 +245,17 @@ impl ToolSet {
         self.read_root.as_deref()
     }
 
+    /// The one root this set's file-writing tools write, or none when it has
+    /// no file-writing tool or its writers name different roots.
+    pub fn write_root(&self) -> Option<&std::path::Path> {
+        let mut roots = self.tools.iter().filter_map(|tool| match tool {
+            NativeTool::WriteFile { root } | NativeTool::EditFile { root } => Some(root),
+            _ => None,
+        });
+        let first = roots.next()?;
+        roots.all(|root| root == first).then_some(first.as_path())
+    }
+
     pub fn tool_names(&self) -> Vec<String> {
         self.tools.iter().map(NativeTool::tool_name).collect()
     }

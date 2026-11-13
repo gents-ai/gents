@@ -2036,7 +2036,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-eval/src/optimization/job.rs", 1),
     ("crates/gents-eval/src/optimization/promote.rs", 2),
     ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    ("crates/gents-pack/src/pack/core_packs.rs", 1),
     ("crates/gents-pack/src/pack/resolve.rs", 1),
     ("crates/gents-pack/src/plugin/allowed.rs", 2),
     ("crates/gents-tools/src/plugin/approval.rs", 2),

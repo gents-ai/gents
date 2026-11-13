@@ -554,6 +554,5 @@
     "browser",
     "automation"
   ],
-  "version": "1.1.2",
-  "plugin_interface": 1
+  "version": "1.0.0-rc2"
 }

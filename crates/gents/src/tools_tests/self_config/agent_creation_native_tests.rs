@@ -1797,7 +1797,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         std::fs::write(directory.path().join("config.json"), serde_json::to_vec(&config)?)?;
         std::fs::write(directory.path().join("README.md"), "# Fixture\n\n## Usage\nFixture")?;
         let (bytes, _) = gents_pack::pack::archive::pack_dir(directory.path())?;
-        gents_pack::pack::archive::PackArchive::from_bytes(&bytes)
+        Ok(gents_pack::pack::archive::PackArchive::from_bytes(&bytes)?)
     }).await??;
     let distribution = gents_pack::pack::node_packs::Distribution::stored(
         archive,

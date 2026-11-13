@@ -69,7 +69,7 @@ fn install_from_pack_locked(
     data_unique_keys: BTreeMap<String, Vec<Vec<String>>>,
     data_collection_fields: BTreeMap<String, Vec<String>>,
     data_collection_schemas: BTreeMap<String, String>,
-    plugin_interface: Option<u32>,
+    gents_version: Option<crate::pack::core_packs::Release>,
     consent: bool,
 ) -> Result<InstalledPlugin, GrantError> {
     // The pack lifecycle already holds this lock across its transaction window; flock does not re-enter.
@@ -118,7 +118,7 @@ fn install_from_pack_locked(
         data_unique_keys,
         data_collection_fields,
         data_collection_schemas,
-        plugin_interface,
+        gents_version,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -194,6 +194,8 @@ fn install_pack_plugins_locked<'a>(
 ) -> Result<Vec<InstalledPlugin>, GrantError> {
     lock.for_home(home)?;
     let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let gents_version =
+        crate::pack::core_packs::declared_release(manifest).map_err(anyhow::Error::from)?;
     manifest
         .metadata
         .plugins
@@ -219,7 +221,7 @@ fn install_pack_plugins_locked<'a>(
                 data_unique_keys,
                 data_collection_fields,
                 data_collection_schemas,
-                manifest.plugin_interface,
+                gents_version,
                 consent,
             )
         })
