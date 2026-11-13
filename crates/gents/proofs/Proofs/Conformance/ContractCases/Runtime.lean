@@ -2,6 +2,7 @@ import Proofs.Runtime.RuntimeReconcile
 import Lean
 import Mathlib.Data.Finset.Sort
 import Proofs.Conformance.ContractCases.Types
+import Proofs.Conformance.Family
 
 namespace Conformance.ContractCases
 
@@ -274,19 +275,6 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   , clientAgentReadinessCase "restart_claim_demotes_stale_ready" "observed" restartClaimedProcessState 4 4 true false false
   ]
 
-def sessionSelectionCasesJson : String :=
-  let cases : List (String × Nat × Option Nat) :=
-    [("invisible", 10, none), ("matching", 10, some 10), ("mismatched", 10, some 20)]
-  let result (selection : RuntimeState.SessionSelection) : String :=
-    match selection with
-    | .unavailable => "unavailable"
-    | .matched => "matched"
-    | .mismatched => "mismatched"
-  (Lean.toJson (cases.map fun (name, requested, visible) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("requested", Lean.toJson requested),
-     ("visible", Lean.toJson visible),
-     ("expected", Lean.toJson (result (RuntimeState.sessionSelection requested visible)))] )).compress
-
 def configurationAdmissionCasesJson : String :=
   let cases : List (String × Bool × Nat × Nat) :=
     [("visible", true, 3, 3), ("invisible_same_generation", false, 3, 3),
@@ -302,3 +290,37 @@ def configurationAdmissionCasesJson : String :=
      ("retries", Lean.toJson (RuntimeState.retriesDeferred deferredAt active))] )).compress
 
 end Conformance.ContractCases
+
+namespace Conformance.RuntimeSession
+
+open Lean RuntimeState
+
+deriving instance ToJson for SessionSelection, SessionSelectionDisposition
+
+structure SelectionInput where
+  requested : Nat
+  visible : Option Nat
+  attempts : Nat
+  bound : Nat
+  deriving ToJson
+
+structure SelectionOutput where
+  selection : SessionSelection
+  disposition : SessionSelectionDisposition
+  deriving ToJson
+
+@[conformance_family]
+def selection : Family SelectionInput SelectionOutput where
+  inputs := [
+    { requested := 10, visible := none, attempts := 0, bound := 1 },
+    { requested := 10, visible := some 10, attempts := 0, bound := 1 },
+    { requested := 10, visible := some 20, attempts := 0, bound := 1 },
+    { requested := 10, visible := none, attempts := 0, bound := 3 },
+    { requested := 10, visible := none, attempts := 3, bound := 3 }
+  ]
+  model := fun i =>
+    let selected := sessionSelection i.requested i.visible
+    { selection := selected,
+      disposition := sessionSelectionDisposition selected i.attempts i.bound }
+
+end Conformance.RuntimeSession

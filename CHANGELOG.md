@@ -23,6 +23,15 @@ source consistency checks, not a separate runtime compatibility version.
   alerts built on `ready == 1` will trip on every restart until the new
   runtime publishes its own readiness. The predecessor's generations and
   agent entries stay readable for diagnosis (#3643).
+- Auxiliary requests route again. The router selected a request's session
+  under the request's own requester DID, but a title audit's or access
+  review's requester is the selected Agent, not the client that opened the
+  session, so every client-opened session's title request stayed pending and
+  the request watcher re-served it after each cooldown without progress.
+  Sessions now receive generated titles, a request whose session stays
+  unreadable is failed with a reason after three routing attempts instead of
+  being retried indefinitely, and a title audit whose session row is not
+  readable is logged instead of silently counting as already titled (#3657).
 - Breaking: a home created by v1.0.0-rc1 or v1.0.0-rc0 is not opened,
   converted or migrated. Starting on one stops before any write and says to
   back it up or delete it and run `gents`; see

@@ -3194,7 +3194,6 @@ pub struct LeanContractSnapshot {
     pub client_session_turn_cases: Vec<LeanSessionTurnCase>,
     pub request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub client_live_delta_cases: Vec<LeanClientLiveDeltaCase>,
-    pub runtime_session_selection_cases: Vec<LeanRuntimeSessionSelectionCase>,
     pub runtime_configuration_admission_cases: Vec<
         LeanRuntimeConfigurationAdmissionCase,
     >,
@@ -10477,15 +10476,6 @@ pub struct LeanRuntimeReconcileCase {
     pub tracked_request_session: usize,
     pub tracked_request_agent: usize,
     pub tracked_session_agent: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRuntimeSessionSelectionCase {
-    pub expected: String,
-    pub name: String,
-    pub requested: u64,
-    pub visible: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

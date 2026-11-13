@@ -90,8 +90,8 @@ pub(crate) use observations::{
 pub use observations::{apply_title_in_txn, rename_session_on};
 pub use observations::{
     derive_session_preview, refresh_session_request_observation_in_txn,
-    session_needs_generated_title, update_session_title_with_source, SessionRequestRefresh,
-    REFUSAL_PROJECTION_EVENT_TARGET,
+    session_needs_generated_title, update_session_title_with_source, GeneratedTitleNeed,
+    SessionRequestRefresh, REFUSAL_PROJECTION_EVENT_TARGET,
 };
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 #[cfg(test)]

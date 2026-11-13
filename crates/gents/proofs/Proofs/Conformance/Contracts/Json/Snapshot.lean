@@ -804,7 +804,6 @@ def snapshotClientCasesJson : String :=
       ++ startupReadinessCasesJson ++ ","
     ++ "\"readiness_publication_cases\":"
       ++ readinessPublicationCasesJson ++ ","
-    ++ "\"runtime_session_selection_cases\":" ++ sessionSelectionCasesJson ++ ","
     ++ "\"runtime_configuration_admission_cases\":" ++ configurationAdmissionCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
