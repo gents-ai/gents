@@ -52,10 +52,15 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
     let guest_path = guest_home.path().join("guest.key");
     let guest = tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(guest_path, None))
         .await??;
-    let owner = db.client_access(db.node_identity.as_ref());
+    let administrator = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(db.node_identity.did())?,
+    );
     let guest_did = identity::Did::new(guest.did())?;
     for permission in [NodePermission::DocumentRead, NodePermission::CollectionGet] {
-        owner.grant_node_permission(&guest_did, permission).await?;
+        administrator
+            .grant_node_permission(&guest_did, permission)
+            .await?;
     }
     for node in [db.node_identity.did(), guest.did()] {
         for (id, enabled) in [("z", Some(true)), ("d", Some(false)), ("a", None)] {
@@ -66,12 +71,12 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
                     .set_optional(service::ENABLED, enabled),
             )
             .render();
-            let created = owner
+            let created = administrator
                 .write_rendered("test.mcp_views.fixture", &mutation)
                 .await?;
             if id == "a" {
                 let doc_id = gents_store::graphql::created_doc_id(&created, "ToolServiceRegistry")?;
-                owner
+                administrator
                     .add_actor_relationship("ToolServiceRegistry", &doc_id, "reader", &guest_did)
                     .await?;
             }
@@ -79,11 +84,11 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
     }
     for node in [db.node_identity.did(), guest.did()] {
         let parent = Create::new(Input::new().set(node_fields::NODE_DID, node)).render();
-        let parent = owner
+        let parent = administrator
             .write_rendered("test.mcp_views.parent", &parent)
             .await?;
         let parent_id = gents_store::graphql::created_doc_id(&parent, "Node")?;
-        owner
+        administrator
             .add_actor_relationship("Node", &parent_id, "runtime_reader", &guest_did)
             .await?;
         for (service_id, status, updated_at, guest_readable) in [
@@ -99,13 +104,13 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
                     .set(health::UPDATED_AT, updated_at),
             )
             .render();
-            let created = owner
+            let created = administrator
                 .write_rendered("test.mcp_views.health", &mutation)
                 .await?;
             if guest_readable {
                 let doc_id =
                     gents_store::graphql::created_doc_id(&created, "ToolServiceHealthState")?;
-                owner
+                administrator
                     .add_resource_relationship(
                         "ToolServiceHealthState",
                         &doc_id,
@@ -117,6 +122,7 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
             }
         }
     }
+    let owner = db.client_access(db.node_identity.as_ref());
     let guest_access = db.client_access(&guest);
     let cases = gents_lean_vocab::families::mcp_views_inventory::cases::<Node, Reader, Selection>();
     assert!(!cases.is_empty());
@@ -152,7 +158,8 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
             .await?;
         case.check(rows.into_iter().map(|row| row.config.service_id).collect());
     }
-    let pages = gents_lean_vocab::families::mcp_views_page::cases::<Cursor, Node, PageSize, Reader>();
+    let pages =
+        gents_lean_vocab::families::mcp_views_page::cases::<Cursor, Node, PageSize, Reader>();
     assert!(!pages.is_empty());
     for case in pages {
         let input = &case.input;
