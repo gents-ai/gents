@@ -579,10 +579,17 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         .iter()
         .find(|case| case.name == "interrupted_then_repaired")
         .unwrap();
-    access
-        .delete_resource_relationship("AgentSession", session_doc, "parent", "agents", &agent_doc)
-        .await
-        .unwrap();
+    gents_store::test_support::relationships::resource_in_txn(
+        &access,
+        "AgentSession",
+        session_doc,
+        "parent",
+        "agents",
+        &agent_doc,
+        true,
+    )
+    .await
+    .unwrap();
     access.write("test.session.interrupted", &format!(
         r#"mutation {{ update_AgentSession(docID: "{}", input: {{ relationships_pending: true }}) {{ _docID }} }}"#,
         escape_graphql_string(session_doc),
@@ -691,16 +698,17 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
             expected
         );
     }
-    access
-        .delete_resource_relationship(
-            "TriggerFire",
-            receipt_doc,
-            "parent",
-            "sessions",
-            session_doc,
-        )
-        .await
-        .unwrap();
+    gents_store::test_support::relationships::resource_in_txn(
+        &access,
+        "TriggerFire",
+        receipt_doc,
+        "parent",
+        "sessions",
+        session_doc,
+        true,
+    )
+    .await
+    .unwrap();
     assert!(
         write_task_delivery(&access, &fire, false, &create)
             .await

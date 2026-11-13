@@ -1829,25 +1829,26 @@ async fn schema_obligation_publication_matches_lean() -> Result<()> {
 
 #[tokio::test]
 async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection() -> Result<()> {
-    let node = Arc::new(
-        gents_store::test_support::node_builder()
-            .with_node_acp_enabled()
-            .build()
-            .await?,
-    );
+    let (builder, runtime) = gents_store::test_support::keyed_node_builder();
+    let node = Arc::new(builder.with_node_acp_enabled().build().await?);
     gents_store::schema::ensure_runtime_schemas(&node).await?;
     node.add_collection(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
     )
     .await?;
-    let access = runtime_access(&node)?;
-    crate::test_support::bootstrap_signed_test_node(
-        &access,
-        node.node_identity_did().context("fixture node has no node identity")?,
-    )
-    .await;
-    let owner = "did:key:outcome-owner";
-    apply(&access, cyclic_configuration(owner, CODING_AGENT_DID)).await?;
+    let access = ConfigAccess::local_runtime(node.clone(), runtime.clone())?;
+    let owner = gents_store::identity::NodeIdentity::did(runtime.as_ref());
+    crate::test_support::bootstrap_signed_test_node(&access, owner).await;
+    let agent = gents_store::identity::provision_agent_identity(runtime.as_ref())?;
+    let mut configuration = cyclic_configuration(owner, &agent.agent_did);
+    for document in configuration
+        .iter_mut()
+        .filter(|document| document.collection == Collection::Agent)
+    {
+        document.add["creation_nonce"] = json!(agent.creation_nonce);
+        document.update["creation_nonce"] = json!(agent.creation_nonce);
+    }
+    apply(&access, configuration).await?;
     let source = |collection: &str| {
         config(
             Collection::EventSource,
@@ -1857,7 +1858,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     let task = |emit_outcome: bool| {
         config(
             Collection::Task,
-            json!({"node_did":owner,"task_id":"handle","agent_did":"did:key:z6MkwUZdxNwTrfGMmUBJxWHoG7KjwfKHSimZMXYhJHCYtRAU","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
+            json!({"node_did":owner,"task_id":"handle","agent_did":agent.agent_did,"prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
         )
     };
     let trigger = config(

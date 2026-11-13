@@ -53,13 +53,25 @@ pub fn runtime_handle() -> tokio::runtime::Handle {
 
 /// Fixtures that reopen a store must retain its original signing identity.
 pub fn node_builder() -> defra_node::NodeBuilder {
+    keyed_node_builder().0
+}
+
+/// [`node_builder`] with the runtime key it names, for a fixture that builds
+/// the host's own access (`ConfigAccess::local_runtime`).
+pub fn keyed_node_builder() -> (
+    defra_node::NodeBuilder,
+    std::sync::Arc<crate::identity::KeyIdentity>,
+) {
     use crate::identity::NodeIdentity as _;
 
     let directory = tempfile::tempdir().unwrap();
     let identity =
         crate::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
             .unwrap();
-    defra_node::Node::builder().with_node_identity_did(identity.did())
+    (
+        defra_node::Node::builder().with_node_identity_did(identity.did()),
+        std::sync::Arc::new(identity),
+    )
 }
 
 pub struct EnvVarGuard {
