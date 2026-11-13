@@ -151,7 +151,10 @@ pub(super) fn classify_client_start_error(
 ) -> ClientStartFailure {
     match gents_store::local::storage_backend::incompatible_store(error.as_ref(), node_data_dir) {
         Some(store) => (
-            BridgeError::new(BridgeErrorCode::IncompatibleLocalStore, store.to_string()),
+            BridgeError::new(
+                BridgeErrorCode::IncompatibleLocalStore,
+                store.client_store_report(),
+            ),
             Some(Box::new(store)),
         ),
         None => (

@@ -11,10 +11,10 @@ use gents_desktop_core::preference::MANAGED_SERVER_CONFIG;
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::operations::install_repair::RepairInput;
 use gents_protocol::operations::install_repair::{
-    Blocker, Finding, HomeChoice, RepairClientScope, RepairOperation, RepairOutcome, RepairReceipt,
-    RepairStep, ServiceMove,
+    Blocker, Finding, HomeChoice, RepairAnswer, RepairClientScope, RepairOperation, RepairOutcome,
+    RepairReceipt, RepairStep, ServiceMove,
 };
-use gents_service::repair::{execute, sets_aside_refused, Progress, ServiceProgram};
+use gents_service::repair::{execute, Progress, ServiceProgram};
 use std::future::Future;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager as _, Runtime};
@@ -47,15 +47,13 @@ where
             }
         })
     });
-    repair_with(state, service_defined, |choice, refused| async move {
-        let input = if refused {
-            RepairInput::Refused { choice }
-        } else {
-            RepairInput::Prepare {
-                choice,
-                service_move: ServiceMove::BeforeSetup,
-                operation: RepairOperation::Run,
-            }
+    repair_with(state, service_defined, |choice| async move {
+        let input = RepairInput::Prepare {
+            choice,
+            service_move: ServiceMove::BeforeSetup,
+            operation: RepairOperation::Run,
+            interactive: false,
+            answer: RepairAnswer::None,
         };
         execute(input, &program, &mut Quiet, None)
             .await
@@ -92,16 +90,15 @@ where
     }
 }
 
-/// `prepare` is also told whether a launch or status read already saw the
-/// node refuse the home as older data, which is set aside rather than asked
-/// about on `IncompatibleHomeScreen`.
+/// The repair runs without a person to ask, so a home it cannot use as it is
+/// is reported, never moved: `IncompatibleHomeScreen` asks.
 pub(super) async fn repair_with<P, F>(
     state: &DesktopAppState,
     service_defined: bool,
     prepare: P,
 ) -> Result<ManagedServerRepairResult, BridgeError>
 where
-    P: FnOnce(HomeChoice, bool) -> F,
+    P: FnOnce(HomeChoice) -> F,
     F: Future<Output = anyhow::Result<RepairReceipt>>,
 {
     let paths = &state.policy.desktop_paths;
@@ -123,19 +120,9 @@ where
         home: node_home,
         explicit: false,
     };
-    let refused = state
-        .managed_server
-        .lock()
-        .await
-        .incompatible_store
-        .as_ref()
-        .is_some_and(|store| sets_aside_refused(&choice, store.kind));
-    let report = prepare(choice, refused)
+    let report = prepare(choice)
         .await
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
-    if refused && matches!(report.outcome, RepairOutcome::NeedsSetup) {
-        state.managed_server.lock().await.incompatible_store = None;
-    }
     // A node serving a deleted folder is part of the lost local node.
     let stale_node = report.repaired.contains(&Finding::StaleNode);
     let mut repaired: Vec<String> = report

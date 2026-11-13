@@ -372,7 +372,7 @@ async fn transcript_pages_bound_tool_groups_without_reintroducing_response_rows(
         .map(|sequence| {
             format!(
                 r#"t{sequence}: create_AgentToolCall(input: {{
-                    tool_call_key: "tool-heavy:{sequence}", session_id: "tool-heavy",
+                    tool_call_key: "tool-heavy:{sequence}", node_did: "did:test:node", session_id: "tool-heavy",
                     message_sequence: {sequence}, tool_name: "bounded_tool",
                     tool_call_id: "call-{sequence}", status: "completed",
                     lifecycle_state: "completed"
@@ -556,7 +556,7 @@ async fn a_window_brings_results_delivered_after_its_cut_but_not_as_rows() {
     let created = node
         .execute(
             r#"mutation { t: create_AgentToolCall(input: {
-                tool_call_key: "results:tool", session_id: "results",
+                tool_call_key: "results:tool", node_did: "did:test:node", session_id: "results",
                 request_doc_id: "request-results", message_sequence: 2,
                 tool_name: "list_files", tool_call_id: "call-1",
                 status: "completed", lifecycle_state: "completed"

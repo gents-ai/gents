@@ -1021,7 +1021,10 @@ async fn collection_cleanup_empties_removes_and_frees_the_name() {
         json!({"argv":["collection","preview","remove","Scratch"]}),
     )
     .await;
-    assert!(full["error"].as_str().unwrap().contains("2 document(s)"));
+    assert!(
+        full["error"].as_str().unwrap().contains("2 document(s)"),
+        "{full}"
+    );
     assert_eq!(
         full["recovery"]["args"]["argv"],
         json!(["collection", "preview", "empty", "Scratch"])
@@ -1107,12 +1110,11 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
     let node_did = node.node_identity_did().unwrap().to_owned();
     let home = tempfile::tempdir().unwrap();
     let tool = SchemaTool {
-        access: ConfigAccess::local(node.clone()),
-        node_did: node_did.clone(),
         home: Some(home.path().to_owned()),
-        caller: None,
+        ..SchemaTool::new(node.clone())
     };
-    let access = ConfigAccess::local(node.clone());
+    let access =
+        ConfigAccess::local_as(node.clone(), identity::Did::new(node_did.as_str()).unwrap());
     apply(
         &tool,
         json!({"argv":["collection","create"],"options":{"sdl":SCRATCH_SDL}}),
@@ -1201,7 +1203,10 @@ async fn collection_cleanup_refuses_managed_and_referenced_collections() {
             json!({"argv":["collection","preview","remove","Scratch"]}),
         )
         .await;
-        assert!(refused["error"].as_str().unwrap().contains("still in use"));
+        assert!(
+            refused["error"].as_str().unwrap().contains("still in use"),
+            "{refused}"
+        );
         let users = users(&refused);
         assert_eq!(users.len(), 1, "{refused}");
         assert!(users[0].contains(expected), "{refused}");

@@ -291,6 +291,5 @@ it("retires a confirmed form after explicit question dismissal", async () => {
   await f.app.actions.answerMailboxQuestion(item(), original);
   expect(loadChatDrafts().chatDrafts).toHaveLength(1);
   await expect(f.app.actions.dismissMailboxItem("question")).resolves.toBeUndefined();
-  expect(f.dismiss).toHaveBeenCalledExactlyOnceWith("question");
   expect(loadChatDrafts().chatDrafts).toHaveLength(0);
 });

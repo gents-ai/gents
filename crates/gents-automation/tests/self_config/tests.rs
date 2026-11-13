@@ -9,6 +9,7 @@ use gents_tools::builtin::self_config::test_support::{
 mod live_documents;
 #[path = "tests/pack_authoring.rs"]
 mod pack_authoring;
+#[cfg(target_os = "macos")]
 static PLUGIN_BUILDER_STUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]

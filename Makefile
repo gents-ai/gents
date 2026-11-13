@@ -49,7 +49,7 @@ help:
 	@echo
 	@echo "Tests:"
 	@echo "  make test                  Run core Rust and CLI tests"
-	@echo "  make test-agent            Run Gents runtime tests"
+	@echo "  make test-agent            Run the runtime crates' tests (the CI runtime suite)"
 	@echo "  make test-agent-conformance  Run runtime conformance tests"
 	@echo "  make test-agent-e2e        Run live-inference agent E2E tests"
 	@echo "  make test-cli              Run CLI tests"
@@ -228,8 +228,10 @@ proofs:
 .PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-eval-drivers test-evals live-configurator-eval
 test: test-agent test-cli test-eval-drivers
 
+RUNTIME_TEST_PACKAGES := $(shell .github/scripts/compile-rust-ci-suite.sh runtime --list-packages)
+
 test-agent:
-	$(CARGO) test -p gents $(CARGO_PROFILE_FLAG)
+	$(CARGO) test --no-fail-fast $(addprefix -p ,$(RUNTIME_TEST_PACKAGES)) $(CARGO_PROFILE_FLAG)
 
 test-agent-conformance:
 	$(CARGO) test -p gents --test conformance $(CARGO_PROFILE_FLAG)

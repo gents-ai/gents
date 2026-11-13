@@ -366,13 +366,23 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
     use identity::Identity as _;
 
     let (core, directory) = crate::tests::support::boot_core().await;
-    let server = wiremock::MockServer::start().await;
-    let graphql = format!("{}/api/v0/graphql", server.uri());
     let home = directory.path().join("runtime");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
     let identity = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
+    let store = core.stores().ensure(&did);
+    let database = gents_store::test_support::wire_database::WireDatabase::spawn(
+        json!({"Node": [{"_docID": "node", "node_did": did, "display_name": "Current settings"}]}),
+        std::sync::Arc::new(move |collection| {
+            if collection == "Node" {
+                store.replace_snapshot(gents_desktop_core::client::ClientStore::default());
+            }
+            Box::pin(async { Ok(()) })
+        }),
+    )
+    .await;
+    let graphql = database.graphql.clone();
     std::fs::write(
         home.join("init.json"),
         json!({"node_name":"Local", "node_did":did, "key_path":key_path}).to_string(),
@@ -393,24 +403,6 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
     )
     .await
     .unwrap();
-    let data = json!({"data":{
-        "nodes":[{"node_did":did, "display_name":"Current settings"}],
-        "agents":[], "inference_backends":[], "inference_profiles":[],
-        "runtimes":[], "node_readiness":[], "contexts":[], "tools":[],
-        "inference_sampling":[], "inference_execution":[], "tasks":[],
-        "schedules":[], "triggers":[], "skills":[], "compactions":[],
-        "tool_service_registries":[], "event_sources":[], "agent_targets":[],
-        "datastore_tool_surfaces":[], "sessions":[], "requests":[], "backend_observations":[]
-    }});
-    let store = core.stores().ensure(&did);
-    wiremock::Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path("/api/v0/graphql"))
-        .respond_with(move |_: &wiremock::Request| {
-            store.replace_snapshot(gents_desktop_core::client::ClientStore::default());
-            wiremock::ResponseTemplate::new(200).set_body_json(&data)
-        })
-        .mount(&server)
-        .await;
     let result = ClientHost::new(core.clone())
         .execute(
             protocol::ClientCommand::InferenceSetupState {
