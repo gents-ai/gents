@@ -457,6 +457,7 @@ pub struct LeanContractSnapshot {
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
+    #[serde(deserialize_with = "required_nullable")]
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
