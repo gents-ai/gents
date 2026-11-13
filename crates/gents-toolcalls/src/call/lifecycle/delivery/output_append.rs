@@ -94,13 +94,6 @@ pub enum ToolOutputAppendRejection {
 #[derive(Debug)]
 pub struct ToolOutputAppendReceipt {
     pub(crate) range: std::ops::Range<u64>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Conformance binds the returned physical segment ID to the modeled write."
-        )
-    )]
     pub segment_doc_id: String,
 }
 

@@ -29,7 +29,6 @@ pub fn config(categories: &[&str]) -> SelfConfigToolConfig {
 /// Grants `subject` the direct sets Lean `Identity.GrantSets.directSets` gives
 /// `recipient`, as the runtime owner does at init. The fixture Agent is its
 /// Node's default Agent, so it holds the modeled default-Agent sets.
-
 pub async fn grant_modeled_direct_sets(
     db: &gents_inference::test_support::TestDb,
     recipient: &str,
@@ -68,7 +67,6 @@ pub async fn grant_modeled_direct_sets(
 /// `schema-and-pack-overlap` without schema, and `datastore-query`). A fixture
 /// Agent that authors its own Engineer-like Tools must already hold these: the
 /// native held-bounded rule refuses a self-granted tool source.
-
 pub async fn grant_engineer_tool_source_permissions(
     db: &gents_inference::test_support::TestDb,
     subject: &str,
@@ -626,7 +624,6 @@ impl SelfConfigFixture {
 /// Every config tool access is the invoking Agent's managed signer (Lean
 /// `Identity.AgentBlockSigning.configToolRoute`); the modeled cases name the
 /// actor and signer each core is built with.
-
 pub async fn config_call(
     tools: &[Box<dyn ToolDyn>],
     argv: &[&str],
@@ -641,7 +638,6 @@ pub async fn config_call(
 
 /// A digest names a stored pack. One the store does not hold is answered
 /// with where a just-built pack is, not an OS error and a home path.
-
 pub fn node_identity(label: &str) -> std::sync::Arc<dyn gents_store::identity::NodeIdentity> {
     let tempdir = tempfile::tempdir().expect("identity tempdir");
     std::sync::Arc::new(

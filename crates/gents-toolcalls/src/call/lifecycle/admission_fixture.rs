@@ -924,11 +924,13 @@ pub async fn materialize_session_message(
         &gents_session::session::message::NoSessionMessageGoals,
         &cause,
         &target,
-        gents_session::session::message::RenderedBody {
-            content: prompt.to_owned(),
-            goal: None,
-        },
-        None,
+        (
+            gents_session::session::message::RenderedBody {
+                content: prompt.to_owned(),
+                goal: None,
+            },
+            None,
+        ),
         false,
         &signer,
     )
@@ -1002,262 +1004,6 @@ pub async fn pending_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, To
     .await
     .expect("publish pending canonical native tool admission");
     (node, path, tool)
-}
-
-#[cfg(test)]
-mod lifecycle_tests {
-    use super::*;
-    use crate::call::lifecycle::FailureClass;
-    use gents_session::session::tool_call_state::CancelCause;
-
-    /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.
-    async fn row(
-        access: &gents_store::config_client::ConfigAccess,
-        session_id: &str,
-    ) -> serde_json::Value {
-        let session = gents_store::graphql::escape_graphql_string(session_id);
-        let response = access
-            .execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id request_doc_id lifecycle_state tool_failure_class cancel_cause deadline_at await_mode }} }}"#))
-            .await
-            .unwrap();
-        let rows = response["data"]["AgentToolCall"].as_array().unwrap();
-        assert_eq!(rows.len(), 1, "exactly one admitted physical tool row");
-        rows.first().cloned().expect("one admitted tool call")
-    }
-
-    async fn teardown(node: Arc<EmbeddedNode>, path: PathBuf) {
-        node.shutdown().await.expect("shut down test node");
-        std::fs::remove_dir_all(path).unwrap();
-    }
-
-    #[tokio::test]
-    async fn signed_admission_keeps_user_node_and_agent_distinct() {
-        let (fixture, request) = published_admission_with_owner(PublishedAdmissionOptions {
-            name: "signed-fixture-identities".to_owned(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-        let actor = fixture.tool.access().unwrap().actor_did().unwrap();
-        let requester = request.request().requester_did.as_deref().unwrap();
-        assert_ne!(requester, fixture.node_did);
-        assert_ne!(requester, actor);
-        assert_ne!(actor, fixture.node_did);
-        assert_eq!(request.request().agent_did, actor);
-        assert!(
-            gents_session::request::binding::load_agent_request_with_access(
-                &fixture.tool.access().unwrap(),
-                &request.request().request_id,
-            )
-            .await
-            .unwrap()
-            .is_some()
-        );
-        assert!(gents_session::request::binding::load_agent_request(
-            &fixture.node,
-            &request.request().request_id,
-        )
-        .await
-        .unwrap()
-        .is_none());
-        teardown(fixture.node, fixture.path).await;
-    }
-
-    #[tokio::test]
-    async fn admitted_native_lifecycle_persists_failure_class() {
-        let (node, path, mut tool) = published_spawn_parent("native-fail").await;
-        let access = tool.access().unwrap();
-        tool.fail("error", FailureClass::ToolReturnedError)
-            .await
-            .unwrap();
-        let row = row(&access, "session-native-fail").await;
-        assert_eq!(row["lifecycle_state"], "failed");
-        assert_eq!(row["tool_failure_class"], "toolReturnedError");
-        teardown(node, path).await;
-    }
-
-    #[tokio::test]
-    async fn admitted_native_terminal_is_irreversible() {
-        let (node, path, mut tool) = published_spawn_parent("native-terminal").await;
-        tool.complete("done").await.unwrap();
-        let error = tool.fail("late", FailureClass::External).await.unwrap_err();
-        assert!(format!("{error:#}").contains("illegal tool call transition"));
-        teardown(node, path).await;
-    }
-
-    #[tokio::test]
-    async fn admitted_native_rejects_duplicate_dispatch_without_duplicate_row() {
-        let (node, path, mut tool) = published_spawn_parent("native-duplicate").await;
-        let access = tool.access().unwrap();
-        let error = tool.start_running().await.unwrap_err();
-        assert!(format!("{error:#}").contains("cannot re-dispatch"));
-        assert_eq!(
-            row(&access, "session-native-duplicate").await["lifecycle_state"],
-            "running"
-        );
-        teardown(node, path).await;
-    }
-
-    #[tokio::test]
-    async fn admitted_native_load_preserves_state_deadline_and_terminal_updates() {
-        let (node, path, tool) = published_spawn_parent("native-load").await;
-        let access = tool.access().unwrap();
-        let expected_deadline = tool.deadline_at;
-        let mut loaded = ToolCallLifecycle::load_as(
-            node.clone(),
-            tool.actor().clone(),
-            "session-native-load",
-            "spawn-native-tool",
-        )
-        .await
-        .unwrap()
-        .expect("admitted tool loads");
-        loaded.inherit_signer(&tool).unwrap();
-        loaded.timeout().await.unwrap();
-        let row = row(&access, "session-native-load").await;
-        assert_eq!(row["lifecycle_state"], "timedOut");
-        assert_eq!(row["cancel_cause"], "deadline");
-        let observed = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        assert_eq!(observed, expected_deadline);
-        teardown(node, path).await;
-    }
-
-    #[tokio::test]
-    async fn admitted_native_load_returns_persisted_failure() {
-        let (node, path, mut tool) = published_spawn_parent("native-load-failure").await;
-        let access = tool.access().unwrap();
-        let actor = tool.actor().clone();
-        tool.fail("oops", FailureClass::Transport).await.unwrap();
-        drop(tool);
-        let loaded = ToolCallLifecycle::load_as(
-            node.clone(),
-            actor,
-            "session-native-load-failure",
-            "spawn-native-tool",
-        )
-        .await
-        .unwrap()
-        .expect("terminal admitted tool loads");
-        drop(loaded);
-        let row = row(&access, "session-native-load-failure").await;
-        assert_eq!(row["lifecycle_state"], "failed");
-        assert_eq!(row["tool_failure_class"], "transport");
-        teardown(node, path).await;
-    }
-
-    #[tokio::test]
-    async fn admitted_native_cancel_during_run_and_after_load_persist_causes() {
-        let (node, path, mut tool) = published_spawn_parent("native-cancel").await;
-        let access = tool.access().unwrap();
-        tool.cancel_during_run(CancelCause::UserCancelled)
-            .await
-            .unwrap();
-        let persisted = row(&access, "session-native-cancel").await;
-        assert_eq!(persisted["lifecycle_state"], "cancelled");
-        assert_eq!(persisted["cancel_cause"], "userCancelled");
-        teardown(node, path).await;
-
-        let (node, path, tool) = published_spawn_parent("native-cancel-load").await;
-        let access = tool.access().unwrap();
-        let actor = tool.actor().clone();
-        assert!(row(&access, "session-native-cancel-load").await["cancel_cause"].is_null());
-        drop(tool);
-        let mut loaded = ToolCallLifecycle::load_as(
-            node.clone(),
-            actor,
-            "session-native-cancel-load",
-            "spawn-native-tool",
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        loaded
-            .bind_agent_signer(access.managed_agent_signer())
-            .unwrap();
-        loaded
-            .cancel_during_run(CancelCause::Interrupted)
-            .await
-            .unwrap();
-        assert_eq!(
-            row(&access, "session-native-cancel-load").await["cancel_cause"],
-            "interrupted"
-        );
-        teardown(node, path).await;
-    }
-
-    #[tokio::test]
-    async fn admitted_pending_native_cancel_persists_cause() {
-        let (node, path, mut tool) = pending_spawn_parent("native-pending-cancel").await;
-        let access = tool.access().unwrap();
-        tool.cancel_before_dispatch(CancelCause::Interrupted)
-            .await
-            .unwrap();
-        let row = row(&access, "session-native-pending-cancel").await;
-        assert_eq!(row["lifecycle_state"], "cancelled");
-        assert_eq!(row["cancel_cause"], "interrupted");
-        teardown(node, path).await;
-    }
-
-    #[tokio::test]
-    async fn timeout_after_terminal_parent_sweep_matches_the_lean_model() {
-        let cases = gents_lean_vocab::families::tool_call_timeout_after_sweep_adoption::cases();
-        for (index, case) in cases.iter().enumerate() {
-            let name = format!("timeout-cas-{index}");
-            let admission = published_admission(PublishedAdmissionOptions {
-                name: name.clone(),
-                real_identity: true,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-            let node = admission.node;
-            let path = admission.path;
-            let node_did = admission.node_did;
-            let mut tool = admission.tool;
-            let tool_access = tool.access().unwrap();
-            let signer = tool_access.managed_agent_signer().unwrap();
-            let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
-            let request = gents_store::graphql::escape_graphql_string(&format!("request-{name}"));
-            if case.input.parent != "live" {
-                let parent = gents_store::graphql::escape_graphql_string(&case.input.parent);
-                let response = tool_access
-                    .write(
-                        "test.timeout_cas.end_parent",
-                        &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, input: {{ lifecycle_state: "{parent}" }}) {{ _docID }} }}"#),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(
-                    response["data"]["update_AgentRequest"]
-                        .as_array()
-                        .map(Vec::len),
-                    Some(1)
-                );
-            }
-
-            let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
-                &node,
-                &node_did,
-                &identities,
-            )
-            .await
-            .unwrap();
-            let timeout_reported = tool.timeout().await.unwrap();
-            let persisted = row(&tool_access, &format!("session-{name}")).await;
-            case.check(
-                gents_lean_vocab::families::tool_call_timeout_after_sweep_adoption::Observed {
-                    swept: u64::try_from(report.tool_calls_terminalized).unwrap(),
-                    timeout_reported,
-                    lifecycle_state: persisted["lifecycle_state"].as_str().unwrap().to_owned(),
-                    cancel_cause: persisted["cancel_cause"].as_str().map(str::to_owned),
-                    failure_class: persisted["tool_failure_class"].as_str().map(str::to_owned),
-                },
-            );
-            teardown(node, path).await;
-        }
-    }
 }
 
 pub fn recovery_identities(admission: &PublishedAdmission) -> Vec<Arc<dyn NodeIdentity>> {
@@ -1586,4 +1332,260 @@ pub async fn set_state(
         )
         .await
         .unwrap();
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::call::lifecycle::FailureClass;
+    use gents_session::session::tool_call_state::CancelCause;
+
+    /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.
+    async fn row(
+        access: &gents_store::config_client::ConfigAccess,
+        session_id: &str,
+    ) -> serde_json::Value {
+        let session = gents_store::graphql::escape_graphql_string(session_id);
+        let response = access
+            .execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id request_doc_id lifecycle_state tool_failure_class cancel_cause deadline_at await_mode }} }}"#))
+            .await
+            .unwrap();
+        let rows = response["data"]["AgentToolCall"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "exactly one admitted physical tool row");
+        rows.first().cloned().expect("one admitted tool call")
+    }
+
+    async fn teardown(node: Arc<EmbeddedNode>, path: PathBuf) {
+        node.shutdown().await.expect("shut down test node");
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_admission_keeps_user_node_and_agent_distinct() {
+        let (fixture, request) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "signed-fixture-identities".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let actor = fixture.tool.access().unwrap().actor_did().unwrap();
+        let requester = request.request().requester_did.as_deref().unwrap();
+        assert_ne!(requester, fixture.node_did);
+        assert_ne!(requester, actor);
+        assert_ne!(actor, fixture.node_did);
+        assert_eq!(request.request().agent_did, actor);
+        assert!(
+            gents_session::request::binding::load_agent_request_with_access(
+                &fixture.tool.access().unwrap(),
+                &request.request().request_id,
+            )
+            .await
+            .unwrap()
+            .is_some()
+        );
+        assert!(gents_session::request::binding::load_agent_request(
+            &fixture.node,
+            &request.request().request_id,
+        )
+        .await
+        .unwrap()
+        .is_none());
+        teardown(fixture.node, fixture.path).await;
+    }
+
+    #[tokio::test]
+    async fn admitted_native_lifecycle_persists_failure_class() {
+        let (node, path, mut tool) = published_spawn_parent("native-fail").await;
+        let access = tool.access().unwrap();
+        tool.fail("error", FailureClass::ToolReturnedError)
+            .await
+            .unwrap();
+        let row = row(&access, "session-native-fail").await;
+        assert_eq!(row["lifecycle_state"], "failed");
+        assert_eq!(row["tool_failure_class"], "toolReturnedError");
+        teardown(node, path).await;
+    }
+
+    #[tokio::test]
+    async fn admitted_native_terminal_is_irreversible() {
+        let (node, path, mut tool) = published_spawn_parent("native-terminal").await;
+        tool.complete("done").await.unwrap();
+        let error = tool.fail("late", FailureClass::External).await.unwrap_err();
+        assert!(format!("{error:#}").contains("illegal tool call transition"));
+        teardown(node, path).await;
+    }
+
+    #[tokio::test]
+    async fn admitted_native_rejects_duplicate_dispatch_without_duplicate_row() {
+        let (node, path, mut tool) = published_spawn_parent("native-duplicate").await;
+        let access = tool.access().unwrap();
+        let error = tool.start_running().await.unwrap_err();
+        assert!(format!("{error:#}").contains("cannot re-dispatch"));
+        assert_eq!(
+            row(&access, "session-native-duplicate").await["lifecycle_state"],
+            "running"
+        );
+        teardown(node, path).await;
+    }
+
+    #[tokio::test]
+    async fn admitted_native_load_preserves_state_deadline_and_terminal_updates() {
+        let (node, path, tool) = published_spawn_parent("native-load").await;
+        let access = tool.access().unwrap();
+        let expected_deadline = tool.deadline_at;
+        let mut loaded = ToolCallLifecycle::load_as(
+            node.clone(),
+            tool.actor().clone(),
+            "session-native-load",
+            "spawn-native-tool",
+        )
+        .await
+        .unwrap()
+        .expect("admitted tool loads");
+        loaded.inherit_signer(&tool).unwrap();
+        loaded.timeout().await.unwrap();
+        let row = row(&access, "session-native-load").await;
+        assert_eq!(row["lifecycle_state"], "timedOut");
+        assert_eq!(row["cancel_cause"], "deadline");
+        let observed = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(observed, expected_deadline);
+        teardown(node, path).await;
+    }
+
+    #[tokio::test]
+    async fn admitted_native_load_returns_persisted_failure() {
+        let (node, path, mut tool) = published_spawn_parent("native-load-failure").await;
+        let access = tool.access().unwrap();
+        let actor = tool.actor().clone();
+        tool.fail("oops", FailureClass::Transport).await.unwrap();
+        drop(tool);
+        let loaded = ToolCallLifecycle::load_as(
+            node.clone(),
+            actor,
+            "session-native-load-failure",
+            "spawn-native-tool",
+        )
+        .await
+        .unwrap()
+        .expect("terminal admitted tool loads");
+        drop(loaded);
+        let row = row(&access, "session-native-load-failure").await;
+        assert_eq!(row["lifecycle_state"], "failed");
+        assert_eq!(row["tool_failure_class"], "transport");
+        teardown(node, path).await;
+    }
+
+    #[tokio::test]
+    async fn admitted_native_cancel_during_run_and_after_load_persist_causes() {
+        let (node, path, mut tool) = published_spawn_parent("native-cancel").await;
+        let access = tool.access().unwrap();
+        tool.cancel_during_run(CancelCause::UserCancelled)
+            .await
+            .unwrap();
+        let persisted = row(&access, "session-native-cancel").await;
+        assert_eq!(persisted["lifecycle_state"], "cancelled");
+        assert_eq!(persisted["cancel_cause"], "userCancelled");
+        teardown(node, path).await;
+
+        let (node, path, tool) = published_spawn_parent("native-cancel-load").await;
+        let access = tool.access().unwrap();
+        let actor = tool.actor().clone();
+        assert!(row(&access, "session-native-cancel-load").await["cancel_cause"].is_null());
+        drop(tool);
+        let mut loaded = ToolCallLifecycle::load_as(
+            node.clone(),
+            actor,
+            "session-native-cancel-load",
+            "spawn-native-tool",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        loaded
+            .bind_agent_signer(access.managed_agent_signer())
+            .unwrap();
+        loaded
+            .cancel_during_run(CancelCause::Interrupted)
+            .await
+            .unwrap();
+        assert_eq!(
+            row(&access, "session-native-cancel-load").await["cancel_cause"],
+            "interrupted"
+        );
+        teardown(node, path).await;
+    }
+
+    #[tokio::test]
+    async fn admitted_pending_native_cancel_persists_cause() {
+        let (node, path, mut tool) = pending_spawn_parent("native-pending-cancel").await;
+        let access = tool.access().unwrap();
+        tool.cancel_before_dispatch(CancelCause::Interrupted)
+            .await
+            .unwrap();
+        let row = row(&access, "session-native-pending-cancel").await;
+        assert_eq!(row["lifecycle_state"], "cancelled");
+        assert_eq!(row["cancel_cause"], "interrupted");
+        teardown(node, path).await;
+    }
+
+    #[tokio::test]
+    async fn timeout_after_terminal_parent_sweep_matches_the_lean_model() {
+        let cases = gents_lean_vocab::families::tool_call_timeout_after_sweep_adoption::cases();
+        for (index, case) in cases.iter().enumerate() {
+            let name = format!("timeout-cas-{index}");
+            let admission = published_admission(PublishedAdmissionOptions {
+                name: name.clone(),
+                real_identity: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            let node = admission.node;
+            let path = admission.path;
+            let node_did = admission.node_did;
+            let mut tool = admission.tool;
+            let tool_access = tool.access().unwrap();
+            let signer = tool_access.managed_agent_signer().unwrap();
+            let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
+            let request = gents_store::graphql::escape_graphql_string(&format!("request-{name}"));
+            if case.input.parent != "live" {
+                let parent = gents_store::graphql::escape_graphql_string(&case.input.parent);
+                let response = tool_access
+                    .write(
+                        "test.timeout_cas.end_parent",
+                        &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, input: {{ lifecycle_state: "{parent}" }}) {{ _docID }} }}"#),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response["data"]["update_AgentRequest"]
+                        .as_array()
+                        .map(Vec::len),
+                    Some(1)
+                );
+            }
+
+            let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
+                &node,
+                &node_did,
+                &identities,
+            )
+            .await
+            .unwrap();
+            let timeout_reported = tool.timeout().await.unwrap();
+            let persisted = row(&tool_access, &format!("session-{name}")).await;
+            case.check(
+                gents_lean_vocab::families::tool_call_timeout_after_sweep_adoption::Observed {
+                    swept: u64::try_from(report.tool_calls_terminalized).unwrap(),
+                    timeout_reported,
+                    lifecycle_state: persisted["lifecycle_state"].as_str().unwrap().to_owned(),
+                    cancel_cause: persisted["cancel_cause"].as_str().map(str::to_owned),
+                    failure_class: persisted["tool_failure_class"].as_str().map(str::to_owned),
+                },
+            );
+            teardown(node, path).await;
+        }
+    }
 }

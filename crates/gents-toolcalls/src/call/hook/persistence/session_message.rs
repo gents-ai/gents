@@ -425,8 +425,7 @@ impl DefraSessionHook {
             self.session_goals.as_ref(),
             &cause,
             &target,
-            rendered,
-            title.as_deref(),
+            (rendered, title.as_deref()),
             delivery,
             &signer,
         )
