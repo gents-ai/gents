@@ -132,7 +132,7 @@ pub(super) async fn write_terminal_progress(
     let too_large = |result: &Result<_>| {
         result.as_ref().is_err_and(|error| {
             matches!(
-                error.downcast_ref::<RecordError>(),
+                RecordError::in_error(error),
                 Some(RecordError::TooLarge { .. })
             )
         })
