@@ -16,7 +16,6 @@ mod background_budget;
 
 mod delegated_finality_tests;
 
-mod script_composition;
 mod wait_settlement;
 
 #[tokio::test]

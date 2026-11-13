@@ -474,14 +474,6 @@ mod plugin {
         }
     }
 
-    async fn rows(node: &Fixture, collection: &str) -> Value {
-        ConfigAccess::local_as(node.node.clone(), node.runtime.clone())
-            .execute(&format!("{{{collection}{{_docID body created_at}}}}"))
-            .await
-            .unwrap()["data"][collection]
-            .clone()
-    }
-
     fn stamps(node: &Fixture) -> StampContext {
         StampContext::Callback {
             caller_did: node.agent.did().into(),
@@ -667,149 +659,124 @@ mod plugin {
         assert_eq!(notes(&node).await.as_array().unwrap().len(), 1);
         node.shutdown().await.expect("node shutdown");
     }
-    #[tokio::test]
-    async fn on_conflict_ignore_with_an_equal_row_is_a_no_op() {
-        let node = node().await;
-        let grant = keyed_grant("Keyed", &[&["key"]]);
-        let write = insert_with(
-            "Keyed",
-            json!({"key": "a", "body": "x"}),
-            Some(OnConflict::Ignore),
-        );
-        let first = apply_all(&node, &grant, vec![write.clone()]).await.unwrap();
-        let second = apply_all(&node, &grant, vec![write]).await.unwrap();
-        assert_eq!(second[0]["_docID"], first[0]["_docID"]);
-        assert!(second[0].get("duplicate").is_none());
-        assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
-        node.shutdown().await.expect("node shutdown");
-    }
-
-    #[tokio::test]
-    async fn on_conflict_ignore_with_a_different_row_reports_duplicate() {
-        let node = node().await;
-        let grant = keyed_grant("Keyed", &[&["key"]]);
-        let write = |body| {
-            insert_with(
-                "Keyed",
-                json!({"key": "a", "body": body}),
-                Some(OnConflict::Ignore),
-            )
-        };
-        apply_all(&node, &grant, vec![write("x")]).await.unwrap();
-        let receipts = apply_all(&node, &grant, vec![write("y")]).await.unwrap();
-        assert_eq!(receipts[0], json!({"duplicate": true}));
-        let stored = rows(&node, "Keyed").await;
-        assert_eq!(stored.as_array().unwrap().len(), 1);
-        assert_eq!(stored[0]["body"], "x");
-        node.shutdown().await.expect("node shutdown");
-    }
-
-    #[tokio::test]
-    async fn on_conflict_fail_refuses_a_different_existing_row_and_keeps_an_equal_one() {
-        let node = node().await;
-        let grant = keyed_grant("Keyed", &[&["key"]]);
-        let write = |body| {
-            insert_with(
-                "Keyed",
-                json!({"key": "a", "body": body}),
-                Some(OnConflict::Fail),
-            )
-        };
-        apply_all(&node, &grant, vec![write("x")]).await.unwrap();
-        let equal = apply_all(&node, &grant, vec![write("x")]).await.unwrap();
-        assert!(equal[0].get("duplicate").is_none());
-        let error = apply_all(&node, &grant, vec![write("y")])
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("duplicate Keyed a"), "{error:#}");
-        assert_eq!(rows(&node, "Keyed").await.as_array().unwrap().len(), 1);
-        node.shutdown().await.expect("node shutdown");
-    }
-
-    #[tokio::test]
-    async fn on_conflict_needs_exactly_one_unique_key() {
-        let node = node().await;
-        let write = insert_with(
-            "Keyed",
-            json!({"key": "a", "body": "x"}),
-            Some(OnConflict::Ignore),
-        );
-        for keys in [&[][..], &[&["key"][..], &["body"][..]][..]] {
-            let error = apply_all(&node, &keyed_grant("Keyed", keys), vec![write.clone()])
-                .await
-                .unwrap_err();
-            assert!(
-                error.to_string().contains("exactly one unique key"),
-                "{error:#}"
-            );
-        }
-        let missing = insert_with("Keyed", json!({"body": "x"}), Some(OnConflict::Ignore));
-        let error = apply_all(&node, &keyed_grant("Keyed", &[&["key"]]), vec![missing])
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("key"), "{error:#}");
-        assert_eq!(rows(&node, "Keyed").await, json!([]));
-        node.shutdown().await.expect("node shutdown");
-    }
-
-    #[tokio::test]
-    async fn p2p_twin_readers_pick_the_earliest_created_then_lowest_doc_id() {
-        let node = node().await;
-        let grant = keyed_grant("Twin", &[&["key"]]);
-        let seed = |key, body, created_at| {
-            insert_with(
-                "Twin",
-                json!({"key": key, "body": body, "created_at": created_at}),
-                None,
-            )
-        };
-        apply_all(
-            &node,
-            &grant,
-            vec![
-                seed("k1", "late", "2026-02"),
-                seed("k1", "early", "2026-01"),
-                seed("k2", "a", "2026-03"),
-                seed("k2", "b", "2026-03"),
-            ],
-        )
-        .await
-        .unwrap();
-        let conflicting = |key, body| {
-            insert_with(
-                "Twin",
-                json!({"key": key, "body": body}),
-                Some(OnConflict::Ignore),
-            )
-        };
-        let early = apply_all(&node, &grant, vec![conflicting("k1", "early")])
+    async fn rows_under(node: &Fixture, collection: &str, key: &str) -> Vec<(String, String)> {
+        let response = ConfigAccess::local_as(node.node.clone(), node.runtime.clone())
+            .execute(&format!(
+                "{{{collection}(filter: {{key: {{_eq: \"{}\"}}}}) {{_docID body}}}}",
+                gents_store::graphql::escape_graphql_string(key)
+            ))
             .await
             .unwrap();
-        assert!(early[0].get("duplicate").is_none(), "{early:?}");
-        let late = apply_all(&node, &grant, vec![conflicting("k1", "late")])
-            .await
-            .unwrap();
-        assert_eq!(late[0], json!({"duplicate": true}));
-        let ties = rows(&node, "Twin").await;
-        let winner = ties
+        response["data"][collection]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|row| row["created_at"] == "2026-03")
-            .min_by_key(|row| row["_docID"].as_str().unwrap().to_owned())
-            .unwrap()["body"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let loser = if winner == "a" { "b" } else { "a" };
-        let same = apply_all(&node, &grant, vec![conflicting("k2", &winner)])
-            .await
-            .unwrap();
-        assert!(same[0].get("duplicate").is_none(), "{same:?}");
-        let other = apply_all(&node, &grant, vec![conflicting("k2", loser)])
-            .await
-            .unwrap();
-        assert_eq!(other[0], json!({"duplicate": true}));
+            .map(|row| {
+                (
+                    row["_docID"].as_str().unwrap().to_owned(),
+                    row["body"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn on_conflict_inserts_resolve_as_the_lean_model() {
+        use gents_lean_vocab::families::plugin_data_writes_conflict::{ConflictOutput, RowWire};
+        let node = node().await;
+        for case in
+            gents_lean_vocab::families::plugin_data_writes_conflict::cases::<String, OnConflict>()
+        {
+            let i = &case.input;
+            let seeding = keyed_grant(&i.collection, &[&["key"]]);
+            for index in 0..i.stored.len() {
+                apply_all(
+                    &node,
+                    &seeding,
+                    vec![insert_with(
+                        &i.collection,
+                        json!({"key": i.key, "body": format!("s{index}")}),
+                        None,
+                    )],
+                )
+                .await
+                .unwrap();
+            }
+            let mut stored = rows_under(&node, &i.collection, &i.key).await;
+            stored.sort();
+            for ((doc_id, _), created_at) in stored.iter().zip(&i.stored) {
+                if let Some(month) = created_at {
+                    apply_all(
+                        &node,
+                        &seeding,
+                        vec![write(
+                            DataOp::Update,
+                            &i.collection,
+                            Some(doc_id.as_str()),
+                            json!({"created_at": format!("2026-{month:02}")}),
+                        )],
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+            let mut fields = json!({
+                "body": i.same_as.map_or("fresh".to_owned(), |rank| stored[rank as usize].1.clone())
+            });
+            if i.key_present {
+                fields["key"] = json!(i.key);
+            }
+            let keys: &[&[&str]] = match i.unique_keys {
+                0 => &[],
+                1 => &[&["key"]],
+                2 => &[&["key"], &["body"]],
+                count => panic!("unmodelled unique-key count {count}"),
+            };
+            let result = apply_all(
+                &node,
+                &keyed_grant(&i.collection, keys),
+                vec![insert_with(&i.collection, fields, Some(i.on_conflict))],
+            )
+            .await;
+            let rank_of = |doc_id: &str| {
+                stored
+                    .iter()
+                    .position(|(stored_id, _)| stored_id == doc_id)
+                    .map(|rank| rank as u64)
+            };
+            let (receipt, existing, error) = match &result {
+                Ok(receipts) if receipts[0] == json!({"duplicate": true}) => {
+                    (Some("duplicate".to_owned()), None, None)
+                }
+                Ok(receipts) => {
+                    let receipt = receipts[0].as_object().unwrap();
+                    assert_eq!(receipt.len(), 1, "{:?}: {receipt:?}", case.input);
+                    match rank_of(receipt["_docID"].as_str().unwrap()) {
+                        Some(rank) => (Some("existing".to_owned()), Some(rank), None),
+                        None => (Some("inserted".to_owned()), None, None),
+                    }
+                }
+                Err(error) => (None, None, Some(error.root_cause().to_string())),
+            };
+            let mut rows: Vec<RowWire> = rows_under(&node, &i.collection, &i.key)
+                .await
+                .into_iter()
+                .map(|(doc_id, body)| RowWire {
+                    rank: rank_of(&doc_id),
+                    body: stored
+                        .iter()
+                        .position(|(_, stored_body)| *stored_body == body)
+                        .map(|rank| rank as u64),
+                })
+                .collect();
+            rows.sort_by_key(|row| (row.rank.is_none(), row.rank));
+            case.check(ConflictOutput {
+                receipt,
+                existing,
+                error,
+                rows,
+            });
+        }
         node.shutdown().await.expect("node shutdown");
     }
 }

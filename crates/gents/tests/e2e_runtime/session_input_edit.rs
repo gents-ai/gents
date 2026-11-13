@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use gents::runtime::agent::session_commands::run_session_command_reconciler;
 use gents_protocol::request_admission::{
@@ -17,6 +18,7 @@ use gents_store::identity::NodeIdentity as _;
 use rapidhash::RapidHashMap;
 use tokio_util::sync::CancellationToken;
 
+use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
 
 struct Stop(CancellationToken);
@@ -52,6 +54,7 @@ async fn wait_row_as(
     required: &str,
 ) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut changes = access.subscribe_changes(collection).await;
     loop {
         let found = rows_as(
             access,
@@ -69,11 +72,11 @@ async fn wait_row_as(
         {
             return row;
         }
-        assert!(
-            Instant::now() < deadline,
-            "{collection}.{field}={value} did not appear with {required}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| {
+                panic!("{collection}.{field}={value} did not appear with {required}")
+            });
     }
 }
 
@@ -131,8 +134,15 @@ fn model_ids(values: &serde_json::Value) -> Vec<u64> {
         .collect()
 }
 
-fn lean_edit_case(name: &str) -> serde_json::Value {
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+async fn contract_snapshot() -> serde_json::Value {
+    tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+async fn lean_edit_case(name: &str) -> serde_json::Value {
+    let contract = contract_snapshot().await;
     contract["session_input_edit_cases"]
         .as_array()
         .unwrap()
@@ -477,7 +487,7 @@ impl EndpointEdits {
     /// Two barrier edits the restarted reconciler must decide prove it swept
     /// past every earlier command.
     async fn barrier(&self, suffix: &str) {
-        let case = lean_edit_case("local_self_applied");
+        let case = lean_edit_case("local_self_applied").await;
         for index in ["one", "two"] {
             let session = format!("barrier-{suffix}-{index}");
             let mut seeded = self
@@ -511,7 +521,7 @@ impl EndpointEdits {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn generated_client_edits_publish_concurrently_with_signed_effect_and_receipt() {
     let edits = EndpointEdits::start("input-edit-endpoint").await;
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let contract = contract_snapshot().await;
     let cases = contract["session_input_edit_cases"]
         .as_array()
         .unwrap()
@@ -632,8 +642,8 @@ async fn generated_client_edits_publish_concurrently_with_signed_effect_and_rece
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn same_signed_edit_published_concurrently_applies_and_replays_once() {
     let edits = EndpointEdits::start("same-edit-endpoint").await;
-    let case = lean_edit_case("local_self_applied");
-    let replay = lean_edit_case("exact_replay_after_expiry");
+    let case = lean_edit_case("local_self_applied").await;
+    let replay = lean_edit_case("exact_replay_after_expiry").await;
     assert_eq!(
         replay["before"], replay["after"],
         "exact replay changes nothing"
@@ -693,10 +703,10 @@ async fn same_signed_edit_published_concurrently_applies_and_replays_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn different_edit_intents_racing_for_one_command_id_admit_one() {
     let edits = EndpointEdits::start("racing-edit-endpoint").await;
-    let collision = lean_edit_case("simultaneous_command_identity_collision");
+    let collision = lean_edit_case("simultaneous_command_identity_collision").await;
     assert_eq!(collision["before"], collision["after"]);
     assert!(collision["receipt"].is_null(), "two documents never apply");
-    let case = lean_edit_case("local_self_applied");
+    let case = lean_edit_case("local_self_applied").await;
     let pending = case["initial"]["queue"]["pending"].as_array().unwrap();
     let mut left_session = edits.seed("racing-left", pending).await;
     let mut right_session = edits.seed("racing-right", pending).await;
@@ -752,10 +762,10 @@ async fn different_edit_intents_racing_for_one_command_id_admit_one() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn late_command_id_twin_in_another_session_is_refused() {
     let edits = EndpointEdits::start("late-twin-endpoint").await;
-    let twin = lean_edit_case("cross_session_collision_preserves_prior_receipt");
+    let twin = lean_edit_case("cross_session_collision_preserves_prior_receipt").await;
     assert_eq!(twin["before"], twin["after"]);
     assert!(twin["receipt"].is_null());
-    let case = lean_edit_case("local_self_applied");
+    let case = lean_edit_case("local_self_applied").await;
     let pending = case["initial"]["queue"]["pending"].as_array().unwrap();
     let mut prior_session = edits.seed("late-prior", pending).await;
     let mut twin_session = edits.seed("late-twin", pending).await;
@@ -797,10 +807,10 @@ async fn late_command_id_twin_in_another_session_is_refused() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn identical_edit_republished_after_receipt_is_refused() {
     let edits = EndpointEdits::start("identical-edit-endpoint").await;
-    let observed = lean_edit_case("observed_collision_preserves_prior_receipt");
+    let observed = lean_edit_case("observed_collision_preserves_prior_receipt").await;
     assert_eq!(observed["before"], observed["after"]);
     assert!(observed["receipt"].is_null());
-    let case = lean_edit_case("local_self_applied");
+    let case = lean_edit_case("local_self_applied").await;
     let mut seeded = edits
         .seed(
             "identical",

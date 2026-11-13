@@ -76,4 +76,35 @@ theorem client_edit_preserves_pause (observed current next : Assignment) (fields
     (h : apply? observed current fields .client = some next) : next.status = .paused := by
   exact (edit_preserves_status_and_epoch observed current next fields .client h).1.trans paused
 
+/-- The stored reset auto-resume preference is a person's choice. The working
+agent cannot name it. A client may name it on any current goal without
+editing its fields, since it neither changes the assignment nor its epoch. An
+edit that does not name it keeps the stored value. -/
+def applyPreference? (observed current : Assignment) (stored : Option Bool) (fields : Fields)
+    (autoResume : Option Bool) (origin : Origin := .agent) : Option (Assignment × Option Bool) :=
+  match autoResume with
+  | none => (apply? observed current fields origin).map (·, stored)
+  | some enabled =>
+    if origin == .agent || observed.status != current.status ||
+        observed.sequence != current.sequence then none
+    else if fields.objective.isNone && fields.budget.isNone then some (current, some enabled)
+    else (apply? observed current fields origin).map (·, some enabled)
+
+theorem auto_resume_operator_setter_stores_it (current : Assignment) (stored : Option Bool)
+    (enabled : Bool) :
+    applyPreference? current current stored ⟨none, none⟩ (some enabled) .client =
+      some (current, some enabled) := by
+  simp [applyPreference?]
+
+theorem auto_resume_none_and_set_goal_keep_the_stored_value (observed current next : Assignment)
+    (stored : Option Bool) (fields : Fields) (origin : Origin)
+    (h : apply? observed current fields origin = some next) :
+    applyPreference? observed current stored fields none origin = some (next, stored) := by
+  simp [applyPreference?, h]
+
+theorem working_agent_cannot_name_auto_resume (observed current : Assignment)
+    (stored : Option Bool) (fields : Fields) (enabled : Bool) :
+    applyPreference? observed current stored fields (some enabled) .agent = none := by
+  simp [applyPreference?]
+
 end GoalAutomation.Edit

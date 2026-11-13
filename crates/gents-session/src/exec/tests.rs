@@ -417,34 +417,39 @@ async fn managed_exec_environment_replaces_the_inherited_environment() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn managed_exec_reports_spawn_failure_as_a_typed_outcome() {
-    let outcome = run_managed_exec(ManagedExecRequest {
-        argv: vec!["/nonexistent/gents-missing-binary".to_string()],
-        cwd: PathBuf::from("/"),
-        deadline_at: Some(Utc::now() + chrono::Duration::seconds(5)),
-        cancellation_token: CancellationToken::new(),
-        max_output_bytes: 1024,
-        stdin: Vec::new(),
-        environment: None,
-        tool_name: Some("spawn-failure".to_string()),
-        live_output: None,
-    })
-    .await;
-    match &outcome {
-        ManagedExecOutcome::SpawnFailed { error } => {
+async fn managed_exec_spawn_outcome_matches_the_lean_model() {
+    let cases = gents_lean_vocab::families::managed_exec_spawn_outcome::cases();
+    for case in &cases {
+        let outcome = run_managed_exec(ManagedExecRequest {
+            argv: vec!["/nonexistent/gents-missing-binary".to_string()],
+            cwd: PathBuf::from("/"),
+            deadline_at: Some(Utc::now() + chrono::Duration::seconds(5)),
+            cancellation_token: CancellationToken::new(),
+            max_output_bytes: 1024,
+            stdin: Vec::new(),
+            environment: None,
+            tool_name: Some("spawn-failure".to_string()),
+            live_output: None,
+        })
+        .await;
+        if let ManagedExecOutcome::SpawnFailed { error } = &outcome {
             assert!(
                 error.contains("No such file") || error.contains("no such file"),
                 "spawn failure should carry the OS error: {error}"
             );
         }
-        other => panic!("expected spawn-failed outcome, got {other:?}"),
-    }
-    assert!(
-        crate::exec::status::active_native_executors()
+        let state = match outcome {
+            ManagedExecOutcome::SpawnFailed { .. } => ManagedExecState::SpawnFailed,
+            _ => ManagedExecState::Running,
+        };
+        let executor_registered = crate::exec::status::active_native_executors()
             .iter()
-            .all(|snapshot| snapshot.tool_name.as_deref() != Some("spawn-failure")),
-        "a failed spawn must not register an active executor snapshot"
-    );
+            .any(|snapshot| snapshot.tool_name.as_deref() == Some("spawn-failure"));
+        case.check(gents_lean_vocab::families::managed_exec_spawn_outcome::SpawnOutput {
+            state: state.as_str().to_string(),
+            executor_registered,
+        });
+    }
 }
 
 #[cfg(unix)]
