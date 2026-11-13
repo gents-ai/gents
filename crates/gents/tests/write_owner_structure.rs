@@ -1993,8 +1993,6 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // HistoryUnlockRequired in Provider::failed
     ("crates/gents-client-host/src/editor_store.rs", 1),
-    // Error in Listener::bind
-    ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     // RemoteP2pAdminError in ClientRouteManager::reconcile_route
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
     // ModelDiscoveryHttpError in classify_discovery_failure
@@ -2126,6 +2124,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 #[rustfmt::skip]
 const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-cli/src/commands/eval/watch.rs", &["store_locked"]),
+    ("crates/gents-desktop-bridge/src/host/local/windows.rs", &["pipe_name_reserved"]),
     ("crates/gents-desktop-core/src/inference.rs", &["classify_discovery_failure"]),
     ("crates/gents-eval/src/report/store.rs", &["unresolvable"]),
     ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", &["provider_reason_from_failure"]),
