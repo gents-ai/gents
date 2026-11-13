@@ -2077,6 +2077,7 @@ export function createDesktopUiHarness(
             : "native logging",
         nodeHomeExists: !freshHome,
         clientStateExists: true,
+        localSetupUnfinished: false,
         savedPeers: !provisioned
           ? []
           : [
