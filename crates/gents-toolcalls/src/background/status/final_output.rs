@@ -261,8 +261,7 @@ pub async fn caused_request_terminals_in_txn(
         let (header, message) = match reader.load_message(message_doc_id).await {
             Ok(value) => value,
             Err(error)
-                if error
-                    .downcast_ref::<ReconstructionError>()
+                if ReconstructionError::in_chain(error.as_ref())
                     .is_some_and(ReconstructionError::is_incomplete) =>
             {
                 continue

@@ -57,6 +57,25 @@ impl std::fmt::Display for RecoveryPlanError {
 
 impl std::error::Error for RecoveryPlanError {}
 
+impl RecoveryPlanError {
+    /// Contradictory or malformed immutable facts: proof of corruption.
+    /// A missing ordinal or source is not.
+    pub fn is_definitive_corruption(&self) -> bool {
+        matches!(
+            self,
+            Self::IdentityConflict { .. }
+                | Self::ConflictingOrdinal { .. }
+                | Self::InvalidWriter
+                | Self::MalformedExtent
+        )
+    }
+
+    /// The recovery-plan failure in an erased error's `source()` chain.
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        crate::error_chain::find_source::<Self>(error)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveryPrefixPlan {
     pub close: SourceClose,
