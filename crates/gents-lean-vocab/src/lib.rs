@@ -146,23 +146,6 @@ pub struct QueueImage {
     pub terminal: BTreeSet<String>,
 }
 
-impl LeanQueueManagementState {
-    pub fn image(&self, native: impl Fn(u64) -> String) -> QueueImage {
-        let ids = |entries: &[LeanFoldQueueEntry]| {
-            entries
-                .iter()
-                .map(|entry| native(entry.request_id))
-                .collect()
-        };
-        QueueImage {
-            active: self.active.map(&native),
-            folding: ids(&self.folding),
-            pending: ids(&self.pending),
-            terminal: self.terminal.iter().copied().map(&native).collect(),
-        }
-    }
-}
-
 pub fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>) {
     let lean_values = lean_to_defradb_values(spec.lean_file, spec.model, spec.namespace);
     let missing_from_lean = values_missing_from(spec.rust_values, &lean_values);

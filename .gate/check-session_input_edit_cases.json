@@ -1,0 +1,21 @@
+{
+ "ok": false,
+ "problems": [
+  "session_input_edit_cases: family fold_queue_contracts_input_edit_unreached has 0 consumer call sites (exactly one wanted): []"
+ ],
+ "per_key": {
+  "session_input_edit_cases": [
+   "family fold_queue_contracts_input_edit_unreached has 0 consumer call sites (exactly one wanted): []"
+  ]
+ },
+ "notes": [
+  "session_input_edit_cases: declared dropped fields (justified): {'before': 'readers compared only the request-ID image of the queue (active, pending, folding, terminal) and the decided receipts; entry attributes are inputs carried in initial and command, and before/after carry the ID image and receipts', 'after': 'readers compared only the request-ID image of the queue (active, pending, folding, terminal) and the decided receipts; entry attributes are inputs carried in initial and command, and before/after carry the ID image and receipts'}",
+  "fold_queue_contracts_input_edit_atomic: consumer crates/gents/src/runtime/agent/session_input_edit/tests.rs",
+  "fold_queue_contracts_input_edit_endpoint: consumer crates/gents/tests/e2e_runtime/session_input_edit.rs",
+  "fold_queue_contracts_input_edit_endpoint_refused: consumer crates/gents/tests/e2e_runtime/session_input_edit.rs",
+  "fold_queue_contracts_input_edit_concurrent_replay: consumer crates/gents/tests/e2e_runtime/session_input_edit.rs",
+  "fold_queue_contracts_input_edit_racing_intents: consumer crates/gents/tests/e2e_runtime/session_input_edit.rs",
+  "fold_queue_contracts_input_edit_late_twin: consumer crates/gents/tests/e2e_runtime/session_input_edit.rs",
+  "fold_queue_contracts_input_edit_identical_republish: consumer crates/gents/tests/e2e_runtime/session_input_edit.rs"
+ ]
+}
