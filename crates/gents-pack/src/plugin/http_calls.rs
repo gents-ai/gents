@@ -295,7 +295,13 @@ impl Lookup for SystemLookup {
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-struct InternalAddress(String);
+pub(crate) struct InternalAddress(String);
+
+impl InternalAddress {
+    pub(crate) fn in_chain(error: &(dyn std::error::Error + 'static)) -> Option<&Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+}
 
 struct Guarded(Arc<dyn Lookup>);
 
@@ -650,12 +656,8 @@ impl Session {
 }
 
 fn send_error(url: &Url, error: &reqwest::Error) -> String {
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
-    while let Some(cause) = source {
-        if let Some(internal) = cause.downcast_ref::<InternalAddress>() {
-            return internal.0.clone();
-        }
-        source = cause.source();
+    if let Some(internal) = InternalAddress::in_chain(error) {
+        return internal.0.clone();
     }
     let host = url.host_str().unwrap_or_default();
     if error.is_timeout() {

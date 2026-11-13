@@ -2005,12 +2005,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-host/src/http/router/accounts.rs", 1),
     // ControlFailure in refusal_reason
     ("crates/gents-host/src/prepare_runtime.rs", 1),
-    // RegistryError in offline_pack_error
-    ("crates/gents-pack/src/pack/resolve.rs", 1),
-    // InternalAddress in send_error
-    ("crates/gents-pack/src/plugin/http_calls.rs", 1),
-    // E in any_error
-    ("crates/gents-pack/src/plugin/store.rs", 1),
     // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
     ("crates/gents-store/src/local/storage_backend.rs", 3),
     // EnrollmentDecisionRefusal in P2pTool::call_one
@@ -2039,7 +2033,10 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
     ("crates/gents-loop/src/loop_stream/contract.rs", &["ReplayEvidenceViolation::in_chain"]),
     ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
+    ("crates/gents-pack/src/pack/registry.rs", &["RegistryError::in_chain"]),
     ("crates/gents-pack/src/plugin.rs", &["GuestTrap::in_chain", "GuestTrap::raised_by"]),
+    ("crates/gents-pack/src/plugin/http_calls.rs", &["InternalAddress::in_chain"]),
+    ("crates/gents-pack/src/plugin/store.rs", &["PublishedPluginReadError::error_chain_is_busy"]),
     ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
     ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
@@ -2106,6 +2103,7 @@ const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", &["classify_error_text"]),
     ("crates/gents-migration/src/engine.rs", &["collection_already_exists"]),
     ("crates/gents-observe/src/observe/trace_export.rs", &["looks_like_deadline_or_inference_failure"]),
+    ("crates/gents-pack/src/plugin/store.rs", &["is_not_found"]),
     ("crates/gents-protocol/src/graphql/response.rs", &["is_collection_missing_error_message"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_transport_error_in_chain"]),
     ("crates/gents-protocol/src/node_readiness.rs", &["is_behavior_unavailable_rejection"]),
