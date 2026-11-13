@@ -524,7 +524,13 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
         .await?;
     assert!(tool
-        .call(json!({"argv":["agent","list"]}).to_string())
+        .call(
+            json!({
+                "argv":["agent","create"],
+                "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
+            })
+            .to_string(),
+        )
         .await
         .is_err());
     user_access
