@@ -140,7 +140,7 @@ import Proofs.Store.Identity.OperationsConformance
 import Proofs.Store.Identity.EvalRecords
 import Proofs.Store.Identity.OptimizationPromotion
 import Proofs.Store.Identity.DirectoryPublication
-import Proofs.Store.Identity.StartupReadiness
+import Proofs.Conformance.Identity.StartupReadiness
 import Proofs.Store.Identity.NodeProvisioningConformance
 import Proofs.Store.Identity.GrantSetsConformance
 import Proofs.Store.Identity.ClientAgentCreation
@@ -598,7 +598,6 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
-    ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
     ++ "\"inference_observation_cases\":"
       ++ Conformance.InferenceObservation.casesJson ++ ","
     ++ "\"inference_visibility_cases\":"
@@ -639,10 +638,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
     ++ "\"client_publication_protected_collection\":"
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
-    ++ "\"identity_bootstrap_cases\":"
-      ++ Identity.NodeProvisioningConformance.bootstrapCasesJson ++ ","
-    ++ "\"identity_bootstrap_reservation_cases\":"
-      ++ Identity.NodeProvisioningConformance.reservationCasesJson ++ ","
     ++ "\"identity_runtime_nac_cases\":"
       ++ Identity.NodeProvisioningConformance.runtimeNacCasesJson ++ ","
     ++ "\"identity_parent_publication_cases\":"
@@ -677,8 +672,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OperationsConformance.observationCasesJson ++ ","
     ++ "\"identity_readiness_settled_cases\":"
       ++ Identity.OperationsConformance.settledCasesJson ++ ","
-    ++ "\"identity_startup_readiness_cases\":"
-      ++ Identity.StartupReadiness.casesJson ++ ","
 
 def snapshotClientCasesJson : String :=
   ""
@@ -698,7 +691,6 @@ def snapshotClientCasesJson : String :=
       ++ PackInstallation.casesJson ++ ","
     ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
-    ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
     ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
     ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","

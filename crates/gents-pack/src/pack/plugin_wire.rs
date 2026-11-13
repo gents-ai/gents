@@ -102,6 +102,10 @@ pub async fn wire_in_spawned(
         .await?
 }
 
+pub fn wire_target_allowed(local: bool, preview: bool, remove: bool) -> bool {
+    local || preview || remove
+}
+
 async fn wire_in_owned(
     access: &ConfigAccess,
     owner: &str,
@@ -109,11 +113,9 @@ async fn wire_in_owned(
     request: &WireRequest,
     held_user: LoadHeldUser,
 ) -> Result<Value> {
-    if !request.preview && !request.remove {
-        anyhow::ensure!(matches!(access, ConfigAccess::Local(_)),
+    anyhow::ensure!(wire_target_allowed(matches!(access, ConfigAccess::Local(_)), request.preview, request.remove),
             "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents config pack wire {} --agent {} --home <node-home>` without --graphql",
             request.plugin, request.agent);
-    }
     let home_for_read = home.to_owned();
     let plugin_name = request.plugin.clone();
     let (_store_guard, plugin) = tokio::task::spawn_blocking(move || {
@@ -512,6 +514,15 @@ mod remote_tests {
     use super::*;
     use axum::{routing::post, Json, Router};
     use std::sync::Mutex;
+
+    #[test]
+    fn wire_targets_follow_the_lean_model() {
+        gents_lean_vocab::families::contracts_pack_installation_wire_target::replay(
+            |input: &gents_lean_vocab::families::contracts_pack_installation_wire_target::WireTargetInput| {
+                wire_target_allowed(input.local, input.preview, input.remove)
+            },
+        );
+    }
 
     fn request() -> WireRequest {
         WireRequest {

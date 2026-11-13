@@ -2847,8 +2847,6 @@ pub struct LeanContractSnapshot {
     pub client_publication_protected_collection: String,
     pub watcher_actor_cases: Vec<LeanWatcherActorCase>,
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
-    pub identity_bootstrap_cases: Vec<LeanIdentityBootstrapCase>,
-    pub identity_bootstrap_reservation_cases: Vec<LeanIdentityBootstrapReservationCase>,
     pub identity_runtime_nac_cases: Vec<LeanIdentityRuntimeNacCase>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_callback_parent_actor_cases: Vec<serde_json::Value>,
@@ -2868,14 +2866,12 @@ pub struct LeanContractSnapshot {
     pub identity_readiness_recovery_cases: Vec<serde_json::Value>,
     pub identity_readiness_observation_cases: Vec<serde_json::Value>,
     pub identity_readiness_settled_cases: Vec<LeanIdentityReadinessSettledCase>,
-    pub identity_startup_readiness_cases: Vec<LeanIdentityStartupReadinessCase>,
     pub goal_link_cases: Vec<LeanGoalLinkCase>,
     pub remote_agent_delivery_cases: Vec<LeanRemoteAgentDeliveryCase>,
     pub remote_agent_delivery_recovery_cases: Vec<serde_json::Value>,
     pub remote_agent_delivery_response_cases: Vec<serde_json::Value>,
     pub remote_agent_delivery_claim_cases: Vec<LeanRemoteAgentDeliveryClaimCase>,
     pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
-    pub client_telemetry_cases: Vec<serde_json::Value>,
     pub client_settings_cases: LeanClientSettingsCases,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
     pub client_request_patch_publication_cases: LeanClientRequestPatchPublicationCases,
@@ -2985,7 +2981,6 @@ pub struct LeanContractSnapshot {
     pub plugin_reference_cases: Vec<serde_json::Value>,
     pub plugin_pin_cases: Vec<serde_json::Value>,
     pub pack_wire_lock_cases: Vec<serde_json::Value>,
-    pub pack_wire_target_cases: Vec<serde_json::Value>,
     pub pack_finality_cases: Vec<serde_json::Value>,
     pub hosted_plugin_cases: Vec<serde_json::Value>,
     pub readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
@@ -5668,32 +5663,6 @@ pub struct LeanIdentityAgent {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityBootstrapCase {
-    pub authenticated_client: bool,
-    pub configuration_published: bool,
-    pub exclusive: bool,
-    pub expected_may_grant: bool,
-    pub fresh_evidence: bool,
-    pub matching_runtime: bool,
-    pub nac_enabled: bool,
-    pub name: String,
-    pub node_absent_observed: bool,
-    pub reservation_durable: bool,
-    pub store_empty_observed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityBootstrapReservationCase {
-    pub created: bool,
-    pub directory_synced: bool,
-    pub expected: bool,
-    pub file_synced: bool,
-    pub name: String,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeanIdentityClientAgentJournalStatus {
@@ -6179,36 +6148,6 @@ pub struct LeanIdentityReplicaGrantCase {
 pub struct LeanIdentityRuntimeNacCase {
     pub may_start: bool,
     pub status: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanIdentityStartupJoin {
-    Pending,
-    Clean,
-    Failed { message: String },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanIdentityStartupOutcome {
-    Wait,
-    AwaitJoin,
-    Ready,
-    Timeout,
-    Premature,
-    Failed { message: String },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityStartupReadinessCase {
-    pub name: String,
-    pub join: LeanIdentityStartupJoin,
-    pub shutting_down: bool,
-    pub readiness: bool,
-    pub deadline: bool,
-    pub expected: LeanIdentityStartupOutcome,
 }
 
 #[derive(Debug, Clone, Deserialize)]
