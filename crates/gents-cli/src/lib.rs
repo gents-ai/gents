@@ -373,6 +373,24 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         }
     }
 
+    // A read-only look at a home an older Gents made gives the repair's report
+    // of it, before anything is asked of a node that home cannot have.
+    let read_only_home = match &command {
+        Command::Status(args) if args.graphql.is_none() => Some(args.home.clone()),
+        Command::Service {
+            command: ServiceCommand::Status(target),
+        }
+        | Command::Runtime {
+            command:
+                RuntimeCommand::Service {
+                    command: ServiceCommand::Status(target),
+                },
+        } => Some(target.home.clone()),
+        _ => None,
+    };
+    if let Some(home) = read_only_home {
+        gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
+    }
     // Client-facing commands load their principal before resolving an endpoint,
     // creating it only for a default home not yet set up; runtime entry points
     // never load this client key.
