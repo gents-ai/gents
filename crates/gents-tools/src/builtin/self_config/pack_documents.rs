@@ -104,7 +104,7 @@ impl PackInstaller {
             blockers.is_empty(),
             "pack plugins require operator authorization: {blockers:?}"
         );
-        let (receipt, effective) = packs
+        let (receipt, mut effective) = packs
             .install_documents(
                 distribution,
                 &dependencies,
@@ -139,6 +139,9 @@ impl PackInstaller {
             crate::surface::reader_grant_step(&reader.agent, published, prior.is_none())
         })
         .collect::<Vec<_>>();
+        if let Some(record) = effective.as_object_mut() {
+            record.remove("source");
+        }
         ordered! {
             "effect": "The document pack is installed.",
             "host_root_access": (!host_root_access.is_empty()).then_some(&host_root_access),
