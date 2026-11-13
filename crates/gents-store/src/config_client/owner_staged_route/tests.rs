@@ -419,9 +419,9 @@ async fn native_change(
 fn fixture_callback_agents(
     _node_did: &str,
     callback: &Value,
-) -> anyhow::Result<std::collections::BTreeSet<String>> {
+) -> Option<std::collections::BTreeSet<String>> {
     let agents = &callback["handler"]["workspace_agents"];
-    Ok(["writer_agent_did", "integrator_agent_did"]
+    Some(["writer_agent_did", "integrator_agent_did"]
         .into_iter()
         .filter_map(|field| agents[field].as_str())
         .chain(

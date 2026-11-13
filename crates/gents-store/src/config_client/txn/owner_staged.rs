@@ -38,9 +38,10 @@ use gents_protocol::owner_staged::OwnerStagedChange;
 
 /// Which Agents a Callback's own configuration selects, read by the
 /// workspace-selection owner above this crate; the composition root attaches
-/// it, and without it no Callback admits a workspace-selection target.
+/// it, and without it, or for a Callback it cannot read, no Callback admits a
+/// workspace-selection target.
 pub struct CallbackAgentSelection(
-    pub fn(&str, &Value) -> anyhow::Result<std::collections::BTreeSet<String>>,
+    pub fn(&str, &Value) -> Option<std::collections::BTreeSet<String>>,
 );
 
 /// How an HTTP transaction handles an owner-staged revocation it requests
@@ -575,7 +576,7 @@ impl ConfigApplyTxn<'_> {
                 let Some(selection) = self.extension::<CallbackAgentSelection>() else {
                     return Ok(false);
                 };
-                Ok((selection.0)(node_did, &value).is_ok_and(|agents| agents.contains(agent_did)))
+                Ok((selection.0)(node_did, &value).is_some_and(|agents| agents.contains(agent_did)))
             }
         }
     }
