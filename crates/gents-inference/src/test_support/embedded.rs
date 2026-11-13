@@ -176,8 +176,9 @@ async fn start(
     let served: ServedNode = ServedNode::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+    let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
     let http = defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_extra_routes(agent_identity_routes(served.clone()));
+        .with_extra_routes(agent_identity_routes(served.clone()).merge(owner_staged.router()));
     let (node, _admission) = protected
         .start_node_with_projection(
             key,
@@ -189,12 +190,14 @@ async fn start(
             composition,
         )
         .await?;
+    owner_staged.serve(&node, identity.clone());
     let _ = served.set((Arc::downgrade(&node), identity));
     Ok((node, endpoint))
 }
 
 /// Serves Agent identity provisioning as a runtime does, so a client creating
-/// an Agent provisions its identity through the authorized owner.
+/// an Agent provisions its identity through the authorized owner. The node
+/// serves the runtime's owner-staged route beside it.
 fn agent_identity_routes(served: ServedNode) -> axum::Router {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;

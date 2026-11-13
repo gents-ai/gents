@@ -237,12 +237,7 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
 
 #[tokio::test]
 async fn an_unreadable_seed_trigger_status_is_infrastructure() {
-    let db = gents_inference::test_support::test_db(
-        "unreadable-seed-trigger-status",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await;
-    let node = db.node.clone();
+    let node = EmbeddedNode::builder().build().await.unwrap();
     let failure = trigger_failure(
         &node,
         "did:key:trial",

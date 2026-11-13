@@ -8,7 +8,9 @@ open Lean _root_.HomeRetirement
 deriving instance ToJson for Role, Reference, Presence, Disposition, Item, Outcome, Retirement
 
 /-- `passes` is how many groups of the same name the owned entries are
-retired in; the model does not read it, so the split changes nothing. -/
+retired in; the model does not read it, so the split changes nothing. A home
+has one reservation and one maintenance entry, so a scenario lists at most one
+of each. -/
 structure Scenario where
   disposition : Disposition
   passes : Nat
@@ -20,7 +22,7 @@ def everyRole : List Item :=
     [Reference.unreferenced, .otherHome, .exclusion].map fun reference =>
       { role, reference, presence := .file })
   ++ [ { role := .maintenance, reference := .unreferenced, presence := .directory }
-     , { role := .maintenance, reference := .otherHome, presence := .directory } ]
+     , { role := .reservation, reference := .unreferenced, presence := .file } ]
 
 def owned (presence : Presence) : Item :=
   { role := .inventory, reference := .unreferenced, presence }
@@ -34,7 +36,10 @@ def homes : List (List Item) :=
   , [owned .directory, owned .vanished, owned .file, owned .uninspectable, owned .link]
   , [ { role := .lock, reference := .unreferenced, presence := .file }, owned .file
     , { role := .foreign, reference := .unreferenced, presence := .link }
-    , { role := .inventory, reference := .exclusion, presence := .directory } ] ]
+    , { role := .inventory, reference := .exclusion, presence := .directory } ]
+  , [ { role := .reservation, reference := .otherHome, presence := .file }
+    , { role := .maintenance, reference := .otherHome, presence := .directory }, owned .file ]
+  , [ { role := .reservation, reference := .exclusion, presence := .file }, owned .directory ] ]
 
 @[conformance_family]
 def retire : Family Scenario Retirement where
