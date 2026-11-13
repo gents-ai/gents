@@ -1993,22 +1993,6 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // HistoryUnlockRequired in Provider::failed
     ("crates/gents-client-host/src/editor_store.rs", 1),
-    // RemoteP2pAdminError in ClientRouteManager::reconcile_route
-    ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
-    // ModelDiscoveryHttpError in classify_discovery_failure
-    ("crates/gents-desktop-core/src/inference.rs", 1),
-    // ClosureDrift in drift_of
-    ("crates/gents-eval/src/optimization/promote.rs", 1),
-    // ActorBackendDiscoveryError in unavailable
-    ("crates/gents-host/src/http/inference_activity.rs", 1),
-    // EnrollmentDecisionRefusal in enrollment_decision_handler
-    ("crates/gents-host/src/http/router/accounts.rs", 1),
-    // ControlFailure in refusal_reason
-    ("crates/gents-host/src/prepare_runtime.rs", 1),
-    // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
-    ("crates/gents-store/src/local/storage_backend.rs", 3),
-    // EnrollmentDecisionRefusal in P2pTool::call_one
-    ("crates/gents-tools/src/builtin/p2p.rs", 1),
 ];
 
 /// Owner classifiers: the functions through which an owner asks an erased
@@ -2030,8 +2014,13 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-eval/src/report/mod.rs", &["report_refused"]),
     ("crates/gents-eval/src/runner/freeze.rs", &["freeze_refused"]),
     ("crates/gents-eval/src/runner/mod.rs", &["provider_down"]),
+    ("crates/gents-inference/src/backends/provider.rs", &["ModelDiscoveryHttpError::in_chain"]),
+    ("crates/gents-inference/src/backends/registry.rs", &["ActorBackendDiscoveryError::unavailable_in"]),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
     ("crates/gents-loop/src/loop_stream/contract.rs", &["ReplayEvidenceViolation::in_chain"]),
+    ("crates/gents-migration/src/error.rs", &["Error::in_chain"]),
+    ("crates/gents-p2p/src/p2p_reconcile/enrollment_store.rs", &["EnrollmentDecisionRefusal::in_chain"]),
+    ("crates/gents-p2p/src/p2p_reconcile/trait_def.rs", &["RemoteP2pAdminError::in_error"]),
     ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
     ("crates/gents-pack/src/pack/registry.rs", &["RegistryError::in_chain"]),
     ("crates/gents-pack/src/plugin.rs", &["GuestTrap::in_chain", "GuestTrap::raised_by"]),
@@ -2040,10 +2029,12 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
     ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
+    ("crates/gents-protocol/src/operations/install_repair.rs", &["IncompatibleStore::of"]),
     ("crates/gents-protocol/src/output.rs", &["ReconstructionError::in_chain"]),
     ("crates/gents-protocol/src/output/recovery.rs", &["RecoveryPlanError::in_chain"]),
     ("crates/gents-service/src/enrollment_admin.rs", &["EnrollmentDecisionRejected::in_chain"]),
     ("crates/gents-service/src/native_service.rs", &["BackgroundApprovalPending::take", "UnsupportedNativeServicePlatform::occurs_in"]),
+    ("crates/gents-service/src/runtime_control.rs", &["ControlFailure::reason_in"]),
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
     ("crates/gents-session/src/request/lifecycle/execution_lease.rs", &["ExecutionOwnershipLost::occurs_in"]),
@@ -2054,6 +2045,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
+    ("crates/gents-store/src/local/backend_protection.rs", &["BackendProtectionError::in_chain"]),
     ("crates/gents-store/src/local/home.rs", &["store_lock_held"]),
     ("crates/gents-store/src/local/storage_backend.rs", &["find_incompatible", "find_insecure_key"]),
     ("crates/gents-store/src/local/store_key.rs", &["store_key_unavailable"]),

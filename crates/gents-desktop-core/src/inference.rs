@@ -246,9 +246,7 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
 /// External premise: a response that does not decode surfaces only as a
 /// `serde_json::Error` in the erased chain.
 fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
-    let http_error = error.chain().find_map(|cause| {
-        cause.downcast_ref::<gents_inference::backends::provider::ModelDiscoveryHttpError>()
-    });
+    let http_error = gents_inference::backends::provider::ModelDiscoveryHttpError::in_chain(error);
     let is_decode = error
         .chain()
         .any(|cause| cause.downcast_ref::<serde_json::Error>().is_some());

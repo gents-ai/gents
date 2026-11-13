@@ -46,21 +46,52 @@ fn refused(reason: &'static str, detail: impl Into<String>) -> anyhow::Error {
     })
 }
 
-#[derive(Debug)]
-struct ClosureDrift(Vec<DriftedRef>);
+/// The promote transaction's failure: a closure that moved since the job froze
+/// it is told apart from every other failure without asking an erased error.
+#[derive(Debug, thiserror::Error)]
+enum PromoteTxnError {
+    #[error("the frozen closure moved: {0:?}")]
+    Drift(Vec<DriftedRef>),
+    #[error(transparent)]
+    Access(#[from] gents_store::config_client::ConfigClientError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
-impl std::fmt::Display for ClosureDrift {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "the frozen closure moved: {:?}", self.0)
+impl PromoteTxnError {
+    fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Other(error) => error,
+            Self::Access(error) => error.into(),
+            drift @ Self::Drift(_) => drift.into(),
+        }
     }
 }
 
-impl std::error::Error for ClosureDrift {}
-
-fn drift_of(error: &anyhow::Error) -> Option<Vec<DriftedRef>> {
-    if let Some(drift) = error.downcast_ref::<ClosureDrift>() {
-        return Some(drift.0.clone());
+impl TransactionFailure for PromoteTxnError {
+    fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Other(error) => TransactionFailure::config_client_error(error),
+            Self::Drift(_) => None,
+        }
     }
+
+    fn rerun_requested(&self) -> Option<&gents_store::config_client::RerunNote> {
+        match self {
+            Self::Access(error) => TransactionFailure::rerun_requested(error),
+            Self::Other(error) => TransactionFailure::rerun_requested(error),
+            Self::Drift(_) => None,
+        }
+    }
+}
+
+fn drift_of(error: &PromoteTxnError) -> Option<Vec<DriftedRef>> {
+    let error = match error {
+        PromoteTxnError::Drift(drifted) => return Some(drifted.clone()),
+        PromoteTxnError::Access(_) => return None,
+        PromoteTxnError::Other(error) => error,
+    };
     stale_expectation(error).map(|stale| {
         stale
             .drifted
@@ -215,7 +246,7 @@ pub async fn promote(
                 let live = capture_closure(txn, &job.owner).await?;
                 let drifted = between(&job.origin.closure, &closure_digests(&live)?);
                 if !drifted.is_empty() {
-                    return Err(anyhow::Error::new(ClosureDrift(drifted)));
+                    return Err(PromoteTxnError::Drift(drifted));
                 }
                 #[cfg(test)]
                 if let Ok(gate) = BETWEEN_CHECK_AND_WRITE.try_with(std::sync::Arc::clone) {
@@ -231,11 +262,13 @@ pub async fn promote(
                 .await?;
                 let written =
                     target_digest(&capture_closure(txn, &job.owner).await?, &job.origin.target)?;
-                anyhow::ensure!(
-                    written == promotion.target_digest,
-                    "the promoted target digests to {written}, not the patch's {}",
-                    promotion.target_digest
-                );
+                if written != promotion.target_digest {
+                    return Err(anyhow::anyhow!(
+                        "the promoted target digests to {written}, not the patch's {}",
+                        promotion.target_digest
+                    )
+                    .into());
+                }
                 let entry = JournalEntry::Promoted {
                     by: (*by).clone(),
                     target_digest: promotion.target_digest.clone(),
@@ -243,7 +276,7 @@ pub async fn promote(
                     previous_digest: promotion.previous_digest.clone(),
                 };
                 append_in_txn(txn, job, &entry).await?;
-                Ok(promotion)
+                Ok::<_, PromoteTxnError>(promotion)
             })
         })
         .await;
@@ -255,7 +288,7 @@ pub async fn promote(
         }
         Err(failure) => {
             if failure.unconfirmed {
-                return Err(failure.error);
+                return Err(failure.error.into_anyhow());
             }
             let error = failure.error;
             let drifted = if let Some(drifted) = drift_of(&error) {
@@ -270,18 +303,18 @@ pub async fn promote(
                     })
                     .await;
                 let Ok(live) = observed else {
-                    return Err(error);
+                    return Err(error.into_anyhow());
                 };
                 let Ok(digests) = closure_digests(&live) else {
-                    return Err(error);
+                    return Err(error.into_anyhow());
                 };
                 let drifted = between(&job.origin.closure, &digests);
                 if drifted.is_empty() {
-                    return Err(error);
+                    return Err(error.into_anyhow());
                 }
                 drifted
             } else {
-                return Err(error);
+                return Err(error.into_anyhow());
             };
             let entry = JournalEntry::PromotionRefused {
                 drifted: drifted.clone(),

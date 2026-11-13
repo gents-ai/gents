@@ -830,6 +830,15 @@ pub enum ActorBackendDiscoveryError {
     Commit(#[source] anyhow::Error),
 }
 
+impl ActorBackendDiscoveryError {
+    pub fn unavailable_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        matches!(
+            gents_protocol::error_chain::find_source::<Self>(error),
+            Some(Self::Unavailable)
+        )
+    }
+}
+
 /// Perform an actor-authorized discovery and commit its observation as the
 /// runtime only while the actor retains native update authority over that backend.
 pub async fn discover_backend_for_actor(
