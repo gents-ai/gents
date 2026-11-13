@@ -56,7 +56,7 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
-        let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+        let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("household client")).await?;
         wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
         run_cli_json_with_env(&runtime_home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home], &owner_env)?;
@@ -254,7 +254,8 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
                 )
                 .await?;
                 let (status, _) =
-                    wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+                    wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql)
+                        .await?;
                 let pending = core
                     .request_status_enrollment_with_label(&status, Some(label))
                     .await?;

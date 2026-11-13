@@ -49,6 +49,7 @@ gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }
 gents-inference = { workspace = true, features = ["test-fixtures"] }
 gents-p2p = { workspace = true, features = ["test-fixtures"] }
+gents-pack = { workspace = true, features = ["test-fixtures"] }
 gents-session = { workspace = true, features = ["test-fixtures"] }
 gents-toolcalls = { workspace = true, features = ["test-fixtures"] }
 gents-automation = { workspace = true, features = ["test-fixtures"] }

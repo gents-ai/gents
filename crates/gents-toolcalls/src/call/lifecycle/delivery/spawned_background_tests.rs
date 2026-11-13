@@ -560,14 +560,15 @@ async fn interrupted_presentation(tool: &ToolCallLifecycle) -> String {
 }
 
 #[tokio::test]
-async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
+async fn interrupted_tool_diagnostics_follow_the_lean_output_budget() {
     use crate::call::lifecycle::admission_fixture::PublishedAdmission;
-    for (name, tool_name, configured, reload, bounded) in [
-        ("budget-bash", "bash", true, false, true),
-        ("budget-bash-restart", "bash", true, true, true),
-        ("budget-remote", "mcp__search__query", true, false, false),
-        ("budget-unresolved", "bash", false, false, false),
-    ] {
+    use gents_lean_vocab::families::interrupted_diagnostic_budget::Diagnostic;
+
+    for (index, case) in gents_lean_vocab::families::interrupted_diagnostic_budget::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let input = &case.input;
         let (
             PublishedAdmission {
                 node,
@@ -578,21 +579,25 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
             },
             request,
         ) = published_admission_with_owner(PublishedAdmissionOptions {
-            name: name.to_owned(),
-            tool_name: Some(tool_name.to_owned()),
+            name: format!("interrupted-budget-{index}"),
+            tool_name: Some(input.tool_name.clone()),
             ..Default::default()
         })
         .await
         .unwrap();
         let agent_did = request.request().agent_did.clone();
         let binding = tool.tool_output_binding().expect("running output binding");
-        append_tool_output(&binding, "0123456789abcdefghij")
-            .await
-            .unwrap();
-        if configured {
-            configure_bash_output_budget(&client, &tool.node_did, &agent_did, 5).await;
+        append_tool_output(&binding, &input.raw).await.unwrap();
+        if let Some(budget) = input.configured_budget {
+            configure_bash_output_budget(
+                &client,
+                &tool.node_did,
+                &agent_did,
+                i64::try_from(budget).unwrap(),
+            )
+            .await;
         }
-        if reload {
+        if input.reload {
             let signer = tool.access().unwrap().managed_agent_signer();
             tool = ToolCallLifecycle::load_by_doc_id_as(
                 node.clone(),
@@ -619,29 +624,27 @@ async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
         .unwrap()
         .expect("running tool for a later same-state replay");
         replay.inherit_signer(&tool).unwrap();
-        assert!(tool.timeout().await.unwrap(), "{name}");
+        let timed_out = tool.timeout().await.unwrap();
         let presented = interrupted_presentation(&tool).await;
-        if bounded {
-            assert!(
-                presented.starts_with("fghij\n") && !presented.contains("0123456789abcde"),
-                "{name}: {presented:?}"
-            );
-        } else {
-            assert!(
-                presented.starts_with("0123456789abcdefghij\n"),
-                "{name}: {presented:?}"
-            );
-        }
-        assert!(
-            presented.contains("tool call deadline exceeded at "),
-            "{presented:?}"
-        );
-
-        if bounded && !reload {
-            configure_bash_output_budget(&client, &tool.node_did, &agent_did, 12).await;
-            assert!(!replay.timeout().await.unwrap(), "{name}: replay");
-            assert_eq!(interrupted_presentation(&tool).await, presented);
-        }
+        let (shown, cause) = presented
+            .split_once("tool call deadline exceeded at ")
+            .unwrap_or_else(|| panic!("diagnostic names the deadline: {presented:?}"));
+        assert!(!cause.is_empty(), "{presented:?}");
+        let tail = shown.strip_suffix('\n').unwrap_or(shown).to_owned();
+        configure_bash_output_budget(
+            &client,
+            &tool.node_did,
+            &agent_did,
+            i64::try_from(input.later_budget).unwrap(),
+        )
+        .await;
+        let replay_timed_out = replay.timeout().await.unwrap();
+        assert_eq!(interrupted_presentation(&tool).await, presented);
+        case.check(Diagnostic {
+            timed_out,
+            tail,
+            replay_timed_out,
+        });
         node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);
     }

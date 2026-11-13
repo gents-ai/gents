@@ -794,14 +794,18 @@ pub async fn create_session_document(
 }
 
 pub async fn seed_session_observation_from_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     session_id: &str,
     request_id: &str,
     preview: &str,
 ) {
     let session = escape_graphql_string(session_id);
     let request = escape_graphql_string(request_id);
-    let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{request}" }} }}, limit: 2) {{ _docID request_id lifecycle_state created_at }} }}"#)).await;
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{request}" }} }}, limit: 2) {{ _docID request_id lifecycle_state created_at }} }}"#),
+        "test.seed_session_observation_request",
+    ).await.expect("read observed request");
     assert!(!response.has_errors(), "{:?}", response.errors);
     let rows = response
         .data
@@ -833,7 +837,7 @@ pub async fn seed_session_observation_from_request(
 }
 
 pub async fn seed_session_observation(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     session_id: &str,
     observation: &gents_protocol::session::SessionObservation,
 ) {
@@ -842,9 +846,13 @@ pub async fn seed_session_observation(
     )
     .expect("render session observation fixture");
     let session_id = escape_graphql_string(session_id);
-    let response = node.execute(&format!(
-        "mutation {{ update_AgentSession(filter: {{session_id: {{_eq: \"{session_id}\"}}}}, input: {input}) {{_docID}} }}"
-    )).await;
+    let response = gents_store::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.seed_session_observation",
+        &format!(
+            "mutation {{ update_AgentSession(filter: {{session_id: {{_eq: \"{session_id}\"}}}}, input: {input}) {{_docID}} }}"
+        ),
+    ).await.expect("write session observation");
     assert!(
         !response.has_errors(),
         "seed session observation: {:?}",

@@ -117,3 +117,29 @@ pub(super) fn take_next_eligible_pending_request(
 
     None
 }
+
+#[cfg(test)]
+#[test]
+fn generated_cooldown_pruning_ends_dedupe_epoch() {
+    use gents_lean_vocab::families::event_delivery_cooldown_pruning as family;
+    family::replay(|input| {
+        let marked_at = Instant::now();
+        let mut marks = (0..input.count)
+            .map(|index| {
+                (
+                    format!("request-{index}"),
+                    ProcessedMark {
+                        at: marked_at,
+                        queue_session: None,
+                        execution_generation: None,
+                    },
+                )
+            })
+            .collect::<ProcessedRequests>();
+        prune_processed_requests(
+            &mut marks,
+            marked_at + Duration::from_millis(input.age_millis),
+        );
+        marks.len() as u64
+    });
+}

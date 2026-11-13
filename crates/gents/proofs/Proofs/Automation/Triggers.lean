@@ -12,3 +12,4 @@ import Proofs.Automation.Triggers.NativeRoute
 import Proofs.Automation.Triggers.SessionKey
 import Proofs.Automation.Triggers.FireBudget
 import Proofs.Automation.Triggers.ManualRun
+import Proofs.Automation.Triggers.WorkspaceFire
