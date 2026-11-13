@@ -1,6 +1,7 @@
 use crate::support::*;
 
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -502,27 +503,37 @@ async fn observe_identity(case: &IdentityCase, command: &[&str]) -> Result<&'sta
 #[tokio::test]
 async fn every_client_command_decides_its_identity_by_the_selected_home() -> Result<()> {
     use gents_lean_vocab::families::install_repair_client_commands as family;
-    for case in family::cases::<String, String>() {
-        let input = &case.input;
-        let identity = IdentityCase {
-            selection: match input.selection.as_str() {
+    let cases = family::cases::<String, String>();
+    let identities = cases
+        .iter()
+        .map(|case| IdentityCase {
+            selection: match case.input.selection.as_str() {
                 "flag" => HomeSelection::Flag,
                 "env" => HomeSelection::Env,
                 "remembered" => HomeSelection::Remembered,
                 "fallback" => HomeSelection::Fallback,
                 other => panic!("unknown home selection {other}"),
             },
-            key_present: input.key_present,
-            selected: (input.selected.settings_present, input.selected.pending),
-            other: (input.other.settings_present, input.other.pending),
-        };
-        let observed = futures::future::try_join_all(
-            RESOLVING_COMMANDS
-                .iter()
-                .map(|command| observe_identity(&identity, command)),
-        )
-        .await?;
-        for (command, observed) in RESOLVING_COMMANDS.iter().zip(observed) {
+            key_present: case.input.key_present,
+            selected: (
+                case.input.selected.settings_present,
+                case.input.selected.pending,
+            ),
+            other: (case.input.other.settings_present, case.input.other.pending),
+        })
+        .collect::<Vec<_>>();
+    let mut observations = futures::stream::iter(identities.iter().flat_map(|identity| {
+        RESOLVING_COMMANDS
+            .iter()
+            .map(move |command| observe_identity(identity, command))
+    }))
+    .buffered(std::thread::available_parallelism()?.get());
+    for (case, identity) in cases.iter().zip(&identities) {
+        for command in RESOLVING_COMMANDS {
+            let observed = observations
+                .next()
+                .await
+                .context("every command of every case is observed")??;
             eprintln!(
                 "gents {} with the home by {:?}",
                 command.join(" "),
