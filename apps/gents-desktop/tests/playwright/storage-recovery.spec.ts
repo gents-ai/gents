@@ -57,9 +57,13 @@ for (const colorScheme of ["light", "dark"] as const) {
     expect(
       await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), key),
     ).toEqual(draft);
+
     await expect(
       page.getByTestId("transcript-panel").getByText(request.content, { exact: true }),
-    ).toHaveCount(0);
+    ).toHaveCount(1);
+    await expect(
+      page.locator('[data-timeline-key="turn:retained-storage-failure"]'),
+    ).toContainText("The message wasn't sent");
     const box = (await panel.boundingBox())!;
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);

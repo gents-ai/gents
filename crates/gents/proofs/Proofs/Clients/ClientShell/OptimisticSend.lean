@@ -659,6 +659,54 @@ theorem composer_blocks_only_mailbox (status : Status) (mailbox refused : Bool)
       (view status mailbox refused).discard = true) := by
   cases status <;> cases mailbox <;> simp_all [view]
 
+/-- The row a kept chat message draws in its session's transcript, or none.
+`observed` is the client reading the session holding the message's identity
+(`sessionHoldsRequest`, the predicate `observe` reads).
+
+Decisions (user): a chat message is in its conversation from the moment it is
+composed, as its own row, not beside the composer: sending while pending, and
+failed with Retry and Discard. Once the session is observed holding its
+identity, the session's row stands for it and the kept message draws nothing,
+even while its reply is still on its way, so the message is never drawn twice.
+A confirmed or discarded message draws nothing from the client. A mailbox
+answer is shown with its question, not as a transcript row. -/
+def keptRow (status : Status) (mailbox observed : Bool) : Option ViewToken :=
+  if mailbox || observed then none
+  else match status with
+    | .pending => some .sending
+    | .failed => some .failed
+    | .confirmed | .discarded => none
+
+/-- The kept row never stands beside the session's row for the same identity. -/
+theorem kept_row_yields_to_session (status : Status) (mailbox : Bool) :
+    keptRow status mailbox true = none := by
+  simp [keptRow]
+
+/-- A kept row shows the message's own view: sending, or failed with Discard
+and Retry unless the runtime refused this client. -/
+theorem kept_row_is_view (status : Status) (mailbox observed refused : Bool) (token : ViewToken)
+    (drawn : keptRow status mailbox observed = some token) :
+    token = (view status mailbox refused).shown ∧
+      (token = .sending ∨ ((view status mailbox refused).discard = true ∧
+        ((view status mailbox refused).retry = true ∨ refused = true))) := by
+  cases status <;> cases mailbox <;> cases observed <;> cases refused <;>
+    simp_all [keptRow, view]
+
+/-- A composed chat message draws its sending row at once, before any reply. -/
+theorem compose_draws_sending_row {s s' : State} {id : Nat} (h : Reachable s)
+    (stepped : step s (.compose id) = some s') :
+    (statusOf s'.messages id).bind (fun status => keptRow status false false) =
+      some .sending := by
+  have inv := reachable_inv (Reachable.step (.compose id) h stepped)
+  have mem : (⟨id, .pending, true⟩ : Message) ∈ s'.messages := by
+    simp only [step] at stepped
+    split at stepped
+    · contradiction
+    · cases stepped; simp
+  have composed : statusOf s'.messages id = some .pending := statusOf_of_mem inv.ids mem
+  rw [composed]
+  simp [keptRow]
+
 /-! ### Conformance cases -/
 
 def statusToken : Status → String
@@ -683,6 +731,15 @@ def viewCasesJson : Json :=
       ("refused", toJson refused),
       ("view", toJson (viewTokenString shown.shown)), ("retry", toJson shown.retry),
       ("discard", toJson shown.discard), ("blocksComposer", toJson shown.blocksComposer)])
+
+def rowCasesJson : Json :=
+  toJson (allStatuses.flatMap fun status => [false, true].flatMap fun mailbox =>
+    [false, true].map fun observed =>
+      Json.mkObj [("status", toJson (statusToken status)), ("mailbox", toJson mailbox),
+        ("observed", toJson observed),
+        ("row", match keptRow status mailbox observed with
+          | some token => toJson (viewTokenString token)
+          | none => Json.null)])
 
 def actionJson : Action → Json
   | .compose id => Json.mkObj [("kind", toJson "compose"), ("id", toJson id)]
@@ -743,6 +800,7 @@ def traceCasesJson : Json :=
       ("after", toJson (replay init actions))])
 
 def casesJson : String :=
-  (Json.mkObj [("views", viewCasesJson), ("traces", traceCasesJson)]).compress
+  (Json.mkObj [("views", viewCasesJson), ("rows", rowCasesJson),
+    ("traces", traceCasesJson)]).compress
 
 end ClientOptimisticSend

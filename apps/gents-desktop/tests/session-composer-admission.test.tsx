@@ -1151,9 +1151,10 @@ it("moves a sent message out of the composer, so Enter after a slow send's deadl
     await typeText(field, "Only once{Enter}");
     expect(sendChatMessage).toHaveBeenCalledTimes(1);
     expect(composerText(field)).toBe("");
-    expect(screen.getByRole("status", { name: "Saved message" }).textContent).toContain(
-      "Only once",
-    );
+    const sent = screen
+      .getByText("Only once")
+      .closest<HTMLElement>("[data-timeline-key]")!;
+    expect(within(sent).getByRole("status")).toHaveTextContent("Sending…");
     await act(() => vi.advanceTimersByTimeAsync(CHAT_SEND_DEADLINE_MS));
     await screen.findByText("The message wasn't sent");
     within(screen.getByRole("status", { name: "Saved message" })).getByRole("button", {

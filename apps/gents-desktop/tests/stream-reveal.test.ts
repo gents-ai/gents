@@ -400,6 +400,50 @@ describe("the rows drawn for sent messages", () => {
   it("never shows one session's message in another", () => {
     expect(withSentTurns([person], local, "other")).toEqual([person]);
   });
+
+  it("draws the copy with the attachments it was sent with", () => {
+    const notes = { name: "notes.txt", mediaType: "text/plain", digest: "d", size: 5 };
+    const [, copy] = withSentTurns([person], { ...local, attachments: [notes] }, "s");
+    expect(copy).toMatchObject({ itemKey: "local:r2", attachments: [notes] });
+  });
+
+  const kept = (requestId: string, createdAt: string | null) =>
+    pendingUserTurn({
+      itemKey: `local:${requestId}`,
+      requestId,
+      content: requestId,
+      lifecycleState: "pending",
+      createdAt,
+    });
+
+  it("draws kept sends after the copy, in the order they were sent, before the live reply", () => {
+    const sent = { ...local, createdAt: "2026-11-11T10:00:01Z" };
+    const rows = withSentTurns([person, live("On it")], sent, "s", false, [
+      kept("r4", "2026-11-11T10:00:03Z"),
+      kept("r3", "2026-11-11T10:00:02Z"),
+    ]);
+    expect(rows.map((row) => row.itemKey)).toEqual([
+      "u1",
+      "local:r2",
+      "local:r3",
+      "local:r4",
+      expect.any(String),
+    ]);
+    expect(rows.at(-1)?.kind).toBe("liveAssistant");
+  });
+
+  it("draws a kept send once, as the session's row once it has one", () => {
+    expect(
+      withSentTurns([person, pending], null, "s", false, [kept("r2", null)]).map(
+        (row) => row.itemKey,
+      ),
+    ).toEqual(["u1", "pending-r2"]);
+    expect(
+      withSentTurns([person], local, "s", false, [kept("r2", null)]).map(
+        (row) => row.itemKey,
+      ),
+    ).toEqual(["u1", "local:r2"]);
+  });
 });
 
 describe("withSentTurns with folded messages", () => {

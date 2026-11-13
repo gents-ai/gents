@@ -9,6 +9,8 @@ export type SendStatus = "pending" | "confirmed" | "failed" | "discarded";
 
 export type DeliveryView = "sending" | "delivered" | "failed" | "hidden";
 
+export type KeptRow = Extract<DeliveryView, "sending" | "failed">;
+
 export type DeliveryAffordances = {
   view: DeliveryView;
   retry: boolean;
@@ -70,4 +72,61 @@ export function deliveryAffordances(
     case "discarded":
       return { view: "hidden", retry: false, discard: false, blocksComposer: false };
   }
+}
+
+export function keptRow(
+  status: SendStatus,
+  mailbox: boolean,
+  observed: boolean,
+): KeptRow | null {
+  if (mailbox || observed) return null;
+  return status === "pending" ? "sending" : status === "failed" ? "failed" : null;
+}
+
+export function drawnInTranscript(
+  draft: ChatDraft,
+  nodeDid: string | null,
+  sessionId: string | null,
+): boolean {
+  return (
+    !draft.mailbox &&
+    !draft.queued &&
+    draft.nodeDid === nodeDid &&
+    draft.selectedSessionId !== null &&
+    draft.selectedSessionId === draft.sessionId &&
+    draft.sessionId === sessionId
+  );
+}
+
+export type TranscriptSend = { draft: ChatDraft; row: KeptRow };
+
+export function transcriptSends(
+  drafts: readonly ChatDraft[],
+  clientDid: string | null,
+  nodeDid: string | null,
+  sessionId: string | null,
+  now: number,
+  observed: (requestId: string) => boolean,
+  storing: string | null,
+): TranscriptSend[] {
+  const sends: TranscriptSend[] = [];
+  for (const draft of drafts) {
+    if (
+      draft.clientDid !== clientDid ||
+      draft.requestId === storing ||
+      !drawnInTranscript(draft, nodeDid, sessionId)
+    )
+      continue;
+    const row = keptRow(
+      sendStatus(draft, now),
+      draft.mailbox !== undefined,
+      observed(draft.requestId),
+    );
+    if (row) sends.push({ draft, row });
+  }
+  return sends.sort(
+    (a, b) =>
+      (a.draft.composedAt ?? 0) - (b.draft.composedAt ?? 0) ||
+      (a.draft.requestId < b.draft.requestId ? -1 : 1),
+  );
 }

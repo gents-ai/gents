@@ -33,6 +33,16 @@ export type ChatState = {
   chatDraftError: string | null;
 
   sendDeadlineTick: number;
+
+  storingSend: string | null;
+
+  transcriptDraws: TranscriptDraws | null;
+};
+
+export type TranscriptDraws = {
+  nodeDid: string | null;
+  sessionId: string;
+  requestIds: readonly string[];
 };
 
 /* enough for a run of sends queued behind one turn */
@@ -53,9 +63,19 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       goalCommandsInFlight: new Set(),
       ...loadChatDrafts(),
       sendDeadlineTick: 0,
+      storingSend: null,
+      transcriptDraws: null,
       ...initial,
     })),
   );
+}
+
+function withSentTurn(sent: readonly SentTurn[], turn: SentTurn): readonly SentTurn[] {
+  return sent.some(
+    (held) => held.requestId === turn.requestId && held.sessionId === turn.sessionId,
+  )
+    ? sent
+    : [...sent.slice(-(SENT_TURNS_KEPT - 1)), turn];
 }
 
 const READY: ChatWorkflowState = { kind: "ready" };
@@ -98,10 +118,11 @@ export const chat = {
   showPendingTurn(store: ChatStore, turn: OptimisticPendingTurn, queued = false) {
     store.setState((state) => ({
       optimisticPendingTurn: turn,
-      sentTurns: [
-        ...state.sentTurns.slice(-(SENT_TURNS_KEPT - 1)),
-        { sessionId: turn.sessionId, requestId: turn.requestId, queued },
-      ],
+      sentTurns: withSentTurn(state.sentTurns, {
+        sessionId: turn.sessionId,
+        requestId: turn.requestId,
+        queued,
+      }),
     }));
   },
 
@@ -115,6 +136,13 @@ export const chat = {
           }
         : state,
     );
+  },
+
+  noteSentTurn(store: ChatStore, turn: SentTurn) {
+    store.setState((state) => {
+      const sentTurns = withSentTurn(state.sentTurns, turn);
+      return sentTurns === state.sentTurns ? state : { sentTurns };
+    });
   },
   endPendingTurn(store: ChatStore, requestId: string) {
     if (store.getState().optimisticPendingTurn?.requestId === requestId)

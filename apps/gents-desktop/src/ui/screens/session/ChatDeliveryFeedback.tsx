@@ -2,7 +2,7 @@ import type {
   ChatSendRequest,
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
 import { errorWords } from "../../../lib/reasonText";
@@ -27,10 +27,18 @@ import {
 import {
   deliveryAffordances,
   resendRefused,
+  drawnInTranscript,
   sendStatus,
+  transcriptSends,
   type SendStatus,
+  type TranscriptSend,
 } from "../../../hooks/chatDeliveryView";
 import { useSendDeadlineClock } from "../../../hooks/sendDeadlineClock";
+import {
+  heldFor,
+  sessionHoldsRequest,
+  useSessionValue,
+} from "../../../hooks/sessionStore";
 
 function description(draft: ChatDraft) {
   if (draft.mailbox) return draft.mailbox.summary;
@@ -65,6 +73,40 @@ export function ChatDeliveryFeedback({
   const readError = stores.chat.use.chatDraftError();
   const sending = stores.chat.use.sending();
   const now = useSendDeadlineClock(stores.chat);
+  const draws = stores.chat.use.transcriptDraws();
+  const storing = stores.chat.use.storingSend();
+  const kept = chatDraftsFor(
+    entries,
+    clientDid,
+    nodeDid,
+    sessionId,
+    mailboxItem?.itemId ?? null,
+  );
+  const held = useSessionValue(stores.session, (state) =>
+    !mailboxItem && heldFor(state.session, sessionId, nodeDid)
+      ? kept
+          .filter((draft) => sessionHoldsRequest(state, draft.requestId))
+          .map((draft) => draft.requestId)
+          .join("\n")
+      : "",
+  );
+
+  const shownElsewhere = (draft: ChatDraft, status: SendStatus) => {
+    if (mailboxItem || draft.mailbox) return false;
+    if (
+      drawnInTranscript(draft, nodeDid, sessionId) &&
+      (draft.requestId === storing ||
+        (draws !== null &&
+          draws.nodeDid === nodeDid &&
+          draws.sessionId === sessionId &&
+          draws.requestIds.includes(draft.requestId)))
+    )
+      return true;
+    return (
+      status === "pending" &&
+      (draft.queued || held.split("\n").includes(draft.requestId))
+    );
+  };
   useEffect(() => {
     const reload = () => stores.chat.setState(loadChatDrafts());
     window.addEventListener("storage", reload);
@@ -80,14 +122,9 @@ export function ChatDeliveryFeedback({
       {/* every kept message is in view from the moment it is sent: pending
           while its send is in flight, failed with Retry and Discard, or a
           confirmed answer waiting for its question to close */}
-      {chatDraftsFor(
-        entries,
-        clientDid,
-        nodeDid,
-        sessionId,
-        mailboxItem?.itemId ?? null,
-      ).map((draft) => {
+      {kept.map((draft) => {
         const status = sendStatus(draft, now);
+        if (shownElsewhere(draft, status)) return null;
         return (
           <SavedMessage
             key={draft.requestId}
@@ -98,6 +135,74 @@ export function ChatDeliveryFeedback({
         );
       })}
     </>
+  );
+}
+
+export function useTranscriptSends(
+  nodeDid: string | null,
+  sessionId: string | null,
+): readonly TranscriptSend[] {
+  const { stores } = useApp();
+  const clientDid = useStore(
+    stores.client,
+    (state) => state.snapshot?.client?.clientDid ?? null,
+  );
+  const drafts = stores.chat.use.chatDrafts();
+  const storing = stores.chat.use.storingSend();
+  const now = useSendDeadlineClock(stores.chat);
+  const observed = useSessionValue(stores.session, (state) =>
+    heldFor(state.session, sessionId, nodeDid)
+      ? drafts
+          .filter(
+            (draft) =>
+              drawnInTranscript(draft, nodeDid, sessionId) &&
+              sessionHoldsRequest(state, draft.requestId),
+          )
+          .map((draft) => draft.requestId)
+          .join("\n")
+      : "",
+  );
+  const sends = transcriptSends(
+    drafts,
+    clientDid,
+    nodeDid,
+    sessionId,
+    now,
+    (requestId) => observed.split("\n").includes(requestId),
+    storing,
+  );
+  const kept = useRef<readonly TranscriptSend[]>(NO_SENDS);
+  if (!sameSends(kept.current, sends)) kept.current = sends.length ? sends : NO_SENDS;
+  return kept.current;
+}
+
+const NO_SENDS: readonly TranscriptSend[] = [];
+
+const sameSends = (a: readonly TranscriptSend[], b: readonly TranscriptSend[]) =>
+  a.length === b.length &&
+  a.every(
+    (send, index) =>
+      send.row === b[index]!.row &&
+      JSON.stringify(send.draft) === JSON.stringify(b[index]!.draft),
+  );
+
+export function TranscriptSendFailure({ draft }: { draft: ChatDraft }) {
+  const sending = useApp().stores.chat.use.sending();
+  const readable = useMemo(() => {
+    try {
+      chatDraftRequest(draft);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [draft]);
+  return (
+    <SavedMessage
+      draft={draft}
+      status="failed"
+      disabled={sending}
+      details={!readable}
+    />
   );
 }
 
@@ -117,10 +222,13 @@ function SavedMessage({
   draft,
   status,
   disabled,
+  details = true,
 }: {
   draft: ChatDraft;
   status: SendStatus;
   disabled: boolean;
+
+  details?: boolean;
 }) {
   const { actions, stores, drafts } = useApp();
   const mounted = useRef(true);
@@ -203,9 +311,9 @@ function SavedMessage({
               ? "The answer wasn't sent"
               : "The message wasn't sent"
       }
-      details={description(draft)}
-      detailsText
-      detailsLabel={`Saved ${noun}`}
+      details={details ? description(draft) : undefined}
+      detailsText={details}
+      detailsLabel={details ? `Saved ${noun}` : undefined}
       actions={
         <>
           {shown.retry && (
