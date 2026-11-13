@@ -566,19 +566,13 @@ mod plugin {
     }
 
     #[tokio::test]
-    async fn plugin_write_to_a_protected_collection_is_refused() {
+    async fn plugin_writes_to_protected_collections_follow_the_model() {
         let node = node().await;
-        let publication =
-            &gents_lean_vocab::lean_contract_snapshot().client_publication_protected_collection;
-        for collection in [
-            gents_protocol::schemas::EVAL_RUN_NAME,
-            "AgentRequest",
-            publication.as_str(),
-        ] {
-            let grant = grant(&[collection]);
-            let error = apply_all(
+        for case in gents_lean_vocab::families::datastore_protection_plugin_write::cases() {
+            let collection = case.input.collection.as_str();
+            let outcome = apply_all(
                 &node,
-                &grant,
+                &grant(&[collection]),
                 vec![write(
                     DataOp::Insert,
                     collection,
@@ -586,13 +580,33 @@ mod plugin {
                     json!({"body": "x"}),
                 )],
             )
-            .await
-            .unwrap_err();
-            assert!(
-                error.to_string().contains("declared data grant"),
-                "{error:#}"
+            .await;
+            case.check(
+                outcome.is_err_and(|error| error.to_string().contains("declared data grant")),
             );
         }
+        node.shutdown().await.expect("node shutdown");
+    }
+
+    #[tokio::test]
+    async fn plugin_write_to_a_runtime_collection_is_refused() {
+        let node = node().await;
+        let error = apply_all(
+            &node,
+            &grant(&["AgentRequest"]),
+            vec![write(
+                DataOp::Insert,
+                "AgentRequest",
+                None,
+                json!({"body": "x"}),
+            )],
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("declared data grant"),
+            "{error:#}"
+        );
         node.shutdown().await.expect("node shutdown");
     }
 

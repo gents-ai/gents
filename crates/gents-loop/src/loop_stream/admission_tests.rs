@@ -89,25 +89,7 @@ async fn dropping_pending_provider_dispatch_keeps_scope_and_cancels_work() {
     assert!(result.await.is_err());
 }
 
-async fn model_case(name: &'static str) -> serde_json::Value {
-    tokio::task::spawn_blocking(move || {
-        let json = gents_lean_contract::load_contract_json().expect("Lean contract snapshot");
-        let snapshot: serde_json::Value = serde_json::from_str(&json).unwrap();
-        snapshot["tool_admission_handoff_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap()
-}
-
-#[tokio::test]
-async fn handoff_delivers_one_reply_before_invocation() {
-    let model = model_case("accepted-before-invoke").await;
+async fn delivered_reply() -> bool {
     let invoked = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let work = AdmissionWork {
@@ -125,13 +107,11 @@ async fn handoff_delivers_one_reply_before_invocation() {
     let mut stream = Box::pin(drive_admissions(inner));
     let item = stream.next().await.unwrap().unwrap();
     assert!(matches!(item, super::LoopStreamItem::Final { .. }));
-    assert_eq!(invoked.load(Ordering::SeqCst), model["expected_invoked"]);
     assert!(stream.next().await.is_none());
+    invoked.load(Ordering::SeqCst)
 }
 
-#[tokio::test]
-async fn cancellation_after_the_reply_prevents_later_invocation() {
-    let model = model_case("cancel-after-reply").await;
+async fn stop_after_the_reply() -> bool {
     let invoked = Arc::new(AtomicBool::new(false));
     let (sender, mut receiver) = tokio::sync::oneshot::channel();
     let (resume, resume_rx) = tokio::sync::oneshot::channel::<()>();
@@ -156,12 +136,10 @@ async fn cancellation_after_the_reply_prevents_later_invocation() {
     );
     drop(stream);
     assert!(resume.send(()).is_err());
-    assert_eq!(invoked.load(Ordering::SeqCst), model["expected_invoked"]);
+    invoked.load(Ordering::SeqCst)
 }
 
-#[tokio::test]
-async fn dropping_waiting_handoff_drops_the_hook_without_replaying_it() {
-    let model = model_case("cancel-waiting-unknown").await;
+async fn drop_while_waiting() -> bool {
     struct Dropped(Arc<AtomicBool>);
     impl Drop for Dropped {
         fn drop(&mut self) {
@@ -183,9 +161,173 @@ async fn dropping_waiting_handoff_drops_the_hook_without_replaying_it() {
     assert!(futures::poll!(stream.next()).is_pending());
     drop(stream);
     assert!(dropped.load(Ordering::SeqCst));
-    assert!(receiver.await.is_err());
-    assert_eq!(model["expected_dispatch"], "unknown");
-    assert_eq!(model["expected_invoked"], false);
+    let reply = receiver.await;
+    assert!(reply.is_err(), "a dropped hook delivers no reply");
+    matches!(reply, Ok(ToolCallHookAction::Continue))
+}
+
+async fn biased_stop_while_waiting() -> bool {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let marker = entered.clone();
+    let invoked = Arc::new(AtomicBool::new(false));
+    let invoked_by_stream = invoked.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let work = AdmissionWork {
+        future: Box::pin(async move {
+            marker.notify_one();
+            std::future::pending::<ToolCallHookAction>().await
+        }),
+        reply: sender,
+    };
+    let inner = async_stream::stream! {
+        yield Ok(OwnedLoopItem::Admission(work));
+        if matches!(receiver.await, Ok(ToolCallHookAction::Continue)) {
+            invoked_by_stream.store(true, Ordering::SeqCst);
+        }
+        yield Ok(OwnedLoopItem::Output(super::LoopStreamItem::Final { text: "done".into() }));
+    };
+    let mut stream = Box::pin(drive_admissions(inner));
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let mut driver = Box::pin(async {
+        tokio::select! {
+            biased;
+            _ = stopped => false,
+            item = stream.next() => { assert!(item.is_none()); true },
+        }
+    });
+    tokio::select! {
+        () = entered.notified() => {},
+        result = &mut driver => panic!("handoff ended before the stop: {result}"),
+    }
+    stop.send(()).unwrap();
+    assert!(!driver.await);
+    drop(stream);
+    invoked.load(Ordering::SeqCst)
+}
+
+async fn closed_reply_channel() -> bool {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    drop(receiver);
+    let work = AdmissionWork {
+        future: Box::pin(async { ToolCallHookAction::Continue }),
+        reply: sender,
+    };
+    let invoked = Arc::new(AtomicBool::new(false));
+    let invoked_by_stream = invoked.clone();
+    let inner = async_stream::stream! {
+        yield Ok(OwnedLoopItem::Admission(work));
+        invoked_by_stream.store(true, Ordering::SeqCst);
+        yield Ok(OwnedLoopItem::Output(super::LoopStreamItem::Final { text: "done".into() }));
+    };
+    let mut stream = Box::pin(drive_admissions(inner));
+    let error = stream
+        .next()
+        .await
+        .expect("closed handoff reports an error")
+        .unwrap_err();
+    assert!(error.to_string().contains("reply receiver closed"));
+    assert!(stream.next().await.is_none());
+    invoked.load(Ordering::SeqCst)
+}
+
+async fn terminate_reply() -> bool {
+    let invoked = Arc::new(AtomicBool::new(false));
+    let invoked_by_stream = invoked.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let work = AdmissionWork {
+        future: Box::pin(async {
+            ToolCallHookAction::Terminate {
+                reason: "hook terminated".into(),
+            }
+        }),
+        reply: sender,
+    };
+    let inner = async_stream::stream! {
+        yield Ok(OwnedLoopItem::Admission(work));
+        if matches!(receiver.await, Ok(ToolCallHookAction::Continue)) {
+            invoked_by_stream.store(true, Ordering::SeqCst);
+        }
+        yield Ok(OwnedLoopItem::Output(super::LoopStreamItem::Final { text: "done".into() }));
+    };
+    let mut stream = Box::pin(drive_admissions(inner));
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap(),
+        super::LoopStreamItem::Final { .. }
+    ));
+    invoked.load(Ordering::SeqCst)
+}
+
+async fn skip_with_hook_effect() -> (bool, bool) {
+    let effect = Arc::new(AtomicBool::new(false));
+    let effect_by_hook = effect.clone();
+    let invoked = Arc::new(AtomicBool::new(false));
+    let invoked_by_stream = invoked.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let work = AdmissionWork {
+        future: Box::pin(async move {
+            effect_by_hook.store(true, Ordering::SeqCst);
+            ToolCallHookAction::Skip {
+                reason: "hook completed".into(),
+            }
+        }),
+        reply: sender,
+    };
+    let inner = async_stream::stream! {
+        yield Ok(OwnedLoopItem::Admission(work));
+        if matches!(receiver.await, Ok(ToolCallHookAction::Continue)) {
+            invoked_by_stream.store(true, Ordering::SeqCst);
+        }
+        yield Ok(OwnedLoopItem::Output(super::LoopStreamItem::Final { text: "done".into() }));
+    };
+    let mut stream = Box::pin(drive_admissions(inner));
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap(),
+        super::LoopStreamItem::Final { .. }
+    ));
+    (
+        effect.load(Ordering::SeqCst),
+        invoked.load(Ordering::SeqCst),
+    )
+}
+
+#[tokio::test]
+async fn handoff_scenarios_follow_the_lean_admission_model() {
+    for case in gents_lean_vocab::families::admission_handoff_drive_admissions::cases() {
+        let invoked = match case.input.name.as_str() {
+            "accepted-before-invoke" | "lease-expires-after-reply-without-observed-stop" => {
+                delivered_reply().await
+            }
+            "cancel-after-reply"
+            | "lease-lost-after-reply"
+            | "shutdown-after-reply"
+            | "deadline-after-reply" => stop_after_the_reply().await,
+            "cancel-waiting-unknown" => {
+                let dropped = drop_while_waiting().await;
+                let stopped = biased_stop_while_waiting().await;
+                assert_eq!(dropped, stopped, "{}", case.input.name);
+                dropped
+            }
+            "lease-lost-waiting" | "shutdown-waiting" | "deadline-waiting" => {
+                biased_stop_while_waiting().await
+            }
+            "dropped-channel" => closed_reply_channel().await,
+            "skip-with-hook-effect" => skip_with_hook_effect().await.1,
+            "terminate-after-dispatch" => terminate_reply().await,
+            other => panic!("no drive_admissions scenario stages {other}"),
+        };
+        case.check(invoked);
+    }
+}
+
+#[tokio::test]
+async fn skip_keeps_the_hook_effect_as_the_lean_admission_model() {
+    for case in gents_lean_vocab::families::admission_handoff_hook_effect::cases() {
+        let (effect, _) = match case.input.name.as_str() {
+            "skip-with-hook-effect" => skip_with_hook_effect().await,
+            other => panic!("no hook effect scenario stages {other}"),
+        };
+        case.check(if effect { "committed" } else { "not_started" }.to_owned());
+    }
 }
 
 #[tokio::test]
@@ -248,113 +390,4 @@ async fn handoff_retains_the_calling_request_scope() {
             Some("correlation".into())
         ))
     );
-}
-
-#[tokio::test]
-async fn a_closed_reply_channel_stops_the_loop() {
-    let model = model_case("dropped-channel").await;
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    drop(receiver);
-    let work = AdmissionWork {
-        future: Box::pin(async { ToolCallHookAction::Continue }),
-        reply: sender,
-    };
-    let inner = stream::iter(vec![Ok(OwnedLoopItem::Admission(work))]);
-    let mut stream = Box::pin(drive_admissions(inner));
-    let error = stream
-        .next()
-        .await
-        .expect("closed handoff reports an error")
-        .unwrap_err();
-    assert!(error.to_string().contains("reply receiver closed"));
-    assert_eq!(model["expected_invoked"], false);
-    assert!(stream.next().await.is_none());
-}
-
-#[tokio::test]
-async fn biased_control_stops_a_pending_handoff_before_invocation() {
-    for name in [
-        "cancel-waiting-unknown",
-        "lease-lost-waiting",
-        "shutdown-waiting",
-        "deadline-waiting",
-    ] {
-        let model = model_case(name).await;
-        let entered = Arc::new(tokio::sync::Notify::new());
-        let marker = entered.clone();
-        let invoked = Arc::new(AtomicBool::new(false));
-        let invoked_by_stream = invoked.clone();
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        let work = AdmissionWork {
-            future: Box::pin(async move {
-                marker.notify_one();
-                std::future::pending::<ToolCallHookAction>().await
-            }),
-            reply: sender,
-        };
-        let inner = async_stream::stream! {
-            yield Ok(OwnedLoopItem::Admission(work));
-            if matches!(receiver.await, Ok(ToolCallHookAction::Continue)) {
-                invoked_by_stream.store(true, Ordering::SeqCst);
-            }
-            yield Ok(OwnedLoopItem::Output(super::LoopStreamItem::Final { text: "done".into() }));
-        };
-        let mut stream = Box::pin(drive_admissions(inner));
-        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-        let mut driver = Box::pin(async {
-            tokio::select! {
-                biased;
-                _ = stopped => false,
-                item = stream.next() => { assert!(item.is_none()); true },
-            }
-        });
-        tokio::select! {
-            () = entered.notified() => {},
-            result = &mut driver => panic!("handoff ended before {name}: {result}"),
-        }
-        stop.send(()).unwrap();
-        assert!(!driver.await);
-        drop(stream);
-        assert_eq!(
-            invoked.load(Ordering::SeqCst),
-            model["expected_invoked"],
-            "{name}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn skip_retains_a_hook_effect_without_invoking_the_guest() {
-    let model = model_case("skip-with-hook-effect").await;
-    let effect = Arc::new(AtomicBool::new(false));
-    let effect_by_hook = effect.clone();
-    let invoked = Arc::new(AtomicBool::new(false));
-    let invoked_by_stream = invoked.clone();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let work = AdmissionWork {
-        future: Box::pin(async move {
-            effect_by_hook.store(true, Ordering::SeqCst);
-            ToolCallHookAction::Skip {
-                reason: "hook completed".into(),
-            }
-        }),
-        reply: sender,
-    };
-    let inner = async_stream::stream! {
-        yield Ok(OwnedLoopItem::Admission(work));
-        if matches!(receiver.await, Ok(ToolCallHookAction::Continue)) {
-            invoked_by_stream.store(true, Ordering::SeqCst);
-        }
-        yield Ok(OwnedLoopItem::Output(super::LoopStreamItem::Final { text: "done".into() }));
-    };
-    let mut stream = Box::pin(drive_admissions(inner));
-    assert!(matches!(
-        stream.next().await.unwrap().unwrap(),
-        super::LoopStreamItem::Final { .. }
-    ));
-    assert_eq!(
-        effect.load(Ordering::SeqCst),
-        model["expected_effect"] == "committed"
-    );
-    assert_eq!(invoked.load(Ordering::SeqCst), model["expected_invoked"]);
 }

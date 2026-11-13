@@ -1297,39 +1297,38 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
     let access = runtime_access(&node)?;
     let owner = "did:key:obligation-owner";
 
-    for (count_field, reported_type) in [
-        ("flag", "Boolean"),
-        ("tags", "LIST"),
-        ("required_tags", "LIST"),
-        ("observed_at", "DateTime"),
-        ("required_observed_at", "DateTime!"),
-        ("marker", "ID"),
-    ] {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases["fields"];
-        let case = cases
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["schema"] == reported_type)
-            .unwrap();
-        assert_eq!(
-            case["accepted"], false,
-            "rejection agrees with the count model"
+    for case in gents_lean_vocab::families::count_carrier_obligation_field::cases() {
+        let reported_type = case.input.schema.as_str();
+        let count_fields: &[&str] = match reported_type {
+            "Boolean" => &["flag"],
+            "LIST" => &["tags", "required_tags"],
+            "DateTime" => &["observed_at"],
+            "DateTime!" => &["required_observed_at"],
+            "ID" => &["marker"],
+            other => panic!("the obligation fixture declares no {other} field"),
+        };
+        let mut refusals = Vec::new();
+        for count_field in count_fields {
+            let outcome = apply(
+                &access,
+                vec![obligation_surface(
+                    owner,
+                    "outcomes",
+                    "ObligationOutcome",
+                    count_field,
+                )],
+            )
+            .await;
+            refusals.push(outcome.is_err_and(|refused| {
+                let diagnostic = format!("{refused:#}");
+                diagnostic.contains("expected_count_field") && diagnostic.contains(reported_type)
+            }));
+        }
+        assert!(
+            refusals.windows(2).all(|pair| pair[0] == pair[1]),
+            "{reported_type}: {refusals:?}"
         );
-        let refused = apply(
-            &access,
-            vec![obligation_surface(
-                owner,
-                "outcomes",
-                "ObligationOutcome",
-                count_field,
-            )],
-        )
-        .await
-        .expect_err("the field can never carry the expected count");
-        let diagnostic = format!("{refused:#}");
-        assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
-        assert!(diagnostic.contains(reported_type), "{diagnostic}");
+        case.check(refusals[0]);
     }
 
     let absent_field = apply(
@@ -1448,25 +1447,17 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
     let access = runtime_access(&node)?;
     let owner = "did:key:event-source-owner";
 
-    for (count_field, reported_type) in [
-        ("flag", "Boolean"),
-        ("tags", "LIST"),
-        ("observed_at", "DateTime"),
-        ("required_observed_at", "DateTime!"),
-        ("marker", "ID"),
-    ] {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases["fields"];
-        let case = cases
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["schema"] == reported_type)
-            .unwrap();
-        assert_eq!(
-            case["accepted"], false,
-            "rejection agrees with the count model"
-        );
-        let refused = apply(
+    for case in gents_lean_vocab::families::count_carrier_event_source_field::cases() {
+        let reported_type = case.input.schema.as_str();
+        let count_field = match reported_type {
+            "Boolean" => "flag",
+            "LIST" => "tags",
+            "DateTime" => "observed_at",
+            "DateTime!" => "required_observed_at",
+            "ID" => "marker",
+            other => panic!("the event source fixture declares no {other} field"),
+        };
+        let outcome = apply(
             &access,
             vec![grouped_event_source(
                 owner,
@@ -1475,11 +1466,11 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
                 count_field,
             )],
         )
-        .await
-        .expect_err("the field can never carry the expected count");
-        let diagnostic = format!("{refused:#}");
-        assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
-        assert!(diagnostic.contains(reported_type), "{diagnostic}");
+        .await;
+        case.check(outcome.is_err_and(|refused| {
+            let diagnostic = format!("{refused:#}");
+            diagnostic.contains("expected_count_field") && diagnostic.contains(reported_type)
+        }));
     }
 
     let absent_field = apply(

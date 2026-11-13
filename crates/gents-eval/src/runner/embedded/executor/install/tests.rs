@@ -345,6 +345,13 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
             "the selected trial Agent lacks {permission:?}"
         );
     }
+    gents_store::identity::provision_agent_identity_authorized(
+        &home.node,
+        home.identity.as_ref(),
+        &selected_did,
+    )
+    .await
+    .expect("the trial Engineer holds the agent catalog");
     home.node.shutdown().await.unwrap();
 }
 

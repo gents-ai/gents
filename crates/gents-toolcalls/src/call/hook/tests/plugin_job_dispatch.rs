@@ -636,53 +636,38 @@ async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_argu
         },
     )
     .await;
-    for (index, name) in [
-        "absent_sources_under_off",
-        "empty_script_under_off",
-        "nonempty_script_under_off",
-        "whitespace_script_is_source",
-        "inline_script_without_argv_under_off",
-    ]
-    .into_iter()
-    .enumerate()
+    for (index, case) in gents_lean_vocab::families::plugin_job_source_boundary_dispatch::cases()
+        .into_iter()
+        .enumerate()
     {
-        let case = gents_lean_vocab::lean_plugin_job_admission_cases()
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap();
+        let name = case.input.name.clone();
         let arguments = json!({
-            "argv": case.job.call.argv,
-            "script": case.job.call.script,
+            "argv": case.input.argv,
+            "script": case.input.script,
         });
         let call = format!("source-boundary-{index}");
         let answer = step.call_as(&call, &arguments.to_string()).await;
         let row = step.row_of(&call).await;
-        if case.expected.admitted {
-            assert_eq!(answer, json!({"answer": 42}), "{name}");
+        let admitted = answer == json!({"answer": 42});
+        if admitted {
             assert_eq!(row["lifecycle_state"], "completed", "{name}: {row}");
         } else {
-            assert!(case.expected.dynamic_code_disabled, "{name}");
-            assert_eq!(
-                answer["code"].as_str(),
-                case.expected.code.as_deref(),
-                "{name}"
-            );
-            assert!(
-                answer["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("job.policy.dynamic"),
-                "{name}: {answer}"
-            );
-            assert!(
-                answer["next"]
-                    .as_str()
-                    .unwrap()
-                    .contains("without a `script`"),
-                "{name}: {answer}"
-            );
             failed(&row, "policyDenied");
         }
+        let dynamic_code_disabled = !admitted
+            && answer["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("job.policy.dynamic"))
+            && answer["next"]
+                .as_str()
+                .is_some_and(|next| next.contains("without a `script`"));
+        case.check(
+            gents_lean_vocab::families::plugin_job_source_boundary_dispatch::DispatchVerdict {
+                admitted,
+                dynamic_code_disabled,
+                code: answer["code"].as_str().map(str::to_owned),
+            },
+        );
         let accepted = gents_session::tool_call::query::result::load_tool_call_arguments(
             &step.access(),
             row["_docID"].as_str().unwrap(),
@@ -1097,117 +1082,99 @@ async fn a_script_that_throws_on_step_0_answers_with_the_engines_message() {
     step.finish().await;
 }
 
-/// Under `policy.dynamic: check` the script's first spawn is refused like any dynamic run.
+/// Under `policy.dynamic: check` the script's first spawn is refused like any
+/// dynamic run, and a job target outside the caller's configured scope names
+/// that scope and the next help call.
 #[tokio::test]
-async fn a_script_spawn_is_refused_under_the_check_policy() {
-    let step = step0(
-        adopting(),
-        Options {
-            imports: true,
-            settings: Some(worker_settings(JobPolicy {
-                dynamic: DynamicMode::Check,
-                ..Default::default()
-            })),
-            ..Default::default()
-        },
-    )
-    .await;
-    let call = json!({"script": PASS_PIN, "agent_budget": 2, "args": pin_args(PASS_PIN, 2, "h")});
-    let answer = step.call_as("call-1", &call.to_string()).await;
-    let case = gents_lean_vocab::lean_plugin_job_admission_cases()
-        .iter()
-        .find(|case| case.name == "dynamic_check_spawn_refused")
-        .unwrap();
-    assert!(!case.expected.admitted);
-    assert_eq!(
-        answer["code"].as_str(),
-        case.expected.code.as_deref(),
-        "{answer}"
-    );
-    assert!(
-        answer["message"]
+async fn refused_dispatches_name_their_policy_and_next_help() {
+    for case in gents_lean_vocab::families::plugin_job_dispatch_refusal::cases() {
+        let name = case.input.name.as_str();
+        let (step, answer, message) = match name {
+            "dynamic_check_spawn_refused" => {
+                let step = step0(
+                    adopting(),
+                    Options {
+                        imports: true,
+                        settings: Some(worker_settings(JobPolicy {
+                            dynamic: DynamicMode::Check,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    },
+                )
+                .await;
+                let call = json!({"script": PASS_PIN, "agent_budget": 2, "args": pin_args(PASS_PIN, 2, "h")});
+                let answer = step.call_as("call-1", &call.to_string()).await;
+                (step, answer, "job.policy.dynamic is check")
+            }
+            "caller_target_unconfigured_refused" => {
+                let step = step0(
+                    adopting(),
+                    Options {
+                        caller_targets: false,
+                        ..Default::default()
+                    },
+                )
+                .await;
+                let args = r#"{"args":{},"agent_budget":2}"#;
+                accept_hook_tool_call(&step.hook, "call-1", TOOL, args, None).await;
+                let row = step.row_of("call-1").await;
+                let (input, _) = crate::background::job::input::build_step_input(
+                    &step.hook.actor_access().unwrap(),
+                    step.hook.job_driver.as_ref().unwrap().runtime(),
+                    row["_docID"].as_str().unwrap(),
+                    crate::background::job::input::StepKind::Step0 {
+                        binding: step.hook.job_tools.get(TOOL).unwrap(),
+                    },
+                )
+                .await
+                .unwrap();
+                assert!(input.ceiling.targets.is_empty());
+                let action = step.hook.on_tool_call(TOOL, None, "call-1", args).await;
+                let ToolCallHookAction::Skip { reason } = action else {
+                    panic!("job call must return its admission result: {action:?}");
+                };
+                let answer: Value = serde_json::from_str(&reason).unwrap();
+                assert!(
+                    answer["next"]
+                        .as_str()
+                        .unwrap()
+                        .contains("agents.target_ids"),
+                    "{answer}"
+                );
+                (step, answer, "caller\u{27}s configured target scope")
+            }
+            other => panic!("the dispatch fixture cannot build {other}"),
+        };
+        assert!(
+            answer["message"].as_str().unwrap().contains(message),
+            "{name}: {answer}"
+        );
+        assert!(
+            answer["next"]
+                .as_str()
+                .unwrap()
+                .contains("tools\",\"edit\",\"--help"),
+            "{name}: {answer}"
+        );
+        let row = step.row_of("call-1").await;
+        let admitted = row["lifecycle_state"] != "failed";
+        if !admitted {
+            failed(&row, "policyDenied");
+            assert_eq!(step.stored_reply(&row).await, answer);
+        }
+        let dynamic_code_disabled = answer["next"]
             .as_str()
-            .unwrap()
-            .contains("job.policy.dynamic is check"),
-        "{answer}"
-    );
-    assert!(
-        answer["next"]
-            .as_str()
-            .unwrap()
-            .contains("tools\",\"edit\",\"--help"),
-        "{answer}"
-    );
-    let row = step.row_of("call-1").await;
-    failed(&row, "policyDenied");
-    assert_eq!(step.stored_reply(&row).await, answer);
-    step.finish().await;
-}
-
-#[tokio::test]
-async fn an_unconfigured_job_target_names_the_caller_scope_and_next_help() {
-    let step = step0(
-        adopting(),
-        Options {
-            caller_targets: false,
-            ..Default::default()
-        },
-    )
-    .await;
-    let args = r#"{"args":{},"agent_budget":2}"#;
-    accept_hook_tool_call(&step.hook, "call-1", TOOL, args, None).await;
-    let row = step.row_of("call-1").await;
-    let (input, _) = crate::background::job::input::build_step_input(
-        &step.hook.actor_access().unwrap(),
-        step.hook.job_driver.as_ref().unwrap().runtime(),
-        row["_docID"].as_str().unwrap(),
-        crate::background::job::input::StepKind::Step0 {
-            binding: step.hook.job_tools.get(TOOL).unwrap(),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(input.ceiling.targets.is_empty());
-    let action = step.hook.on_tool_call(TOOL, None, "call-1", args).await;
-    let ToolCallHookAction::Skip { reason } = action else {
-        panic!("job call must return its admission result: {action:?}");
-    };
-    let answer: Value = serde_json::from_str(&reason).unwrap();
-    let case = gents_lean_vocab::lean_plugin_job_admission_cases()
-        .iter()
-        .find(|case| case.name == "caller_target_unconfigured_refused")
-        .unwrap();
-    assert!(!case.expected.admitted);
-    assert_eq!(
-        answer["code"].as_str(),
-        case.expected.code.as_deref(),
-        "{answer}"
-    );
-    assert!(
-        answer["message"]
-            .as_str()
-            .unwrap()
-            .contains("caller\u{27}s configured target scope"),
-        "{answer}"
-    );
-    assert!(
-        answer["next"]
-            .as_str()
-            .unwrap()
-            .contains("agents.target_ids"),
-        "{answer}"
-    );
-    assert!(
-        answer["next"]
-            .as_str()
-            .unwrap()
-            .contains("tools\",\"edit\",\"--help"),
-        "{answer}"
-    );
-    let row = step.row_of("call-1").await;
-    failed(&row, "policyDenied");
-    assert_eq!(step.stored_reply(&row).await, answer);
-    step.finish().await;
+            .is_some_and(|next| next.contains("without a `script`"));
+        case.check(
+            gents_lean_vocab::families::plugin_job_dispatch_refusal::DispatchVerdict {
+                admitted,
+                dynamic_code_disabled,
+                code: answer["code"].as_str().map(str::to_owned),
+            },
+        );
+        step.finish().await;
+    }
 }
 
 /// A call without a `script` is `installed` (Lean `callOrigin`), so the `check`

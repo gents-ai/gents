@@ -2578,14 +2578,6 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
     let nodes = local.execute("{ Node { _docID } }").await?;
     assert!(gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node").is_empty());
     let doc = write_enrollment_request(&core.node, &request).await?;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_enrollment_policy_cases;
-    let expected = |name: &str| -> Result<bool> {
-        cases
-            .iter()
-            .find(|case| case.name == name)
-            .map(|case| case.allowed)
-            .with_context(|| format!("missing enrollment policy case {name}"))
-    };
     let acp = core.node.document_acp();
     let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
     assert_eq!(
@@ -2603,19 +2595,21 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
         r#"{{ NetworkEnrollmentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID offer_token}} }}"#,
         escape_graphql_string(&doc)
     );
-    for (name, actor, permission) in [
-        (
-            "thin-client-write",
-            core.node_identity(),
-            DocumentPermission::Update,
-        ),
-        ("thin-admin-read", &admin, DocumentPermission::Read),
-        ("thin-admin-write", &admin, DocumentPermission::Update),
-        ("thin-user-read", &user, DocumentPermission::Read),
-        ("thin-agent-read", &agent, DocumentPermission::Read),
-        ("thin-outsider-read", &outsider, DocumentPermission::Read),
-    ] {
-        let actual = acp
+    for case in gents_lean_vocab::families::identity_operations_enrollment_policy_thin::cases() {
+        let actor = match case.input.actor.as_str() {
+            "client" => core.node_identity(),
+            "admin" => &admin,
+            "user" => &user,
+            "agent" => &agent,
+            "outsider" => &outsider,
+            other => panic!("the thin-client scenario has no actor {other}"),
+        };
+        let permission = match case.input.permission.as_str() {
+            "read" => DocumentPermission::Read,
+            "update" => DocumentPermission::Update,
+            other => panic!("the thin-client scenario has no permission {other}"),
+        };
+        let allowed = acp
             .check_doc_access(
                 &AcpIdentity::Authenticated(identity::Did::new(actor.did())?),
                 permission,
@@ -2624,23 +2618,23 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
                 &doc,
             )
             .await?;
-        assert_eq!(actual, expected(name)?, "{name}");
-    }
-    for (name, actor) in [
-        ("thin-admin-read", &admin),
-        ("thin-user-read", &user),
-        ("thin-agent-read", &agent),
-        ("thin-outsider-read", &outsider),
-    ] {
-        let response = access(actor)?.execute(&query).await?;
-        assert_eq!(
-            !gents_protocol::graphql::graphql_rows_from_response(
-                &response,
-                "NetworkEnrollmentRequest"
-            )
-            .is_empty(),
-            expected(name)?,
-            "{name}"
+        if case.input.permission == "read" {
+            let response = access(actor)?.execute(&query).await?;
+            assert_eq!(
+                !gents_protocol::graphql::graphql_rows_from_response(
+                    &response,
+                    "NetworkEnrollmentRequest"
+                )
+                .is_empty(),
+                allowed,
+                "{}",
+                case.input.name
+            );
+        }
+        case.check(
+            gents_lean_vocab::families::identity_operations_enrollment_policy_thin::Allowed {
+                allowed,
+            },
         );
     }
     let mutation = format!(

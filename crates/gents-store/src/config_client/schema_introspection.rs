@@ -175,6 +175,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn count_carrier_admission_follows_the_model() {
+        gents_lean_vocab::families::count_carrier_admission::replay(|case| {
+            can_hold_canonical_count(&case.schema)
+        });
+    }
+
+    #[test]
     fn introspection_query_rejects_injection() {
         let err = introspection_query("X\") { } evil").unwrap_err();
         assert!(err.to_string().contains("invalid"), "{err}");

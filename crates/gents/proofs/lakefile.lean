@@ -33,7 +33,6 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.ClientVoice,
   `Proofs.Conformance.EditorUndo,
   `Proofs.Conformance.EditorUndoCheckpoint,
-  `Proofs.Conformance.ClientDataPublication,
   `Proofs.Conformance.ObserverResync,
   `Proofs.Conformance.ClientWindowScope,
   `Proofs.Conformance.ClientRequestCacheIdentity,

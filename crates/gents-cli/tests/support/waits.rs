@@ -11,14 +11,53 @@ use serde_json::Value;
 use super::fs::read_runtime_state_json;
 use super::graphql::{escape_graphql_string, first_graphql_row, graphql_query};
 
+/// File changes directly inside the directories that can hold a home's
+/// runtime state. Serve replaces that state once it is serving, which is
+/// after its startup gate opened client access; until then the gate answers
+/// 503 to reads and subscriptions alike, so this is the only notification a
+/// client outside the process can wait on before it may subscribe. The watch
+/// is not recursive: a recursive one opens every entry below the directory,
+/// which fails on a dangling link and races the store's own files.
+struct RuntimeStateChanges {
+    _watcher: notify::RecommendedWatcher,
+    changes: tokio::sync::mpsc::UnboundedReceiver<notify::Result<notify::Event>>,
+}
+
+impl RuntimeStateChanges {
+    fn watch<'a>(directories: impl IntoIterator<Item = &'a Path>) -> Result<Self> {
+        use notify::Watcher;
+        let (tx, changes) = tokio::sync::mpsc::unbounded_channel();
+        let mut watcher = notify::recommended_watcher(move |event| {
+            let _ = tx.send(event);
+        })?;
+        for directory in directories {
+            watcher.watch(directory, notify::RecursiveMode::NonRecursive)?;
+        }
+        Ok(Self {
+            _watcher: watcher,
+            changes,
+        })
+    }
+
+    async fn recv_until(&mut self, deadline: Instant) -> Result<()> {
+        if let Ok(Some(event)) = tokio::time::timeout_at(deadline, self.changes.recv()).await {
+            event?;
+        }
+        Ok(())
+    }
+}
+
 pub async fn wait_for_runtime_ready(
     graphql: &str,
     node_did: &str,
     timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
+    let mut serving = super::graphql::served_home(graphql)
+        .map(|home| RuntimeStateChanges::watch([home.as_path()]))
+        .transpose()?;
     let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
-    let mut changes = access.subscribe_changes("NodeReadiness").await;
+    let mut changes = None::<gents::support::snapshots::SnapshotChanges>;
     loop {
         let response = graphql_query(
             graphql,
@@ -35,7 +74,7 @@ pub async fn wait_for_runtime_ready(
         )
         .await;
         let last_observation = format!("{response:?}");
-        match response {
+        let client_access_open = match response {
             Ok(response) => {
                 if let Ok(row) = first_graphql_row(&response, "NodeReadiness") {
                     if let Ok(row) = serde_json::from_value::<NodeReadinessRow>(row.clone()) {
@@ -50,18 +89,30 @@ pub async fn wait_for_runtime_ready(
                         }
                     }
                 }
+                true
             }
-            Err(error)
-                if runtime_schema_is_starting(&error) || runtime_http_is_starting(&error) => {}
-
+            Err(error) if runtime_schema_is_starting(&error) => true,
+            Err(error) if runtime_http_is_starting(&error) => false,
             Err(error) => return Err(error),
-        }
+        };
 
         if Instant::now() >= deadline {
             bail!("timed out waiting for authoritative runtime readiness for {node_did}; last observation: {last_observation}");
         }
 
-        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+        if client_access_open {
+            match changes.as_mut() {
+                Some(changes) => {
+                    let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+                }
+                None => changes = Some(access.subscribe_changes("NodeReadiness").await),
+            }
+        } else {
+            let Some(serving) = serving.as_mut() else {
+                bail!("{graphql} is still starting and no fixture registered its home, so its serving announcement cannot be observed; last observation: {last_observation}");
+            };
+            serving.recv_until(deadline).await?;
+        }
     }
 }
 
@@ -70,12 +121,12 @@ pub async fn wait_for_runtime_state_graphql(
     expected_graphql: &str,
     timeout: Duration,
 ) -> Result<Value> {
-    use notify::Watcher;
-    let (tx, mut changes) = tokio::sync::mpsc::unbounded_channel();
-    let mut watcher = notify::recommended_watcher(move |event| {
-        let _ = tx.send(event);
-    })?;
-    watcher.watch(home_dir, notify::RecursiveMode::Recursive)?;
+    let nested_home = home_dir.join(".gents");
+    let mut changes = RuntimeStateChanges::watch(
+        [home_dir, nested_home.as_path()]
+            .into_iter()
+            .filter(|directory| directory.is_dir()),
+    )?;
     let deadline = Instant::now() + timeout;
     let mut last_state = None::<Value>;
     let mut last_error: Option<anyhow::Error>;
@@ -106,9 +157,7 @@ pub async fn wait_for_runtime_state_graphql(
             );
         }
 
-        if let Ok(Some(event)) = tokio::time::timeout_at(deadline, changes.recv()).await {
-            event?;
-        }
+        changes.recv_until(deadline).await?;
     }
 }
 

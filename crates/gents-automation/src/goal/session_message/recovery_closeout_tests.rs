@@ -147,30 +147,19 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         goal.assignment_root_request_doc_id.as_deref(),
                         Some(message.caused_request_doc_id.as_str())
                     );
-                    let modeled = tokio::task::spawn_blocking(|| {
-                        gents_lean_vocab::lean_contract_snapshot()
-                            .goal_link_cases
-                            .iter()
-                            .find(|case| {
-                                case.collection == "Goal"
-                                    && case.actor == "agent"
-                                    && case.mode == "fresh"
-                                    && case.commit
-                            })
-                            .unwrap()
-                            .clone()
-                    })
-                    .await
-                    .unwrap();
                     let escaped = gents_store::graphql::escape_graphql_string(&goal.doc_id);
                     let visible = access.execute(&format!(r#"{{ Goal(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ creator_did agent_did parent_linked }} }}"#)).await.unwrap();
                     let selected = caller.agent_did.as_deref().unwrap();
                     assert_eq!(visible["data"]["Goal"][0]["creator_did"], selected);
                     assert_eq!(visible["data"]["Goal"][0]["agent_did"], selected);
-                    assert_eq!(
-                        visible["data"]["Goal"][0]["parent_linked"],
-                        modeled.initial.linked
-                    );
+                    for case in gents_lean_vocab::families::goal_links_closeout_goal::cases() {
+                        let collection = case.input.collection.as_str();
+                        case.check(
+                            visible["data"][collection][0]["parent_linked"]
+                                .as_bool()
+                                .unwrap(),
+                        );
+                    }
                     let owners = access
                         .transact_readonly("test.closeout_goal_owner", |txn| {
                             let doc = &goal.doc_id;

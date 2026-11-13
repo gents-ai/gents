@@ -18,9 +18,10 @@ mod registered;
 pub mod request_receipt;
 
 pub use agent::{
-    derive_agent_identity, observe_agent_admission, provision_agent_identity,
-    provision_agent_identity_authorized, provision_agent_identity_for_agent,
-    resolve_agent_identity, AgentAdmissionObservationError, AgentProvisionError, RuntimeAgentProof,
+    derive_agent_identity, observe_agent_admission, observe_document_permissions,
+    provision_agent_identity, provision_agent_identity_authorized,
+    provision_agent_identity_for_agent, resolve_agent_identity, AgentAdmissionObservationError,
+    AgentProvisionError, ObservedDocumentPermissions, RuntimeAgentProof,
 };
 pub use enrollment_approval::{
     approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep,

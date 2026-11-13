@@ -18,8 +18,10 @@ attribute [conformance_vocabulary] ExecutionOrigin.toDefraDB
 attribute [conformance_vocabulary] ProcessState.toDefraDB
 attribute [conformance_vocabulary] PersistenceState.FailurePolicy.toDefraDB
 attribute [conformance_vocabulary] ReconcilePhase.toDefraDB
+attribute [conformance_vocabulary] InferenceCallTerminalReason.toDefraDB
 attribute [conformance_vocabulary] ToolExecution.ToolCallState.toDefraDB
 attribute [conformance_vocabulary] ToolExecution.CancelCause.toDefraDB
+attribute [conformance_vocabulary] ManagedExecState.toDefraDB
 attribute [conformance_vocabulary] ManagedExec.StopOutcome.toContract
 attribute [conformance_vocabulary] ManagedExec.CancelReply.toContract
 attribute [conformance_vocabulary] ToolExecution.FailureClass.toDefraDB
@@ -34,38 +36,6 @@ attribute [conformance_vocabulary] Eval.ProviderReason.toDefraDB
 attribute [conformance_vocabulary] Eval.EvidenceClass.toDefraDB
 
 namespace Conformance.Contracts
-
-def vocabularies : List VocabularyContract :=
-  [ { domain := "RequestState", values := requestStateNames }
-  , { domain := "PersistenceState", values := persistenceStateNames }
-  , { domain := "PersistenceFailurePolicy", values :=
-        [.failOpen, .failClosed].map PersistenceState.FailurePolicy.toDefraDB }
-  , { domain := "StorageObservation", values := storageObservationStateNames }
-  , { domain := "SessionRecoveryLatestRequestState"
-    , values := requestStateNames
-    }
-  , { domain := "InferenceCallState", values := inferenceCallStateNames }
-  , { domain := "InferenceCallTerminalReason", values :=
-        [ .cancelled
-        , .backendGone
-        , .queueFull
-        , .streamDroppedBeforeTerminalResponse
-        ].map InferenceCallTerminalReason.toDefraDB
-    }
-  , { domain := "CompletionRetryFailureClass"
-    , values := CompletionRetry.Contracts.failureClassVocabulary
-    }
-  , { domain := "ManagedExecState", values := managedExecStateNames }
-  , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
-  , { domain := "GoalStatus", values := goalStatusNames }
-  , { domain := "MailboxStatus", values := Mailbox.statusVocabulary }
-  , { domain := "MailboxKind", values := Mailbox.kindVocabulary }
-  , { domain := "MailboxHandling", values := Mailbox.handlingVocabulary }
-  , { domain := "MailboxSourceKind", values := Mailbox.sourceKindVocabulary }
-  , { domain := "EvalOutcomeKind", values := Eval.allKinds.map Eval.OutcomeKind.toDefraDB }
-  , { domain := "EvalProviderReason", values := Eval.allReasons.map Eval.ProviderReason.toDefraDB }
-  , { domain := "EvalEvidenceClass", values := Eval.allClasses.map Eval.EvidenceClass.toDefraDB }
-  ]
 
 def stateMachines : List StateMachineContract :=
   [ requestMachine

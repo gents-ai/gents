@@ -16,19 +16,6 @@ import Proofs.Tools.SelfConfig.Auth
 namespace Identity.Conformance
 open Lean
 
-def taskSessionPublicationCasesJson : String :=
-  let empty : Automation.TaskSessionPublication := ⟨false, false, false, false⟩
-  let revoked : Automation.TaskSessionPublication := ⟨true, true, true, false⟩
-  let cases := [("aborted", empty, true, true, false),
-    ("created", empty, true, true, true),
-    ("duplicate-after-revocation", revoked, false, false, true)]
-  (toJson (cases.map fun (name, before, fresh, newSession, committed) =>
-    let result := Automation.publishTaskSession before fresh newSession committed
-    Json.mkObj [("name", toJson name), ("fresh", toJson fresh),
-      ("new_session", toJson newSession), ("committed", toJson committed),
-      ("request", toJson result.request), ("session", toJson result.session),
-      ("parent", toJson result.parent), ("working_agent", toJson result.workingAgent)])).compress
-
 def userDid : String := "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
 def runtimeDid : String := "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"
 def otherRuntimeDid : String := "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
@@ -38,19 +25,6 @@ def otherAgentDid : String := "did:key:z6Mkef1w29eU7SP9XmbDzTwbiisHZ3uTS5JpNEuu1
 def readerDid : String := "did:key:z6MkeiwEAT7UhjgNfrqjRmGX1be3oD7f78zdveaZ4o9QuZ5D"
 def strangerDid : String := "did:key:z6MkenrXJkaVJ2ybox6Es4bSJUQp3NKrnCgTV4FD8BC1etPv"
 
-def clientSessionReservationCasesJson : String :=
-  let empty : Household.State := ⟨[], [], []⟩
-  let parent : Household.Relation := ⟨"sessions", "session", "parent", .object "agents" "agent"⟩
-  let worker : Household.Relation := ⟨"sessions", "session", "working_agent", .actor agentDid⟩
-  let revoked : Household.State := ⟨[⟨"sessions", "session", userDid⟩], [parent], []⟩
-  let cases := [("aborted", empty, true, false), ("created", empty, true, true),
-    ("duplicate-after-revocation", revoked, false, true)]
-  (toJson (cases.map fun (name, before, fresh, commit) =>
-    let result := Household.reserveUserSession before "session" userDid agentDid "agent" fresh commit
-    Json.mkObj [("name", toJson name), ("fresh", toJson fresh), ("commit", toJson commit),
-      ("session", toJson (result.objects.any (fun o => o.resource == "sessions" && o.id == "session"))),
-      ("parent", toJson (result.relations.contains parent)),
-      ("working_agent", toJson (result.relations.contains worker))])).compress
 def creationA : String := String.mk (List.replicate 64 'a')
 def creationB : String := String.mk (List.replicate 64 'b')
 
@@ -76,10 +50,6 @@ def otherNode : NodeCase := ⟨otherRuntimeDid, true⟩
 def selectedAgent : AgentCase := ⟨"general", agentDid, creationA, runtimeDid, true⟩
 def siblingAgent : AgentCase := ⟨"general", siblingDid, creationB, runtimeDid, true⟩
 def remoteAgent : AgentCase := ⟨"general", otherAgentDid, creationA, otherRuntimeDid, true⟩
-
-def agentCaseJson (c : AgentCase) : Json := Json.mkObj
-  [("label", toJson c.label), ("did", toJson c.did), ("creation_nonce", toJson c.creationId),
-   ("node", toJson c.node), ("enabled", toJson c.enabled)]
 
 structure IdentityStructuralCase where
   name : String
@@ -168,21 +138,6 @@ theorem same_node_isolation_and_no_fallback_pinned :
     (identityPermissionCases.take 2).map (fun c => (c.allowed c.actor, c.allowed c.peer)) =
     [(false, false), (true, false)] := by native_decide
 
-def identityPermissionCaseJson (c : IdentityPermissionCase) : Json := Json.mkObj
-  [("name", toJson c.name), ("nodes", toJson c.nodes), ("agents", toJson (c.agents.map agentCaseJson)),
-   ("grants", toJson c.grants), ("permission", toJson c.permission), ("row_owner", toJson c.rowOwner),
-   ("actor_node", toJson c.actorNode), ("actor_did", toJson c.actorDid),
-   ("peer_node", toJson c.peerNode), ("peer_did", toJson c.peerDid),
-   ("expected_actor_did", toJson (c.actor.map (·.did))),
-   ("expected_peer_did", toJson (c.peer.map (·.did))),
-   ("expected_actor_allowed", toJson (c.allowed c.actor)),
-   ("expected_peer_allowed", toJson (c.allowed c.peer)),
-   ("same_node", toJson (c.actor.any fun a => c.peer.any (fun b => a.node == b.node))),
-   ("expected_decisions_equal", toJson (c.allowed c.actor == c.allowed c.peer))]
-
-def identityPermissionCasesJson : String :=
-  (toJson (identityPermissionCases.map identityPermissionCaseJson)).compress
-
 structure DerivationInput where
   nodeKey : String
   creationNonce : String
@@ -217,10 +172,6 @@ def derivationCases : List (String × DerivationInput × DerivationInput) :=
   , ("reopen-preserves-did", ⟨"runtime-a", creationA, "general"⟩,
       ⟨"runtime-a", creationA, "general"⟩) ]
 
-def derivationInputJson (input : DerivationInput) : Json := Json.mkObj
-  [("node_key", toJson input.nodeKey), ("creation_nonce", toJson input.creationNonce),
-   ("label", toJson input.label)]
-
 /-- A claimed Agent DID names an independent key or a derivation input. -/
 inductive ClaimedDid where
   | key (name : String)
@@ -253,10 +204,6 @@ def managedToolIdentityCaseJson : Option ClaimedDid × String × Option String �
      ("creation_nonce", toJson creation),
      ("allowed", toJson (Configuration.managedToolIdentityAllowed renderedDerivation
         ((claimed.map ClaimedDid.render).getD "") nodeKey creation))]
-
-def derivationCasesJson : String := (toJson (derivationCases.map fun (name, left, right) =>
-  Json.mkObj [("name", toJson name), ("left", derivationInputJson left),
-    ("right", derivationInputJson right), ("expected_same_did", toJson (sameDerivedDid left right))])).compress
 
 namespace HouseholdFixture
 open Household
@@ -2221,14 +2168,5 @@ end SecretConfigurationFixture
 
 def householdCasesJson : String := (toJson [HouseholdFixture.json, OperationsFixture.json,
   ConfigurationFixture.json, SecretConfigurationFixture.json]).compress
-
-def identityContractsJson : String := (toJson [Json.mkObj
-  [("name", toJson "identity.agent_owned_data"),
-   ("statement", toJson "User keys stay on clients. Node keys serve P2P and own node-local operational data not caused by agents; operational data inherits user read access through Node. Agent work never falls back to runtime authority. Agent DIDs derive from immutable creation nonces and select all agent work. Users own Node configuration and transitively administer Agents. User-created sessions are user-owned; unattended sessions are agent-owned with configured user access and deletion. Agents own session children with parent-session user access and control."),
-   ("node_local_collections", toJson nodeLocalCollections),
-   ("replicated_protocol_collections", toJson replicatedProtocolCollections),
-   ("schema_actor", toJson (schemaActor { did := runtimeDid, displayName := none, enabled := true } .createSchema)),
-   ("runtime_actor", toJson runtimeDid),
-   ("enforced", toJson false), ("tracked_by", toJson "#3485")]]).compress
 
 end Identity.Conformance

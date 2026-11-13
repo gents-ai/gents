@@ -3,6 +3,8 @@ import Proofs.Conformance.Family
 import Proofs.Conformance.Functions.Tools
 import Proofs.Conformance.ContractCases
 import Proofs.Session.ToolExecution
+import Proofs.Session.ManagedExec.Composed
+import Proofs.Session.ToolExecution.NativeFilesystemBoundary
 import Proofs.Tools.MCPHealth.Executable
 import Proofs.Runtime.BackendHealth.Executable
 import Proofs.Conformance.Functions.Runtime
@@ -11,22 +13,36 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-def nativeFilesystemBoundaryCaseJson
-    (witness : NativeFilesystemBoundaryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"tool_name\":" ++ jsonString witness.toolName ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"inner_poll_blocks\":" ++ boolString witness.innerPollBlocks ++ ","
-    ++ "\"request_deadline_ms\":" ++ toString witness.requestDeadlineMs ++ ","
-    ++ "\"blocker_ms\":" ++ toString witness.blockerMs ++ ","
-    ++ "\"expected_terminal\":" ++ jsonString witness.expectedTerminal ++ ","
-    ++ "\"expected_failure_class\":"
-      ++ jsonOptionalString witness.expectedFailureClass ++ ","
-    ++ "\"queue_advances_before_blocker_returns\":"
-      ++ boolString witness.queueAdvancesBeforeBlockerReturns
-    ++ "}"
+structure NativeFilesystemBoundaryInput where
+  name : String
+  toolName : String
+  workClass : String
+  boundary : String
+  innerPollBlocks : Bool
+  requestDeadlineMs : Nat
+  blockerMs : Nat
+  deriving Lean.ToJson
+
+structure NativeFilesystemBoundaryOutput where
+  terminal : String
+  queueAdvancesBeforeBlockerReturns : Bool
+  deriving Lean.ToJson
+
+/-- Each native filesystem tool driven past its request deadline while one
+poll in its runner is blocked. -/
+@[conformance_family]
+def nativeFilesystemBoundary :
+    Family NativeFilesystemBoundaryInput NativeFilesystemBoundaryOutput where
+  inputs := nativeFilesystemBoundaryCases.map fun c =>
+    { name := c.name, toolName := c.toolName, workClass := c.workClass, boundary := c.boundary
+    , innerPollBlocks := c.innerPollBlocks, requestDeadlineMs := c.requestDeadlineMs
+    , blockerMs := c.blockerMs }
+  model := fun i =>
+    { terminal := (ToolExecution.NativeFilesystemBoundary.terminal i.innerPollBlocks
+        i.requestDeadlineMs i.blockerMs).toDefraDB
+    , queueAdvancesBeforeBlockerReturns :=
+        ToolExecution.NativeFilesystemBoundary.queueAdvancesBeforeBlockerReturns
+          i.innerPollBlocks i.requestDeadlineMs i.blockerMs }
 
 def managedExecToolBoundaryCaseJson
     (witness : ManagedExecToolBoundaryCase) : String :=
@@ -46,21 +62,66 @@ def managedExecToolBoundaryCaseJson
       ++ boolString witness.captureDrainBounded
     ++ "}"
 
-def managedExecLivenessCaseJson
-    (witness : ManagedExecLivenessCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"trigger\":" ++ jsonString witness.trigger ++ ","
-    ++ "\"pre_exec_state\":" ++ jsonString witness.preExecState ++ ","
-    ++ "\"pre_tool_state\":" ++ jsonString witness.preToolState ++ ","
-    ++ "\"expected_exec_state\":"
-      ++ jsonString witness.expectedExecState ++ ","
-    ++ "\"expected_tool_state\":"
-      ++ jsonString witness.expectedToolState ++ ","
-    ++ "\"max_steps\":" ++ toString witness.maxSteps ++ ","
-    ++ "\"kill_signal_required\":"
-      ++ boolString witness.killSignalRequired
-    ++ "}"
+def managedExecLivenessRequest : RequestContext :=
+  { state := .processing, origin := .interactive, backend := ⟨"managed-exec"⟩
+  , admission := .executing, deadline := 1, claimTime := 0, currentTime := 2
+  , retryCount := 0, maxRetries := 0, messageSeq := 0, persistence := .committed }
+
+/-- A command started before the request deadline (1) and observed after it
+(2), so only a `deadlineElapsed` trigger finds the deadline passed. -/
+def managedExecLivenessPre (execState toolState : String) : ManagedExec.ManagedExecComposedState :=
+  { request := managedExecLivenessRequest
+  , tool := { callId := 0, requestId := 0
+            , state := (ToolExecution.ToolCallState.fromDefraDB? toolState).getD .pending
+            , operation := .nativeCommand, deadline := 1, currentTime := 2
+            , persistence := .committed }
+  , exec := { state := (ManagedExecState.fromDefraDB? execState).getD .pendingSpawn
+            , deadline := 1, now := 2 }
+  , now := 2 }
+
+deriving instance Lean.ToJson for ManagedExec.Trigger
+
+structure ManagedExecLivenessInput where
+  name : String
+  trigger : ManagedExec.Trigger
+  preExecState : String
+  preToolState : String
+  deriving Lean.ToJson
+
+def ManagedExecLivenessInput.post (i : ManagedExecLivenessInput) :
+    ManagedExec.ManagedExecComposedState :=
+  let pre := managedExecLivenessPre i.preExecState i.preToolState
+  (ManagedExec.composedStep? pre i.trigger).getD pre
+
+def managedExecLivenessInputs : List ManagedExecLivenessInput :=
+  managedExecLivenessCases.map fun c =>
+    { name := c.name, trigger := c.trigger, preExecState := c.preExecState
+    , preToolState := c.preToolState }
+
+structure ManagedExecLivenessExecOutput where
+  execState : String
+  killSignalRequired : Bool
+  deriving Lean.ToJson
+
+/-- The managed command's own state after the trigger, and whether stopping
+it needed a signal to its process tree. -/
+@[conformance_family]
+def managedExecLivenessExec : Family ManagedExecLivenessInput ManagedExecLivenessExecOutput where
+  inputs := managedExecLivenessInputs
+  model := fun i =>
+    let post := i.post
+    { execState := post.exec.state.toDefraDB
+    , killSignalRequired := post.exec.state == .killSignaled }
+
+structure ManagedExecLivenessToolOutput where
+  toolState : String
+  deriving Lean.ToJson
+
+/-- The tool call's terminal after the trigger. -/
+@[conformance_family]
+def managedExecLivenessTool : Family ManagedExecLivenessInput ManagedExecLivenessToolOutput where
+  inputs := managedExecLivenessInputs
+  model := fun i => { toolState := i.post.tool.state.toDefraDB }
 
 def processStopCaseJson (witness : ProcessStopCase) : String :=
   "{"

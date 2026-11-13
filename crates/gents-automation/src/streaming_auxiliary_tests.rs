@@ -1,15 +1,15 @@
 use defra_node::Node as EmbeddedNode;
-use gents_lean_vocab::{
-    lean_auxiliary_output_cases, LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure,
-    LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication,
-    LeanMessageRole, LeanOutcome, LeanPayloadKind, LeanPresentation, LeanReasoningAuditResult,
-    LeanReasoningPart,
+use gents_lean_vocab::canonical_wire::{
+    self as wire, AuxiliaryKind, Block, Closure, Message as WireMessage, Observation, PayloadKind,
+    PayloadSpec, Presentation, Publication, ReasoningPart as WireReasoningPart, Role, Segment,
+    Source,
 };
+use gents_lean_vocab::family::Json;
 use gents_loop::provider_audit::{AuxiliaryOutputEvent, AuxiliaryOutputObservation};
 use gents_loop::provider_input::ProviderInputProfile;
 use gents_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
 use gents_protocol::output::live::{
-    project_live, reconstruct_dense_prefix, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
+    project_live, reconstruct_dense_prefix, LiveObservation, LiveTarget, OwnerLiveness,
 };
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
@@ -24,21 +24,21 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
-    let LeanCanonicalSource::Auxiliary {
+fn modeled_scope(name: &str, raw: &Segment) -> (CaptureScope, usize, u32) {
+    let Source::Auxiliary {
         auxiliary_kind,
         scope,
         turn,
         attempt,
-    } = &case.raw.coordinate.source
+    } = &raw.coordinate.source
     else {
-        panic!("{} has no auxiliary source", case.name);
+        panic!("{name} has no auxiliary source");
     };
     let kind = match auxiliary_kind {
-        LeanAuxiliaryKind::Compaction => CaptureScopeKind::Compaction,
-        LeanAuxiliaryKind::CompactionFallback => CaptureScopeKind::CompactionFallback,
-        LeanAuxiliaryKind::Title => CaptureScopeKind::Title,
-        LeanAuxiliaryKind::AccessReview => CaptureScopeKind::AccessReview,
+        AuxiliaryKind::Compaction => CaptureScopeKind::Compaction,
+        AuxiliaryKind::CompactionFallback => CaptureScopeKind::CompactionFallback,
+        AuxiliaryKind::Title => CaptureScopeKind::Title,
+        AuxiliaryKind::AccessReview => CaptureScopeKind::AccessReview,
     };
     (
         CaptureScope { kind, seq: *scope },
@@ -47,20 +47,16 @@ fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
     )
 }
 
-fn modeled_message(case: &LeanAuxiliaryOutputCase) -> Message {
-    let flush = case.raw.flush.as_ref().expect("modeled raw flush");
-    assert_eq!(
-        flush.ordinal, 0,
-        "{}: unsupported initial ordinal",
-        case.name
-    );
+fn modeled_message(name: &str, raw: &Segment) -> Message {
+    let flush = raw.flush.as_ref().expect("modeled raw flush");
+    assert_eq!(flush.ordinal, 0, "{}: unsupported initial ordinal", name);
     let mut cursor = 0usize;
     let mut parts: BTreeMap<u64, (Option<ReasoningContent>, Option<String>)> = BTreeMap::new();
     for (stream_index, run) in flush.runs.iter().enumerate() {
         assert_eq!(
             run.stream as usize, stream_index,
             "{}: unsupported stream order",
-            case.name
+            name
         );
         let length = usize::try_from(run.bytes).expect("modeled run fits usize");
         let end = cursor
@@ -73,11 +69,11 @@ fn modeled_message(case: &LeanAuxiliaryOutputCase) -> Message {
         cursor = end;
         let text = String::from_utf8(bytes.to_vec()).expect("native payload requires UTF-8");
         let declaration = run.declaration.as_ref().expect("modeled declaration");
-        assert_eq!(declaration.block, 0, "{}: unsupported block", case.name);
+        assert_eq!(declaration.block, 0, "{}: unsupported block", name);
         assert!(declaration.tool.is_none() && declaration.media_kind.is_none());
         let (body, signature) = parts.entry(declaration.part).or_default();
         match declaration.kind {
-            LeanPayloadKind::Reasoning => {
+            PayloadKind::Reasoning => {
                 assert!(body
                     .replace(ReasoningContent::Text {
                         text,
@@ -85,37 +81,32 @@ fn modeled_message(case: &LeanAuxiliaryOutputCase) -> Message {
                     })
                     .is_none());
             }
-            LeanPayloadKind::Signature => {
+            PayloadKind::Signature => {
                 assert!(signature.replace(text).is_none());
             }
-            LeanPayloadKind::Encrypted => {
+            PayloadKind::Encrypted => {
                 assert!(body.replace(ReasoningContent::Encrypted(text)).is_none());
             }
-            LeanPayloadKind::Redacted => {
+            PayloadKind::Redacted => {
                 assert!(body
                     .replace(ReasoningContent::Redacted { data: text })
                     .is_none());
             }
-            _ => panic!("{}: unsupported native reasoning field", case.name),
+            _ => panic!("{}: unsupported native reasoning field", name),
         }
     }
-    assert_eq!(
-        cursor,
-        flush.payload.len(),
-        "{}: unconsumed payload",
-        case.name
-    );
+    assert_eq!(cursor, flush.payload.len(), "{}: unconsumed payload", name);
     let content = parts
         .into_iter()
         .enumerate()
         .map(|(index, (part, (body, signature)))| {
-            assert_eq!(part, index as u64, "{}: non-dense native parts", case.name);
+            assert_eq!(part, index as u64, "{}: non-dense native parts", name);
             match (body.expect("modeled reasoning body"), signature) {
                 (ReasoningContent::Text { text, .. }, signature) => {
                     ReasoningContent::Text { text, signature }
                 }
                 (body, None) => body,
-                _ => panic!("{}: signature has no text body", case.name),
+                _ => panic!("{}: signature has no text body", name),
             }
         })
         .collect();
@@ -183,13 +174,15 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
 }
 
 fn native_raw(
-    case: &LeanAuxiliaryOutputCase,
+    name: &str,
+    modeled_raw: &Segment,
     lifecycle: &RequestLifecycle,
     generation: &str,
 ) -> OutputSegment {
-    let encoded = native_encoding::encode_native_message(&modeled_message(case)).unwrap();
-    let flush = case.raw.flush.as_ref().expect("modeled raw flush");
-    assert_eq!(flush.runs.len(), encoded.streams.len(), "{}", case.name);
+    let encoded =
+        native_encoding::encode_native_message(&modeled_message(name, modeled_raw)).unwrap();
+    let flush = modeled_raw.flush.as_ref().expect("modeled raw flush");
+    assert_eq!(flush.runs.len(), encoded.streams.len(), "{}", name);
     let mut payload = String::new();
     let runs = encoded
         .streams
@@ -197,32 +190,27 @@ fn native_raw(
         .enumerate()
         .map(|(index, stream)| {
             let modeled = &flush.runs[index];
-            assert_eq!(modeled.stream as usize, index, "{}", case.name);
-            assert_eq!(
-                modeled.bytes as usize,
-                stream.payload.len(),
-                "{}",
-                case.name
-            );
+            assert_eq!(modeled.stream as usize, index, "{}", name);
+            assert_eq!(modeled.bytes as usize, stream.payload.len(), "{}", name);
             let declaration = modeled.declaration.as_ref().expect("modeled declaration");
             assert_eq!(
                 declaration.block as u32, stream.declaration.block_index,
                 "{}",
-                case.name
+                name
             );
             assert_eq!(
                 declaration.part as u32, stream.declaration.part_index,
                 "{}",
-                case.name
+                name
             );
             let payload_kind = match declaration.kind {
-                LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
-                LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
-                LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
-                LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,
-                _ => panic!("{}: unsupported native audit declaration", case.name),
+                PayloadKind::Reasoning => StreamPayload::Reasoning,
+                PayloadKind::Signature => StreamPayload::ReasoningSignature,
+                PayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
+                PayloadKind::Redacted => StreamPayload::ReasoningRedacted,
+                _ => panic!("{name}: unsupported native audit declaration"),
             };
-            assert_eq!(payload_kind, stream.declaration.payload, "{}", case.name);
+            assert_eq!(payload_kind, stream.declaration.payload, "{}", name);
             payload.push_str(&stream.payload);
             SegmentRun {
                 stream: u32::try_from(index).unwrap(),
@@ -231,9 +219,9 @@ fn native_raw(
             }
         })
         .collect();
-    assert_eq!(payload.as_bytes(), flush.payload, "{}", case.name);
+    assert_eq!(payload.as_bytes(), flush.payload, "{}", name);
     let request = lifecycle.request();
-    let (scope, turn, attempt) = modeled_scope(case);
+    let (scope, turn, attempt) = modeled_scope(name, modeled_raw);
     OutputSegment {
         node_did: request.node_did.clone(),
         requester_did: request.requester_did.clone(),
@@ -273,11 +261,22 @@ fn output_counts(state: &serde_json::Value) -> (usize, usize) {
     )
 }
 
+fn close_kind(name: &str, outcome: &str) -> canonical::ProviderAttemptClose {
+    match outcome {
+        "complete" => canonical::ProviderAttemptClose::AuxiliaryComplete,
+        "partial" => canonical::ProviderAttemptClose::Partial,
+        other => panic!("{name}: unsupported modeled close {other}"),
+    }
+}
+
 #[tokio::test]
-async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guards() {
-    let cases = lean_auxiliary_output_cases();
-    assert!(!cases.is_empty(), "generated auxiliary cases are empty");
-    for case in cases {
+async fn auxiliary_owned_guards_follow_the_lean_model() {
+    for case in gents_lean_vocab::families::auxiliary_output_owned::cases() {
+        let input = &case.input;
+        let modeled_raw: Segment = wire::decode(&input.raw.0);
+        let native_publication_closing: Segment = wire::decode(&input.native_publication_closing.0);
+        let native_publication_message: WireMessage<PayloadSpec> =
+            wire::decode(&input.native_publication_message.0);
         let db = crate::triggers::callback::test_node_builder(
             "generated-auxiliary-cases-drive-owned-be",
         )
@@ -288,24 +287,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
         )
         .await;
-        let mut lifecycle = claimed(&node, &case.name).await;
-        assert_eq!(
-            case.authority.claimed_request_state, "claimed",
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.authority.begin_boundary, "mutation_write_gate",
-            "{}",
-            case.name
-        );
-        let LeanCanonicalWriter::Request {
-            generation: raw_generation,
-        } = &case.raw.writer
-        else {
-            panic!("{}: raw has no request writer", case.name);
-        };
-        assert_eq!(*raw_generation, case.authority.generation, "{}", case.name);
+        let mut lifecycle = claimed(&node, &input.name).await;
         let writer = DefraStreamWriter::new_for_lifecycle(
             node.clone(),
             &lifecycle,
@@ -315,8 +297,8 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         let generation = lifecycle.execution_generation().unwrap().to_owned();
         let request_doc_id = lifecycle.request().doc_id.clone();
         let empty_state = output_state(&node, &request_doc_id).await;
-        assert_eq!(output_counts(&empty_state), (0, 0), "{}", case.name);
-        let before = native_raw(case, &lifecycle, &generation);
+        assert_eq!(output_counts(&empty_state), (0, 0), "{}", input.name);
+        let before = native_raw(&input.name, &modeled_raw, &lifecycle, &generation);
         let claimed_append = canonical::append_provider_segment_with_signer(
             &node,
             identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
@@ -325,36 +307,29 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             &before,
         )
         .await;
-        assert_eq!(
-            claimed_append.is_ok(),
-            case.expected.claimed_append_accepted,
-            "{}",
-            case.name
-        );
-        if !case.expected.claimed_append_accepted {
+        let claimed_append_accepted = claimed_append.is_ok();
+        if let Err(error) = claimed_append {
             assert!(
                 matches!(
-                    claimed_append
-                        .unwrap_err()
-                        .downcast_ref::<canonical::ProviderAppendRejection>(),
+                    error.downcast_ref::<canonical::ProviderAppendRejection>(),
                     Some(canonical::ProviderAppendRejection::LostLease)
                 ),
                 "{}: Claimed append failed outside the lease owner",
-                case.name
+                input.name
             );
         }
         assert_eq!(
             output_state(&node, &request_doc_id).await,
             empty_state,
             "{}",
-            case.name
+            input.name
         );
 
         let begin = lifecycle.begin_owned_execution(&writer).await;
-        assert_eq!(begin.is_ok(), case.expected.begin_accepted, "{}", case.name);
+        let begin_accepted = begin.is_ok();
         begin.unwrap();
         assert_eq!(lifecycle.execution_generation().unwrap(), generation);
-        let raw = native_raw(case, &lifecycle, &generation);
+        let raw = native_raw(&input.name, &modeled_raw, &lifecycle, &generation);
         let append = canonical::append_provider_segment_with_signer(
             &node,
             identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
@@ -363,37 +338,11 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             &raw,
         )
         .await;
-        assert_eq!(
-            append.is_ok(),
-            case.expected.begun_append_accepted,
-            "{}",
-            case.name
-        );
+        let begun_append_accepted = append.is_ok();
         append.unwrap();
         let appended_state = output_state(&node, &request_doc_id).await;
-        assert_eq!(output_counts(&appended_state), (1, 0), "{}", case.name);
+        assert_eq!(output_counts(&appended_state), (1, 0), "{}", input.name);
 
-        assert!(case.publication_message.blocks.is_empty(), "{}", case.name);
-        assert!(
-            case.publication_message.header.refs.is_empty(),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.publication_message.header.role,
-            LeanMessageRole::Assistant
-        );
-        let LeanMessagePublication::RequestExecution {
-            generation: publication_generation,
-        } = &case.publication_message.header.publication
-        else {
-            panic!("{}: empty header is not request-owned", case.name);
-        };
-        assert_eq!(
-            *publication_generation, case.authority.generation,
-            "{}",
-            case.name
-        );
         let empty_message = Message::Assistant {
             request_id: None,
             id: None,
@@ -405,65 +354,39 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
                 .to_string()
                 .contains("native assistant message has no blocks"),
             "{}: empty native assistant passed the wire encoder",
-            case.name
+            input.name
         );
-        assert_eq!(
-            case.native_publication_closing.coordinate, case.raw.coordinate,
-            "{}",
-            case.name
+        assert!(
+            matches!(
+                native_publication_message.header.publication,
+                Publication::RequestExecution { .. }
+            ) && native_publication_message.header.role == Role::Assistant,
+            "{}: native publication is not a request-owned assistant header",
+            input.name
         );
-        assert_eq!(
-            case.native_publication_closing.writer, case.raw.writer,
-            "{}",
-            case.name
-        );
-        assert!(matches!(
-            case.native_publication_closing.close.as_ref(),
-            Some(LeanCanonicalClosure::Closed {
-                outcome: LeanOutcome::Complete,
-                ..
-            })
-        ));
-        let LeanMessagePublication::RequestExecution {
-            generation: native_publication_generation,
-        } = &case.native_publication_message.header.publication
-        else {
-            panic!("{}: native publication is not request-owned", case.name);
-        };
-        assert_eq!(
-            *native_publication_generation, case.authority.generation,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.native_publication_message.header.role,
-            LeanMessageRole::Assistant,
-            "{}",
-            case.name
-        );
-        let [LeanMessageBlock::Reasoning {
+        let [Block::Reasoning {
             id: modeled_id,
             parts: modeled_parts,
-        }] = case.native_publication_message.blocks.as_slice()
+        }] = native_publication_message.blocks.as_slice()
         else {
             panic!(
                 "{}: native publication is not one reasoning block",
-                case.name
+                input.name
             );
         };
-        let message = modeled_message(case);
+        let message = modeled_message(&input.name, &modeled_raw);
         let Message::Assistant { content, .. } = &message else {
             unreachable!()
         };
         let [AssistantContent::Reasoning(reasoning)] = content.as_slice() else {
             unreachable!()
         };
-        assert_eq!(modeled_id, &reasoning.id, "{}", case.name);
+        assert_eq!(modeled_id, &reasoning.id, "{}", input.name);
         assert_eq!(
             modeled_parts.len(),
             reasoning.content.len(),
             "{}",
-            case.name
+            input.name
         );
         let encoded = native_encoding::encode_native_message(&message).unwrap();
         let mut referenced = Vec::new();
@@ -472,28 +395,28 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         {
             let (payload, payload_kind) = match (modeled, native) {
                 (
-                    LeanReasoningPart::Text { payload, signature },
+                    WireReasoningPart::Text { payload, signature },
                     ReasoningContent::Text {
                         signature: native_signature,
                         ..
                     },
                 ) => {
-                    assert_eq!(signature, native_signature, "{}", case.name);
+                    assert_eq!(signature, native_signature, "{}", input.name);
                     (payload, StreamPayload::Reasoning)
                 }
-                (LeanReasoningPart::Encrypted { payload }, ReasoningContent::Encrypted(_)) => {
+                (WireReasoningPart::Encrypted { payload }, ReasoningContent::Encrypted(_)) => {
                     (payload, StreamPayload::ReasoningEncrypted)
                 }
-                (LeanReasoningPart::Redacted { payload }, ReasoningContent::Redacted { .. }) => {
+                (WireReasoningPart::Redacted { payload }, ReasoningContent::Redacted { .. }) => {
                     (payload, StreamPayload::ReasoningRedacted)
                 }
-                _ => panic!("{}: native publication reasoning part differs", case.name),
+                _ => panic!("{}: native publication reasoning part differs", input.name),
             };
-            assert!(matches!(&payload.presentation, LeanPresentation::Full));
+            assert!(matches!(&payload.presentation, Presentation::Full));
             assert_eq!(
-                payload.reference.close_id, case.native_publication_closing.id,
+                payload.reference.close_id, native_publication_closing.id,
                 "{}",
-                case.name
+                input.name
             );
             let stream = encoded
                 .streams
@@ -504,25 +427,21 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
                         && stream.declaration.payload == payload_kind
                 })
                 .expect("modeled publication stream exists");
-            assert_eq!(payload.reference.stream as usize, stream, "{}", case.name);
+            assert_eq!(payload.reference.stream as usize, stream, "{}", input.name);
             referenced.push(payload.reference.clone());
         }
         assert_eq!(
-            case.native_publication_message.header.refs, referenced,
+            native_publication_message.header.refs, referenced,
             "{}",
-            case.name
+            input.name
         );
-        let LeanCanonicalClosure::Closed {
-            outcome: LeanOutcome::Complete,
+        let Some(Closure::Closed {
             segments,
             stream_bytes,
-        } = case
-            .native_publication_closing
-            .close
-            .as_ref()
-            .expect("modeled native publication close")
+            ..
+        }) = native_publication_closing.close.as_ref()
         else {
-            unreachable!()
+            panic!("{}: modeled native publication has no close", input.name);
         };
         let mut publication_closing = raw.clone();
         publication_closing.ordinal = None;
@@ -540,7 +459,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             &generation,
             canonical::ProviderPublicationPlan {
                 final_flush: Some(publication_closing),
-                message_key: case.native_publication_message.key.clone(),
+                message_key: native_publication_message.key.clone(),
                 encoded: Arc::new(encoded),
                 expected: Arc::new(message),
                 tool_deadline_at: chrono::Utc::now().to_rfc3339(),
@@ -549,39 +468,23 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             },
         )
         .await;
-        assert_eq!(
-            publication.is_ok(),
-            case.expected.native_publication_accepted,
-            "{}",
-            case.name
-        );
-        if !case.expected.native_publication_accepted {
-            let error = publication.unwrap_err();
+        let native_publication_accepted = publication.is_ok();
+        if let Err(error) = publication {
             let diagnostic = format!("{error:#}");
             assert!(
                 diagnostic.contains("provider publication does not bind its request generation"),
-                "{}: empty auxiliary header failed outside publication owner: {diagnostic}",
-                case.name
+                "{}: auxiliary header failed outside publication owner: {diagnostic}",
+                input.name
             );
         }
         assert_eq!(
             output_state(&node, &request_doc_id).await,
             appended_state,
             "{}",
-            case.name
+            input.name
         );
 
-        let close_kind = match case.closing.close.as_ref().expect("modeled close") {
-            LeanCanonicalClosure::Closed {
-                outcome: LeanOutcome::Complete,
-                ..
-            } => canonical::ProviderAttemptClose::AuxiliaryComplete,
-            LeanCanonicalClosure::Closed {
-                outcome: LeanOutcome::Partial,
-                ..
-            } => canonical::ProviderAttemptClose::Partial,
-            _ => panic!("{}: unsupported modeled close", case.name),
-        };
+        let close_kind = close_kind(&input.name, &input.outcome);
         let close = canonical::close_provider_attempt_with_signer(
             &node,
             identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
@@ -591,22 +494,11 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             close_kind,
         )
         .await;
-        assert_eq!(close.is_ok(), case.expected.close_accepted, "{}", case.name);
+        let close_accepted = close.is_ok();
         close.unwrap();
         let closed_state = output_state(&node, &request_doc_id).await;
-        assert_eq!(output_counts(&closed_state), (2, 0), "{}", case.name);
-        let LeanCanonicalWriter::Request {
-            generation: stale_generation,
-        } = &case.stale_closing.writer
-        else {
-            panic!("{}: stale close has no request writer", case.name);
-        };
-        assert_ne!(
-            *stale_generation, case.authority.generation,
-            "{}",
-            case.name
-        );
-        let stale_generation = format!("{generation}-modeled-{stale_generation}");
+        assert_eq!(output_counts(&closed_state), (2, 0), "{}", input.name);
+        let stale_generation = format!("{generation}-modeled-stale");
         let mut stale = raw.clone();
         stale.writer = OutputWriter::RequestExecution {
             execution_generation: stale_generation.clone(),
@@ -620,14 +512,8 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             close_kind,
         )
         .await;
-        assert_eq!(
-            stale_replay.is_ok(),
-            case.expected.stale_close_replay_accepted,
-            "{}",
-            case.name
-        );
-        if !case.expected.stale_close_replay_accepted {
-            let error = stale_replay.unwrap_err();
+        let stale_close_replay_accepted = stale_replay.is_ok();
+        if let Err(error) = stale_replay {
             let diagnostic = format!("{error:#}");
             assert!(
                 matches!(
@@ -635,39 +521,35 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
                     Some(canonical::ProviderCloseRejection::WriterMismatch)
                 ),
                 "{}: stale close failed outside immutable writer check: {diagnostic}",
-                case.name
+                input.name
             );
         }
         assert_eq!(
             output_state(&node, &request_doc_id).await,
             closed_state,
             "{}",
-            case.name
+            input.name
         );
         node.shutdown().await.expect("shut down test node");
+        case.check(Some(
+            gents_lean_vocab::families::auxiliary_output_owned::OwnedOutput {
+                claimed_append_accepted,
+                begin_accepted,
+                begun_append_accepted,
+                native_publication_accepted,
+                close_accepted,
+                stale_close_replay_accepted,
+            },
+        ));
     }
 }
 
 #[tokio::test]
-async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publication() {
-    let cases = lean_auxiliary_output_cases();
-    assert!(!cases.is_empty(), "generated auxiliary cases are empty");
-    for case in cases {
-        assert!(
-            case.expected.append_accepted && case.expected.close_accepted,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.raw.coordinate, case.closing.coordinate,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.raw.coordinate, case.observation.target.coordinate,
-            "{}",
-            case.name
-        );
+async fn auxiliary_sink_audit_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::auxiliary_output_sink::cases() {
+        let input = &case.input;
+        let modeled_raw: Segment = wire::decode(&input.raw.0);
+        let observation: Observation = wire::decode(&input.observation.0);
         let db = crate::triggers::callback::test_node_builder(
             "generated-auxiliary-cases-drive-non-clau",
         )
@@ -678,7 +560,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
         )
         .await;
-        let mut lifecycle = claimed(&node, &case.name).await;
+        let mut lifecycle = claimed(&node, &input.name).await;
         let writer = DefraStreamWriter::new_for_lifecycle(
             node.clone(),
             &lifecycle,
@@ -688,7 +570,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         let request = lifecycle.request().clone();
         let generation = lifecycle.execution_generation().unwrap().to_owned();
-        let (scope, turn, attempt) = modeled_scope(case);
+        let (scope, turn, attempt) = modeled_scope(&input.name, &modeled_raw);
         let source = OutputSource::ProviderTurn {
             scope,
             turn_index: u32::try_from(turn).unwrap(),
@@ -697,12 +579,12 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         let output_writer = OutputWriter::RequestExecution {
             execution_generation: generation.clone(),
         };
-        let message = modeled_message(case);
+        let message = modeled_message(&input.name, &modeled_raw);
         let Message::Assistant { content, .. } = &message else {
             unreachable!()
         };
         let [AssistantContent::Reasoning(reasoning)] = content.as_slice() else {
-            panic!("{}: unsupported modeled native content", case.name);
+            panic!("{}: unsupported modeled native content", input.name);
         };
         let mut writer =
             DefraStreamWriter::new(node.clone(), &request.agent_did, Duration::from_millis(1));
@@ -726,12 +608,11 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             .await
             .unwrap();
         }
-        let event = match case.closing.close.as_ref().expect("modeled close") {
-            LeanCanonicalClosure::Closed { outcome, .. } => match outcome {
-                LeanOutcome::Complete => AuxiliaryOutputEvent::TurnReady { message },
-                LeanOutcome::Partial => AuxiliaryOutputEvent::ClosePartial,
-            },
-            _ => panic!("{}: unsupported auxiliary close", case.name),
+        let event = match close_kind(&input.name, &input.outcome) {
+            canonical::ProviderAttemptClose::AuxiliaryComplete => {
+                AuxiliaryOutputEvent::TurnReady { message }
+            }
+            _ => AuxiliaryOutputEvent::ClosePartial,
         };
         (sink.observe)(AuxiliaryOutputObservation {
             capture_scope: scope,
@@ -754,41 +635,14 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             .map(decode_output_segment_row)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(
-            rows.len(),
-            case.observation.records.len() + 1,
-            "{}",
-            case.name
-        );
         let close = rows
             .iter()
-            .find(|row| row.segment.close.is_some())
+            .find_map(|row| row.segment.close.as_ref())
             .expect("durable close");
-        let LeanCanonicalClosure::Closed {
-            outcome,
-            segments,
-            stream_bytes,
-        } = case.closing.close.as_ref().unwrap()
-        else {
-            unreachable!()
-        };
-        let expected_outcome = match outcome {
-            LeanOutcome::Complete => gents_protocol::output::OutputOutcome::Complete,
-            LeanOutcome::Partial => gents_protocol::output::OutputOutcome::Partial,
-        };
-        assert!(
-            matches!(Option::as_ref(&close.segment.close), Some(SourceClose::Closed {
-            outcome, segments: actual_segments, stream_bytes: actual_bytes,
-        }) if *outcome == expected_outcome && u64::from(*actual_segments) == *segments
-            && actual_bytes == stream_bytes),
-            "{}",
-            case.name
-        );
-        assert!(!case.expected.publication_accepted, "{}", case.name);
         assert!(
             data["AgentMessage"].as_array().unwrap().is_empty(),
             "{}",
-            case.name
+            input.name
         );
         let observed = rows
             .iter()
@@ -797,46 +651,12 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
                 segment: &row.segment,
             })
             .collect::<Vec<_>>();
-        let audit =
-            reconstruct_dense_prefix(&observed, &request.doc_id, &source, &output_writer, None)
-                .unwrap();
-        let LeanReasoningAuditResult::Ok { streams } = &case.expected.audit else {
-            panic!("{}: unsupported modeled audit result", case.name);
-        };
-        assert_eq!(audit.streams.len(), streams.len(), "{}", case.name);
-        for (actual, expected) in audit.streams.iter().zip(streams) {
-            assert_eq!(
-                actual.declaration.block_index as u64, expected.declaration.block,
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                actual.declaration.part_index as u64, expected.declaration.part,
-                "{}",
-                case.name
-            );
-            let expected_payload = match expected.declaration.kind {
-                LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
-                LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
-                LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
-                LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,
-                _ => panic!("{}: unsupported modeled audit field", case.name),
-            };
-            assert_eq!(
-                actual.declaration.payload, expected_payload,
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                actual.text.as_bytes(),
-                expected.bytes.as_slice(),
-                "{}",
-                case.name
-            );
-        }
-        assert!(matches!(
-            case.expected.public_view,
-            gents_lean_vocab::LeanCanonicalOutputView::Absent
+        let audit = wire::audit_wire(reconstruct_dense_prefix(
+            &observed,
+            &request.doc_id,
+            &source,
+            &output_writer,
+            None,
         ));
         let view = project_live(&LiveObservation {
             request_doc_id: &request.doc_id,
@@ -869,7 +689,13 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             request_terminal: false,
             terminal_selection: None,
         });
-        assert_eq!(view, LiveView::Absent, "{}", case.name);
+        let output = gents_lean_vocab::families::auxiliary_output_sink::SinkOutput {
+            close: Json(wire::encode(&wire::closure_wire(close))),
+            segments: Some(rows.len() as u64),
+            audit: Json(wire::encode(&audit)),
+            public_view: Json(wire::encode(&wire::view_wire(&view, &observation))),
+        };
         node.shutdown().await.expect("shut down test node");
+        case.check(Some(output));
     }
 }

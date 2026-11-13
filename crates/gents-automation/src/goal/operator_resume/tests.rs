@@ -185,89 +185,58 @@ async fn resume_on_retry_matches_the_lean_profile_model() {
 }
 
 #[tokio::test]
-async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_operator_resume_on_cases;
-    assert_eq!(cases.len(), 2);
-    for case in cases {
-        assert!(!case.target_available);
-        match case.name.as_str() {
-            "unavailable_target_keeps_goal_and_publishes_nothing" => {
-                assert!(case.before.children.is_empty());
-                assert!(case.expected.children.is_empty());
-                assert_eq!(case.outcome, "unavailable");
-                let limited = Limited::new(&usage_limit()).await;
-                gents_inference::profile_switch::switch_profile_account(
-                    &limited.access,
-                    limited.f.identity.did(),
-                    PROFILE,
-                    &limited.b,
-                    false,
-                    &[],
-                )
-                .await
-                .unwrap();
-                gents_inference::auth::credential::set_account_enabled(
-                    &limited.access,
-                    limited.f.identity.did(),
-                    &limited.b_credential,
-                    false,
-                )
-                .await
-                .unwrap();
-                let error = limited.resume_on(&limited.b).await.unwrap_err();
-                assert!(format!("{error:#}").contains("target account"));
-                assert!(limited.children().await.is_empty());
-                assert_eq!(limited.goal_status().await, "usage_limited");
-            }
-            "existing_child_is_recovered_after_target_disabled" => {
-                assert_eq!(case.before.children.len(), 1);
-                assert_eq!(case.expected.status, case.before.status);
-                assert_eq!(case.expected.blocked_audits, case.before.blocked_audits);
-                assert_eq!(case.expected.wrapup_requested, case.before.wrapup_requested);
-                assert_eq!(case.expected.wrapup_completed, case.before.wrapup_completed);
-                assert_eq!(case.expected.sequence, case.before.sequence);
-                assert_eq!(
-                    case.expected.last_continued_from,
-                    case.before.last_continued_from
-                );
-                assert_eq!(case.expected.latest_request, case.before.latest_request);
-                assert_eq!(case.expected.tokens_used, case.before.tokens_used);
-                assert_eq!(case.expected.token_budget, case.before.token_budget);
-                assert_eq!(case.expected.children.len(), case.before.children.len());
-                let expected_children = &case.expected.children;
-                let before_children = &case.before.children;
-                for (expected, before) in expected_children.iter().zip(before_children) {
-                    assert_eq!(expected.goal, before.goal);
-                    assert_eq!(expected.owner, before.owner);
-                    assert_eq!(expected.session, before.session);
-                    assert_eq!(expected.predecessor, before.predecessor);
-                    assert_eq!(expected.predecessor_doc, before.predecessor_doc);
-                    assert_eq!(expected.correlation, before.correlation);
-                    assert_eq!(expected.source_document, before.source_document);
-                    assert_eq!(expected.trigger_context, before.trigger_context);
-                    assert_eq!(expected.workspace_fingerprint, before.workspace_fingerprint);
-                    assert_eq!(expected.semantic_fingerprint, before.semantic_fingerprint);
-                    assert_eq!(expected.child, before.child);
-                    assert_eq!(expected.sequence, before.sequence);
-                }
-                assert_eq!(case.outcome, "recovered");
-                let limited = Limited::new(&usage_limit()).await;
-                let first = limited.resume_on(&limited.b).await.unwrap();
-                gents_inference::auth::credential::set_account_enabled(
-                    &limited.access,
-                    limited.f.identity.did(),
-                    &limited.b_credential,
-                    false,
-                )
-                .await
-                .unwrap();
-                let retry = limited.resume_on(&limited.b).await.unwrap();
-                assert!(!retry.resume.created);
-                assert_eq!(retry.resume.request_id, first.resume.request_id);
-                assert_eq!(limited.children().await, [first.resume.request_id]);
-            }
-            name => panic!("unmapped generated resume-on case {name}"),
+async fn resume_on_target_matches_the_lean_model() {
+    for case in gents_lean_vocab::families::goal_operator_resume_contracts_resume_on_target::cases()
+    {
+        let limited = Limited::new(&usage_limit()).await;
+        if case.input.prior_receipt {
+            limited.resume_on(&limited.b).await.unwrap();
+        } else {
+            gents_inference::profile_switch::switch_profile_account(
+                &limited.access,
+                limited.f.identity.did(),
+                PROFILE,
+                &limited.b,
+                false,
+                &[],
+            )
+            .await
+            .unwrap();
         }
+        gents_inference::auth::credential::set_account_enabled(
+            &limited.access,
+            limited.f.identity.did(),
+            &limited.b_credential,
+            case.input.target_available,
+        )
+        .await
+        .unwrap();
+        let goal_before = serde_json::to_value(limited.f.current_goal().await).unwrap();
+        let children_before = limited.children().await;
+        let result = limited.resume_on(&limited.b).await;
+        let goal_after = serde_json::to_value(limited.f.current_goal().await).unwrap();
+        let children_after = limited.children().await;
+        let (outcome, receipt_is_existing_child) = match &result {
+            Ok(receipt) if receipt.resume.created => (
+                "created".to_owned(),
+                Some(children_before.contains(&receipt.resume.request_id)),
+            ),
+            Ok(receipt) => (
+                "recovered".to_owned(),
+                Some(children_before.contains(&receipt.resume.request_id)),
+            ),
+            Err(error) if format!("{error:#}").contains("target account") => {
+                ("unavailable".to_owned(), None)
+            }
+            Err(error) => panic!("{:?}: resume failed: {error:#}", case.input),
+        };
+        case.check(
+            gents_lean_vocab::families::goal_operator_resume_contracts_resume_on_target::ResumeOnOutput {
+                outcome,
+                snapshot_unchanged: goal_before == goal_after && children_before == children_after,
+                receipt_is_existing_child,
+            },
+        );
     }
 }
 

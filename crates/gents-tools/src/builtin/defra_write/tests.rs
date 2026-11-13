@@ -141,27 +141,6 @@ async fn rejects_raw_mailbox_writer_even_when_declaration_is_canonical() {
 }
 
 #[tokio::test]
-async fn rejects_client_publication_mutations() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    let mut protected = decl();
-    protected.collection = gents_lean_vocab::lean_contract_snapshot()
-        .client_publication_protected_collection
-        .clone();
-    let tool = BoundedWriteTool::new(ConfigAccess::local(node), protected);
-    assert!(!tool.is_well_formed());
-    let error = Tool::call(
-        &tool,
-        serde_json::from_value(json!({
-            "drift_sig":"abc", "summary":"stale", "status":"open"
-        }))
-        .unwrap(),
-    )
-    .await
-    .expect_err("client publication data is not agent-writable");
-    assert!(format!("{error:#}").contains("protected"));
-}
-
-#[tokio::test]
 async fn writes_one_bounded_doc() {
     let node = node_with_actionrequest().await;
     let tool = BoundedWriteTool::new(ConfigAccess::local(Arc::clone(&node)), decl());
@@ -651,46 +630,38 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
     );
 }
 
+/// Premise evidence for the ledger row `boundary.count-carrier.non-null-id`.
 #[tokio::test]
-async fn generated_count_carriers_bind_admission_parser_and_storage() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases;
-    let fields = cases["fields"].as_array().unwrap();
-    let values = cases["values"].as_array().unwrap();
-    assert!(!fields.is_empty() && !values.is_empty());
-    for case in values {
-        let maximum = case["maximum"].as_u64().unwrap() as usize;
-        assert_eq!(
-            gents_store::graphql::canonical_positive_count(&case["value"], maximum),
-            case["expected"].as_u64().map(|n| n as usize),
-            "parser: {case}"
-        );
-    }
+async fn defradb_refuses_a_non_null_id_count_carrier() {
+    let node = gents_store::test_support::node_builder()
+        .build()
+        .await
+        .unwrap();
+    let error = node
+        .add_collection("type CountCarrierNonNullId { count: ID! }")
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("NonNull variant for type ID is not supported"),
+        "{error:#}"
+    );
+}
+
+#[tokio::test]
+async fn count_carriers_store_as_the_count_carrier_model() {
     let node = Arc::new(
         gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
     );
-    for (index, case) in fields.iter().enumerate() {
-        let schema = case["schema"].as_str().unwrap();
-        let admitted = case["accepted"].as_bool().unwrap();
-        assert_eq!(
-            gents_store::config_client::schema_introspection::can_hold_canonical_count(schema),
-            admitted,
-            "{case}"
-        );
+    let maximum = gents_documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS;
+    for (index, case) in gents_lean_vocab::families::count_carrier_storage::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let schema = case.input.schema.as_str();
         let collection = format!("CountCarrier{index}");
-        if let Some(expected_error) = case["schema_error"].as_str() {
-            let error = node
-                .add_collection(&format!("type {collection} {{ count: {schema} }}"))
-                .await
-                .unwrap_err();
-            assert!(format!("{error:#}").contains(expected_error), "{error:#}");
-            continue;
-        }
-        if case["storage"] != true {
-            continue;
-        }
         node.add_collection(&format!("type {collection} {{ count: {schema} }}"))
             .await
             .unwrap();
@@ -713,12 +684,10 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             ),
             declaration,
         );
-        let input = if admitted {
-            &case["witness"]
-        } else {
-            &case["probe"]
-        }
-        .clone();
+        let input: serde_json::Value = match case.input.probe.kind.as_str() {
+            "text" => serde_json::Value::String(case.input.probe.spelling.clone()),
+            _ => serde_json::from_str(&case.input.probe.spelling).unwrap(),
+        };
         Tool::call(
             &tool,
             serde_json::from_value(json!({"count": input})).unwrap(),
@@ -734,23 +703,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         .await
         .unwrap();
         assert!(!response.has_errors(), "{schema}: {:?}", response.errors);
-        let output = &response.data.as_ref().unwrap()[&collection][0]["count"];
-        let maximum = gents_documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS;
-        let expected = case["probe_expected"].as_u64().map(|n| n as usize);
-        assert_eq!(
-            gents_store::graphql::canonical_positive_count(&input, maximum),
-            expected,
-            "durable call argument: {schema}, {input}"
-        );
-        assert_eq!(
-            gents_store::graphql::canonical_positive_count(output, maximum),
-            expected,
-            "stored document: {schema}, {input} -> {output}"
-        );
-        assert_eq!(
-            gents_store::graphql::canonical_positive_count(output, maximum).is_some(),
-            admitted
-        );
+        let output = response.data.as_ref().unwrap()[&collection][0]["count"].clone();
         let introspection = gents_store::graphql::graphql_with_transaction_retry(
             &node,
             &gents_store::config_client::schema_introspection::introspection_query(&collection)
@@ -768,24 +721,32 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             .iter()
             .find(|field| field.name == "count")
             .unwrap();
-        assert_eq!(
+        let introspected =
             gents_store::config_client::schema_introspection::can_hold_canonical_count(
-                field.named_type()
-            ),
-            admitted,
-            "introspection: {schema}"
-        );
-        if !admitted {
-            assert!(
+                field.named_type(),
+            );
+        let decimal_admitted = if introspected {
+            None
+        } else {
+            Some(
                 Tool::call(
                     &tool,
-                    serde_json::from_value(json!({"count":"10"})).unwrap()
+                    serde_json::from_value(json!({"count":"10"})).unwrap(),
                 )
                 .await
-                .is_err(),
-                "{schema} accepted a decimal count"
-            );
-        }
+                .is_ok(),
+            )
+        };
+        case.check(
+            gents_lean_vocab::families::count_carrier_storage::StorageOutput {
+                argument: gents_store::graphql::canonical_positive_count(&input, maximum)
+                    .map(|count| count as u64),
+                stored: gents_store::graphql::canonical_positive_count(&output, maximum)
+                    .map(|count| count as u64),
+                introspected,
+                decimal_admitted,
+            },
+        );
     }
 }
 

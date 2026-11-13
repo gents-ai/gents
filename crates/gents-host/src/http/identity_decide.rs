@@ -171,7 +171,7 @@ mod tests {
 
     use super::*;
 
-    use gents_lean_vocab::{lean_identity_permission_cases, LeanIdentityPermissionCase};
+    use gents_lean_vocab::families::agent_identity_permission_decide as decide;
 
     const IDENTITY_PERMISSION_POLICY_ID: &str = "identity-permission-cases";
     const IDENTITY_PERMISSION_RESOURCE_NAME: &str = "row";
@@ -246,8 +246,22 @@ mod tests {
     }
 
     async fn build_local_acp_from_lean_case(
-        case: &LeanIdentityPermissionCase,
+        case: &decide::PermissionInput,
     ) -> anyhow::Result<LocalDocumentACP> {
+        assert!(
+            case.permission.ends_with(".read"),
+            "case {:?}: only .read permission fixtures are supported by this ACP witness, got {:?}",
+            case.name,
+            case.permission
+        );
+        assert!(
+            case.permission
+                .starts_with(format!("row:{}:", case.row_owner).as_str()),
+            "case {:?}: permission {:?} must be scoped to row owner {:?}",
+            case.name,
+            case.permission,
+            case.row_owner
+        );
         let store = Arc::new(MemoryAcpStore::new());
         let acp = LocalDocumentACP::new(store.clone());
         let row_owner = did_from_lean_case(&case.row_owner, case, "row_owner");
@@ -263,6 +277,11 @@ mod tests {
         let namespaced_resource =
             format!("{IDENTITY_PERMISSION_POLICY_ID}:{IDENTITY_PERMISSION_RESOURCE_NAME}");
         for grant in &case.grants {
+            assert_eq!(
+                grant.permission, case.permission,
+                "case {:?}: grant {:?} targets a different permission than the row under test",
+                case.name, grant.actor
+            );
             let principal = did_from_lean_case(&grant.actor, case, "grant.actor");
             let tuple = RelationTuple::try_new(
                 principal,
@@ -276,7 +295,7 @@ mod tests {
         Ok(acp)
     }
 
-    fn did_from_lean_case(value: &str, case: &LeanIdentityPermissionCase, field: &str) -> Did {
+    fn did_from_lean_case(value: &str, case: &decide::PermissionInput, field: &str) -> Did {
         Did::new(value).unwrap_or_else(|error| {
             panic!(
                 "case {:?}: {field} {:?} is not a valid DefraDB identity DID: {error}",
@@ -377,47 +396,35 @@ mod tests {
             gents_desktop_core::client::DesktopPaths::from_root(temp.path().join("operator"));
         paths.ensure_root_dirs().await?;
         let owner = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
-        let cases = lean_identity_permission_cases();
-        assert!(!cases.is_empty());
-
-        for case in cases {
-            if case.expected_actor_did.is_none() || case.expected_peer_did.is_none() {
-                continue;
-            }
+        for case in gents_lean_vocab::families::agent_identity_permission_decide::cases() {
+            let input = &case.input;
             let runtime_addr =
-                spawn_runtime_router(build_local_acp_from_lean_case(case).await?, &owner).await?;
+                spawn_runtime_router(build_local_acp_from_lean_case(input).await?, &owner).await?;
             let resource = format!(
                 "{IDENTITY_PERMISSION_POLICY_ID}/{IDENTITY_PERMISSION_RESOURCE_NAME}/{}",
-                case.row_owner
+                input.row_owner
             );
-
             let actor = post_identity_decide(
                 runtime_addr,
                 &owner,
-                case.expected_actor_did.as_deref().expect("resolved actor"),
-                &case.permission,
+                &input.requested_actor_did,
+                &input.permission,
                 &resource,
             )
             .await?;
             let peer = post_identity_decide(
                 runtime_addr,
                 &owner,
-                case.expected_peer_did.as_deref().expect("resolved peer"),
-                &case.permission,
+                &input.requested_peer_did,
+                &input.permission,
                 &resource,
             )
             .await?;
-
-            assert_eq!(
-                actor.allowed, case.expected_actor_allowed,
-                "case {:?}: /identity/decide actor decision drifted from Lean witness",
-                case.name
-            );
-            assert_eq!(
-                peer.allowed, case.expected_peer_allowed,
-                "case {:?}: /identity/decide peer decision drifted from Lean witness",
-                case.name
-            );
+            case.check(decide::DecisionOutput {
+                actor_allowed: actor.allowed,
+                peer_allowed: peer.allowed,
+                decisions_equal: actor.allowed == peer.allowed,
+            });
         }
 
         Ok(())

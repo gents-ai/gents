@@ -151,7 +151,7 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
         // Logical IDs are scoped by their Node: the same ID under another
         // Node names nothing here.
         let other = "did:key:zOtherNode";
-        let other_id = if *collection == Collection::Node {
+        let other_id = if collection.keyed_by_owner() {
             other
         } else {
             id

@@ -2,16 +2,14 @@
 //! `event_trigger_e2e.rs` uses `WebhookEvent` in the same process-global
 //! DefraDB schema registry.
 //!
-//! P2P carries only discovery and enrollment documents, so an application
-//! event source never reaches a peer's trigger; the single-node trigger path
-//! is covered by `event_source_trigger_e2e`.
+//! An application collection reaches a peer only through an application
+//! pairing (Lean `PairingReconcile.ApplicationRoute.no_overlay_is_base_only`);
+//! the single-node trigger path is covered by `event_source_trigger_e2e`.
 
 use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents_p2p::p2p_reconcile::{
-    EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError,
-};
+use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
@@ -91,15 +89,8 @@ async fn replicated_events(node: &std::sync::Arc<EmbeddedNode>) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn refuses_runtime_local(result: Result<(), RemoteP2pAdminError>) -> bool {
-    matches!(
-        result,
-        Err(RemoteP2pAdminError::RuntimeLocalCollection(ref name)) if name == "ReplicatedEvent"
-    )
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn p2p_refuses_to_replicate_an_application_event_source() {
+async fn an_unpaired_application_event_source_stays_local() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     let db_writer = test_p2p_db("event-trigger-p2p-writer").await;
     register_replicated_event_schema(&db_writer.node).await;
@@ -126,19 +117,6 @@ async fn p2p_refuses_to_replicate_an_application_event_source() {
             "an application collection must not be subscribed"
         );
     }
-    assert!(
-        refuses_runtime_local(
-            writer
-                .add_replicator(
-                    std::slice::from_ref(&agent_addr),
-                    &["ReplicatedEvent".to_owned()],
-                    &PairingFilters::default(),
-                )
-                .await
-        ),
-        "an application collection must not be replicated to a peer"
-    );
-
     let source_doc_id = write_replicated_event(&db_writer.node, EXTERNAL_ID, "signup").await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
     let mut changes = db_agent.node.subscribe_changes("ReplicatedEvent").await;

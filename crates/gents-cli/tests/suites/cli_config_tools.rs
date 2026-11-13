@@ -215,6 +215,8 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
             "set",
             "--file",
             tools_path.to_str().unwrap(),
+            "--allow-drop",
+            "host",
         ],
     )?;
 

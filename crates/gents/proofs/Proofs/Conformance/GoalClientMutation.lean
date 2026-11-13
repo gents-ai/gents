@@ -1,5 +1,6 @@
 import Proofs.Automation.GoalAutomation.ClientMutation
 import Proofs.Conformance.GoalClientControl
+import Proofs.Conformance.Family
 
 namespace Conformance.GoalClientMutationContracts
 
@@ -111,21 +112,6 @@ def stepJson : Step → String
         ",\"next_composite\":" ++ jsonString next ++
         ",\"commit\":" ++ (if commit then "true" else "false") ++ "}"
 
-def caseJson (c : Case) : String :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"initial\":" ++ stateJson initial ++
-    ",\"history\":" ++ jsonArray (c.history.map stepJson) ++
-    ",\"before\":" ++ stateJson c.before ++ ",\"command\":" ++ commandJson c.command ++
-    ",\"facts\":" ++ factsJson c.facts ++ ",\"now\":" ++ toString c.now ++
-    ",\"next_composite\":" ++ jsonString c.next ++
-    ",\"commit\":" ++ (if c.commit then "true" else "false") ++
-    ",\"expected\":" ++ stateJson c.after.1 ++ ",\"receipt\":" ++
-      (match c.after.2 with | none => "null" | some r => receiptJson r) ++
-    ",\"recovered\":" ++
-      (match recoverReceipt c.before c.command c.facts.commandIdentityUnique with
-       | none => "null" | some r => receiptJson r) ++ "}"
-
-def casesJson : String := jsonArray (cases.map caseJson)
-
 def localStep : Step → Step
   | .loseReceipts => .loseReceipts
   | .apply command facts now next commit =>
@@ -140,8 +126,51 @@ def localReceiptCases : List Case :=
         command := { c.command with hasPeer := false }
         facts := c.facts }
 
-def receiptCasesJson : String := jsonArray (localReceiptCases.map caseJson)
-
 example : localReceiptCases.length = 4 := by native_decide
+
+private def parsed (raw : String) : Lean.Json :=
+  match Lean.Json.parse raw with
+  | .ok value => value
+  | .error error => panic! error
+
+structure ReceiptInput where
+  name : String
+  initial : Lean.Json
+  history : Lean.Json
+  command : Lean.Json
+  facts : Lean.Json
+  now : Nat
+  nextComposite : String
+  commit : Bool
+  deriving Lean.ToJson
+
+structure ReceiptOutput where
+  before : Lean.Json
+  recovered : Option Lean.Json
+  receipt : Option Lean.Json
+  expected : Lean.Json
+  deriving Lean.ToJson
+
+/-- A served node replays one local client command after its history. Only
+local commands are built because the served fixture has no peer route, and
+the history is replayed in order on one session. -/
+@[conformance_family]
+def localReceipt : Family ReceiptInput ReceiptOutput where
+  inputs := localReceiptCases.map fun c =>
+    { name := c.name
+      initial := parsed (stateJson initial)
+      history := parsed (jsonArray (c.history.map stepJson))
+      command := parsed (commandJson c.command)
+      facts := parsed (factsJson c.facts)
+      now := c.now
+      nextComposite := c.next
+      commit := c.commit }
+  model := fun i =>
+    let c := (localReceiptCases.find? fun c => c.name == i.name).getD default
+    { before := parsed (stateJson c.before)
+      recovered := (recoverReceipt c.before c.command c.facts.commandIdentityUnique).map
+        fun r => parsed (receiptJson r)
+      receipt := c.after.2.map fun r => parsed (receiptJson r)
+      expected := parsed (stateJson c.after.1) }
 
 end Conformance.GoalClientMutationContracts

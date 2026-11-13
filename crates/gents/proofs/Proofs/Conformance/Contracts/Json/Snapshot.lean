@@ -131,7 +131,7 @@ import Proofs.Conformance.StorageWriteGateStreamWaiter
 import Proofs.Conformance.NativeCompletion
 import Proofs.Conformance.NativeClaimLifetime
 import Proofs.Conformance.UpdateHandoff
-import Proofs.Runtime.CanonicalOutput.Execution.AdmissionHandoffCases
+import Proofs.Conformance.AdmissionHandoff
 import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
@@ -151,12 +151,14 @@ import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
 import Proofs.Conformance.InferenceObservation
-import Proofs.Store.Identity.PublicationConformance
+import Proofs.Conformance.Identity.Publication
+import Proofs.Conformance.Identity.GoalLinks
 import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
+import Proofs.Conformance.Identity.AgentIdentity
+import Proofs.Conformance.Identity.SessionPublication
 import Proofs.Conformance.Identity.DelegatedFinality
-import Proofs.Store.Identity.OperationsConformance
 import Proofs.Conformance.Identity.EvalRecords
 import Proofs.Conformance.Identity.OptimizationPromotion
 import Proofs.Store.Identity.DirectoryPublication
@@ -270,6 +272,8 @@ import Proofs.Conformance.PromptAssemblyRepair
 import Proofs.Conformance.ProviderToolIdentity
 import Proofs.Conformance.ReasoningDeltas
 import Proofs.Conformance.AggregateBudget
+import Proofs.Conformance.StateMachines
+import Proofs.Conformance.HookPersistence
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.ContractCases.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
@@ -290,12 +294,12 @@ import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.Conformance.ClientLiveDelta
 import Proofs.Conformance.ApplyReconcile.ContractCases
-import Proofs.Conformance.Deviations
 import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Identity.Conformance
 import Proofs.Store.Identity.SessionChild
 import Proofs.Session.Request.RemoteDelivery
 import Proofs.Session.Request.CrossActorAuthorization
+import Proofs.Conformance.CrossActorAuthorization
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.TriggerDelivery
 import Proofs.Conformance.GoalOperatorResume
@@ -314,6 +318,9 @@ import Proofs.Conformance.GoalDeliveryInput
 import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.SchemaArgumentRepairFamily
+import Proofs.Conformance.ReasoningAudit
+import Proofs.Conformance.CanonicalOutputProjection
+import Proofs.Conformance.AuxiliaryOutput
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientDelivery
@@ -356,38 +363,19 @@ set_option maxHeartbeats 2000000 in
 checks grow with the family count past the default heartbeat budget. -/
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"compaction_canonical_projection_cases\":"
-      ++ compactionCanonicalProjectionCasesJson ++ ","
-    ++ "\"goal_link_cases\":"
-      ++ Identity.SessionChild.goalLinkCasesJson ++ ","
-    ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
-    ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""
-    ++ "\"trigger_delivery_callback_visibility_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryCallbackVisibilityCasesJson ++ ","
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
     ++ ",\"feature_surface_requirements\":"
       ++ featureSurfaceRequirementsJson
     ++ ",\"feature_matrix\":"
       ++ featureMatrixJson
-    ++ ",\"identity_permission_cases\":"
-      ++ Identity.Conformance.identityPermissionCasesJson
     ++ ",\"identity_household_cases\":"
       ++ Identity.Conformance.householdCasesJson
-    ++ ",\"identity_task_session_publication_cases\":"
-      ++ Identity.Conformance.taskSessionPublicationCasesJson
-    ++ ",\"identity_client_session_reservation_cases\":"
-      ++ Identity.Conformance.clientSessionReservationCasesJson
-    ++ ",\"identity_atomic_client_request_cases\":"
-      ++ Identity.SessionChild.atomicClientRequestCasesJson
-    ++ ",\"identity_derivation_cases\":"
-      ++ Identity.Conformance.derivationCasesJson
-    ++ ",\"identity_contracts\":"
-      ++ Identity.Conformance.identityContractsJson
     ++ "}"
 
 def snapshotJsonTail : String :=
@@ -396,124 +384,45 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"vocabularies\":"
-      ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
-    ++ "\"state_machines\":"
-      ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
-    ++ "\"tool_admission_handoff_cases\":"
-      ++ CanonicalOutput.Execution.AdmissionHandoff.Cases.casesJson ++ ","
     ++ "\"delegated_publication_cases\":"
       ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
 
 def snapshotGoalMutationCasesJson : String :=
   ""
-    ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
-    ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
-    ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
-    ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
-    ++ "\"goal_claimed_publication_cases\":"
-      ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
-    ++ "\"goal_operator_resume_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
-    ++ "\"goal_operator_resume_on_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
 
 def snapshotRequestCasesJson : String :=
   ""
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
-    ++ "\"session_input_edit_client_observation_cases\":"
-      ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
-    ++ "\"canonical_payload_presentation_cases\":"
-      ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
-    ++ "\"process_transition_cases\":"
-      ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
-    ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
-    ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
-    ++ "\"frontend_client_shell_case_count\":"
-      ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
-    ++ "\"frontend_client_shell_cases\":"
-      ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
 
 def snapshotIdentityCasesJson : String :=
   ""
-    ++ "\"identity_publication_cases\":"
-      ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"client_publication_protected_collection\":"
-      ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
-    ++ "\"identity_parent_publication_cases\":"
-      ++ Identity.PublicationConformance.parentCasesJson ++ ","
-    ++ "\"identity_readiness_preflight_cases\":"
-      ++ Identity.OperationsConformance.preflightCasesJson ++ ","
-    ++ "\"identity_pairing_partition_cases\":"
-      ++ Identity.OperationsConformance.pairingPartitionCasesJson ++ ","
-    ++ "\"identity_pairing_reader_cases\":"
-      ++ Identity.OperationsConformance.pairingReaderCasesJson ++ ","
-    ++ "\"identity_replica_grant_cases\":"
-      ++ Identity.OperationsConformance.replicaGrantCasesJson ++ ","
-    ++ "\"identity_enrollment_policy_cases\":"
-      ++ Identity.OperationsConformance.enrollmentPolicyCasesJson ++ ","
-    ++ "\"identity_readiness_recovery_cases\":"
-      ++ Identity.OperationsConformance.recoveryCasesJson ++ ","
-    ++ "\"identity_readiness_observation_cases\":"
-      ++ Identity.OperationsConformance.observationCasesJson ++ ","
-    ++ "\"identity_readiness_settled_cases\":"
-      ++ Identity.OperationsConformance.settledCasesJson ++ ","
 
 def snapshotClientCasesJson : String :=
   ""
-    ++ "\"client_data_publication_cases\":"
-      ++ Conformance.ClientDataPublication.casesJson ++ ","
-    ++ "\"client_request_closure_cases\":"
-      ++ Conformance.ClientRequestClosure.casesJson ++ ","
-    ++ "\"client_session_turn_cases\":"
-      ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
-    ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
-    ++ "\"runtime_reconcile_cases\":"
-      ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
 
 def snapshotRuntimeCasesJson : String :=
   ""
-    ++ "\"persistence_failure_policy_cases\":"
-      ++ jsonArray
-        (persistenceFailurePolicyCases.map persistenceFailurePolicyCaseJson) ++ ","
-    ++ "\"storage_observation_runtime_cases\":"
-      ++ jsonArray
-        (storageObservationRuntimeCases.map storageObservationRuntimeCaseJson) ++ ","
-    ++ "\"native_filesystem_boundary_cases\":"
-      ++ jsonArray
-        (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
     ++ "\"managed_exec_tool_boundary_cases\":"
       ++ jsonArray
         (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
-    ++ "\"managed_exec_liveness_cases\":"
-      ++ jsonArray
-        (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
     ++ "\"process_stop_cases\":"
       ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
-    ++ "\"deviations\":"
-      ++ deviationsJson ++ ","
-    ++ "\"request_progress_cases\":"
-      ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
-    ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=
   ""
-    ++ "\"queue_deadline_conformance_cases\":"
-      ++ jsonArray
-        (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
@@ -522,48 +431,17 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
-    ++ "\"composed_invariant_witnesses\":"
-      ++ jsonArray
-        (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
-    ++ "\"count_carrier_cases\":" ++ Conformance.CountCarrier.casesJson ++ ","
-    ++ "\"schema_argument_repair_cases\":"
-      ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
-    ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
-    ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
-    ++ "\"workspace_path_capability_cases\":"
-      ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
-    ++ "\"file_inventory_direct_reader_cases\":"
-      ++ Conformance.FileInventoryContracts.directReaderCasesJson ++ ","
-    ++ "\"file_inventory_fork_cases\":"
-      ++ Conformance.FileInventoryContracts.forkCasesJson ++ ","
-    ++ "\"file_inventory_source_projection_cases\":"
-      ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
-    ++ "\"file_inventory_reader_cases\":"
-      ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
-    ++ "\"file_review_subscription_cases\":"
-      ++ Conformance.FileReviewRouteContracts.subscriptionCasesJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
-    ++ "\"canonical_output_projection_cases\":"
-      ++ jsonArray
-        (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
-    ++ "\"reasoning_audit_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
-    ++ "\"reasoning_signature_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
-    ++ "\"auxiliary_output_cases\":" ++ jsonArray
-      (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
 
 
 def snapshotJson : String :=

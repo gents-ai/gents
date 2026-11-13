@@ -325,29 +325,6 @@ async fn protected_collections_are_refused_by_reads_and_discovery() {
 }
 
 #[tokio::test]
-async fn refuses_client_publication_reads_and_discovery() {
-    let node = seeded_node().await;
-    let tool = DefraQueryTool::new(node, CollectionScope::all());
-    let collection =
-        &gents_lean_vocab::lean_contract_snapshot().client_publication_protected_collection;
-    for fields in [vec!["payload".to_owned()], vec!["*".to_owned()]] {
-        let error = Tool::call(
-            &tool,
-            DefraQueryParams {
-                collection: collection.clone(),
-                filter: None,
-                fields,
-                limit: None,
-            }
-            .into(),
-        )
-        .await
-        .expect_err("client publication data is not agent-readable");
-        assert!(format!("{error:#}").contains("protected"));
-    }
-}
-
-#[tokio::test]
 async fn invalid_tool_call_created_at_suggests_started_and_completed_at() {
     let node = seeded_node().await;
     let tool = DefraQueryTool::new(node, CollectionScope::all());

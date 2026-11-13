@@ -1,13 +1,11 @@
 use crate::goal::{
     decide_goal_continuation, decide_model_goal_create, gate_goal_continuation,
-    goal_continuation_materialization_step, goal_creation_fingerprint, goal_submission_step,
-    next_goal_infrastructure_retries, observe_goal_agent_readiness, GoalAction,
-    GoalAgentObservation, GoalAgentReadiness, GoalAuditObservation, GoalContinuationAction,
-    GoalContinuationFacts, GoalContinuationPhase, GoalCreateDisposition, GoalCreateRequest,
-    GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
-    GoalRequestTerminal, GoalState, GoalSubmissionState,
+    goal_continuation_materialization_step, goal_submission_step, next_goal_infrastructure_retries,
+    observe_goal_agent_readiness, GoalAction, GoalAgentObservation, GoalAgentReadiness,
+    GoalAuditObservation, GoalContinuationAction, GoalContinuationFacts, GoalContinuationPhase,
+    GoalCreateDisposition, GoalCreateRequest, GoalCreationFingerprint, GoalDecision,
+    GoalFailureCause, GoalGatedDecision, GoalRequestTerminal, GoalState, GoalSubmissionState,
 };
-use gents_lean_vocab::{lean_goal_create_cases, lean_task_goal_publication_cases};
 use gents_protocol::goal_status::GoalStatus;
 
 #[test]
@@ -127,11 +125,20 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
     });
 }
 
+fn family_budget(budget: Option<&gents_lean_vocab::family::Json>) -> Option<i128> {
+    budget.map(|budget| {
+        budget
+            .0
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| budget.0.as_u64().map(i128::from))
+            .expect("a modeled token budget is an integer")
+    })
+}
+
 #[test]
 fn generated_goal_create_cases_fence_authority_and_idempotency() {
-    let cases = lean_goal_create_cases();
-    assert_eq!(cases.len(), 16, "the durable-goal creation matrix drifted");
-    for case in cases {
+    gents_lean_vocab::families::contracts_goal_create::replay::<GoalCreateDisposition>(|case| {
         let request = GoalCreateRequest {
             caller: case.caller.clone(),
             current_session: case.current_session.clone(),
@@ -139,86 +146,34 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
             requested_session: case.requested_session.clone(),
             objective: case.objective.clone(),
             objective_nonempty: case.objective_nonempty,
-            token_budget: case.token_budget,
+            token_budget: family_budget(case.token_budget.as_ref()),
             goal_tools: case.goal_tools,
             goal_create: case.goal_create,
         };
-        let matching = goal_creation_fingerprint(&request);
-        let conflicting = GoalCreationFingerprint {
-            owner: request.caller.clone(),
-            session: request.current_session.clone(),
-            objective: format!("{}-conflict", request.objective),
-            token_budget: request.token_budget,
-        };
-        let existing = case.existing.then_some(if case.existing_matches {
-            &matching
-        } else {
-            &conflicting
-        });
-        let actual = decide_model_goal_create(&request, existing);
-        let expected = match case.expected.as_str() {
-            "denied" => GoalCreateDisposition::Denied,
-            "invalid" => GoalCreateDisposition::Invalid,
-            "fresh" => GoalCreateDisposition::Fresh,
-            "idempotent" => GoalCreateDisposition::Idempotent,
-            "conflict" => GoalCreateDisposition::Conflict,
-            other => panic!(
-                "unknown create disposition {other:?} in Lean case {}",
-                case.name
-            ),
-        };
-        assert_eq!(actual, expected, "Lean case {}", case.name);
-    }
+        let existing = case
+            .existing_fingerprint
+            .as_ref()
+            .map(|existing| GoalCreationFingerprint {
+                owner: existing.owner.clone(),
+                session: existing.session.clone(),
+                objective: existing.objective.clone(),
+                token_budget: family_budget(existing.token_budget.as_ref()),
+            });
+        decide_model_goal_create(&request, existing.as_ref())
+    });
 }
 
 #[test]
-fn generated_task_goal_cases_fence_declaration_and_identity() {
-    let cases = lean_task_goal_publication_cases();
-    assert_eq!(cases.len(), 11, "the Task goal publication matrix drifted");
-    for case in cases {
-        let declaration_valid = match case.goal_token_budget {
-            Some(budget) => i64::try_from(budget).is_ok_and(|budget| {
-                gents_documents::task_goal_declaration::validate_task_goal_declaration(
-                    case.goal_objective.as_deref(),
-                    Some(budget),
-                )
-                .is_ok()
-            }),
-            None => gents_documents::task_goal_declaration::validate_task_goal_declaration(
-                case.goal_objective.as_deref(),
-                None,
-            )
-            .is_ok(),
-        };
-        assert_eq!(
-            declaration_valid, case.declaration_valid,
-            "Lean case {} disagrees with the production declaration validator",
-            case.name
-        );
-
-        if declaration_valid && case.goal_objective.is_some() {
-            let identity =
-                crate::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
-            assert_eq!(
-                case.expected_session_id.as_deref(),
-                Some(identity.session_id.as_str()),
-                "Lean case {} session identity",
-                case.name
-            );
-            assert_eq!(
-                case.expected_request_id.as_deref(),
-                Some(identity.request_id.as_str()),
-                "Lean case {} request identity",
-                case.name
-            );
-            assert_eq!(
-                case.expected_retry_key.as_deref(),
-                Some(identity.retry_key.as_str()),
-                "Lean case {} retry identity",
-                case.name
-            );
+fn generated_task_goal_cases_fence_fire_identity() {
+    gents_lean_vocab::families::contracts_task_goal_publication_identity::replay(|case| {
+        let identity =
+            crate::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
+        gents_lean_vocab::families::contracts_task_goal_publication_identity::TaskGoalPublicationIdentity {
+            session_id: Some(identity.session_id),
+            request_id: Some(identity.request_id),
+            retry_key: Some(identity.retry_key),
         }
-    }
+    });
 }
 
 #[test]

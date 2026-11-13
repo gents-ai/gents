@@ -54,55 +54,11 @@ impl Drop for ReleaseSignerOnDrop {
     }
 }
 
-async fn model_case(name: &str) -> gents_lean_vocab::LeanNativeClaimLifetimeCase {
-    let cases = tokio::task::spawn_blocking(|| {
-        &gents_lean_vocab::lean_contract_snapshot().native_claim_lifetime_cases
-    })
-    .await
-    .expect("Lean snapshot load");
-    cases
-        .iter()
-        .find(|case| case.name == name)
-        .cloned()
-        .unwrap_or_else(|| panic!("generated native claim-lifetime case {name}"))
-}
-
-fn model_observation<'a>(
-    case: &'a gents_lean_vocab::LeanNativeClaimLifetimeCase,
-    event: &str,
-    occurrence: usize,
-) -> &'a gents_lean_vocab::LeanNativeClaimLifetimeCaseObservationsItem {
-    let index = case
-        .events
-        .iter()
-        .enumerate()
-        .filter(|(_, candidate)| candidate.as_str() == event)
-        .nth(occurrence)
-        .map(|(index, _)| index)
-        .unwrap_or_else(|| panic!("Lean fixture is missing {event} occurrence {occurrence}"));
-    &case.observations[index]
-}
-
-fn assert_observation(
-    case: &gents_lean_vocab::LeanNativeClaimLifetimeCase,
-    expected: &gents_lean_vocab::LeanNativeClaimLifetimeCaseObservationsItem,
-    home: &std::path::Path,
-    data: &std::path::Path,
-    node: &EmbeddedNode,
-) {
+fn observe(home: &std::path::Path, data: &std::path::Path, node: &EmbeddedNode) -> (bool, bool) {
     let claim_held = crate::local::home::lock_store(home, data).is_err();
     let gate = mutation_write_gate(node);
     let mutation_gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
-    assert_eq!(
-        claim_held, expected.claim_held,
-        "{} store-claim state",
-        case.name
-    );
-    assert_eq!(
-        mutation_gate_held, expected.mutation_gate_held,
-        "{} mutation-gate state",
-        case.name
-    );
+    (claim_held, mutation_gate_held)
 }
 
 async fn signed_claimed_access(
@@ -215,16 +171,8 @@ async fn run_paused_owned_schema(
     .await
 }
 
-#[tokio::test]
-async fn lean_claimed_access_retains_real_store_lock_after_cancelled_signed_write() {
-    let case = model_case("auto_commit_cancel_retains_claim").await;
-    assert_eq!(case.events.len(), case.observations.len());
-    assert_eq!(case.events[1], "caller_cancelled");
-    assert_eq!(case.events[2], "access_released");
-    assert_eq!(case.events[3], "gate_release_requested");
-    assert_eq!(case.events[4], "native_returned");
-    assert_eq!(case.events[5], "gate_release_requested");
-
+async fn auto_commit_cancel() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -244,51 +192,24 @@ async fn lean_claimed_access_retains_real_store_lock_after_cancelled_signed_writ
         .await
         .expect("actual DefraDB signed write reaches the blocking signer");
 
-    assert_observation(
-        &case,
-        model_observation(&case, "native_started", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     writer.abort();
     assert!(writer.await.unwrap_err().is_cancelled());
 
-    assert_observation(
-        &case,
-        model_observation(&case, "caller_cancelled", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
 
     drop(access);
-    assert_observation(
-        &case,
-        model_observation(&case, "access_released", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "gate_release_requested", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
 
     signer.release();
-    let final_observation = model_observation(&case, "gate_release_requested", 1);
-    assert!(!final_observation.claim_held);
-    assert!(!final_observation.mutation_gate_held);
     let reacquired = shutdown_then_reacquire_store_lock(node, &home, &data).await;
     drop(reacquired);
+    observed
 }
 
-#[tokio::test]
-async fn lean_claimed_read_owner_retains_store_lock_after_caller_timeout() {
-    let case = model_case("claimed_read_timeout_retains_claim").await;
+async fn claimed_read_timeout() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -304,13 +225,7 @@ async fn lean_claimed_read_owner_retains_store_lock_after_caller_timeout() {
     tokio::time::timeout(Duration::from_secs(10), reached.notified())
         .await
         .expect("claimed read owner reaches its finite dispatch pause");
-    assert_observation(
-        &case,
-        model_observation(&case, "native_started", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     tokio::time::pause();
     tokio::time::advance(Duration::from_millis(50)).await;
     assert!(
@@ -318,33 +233,12 @@ async fn lean_claimed_read_owner_retains_store_lock_after_caller_timeout() {
         "caller timeout must be observed"
     );
     tokio::time::resume();
-    assert_observation(
-        &case,
-        model_observation(&case, "caller_timed_out", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     drop(access);
-    assert_observation(
-        &case,
-        model_observation(&case, "access_released", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "gate_release_requested", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
 
     release.notify_one();
-    let final_observation = model_observation(&case, "gate_release_requested", 1);
-    assert!(!final_observation.claim_held);
-    assert!(!final_observation.mutation_gate_held);
     let response = ConfigAccess::local(Arc::clone(&node))
         .execute("{ NativeClaimLifetimeProbe { value } }")
         .await
@@ -352,11 +246,11 @@ async fn lean_claimed_read_owner_retains_store_lock_after_caller_timeout() {
     assert!(response.get("errors").is_none() || response["errors"].is_null());
     let reacquired = shutdown_then_reacquire_store_lock(node, &home, &data).await;
     drop(reacquired);
+    observed
 }
 
-#[tokio::test]
-async fn lean_claimed_schema_owner_retains_store_lock_after_caller_timeout() {
-    let case = model_case("schema_future_timeout_retains_claim_until_return").await;
+async fn claimed_schema_timeout() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -380,13 +274,7 @@ async fn lean_claimed_schema_owner_retains_store_lock_after_caller_timeout() {
     tokio::time::timeout(Duration::from_secs(10), reached.notified())
         .await
         .expect("claimed schema owner reaches its finite dispatch pause");
-    assert_observation(
-        &case,
-        model_observation(&case, "native_started", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     tokio::time::pause();
     tokio::time::advance(Duration::from_millis(50)).await;
     assert!(
@@ -394,36 +282,15 @@ async fn lean_claimed_schema_owner_retains_store_lock_after_caller_timeout() {
         "caller timeout must be observed"
     );
     tokio::time::resume();
-    assert_observation(
-        &case,
-        model_observation(&case, "caller_timed_out", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     drop(access);
-    assert_observation(
-        &case,
-        model_observation(&case, "access_released", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "gate_release_requested", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
 
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(10), completed.notified())
         .await
         .expect("owned native schema operation returns before querying its schema");
-    let final_observation = model_observation(&case, "gate_release_requested", 1);
-    assert!(!final_observation.claim_held);
-    assert!(!final_observation.mutation_gate_held);
     let response = ConfigAccess::local(Arc::clone(&node))
         .execute("{ NativeClaimLifetimeSchemaProbe { value } }")
         .await
@@ -431,11 +298,11 @@ async fn lean_claimed_schema_owner_retains_store_lock_after_caller_timeout() {
     assert!(response.get("errors").is_none() || response["errors"].is_null());
     let reacquired = shutdown_then_reacquire_store_lock(node, &home, &data).await;
     drop(reacquired);
+    observed
 }
 
-#[tokio::test]
-async fn lean_readonly_transaction_retains_claim_until_native_cleanup_returns() {
-    let case = model_case("readonly_transaction_cleanup_retains_claim").await;
+async fn readonly_transaction_cleanup() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -462,13 +329,7 @@ async fn lean_readonly_transaction_retains_claim_until_native_cleanup_returns() 
     tokio::time::timeout(Duration::from_secs(10), reached.notified())
         .await
         .expect("read-only native query owner reaches its finite pause");
-    assert_observation(
-        &case,
-        model_observation(&case, "native_started", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     tokio::time::pause();
     tokio::time::advance(super::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT + Duration::from_secs(1))
         .await;
@@ -478,47 +339,20 @@ async fn lean_readonly_transaction_retains_claim_until_native_cleanup_returns() 
     assert!(crate::config_client::is_transaction_step_unavailable(
         &error
     ));
-    assert_observation(
-        &case,
-        model_observation(&case, "caller_timed_out", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "transaction_dropped", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
     drop(access);
-    assert_observation(
-        &case,
-        model_observation(&case, "access_released", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "gate_release_requested", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
 
     release.notify_one();
-    let final_observation = model_observation(&case, "gate_release_requested", 1);
-    assert!(!final_observation.claim_held);
-    assert!(!final_observation.mutation_gate_held);
     let reacquired = shutdown_then_reacquire_store_lock(node, &home, &data).await;
     drop(reacquired);
+    observed
 }
 
-#[tokio::test]
-async fn lean_mutation_transaction_cleanup_retains_claim_around_real_signed_worker() {
-    let case = model_case("mutation_transaction_cleanup_retains_claim").await;
+async fn mutation_transaction_cleanup() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -539,13 +373,7 @@ async fn lean_mutation_transaction_cleanup_retains_claim_around_real_signed_work
     tokio::time::timeout(Duration::from_secs(10), signer.entered.notified())
         .await
         .expect("actual DefraDB transaction statement reaches the blocking signer");
-    assert_observation(
-        &case,
-        model_observation(&case, "native_started", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     tokio::time::pause();
     tokio::time::advance(super::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT + Duration::from_secs(1))
         .await;
@@ -555,47 +383,20 @@ async fn lean_mutation_transaction_cleanup_retains_claim_around_real_signed_work
     assert!(crate::config_client::is_transaction_step_unavailable(
         &error
     ));
-    assert_observation(
-        &case,
-        model_observation(&case, "caller_timed_out", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "transaction_dropped", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
     drop(access);
-    assert_observation(
-        &case,
-        model_observation(&case, "access_released", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "gate_release_requested", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
 
     signer.release();
-    let final_observation = model_observation(&case, "gate_release_requested", 1);
-    assert!(!final_observation.claim_held);
-    assert!(!final_observation.mutation_gate_held);
     let reacquired = shutdown_then_reacquire_store_lock(node, &home, &data).await;
     drop(reacquired);
+    observed
 }
 
-#[tokio::test]
-async fn lean_renewal_transaction_retains_claim_without_mutation_gate() {
-    let case = model_case("periodic_renewal_retains_claim_without_mutex").await;
+async fn renewal_transaction() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -620,13 +421,7 @@ async fn lean_renewal_transaction_retains_claim_without_mutation_gate() {
     tokio::time::timeout(Duration::from_secs(10), reached.notified())
         .await
         .expect("renewal native operation reaches its finite pause");
-    assert_observation(
-        &case,
-        model_observation(&case, "native_started", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     tokio::time::pause();
     tokio::time::advance(super::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT + Duration::from_secs(1))
         .await;
@@ -636,51 +431,19 @@ async fn lean_renewal_transaction_retains_claim_without_mutation_gate() {
     assert!(crate::config_client::is_transaction_step_unavailable(
         &error
     ));
-    assert_observation(
-        &case,
-        model_observation(&case, "caller_timed_out", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "renewal_attempt_returned", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "renewal_requested", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
     drop(access);
-    assert_observation(
-        &case,
-        model_observation(&case, "access_released", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert!(!model_observation(&case, "native_started", 0).mutation_gate_held);
+    observed.push(observe(&home, &data, &node));
     release.notify_one();
-    let final_observation = model_observation(&case, "renewal_requested", 0);
-    assert!(final_observation.claim_held);
-    assert!(final_observation.transaction_owner_alive);
-    let cleanup_observation = model_observation(&case, "rollback_returned", 0);
-    assert!(!cleanup_observation.claim_held);
-    assert!(cleanup_observation.rollback_returned);
-    assert!(!cleanup_observation.cleanup_pending);
     let reacquired = shutdown_then_reacquire_store_lock(node, &home, &data).await;
     drop(reacquired);
+    observed
 }
 
-#[tokio::test]
-async fn lean_committed_readonly_transaction_leaves_claim_with_live_access() {
-    let case = model_case("committed_transaction_keeps_live_access_claim").await;
+async fn committed_readonly_transaction() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -695,26 +458,16 @@ async fn lean_committed_readonly_transaction_leaves_claim_with_live_access() {
         })
         .await
         .unwrap();
-    let committed = model_observation(&case, "transaction_committed", 0);
-    assert_observation(&case, committed, &home, &data, &node);
-    assert_observation(
-        &case,
-        model_observation(&case, "gate_release_requested", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
     drop(access);
-    let released = model_observation(&case, "access_released", 0);
-    assert!(!released.claim_held);
-    assert!(!released.mutation_gate_held);
     let reacquired = shutdown_then_reacquire_store_lock(node, &home, &data).await;
     drop(reacquired);
+    observed
 }
 
-#[tokio::test]
-async fn poisoned_transaction_drop_from_std_thread_keeps_claim_until_native_cleanup() {
-    let case = model_case("mutation_transaction_cleanup_retains_claim").await;
+async fn poisoned_transaction_thread_drop() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let data = temp.path().join("data");
@@ -752,48 +505,77 @@ async fn poisoned_transaction_drop_from_std_thread_keeps_claim_until_native_clea
         tokio::time::resume();
     }
 
-    assert_observation(
-        &case,
-        model_observation(&case, "caller_timed_out", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     std::thread::spawn(move || drop(txn))
         .join()
         .expect("dropping the poisoned transaction from an OS thread");
     drop(access);
-    assert_observation(
-        &case,
-        model_observation(&case, "access_released", 0),
-        &home,
-        &data,
-        &node,
-    );
-    assert_observation(
-        &case,
-        model_observation(&case, "gate_release_requested", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
+    observed.push(observe(&home, &data, &node));
 
     signer.release();
     tokio::time::timeout(Duration::from_secs(10), cleanup_pause.started.notified())
         .await
         .expect("rollback owner waits for native completion before cleanup");
-    assert_observation(
-        &case,
-        model_observation(&case, "native_returned", 0),
-        &home,
-        &data,
-        &node,
-    );
+    observed.push(observe(&home, &data, &node));
     cleanup_pause.release.notify_one();
 
-    let final_observation = model_observation(&case, "gate_release_requested", 1);
-    assert!(!final_observation.claim_held);
-    assert!(!final_observation.mutation_gate_held);
     let reacquired = shutdown_then_reacquire_store_lock(node, &home, &data).await;
     drop(reacquired);
+    observed
+}
+
+#[tokio::test]
+async fn claimed_store_owners_follow_the_lean_claim_lifetime() {
+    for case in
+        gents_lean_vocab::families::native_claim_lifetime_store_scenario::cases::<String, String>()
+    {
+        let observed = match case.input.lane.as_str() {
+            "auto_commit_write" => auto_commit_cancel().await,
+            "claimed_read" => claimed_read_timeout().await,
+            "claimed_schema" => claimed_schema_timeout().await,
+            "read_only_transaction"
+                if case
+                    .input
+                    .events
+                    .contains(&"transaction_committed".to_string()) =>
+            {
+                committed_readonly_transaction().await
+            }
+            "read_only_transaction" => readonly_transaction_cleanup().await,
+            "mutation_transaction" => mutation_transaction_cleanup().await,
+            "periodic_renewal" => renewal_transaction().await,
+            other => panic!("{}: no store scenario drives lane {other}", case.input.name),
+        };
+        case.check(
+            observed
+                .into_iter()
+                .map(|(claim_held, mutation_gate_held)| {
+                    gents_lean_vocab::families::native_claim_lifetime_store_scenario::StoreView {
+                        claim_held,
+                        mutation_gate_held,
+                    }
+                })
+                .collect(),
+        );
+    }
+}
+
+#[tokio::test]
+async fn poisoned_transaction_dropped_from_a_thread_follows_the_lean_claim_lifetime() {
+    for case in gents_lean_vocab::families::native_claim_lifetime_thread_drop_scenario::cases::<
+        String,
+        String,
+    >() {
+        let observed = poisoned_transaction_thread_drop().await;
+        case.check(
+            observed
+                .into_iter()
+                .map(|(claim_held, mutation_gate_held)| gents_lean_vocab::families::native_claim_lifetime_thread_drop_scenario::StoreView {
+                    claim_held,
+                    mutation_gate_held,
+                })
+                .collect(),
+        );
+    }
 }
