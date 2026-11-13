@@ -2,7 +2,6 @@ use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::types::{SessionSummary, TriggerView};
-use gents_lean_vocab::lean_trigger_dispatch_cases;
 
 fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({
@@ -374,61 +373,30 @@ fn task_histories_keep_eight_latest_rows_per_task_without_foreign_or_duplicate_t
 
 #[test]
 fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_cases() {
-    let cases = lean_trigger_dispatch_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean trigger dispatch contract should emit recent-runs cases"
-    );
-
-    let fired_task_cases = cases
-        .iter()
-        .filter(|case| {
-            case.expected_result == "fired"
-                && matches!(
-                    case.expected_request_caused_by_kind.as_deref(),
-                    Some("schedule" | "event")
-                )
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        fired_task_cases
-            .iter()
-            .any(|case| case.expected_request_caused_by_kind.as_deref() == Some("schedule")),
-        "Lean trigger dispatch contract must include a fired schedule lineage case"
-    );
-    assert!(
-        fired_task_cases
-            .iter()
-            .any(|case| case.expected_request_caused_by_kind.as_deref() == Some("event")),
-        "Lean trigger dispatch contract must include a fired event lineage case"
-    );
-
-    for (index, case) in fired_task_cases.into_iter().enumerate() {
-        let task_id = format!("contract-task-{}", case.name);
+    for (index, case) in
+        gents_lean_vocab::families::trigger_contracts_recent_run::cases::<String, String, String>()
+            .into_iter()
+            .enumerate()
+    {
+        let input = &case.input;
+        let task_id = format!("contract-task-{}", input.name);
         let request_id = format!("contract-req-{index}");
         let created_at = format!("2026-04-21T12:{index:02}:00Z");
-        let trigger_id = case
-            .expected_request_caused_by_id
+        let trigger_id = input
+            .trigger_id
             .as_deref()
-            .expect("fired schedule/event cases carry a trigger id");
-        let trigger_kind = case
-            .expected_request_caused_by_kind
-            .as_deref()
-            .expect("fired schedule/event cases carry a trigger kind");
-
-        assert_eq!(
-            case.expected_materialize_trigger_id.as_deref(),
-            Some(trigger_id),
-            "case {} materialized trigger id should feed recent-runs lineage",
-            case.name
-        );
-        assert_eq!(
-            case.expected_materialize_trigger_kind.as_deref(),
-            Some(trigger_kind),
-            "case {} materialized trigger kind should feed recent-runs lineage",
-            case.name
-        );
+            .expect("schedule and event dispatches carry a trigger id");
+        let kind = match input.trigger_kind.as_str() {
+            "schedule" => gents_documents::task_delivery::TriggerKind::Schedule,
+            "event" => gents_documents::task_delivery::TriggerKind::Event,
+            other => panic!(
+                "case {} is not a trigger-caused dispatch: {other}",
+                input.name
+            ),
+        };
+        let trigger_kind = kind.as_str();
+        let execution_origin =
+            gents_automation::triggers::engine::production_materializer::execution_origin_for_trigger_kind(kind);
 
         let source = if trigger_kind == "schedule" {
             serde_json::json!({"kind":"schedule","schedule_id":"schedule"})
@@ -438,7 +406,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
         let triggers = vec![TriggerView {
             config: serde_json::from_value(serde_json::json!({
                 "node_did":"did:test:contract-node", "trigger_id": trigger_id,
-                "task_id": task_id, "source":source, "concurrency":case.concurrency
+                "task_id": task_id, "source":source, "concurrency":input.concurrency
             }))
             .unwrap(),
             next_run_at: None,
@@ -463,7 +431,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 max_total_tokens: None,
                 lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
-                execution_origin: case.expected_execution_origin.clone(),
+                execution_origin: Some(execution_origin.as_str().to_owned()),
                 failure_reason: None,
                 terminalized_at: None,
                 terminal_redrive_attempts: None,
@@ -493,36 +461,36 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
         assert_eq!(
             recent_runs.total_fires, 1,
             "case {} should project one recent fire",
-            case.name
+            input.name
         );
         assert_eq!(
             recent_runs.last_attempt_at.as_deref(),
             Some(created_at.as_str()),
             "case {} should surface the trigger bookkeeping timestamp",
-            case.name
+            input.name
         );
         assert_eq!(
             recent_runs.last_status.as_deref(),
             Some("completed"),
             "case {} should surface the latest attempt's status",
-            case.name
+            input.name
         );
         assert!(
             recent_runs.last_error.is_none(),
             "case {} must not invent an error for a clean latest attempt",
-            case.name
+            input.name
         );
         assert_eq!(
             recent_runs.schedule_count,
             usize::from(trigger_kind == "schedule"),
             "case {} schedule count drifted",
-            case.name
+            input.name
         );
         assert_eq!(
             recent_runs.event_count,
             usize::from(trigger_kind == "event"),
             "case {} event trigger count drifted",
-            case.name
+            input.name
         );
 
         let histories = task_run_histories(&store, "did:test:contract-node", &triggers);
@@ -531,17 +499,16 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             run_history.len(),
             1,
             "case {} should project one recent-runs history row",
-            case.name
+            input.name
         );
         let run = &run_history[0];
         assert_eq!(run.request_id, request_id);
-        assert_eq!(run.caused_by_trigger_id.as_deref(), Some(trigger_id));
-        assert_eq!(run.caused_by_trigger_kind.as_deref(), Some(trigger_kind));
-        assert_eq!(
-            run.execution_origin.as_deref(),
-            case.expected_execution_origin.as_deref(),
-            "case {} should preserve Lean trigger execution origin",
-            case.name
+        case.check(
+            gents_lean_vocab::families::trigger_contracts_recent_run::RecentRunOutput {
+                request_caused_by_id: run.caused_by_trigger_id.clone(),
+                request_caused_by_kind: run.caused_by_trigger_kind.clone(),
+                execution_origin: run.execution_origin.clone(),
+            },
         );
     }
 }

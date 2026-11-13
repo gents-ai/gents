@@ -717,10 +717,6 @@ pub fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
     &lean_contract_snapshot().transcript_conformance_cases
 }
 
-pub fn lean_trigger_dispatch_cases() -> &'static [LeanTriggerDispatchCase] {
-    &lean_contract_snapshot().trigger_dispatch_cases
-}
-
 pub fn lean_workspace_binding_cases() -> &'static [LeanWorkspaceBindingCase] {
     &lean_contract_snapshot().workspace_binding_cases
 }
@@ -3055,7 +3051,6 @@ pub struct LeanContractSnapshot {
     pub request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
     pub request_execution_lease_observed_cases: Vec<LeanRequestExecutionObservedCase>,
     pub request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
-    pub trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
     pub event_group_clock_case_count: usize,
     pub event_group_clock_cases: Vec<serde_json::Value>,
     pub event_group_capture_case_count: usize,
@@ -11876,31 +11871,6 @@ pub struct LeanTranscriptCase {
 pub struct LeanTransitionPair {
     pub from: String,
     pub to: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanTriggerDispatchCase {
-    pub name: String,
-    pub trigger_id: Option<String>,
-    pub trigger_kind: String,
-    pub concurrency: String,
-    pub active_schedule_ids: Vec<String>,
-    pub active_event_trigger_ids: Vec<String>,
-    pub intent_task_id: String,
-    pub selected_task_id: Option<String>,
-    pub prior_nonterminal_keys: Vec<String>,
-    pub expected_result: String,
-    pub expected_skip_reason: Option<String>,
-    pub expected_materialize_trigger_id: Option<String>,
-    pub expected_materialize_trigger_kind: Option<String>,
-    pub expected_request_caused_by_id: Option<String>,
-    pub expected_request_caused_by_kind: Option<String>,
-    pub expected_execution_origin: Option<String>,
-    pub expected_supersede_call_keys: Vec<String>,
-    pub superseded_prior_ids: Vec<String>,
-    pub target_nonterminal_count_after: Option<usize>,
-    pub request_count_before: usize,
-    pub request_count_after: usize,
 }
 
 #[derive(Debug, Deserialize)]

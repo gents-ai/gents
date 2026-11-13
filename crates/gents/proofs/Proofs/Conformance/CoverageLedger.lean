@@ -615,17 +615,17 @@ def caseCoverage : List CoverageEntry :=
       "Triggers.Durable.Outcomes")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "trigger_dispatch_cases"
-      "TriggerDispatch"
+      "family"
+      "trigger_contracts_engine_dispatch"
       "Dispatch decisions exercise the production engine. Existing materializer tests cover correlation scope, retry exclusion and live-execution supersession. Cross-node isolation and expired-claim deadline/grace cases still need direct materializer observations. A booted schedule-kind error-writeback observation is also outstanding.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_dispatch_cases"
-      "TriggerDispatch")
+      "family"
+      "trigger_contracts_manual_run")
       "triggers" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "trigger_dispatch_cases"
-      "TriggerDispatch")
+      "family"
+      "trigger_contracts_recent_run")
       "triggers" [Surface.operatorUi]
   , tagged (consumerCoverage
       "goal_decision_cases"

@@ -15,50 +15,34 @@ pub(super) async fn event_group_eligibility_matches_lean_generated_contract_case
 }
 
 pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
-    let cases = lean_trigger_dispatch_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean trigger dispatch contract should emit at least one case"
-    );
-
-    for case in cases {
-        let trigger_kind = trigger_kind_from_lean(&case.trigger_kind);
-        let concurrency = concurrency_from_lean(&case.concurrency);
-        let task = spy_resolved_task(&format!("lean case {}", case.name));
-        let snapshot = snapshot_from_trigger_contract(case, &task, concurrency);
+    for case in gents_lean_vocab::families::trigger_contracts_engine_dispatch::cases::<
+        String,
+        String,
+        String,
+    >() {
+        let input = &case.input;
+        let trigger_kind = trigger_kind_from_lean(&input.trigger_kind);
+        let concurrency = concurrency_from_lean(&input.concurrency);
+        let task = spy_resolved_task(&format!("lean case {}", input.name));
+        let snapshot = snapshot_from_trigger_contract(
+            &input.active_schedule_ids,
+            &input.active_event_trigger_ids,
+            &task,
+            concurrency,
+        );
         let (_tx, rx) = watch::channel(snapshot);
         let materializer = SpyMaterializer::new();
         materializer.track_materialized_nonterminal();
-        let target_key = case.trigger_id.as_ref();
-        let expects_target_supersede =
-            target_key.is_some_and(|id| case.expected_supersede_call_keys.contains(id));
-        let mut superseded_prior_ids = case.superseded_prior_ids.iter();
-        for key in &case.prior_nonterminal_keys {
-            let prior_trigger_id = key;
-            if target_key == Some(prior_trigger_id) {
-                if let Some(request_id) = superseded_prior_ids.next() {
-                    materializer.mark_nonterminal_request(
-                        prior_trigger_id,
-                        trigger_kind,
-                        request_id.clone(),
-                    );
-                } else {
-                    assert!(
-                        !expects_target_supersede,
-                        "Lean case {} emitted fewer superseded_prior_ids than prior target keys",
-                        case.name
-                    );
-                    materializer.mark_nonterminal(prior_trigger_id, trigger_kind);
-                }
-            } else {
-                materializer.mark_nonterminal(prior_trigger_id, trigger_kind);
+        for prior in &input.prior_requests {
+            if let (Some(prior_trigger_id), false) = (prior.caused_by.as_deref(), prior.is_terminal)
+            {
+                materializer.mark_nonterminal_request(
+                    prior_trigger_id,
+                    trigger_kind,
+                    prior.id.clone(),
+                );
             }
         }
-        assert!(
-            superseded_prior_ids.next().is_none(),
-            "Lean case {} emitted superseded_prior_ids that were not backed by prior target keys",
-            case.name
-        );
         let engine = TriggerEngine::new(rx, materializer.clone());
         let event_vars = if matches!(trigger_kind, TriggerKind::Event) {
             serde_json::json!({"source_doc_id": "lean-event-source-doc"})
@@ -67,7 +51,7 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
         };
 
         let intent = FireIntent {
-            trigger_id: case.trigger_id.clone(),
+            trigger_id: input.trigger_id.clone(),
             trigger_kind,
             task,
             concurrency,
@@ -83,48 +67,15 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
             on_result: Box::new(|_| {}),
         };
 
-        let result = engine.dispatch(intent).await;
-        let expected_delta = case
-            .request_count_after
-            .checked_sub(case.request_count_before)
-            .unwrap_or_else(|| panic!("Lean case {} shrank request count", case.name));
-
-        match (case.expected_result.as_str(), result) {
-            ("fired", FireResult::Fired { .. }) => {}
-            ("skipped", FireResult::Skipped { reason }) => assert_eq!(
-                Some(reason.as_str()),
-                case.expected_skip_reason.as_deref(),
-                "Lean case {} skip reason drifted",
-                case.name
-            ),
-            (expected, other) => panic!(
-                "Lean case {} expected {expected}, but TriggerEngine returned {other:?}",
-                case.name
-            ),
-        }
+        let (result, skip_reason) = match engine.dispatch(intent).await {
+            FireResult::Fired { .. } => ("fired".to_owned(), None),
+            FireResult::Skipped { reason } => ("skipped".to_owned(), Some(reason)),
+            other => (format!("{other:?}"), None),
+        };
 
         let calls = materializer.calls();
-        assert_eq!(
-            calls.len(),
-            expected_delta,
-            "Lean case {} materialize delta drifted",
-            case.name
-        );
-        if expected_delta == 1 {
-            let (trigger_id, kind, rendered) = &calls[0];
-            assert_eq!(
-                trigger_id.as_deref(),
-                case.expected_materialize_trigger_id.as_deref(),
-                "Lean case {} materialize trigger_id drifted",
-                case.name
-            );
-            assert_eq!(
-                kind.as_str(),
-                case.expected_materialize_trigger_kind.as_deref().unwrap(),
-                "Lean case {} materialize trigger_kind drifted",
-                case.name
-            );
-            let body = format!("lean case {}", case.name);
+        let materialized = calls.first().map(|(trigger_id, kind, rendered)| {
+            let body = format!("lean case {}", input.name);
             let prompt_matches = match kind {
                 TriggerKind::Manual => *rendered == body,
                 kind => {
@@ -142,70 +93,47 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
             assert!(
                 prompt_matches,
                 "Lean case {} rendered prompt drifted: {rendered}",
-                case.name
+                input.name
             );
-            assert_eq!(
-                case.expected_execution_origin.as_deref(),
-                Some(execution_origin_for_trigger_kind(*kind).as_str()),
-                "Lean case {} execution-origin contract no longer matches production materializer mapping",
-                case.name
-            );
-            let expected_request_kind = if trigger_id.is_some() {
-                Some(kind.as_str())
-            } else {
-                None
-            };
-            assert_eq!(
-                case.expected_request_caused_by_id.as_deref(),
-                trigger_id.as_deref(),
-                "Lean case {} request caused_by id drifted",
-                case.name
-            );
-            assert_eq!(
-                case.expected_request_caused_by_kind.as_deref(),
-                expected_request_kind,
-                "Lean case {} request caused_by kind drifted",
-                case.name
-            );
-            assert_eq!(
-                materializer.source_doc_ids(),
-                vec![matches!(trigger_kind, TriggerKind::Event)
-                    .then(|| "lean-event-source-doc".to_string())],
-                "Lean case {} source document lineage drifted",
-                case.name
-            );
-        } else {
-            assert!(
-                case.expected_materialize_trigger_id.is_none()
-                    && case.expected_materialize_trigger_kind.is_none()
-                    && case.expected_execution_origin.is_none(),
-                "Lean case {} should not carry materialization fields when skipped",
-                case.name
-            );
-            assert!(materializer.source_doc_ids().is_empty());
-        }
-
-        let supersede_calls = materializer.supersede_calls();
-        let expected_supersede_calls = &case.expected_supersede_call_keys;
+            (trigger_id.clone(), *kind)
+        });
         assert_eq!(
-            &supersede_calls, expected_supersede_calls,
-            "Lean case {} supersede calls drifted",
-            case.name
-        );
-        assert_eq!(
-            materializer.superseded_request_ids(),
-            case.superseded_prior_ids,
-            "Lean case {} superseded concrete request ids drifted",
-            case.name
+            materializer.source_doc_ids(),
+            materialized
+                .iter()
+                .map(|_| matches!(trigger_kind, TriggerKind::Event)
+                    .then(|| "lean-event-source-doc".to_string()))
+                .collect::<Vec<_>>(),
+            "Lean case {} source document lineage drifted",
+            input.name
         );
 
-        if let Some(trigger_id) = case.trigger_id.as_deref() {
-            assert_eq!(
-                materializer.nonterminal_count_for(trigger_id, trigger_kind),
-                case.target_nonterminal_count_after.unwrap_or(0),
-                "Lean case {} target non-terminal count drifted",
-                case.name
-            );
-        }
+        case.check(
+            gents_lean_vocab::families::trigger_contracts_engine_dispatch::DispatchOutput {
+                result,
+                skip_reason,
+                materialize_trigger_id: materialized
+                    .as_ref()
+                    .and_then(|(trigger_id, _)| trigger_id.clone()),
+                materialize_trigger_kind: materialized
+                    .as_ref()
+                    .map(|(_, kind)| kind.as_str().to_owned()),
+                request_caused_by_id: materialized
+                    .as_ref()
+                    .and_then(|(trigger_id, _)| trigger_id.clone()),
+                request_caused_by_kind: materialized.as_ref().and_then(|(trigger_id, kind)| {
+                    trigger_id.as_ref().map(|_| kind.as_str().to_owned())
+                }),
+                execution_origin: materialized
+                    .as_ref()
+                    .map(|(_, kind)| execution_origin_for_trigger_kind(*kind).as_str().to_owned()),
+                supersede_call_keys: materializer.supersede_calls(),
+                superseded_prior_ids: materializer.superseded_request_ids(),
+                target_nonterminal_count_after: input.trigger_id.as_deref().map(|trigger_id| {
+                    materializer.nonterminal_count_for(trigger_id, trigger_kind) as u64
+                }),
+                request_count_after: input.request_count_before + calls.len() as u64,
+            },
+        );
     }
 }
