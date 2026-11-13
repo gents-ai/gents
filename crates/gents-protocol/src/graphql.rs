@@ -15,7 +15,7 @@ pub use response::{
     extract_mutation_doc_id, first_graphql_row, graphql_rows_from_response,
     is_collection_missing_error_message,
 };
-pub use transport::GraphqlRequestOptions;
+pub use transport::{GraphqlRequestOptions, POOLED_CONNECTION_IDLE_LIMIT};
 #[cfg(feature = "native")]
 pub use transport::{
     execute_graphql_async, execute_graphql_with_variables_async, graphql_endpoint_available,
