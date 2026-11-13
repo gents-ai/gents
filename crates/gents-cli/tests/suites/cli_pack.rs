@@ -912,7 +912,7 @@ fn pack_install_expect_digest_mismatch_writes_nothing() -> Result<()> {
     let digest = fixture.job_pack_digest()?;
     let wrong = format!("sha256:{}", "0".repeat(64));
     let stderr = fixture.install_job_pack_failure(&["--expect-digest", &wrong])?;
-    for needle in [wrong.as_str(), digest.as_str(), "gents config pack show"] {
+    for needle in [wrong.as_str(), digest.as_str(), "--preview"] {
         anyhow::ensure!(stderr.contains(needle), "{needle} missing from: {stderr}");
     }
     anyhow::ensure!(

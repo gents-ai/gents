@@ -49,6 +49,11 @@ mod agent_target_access {
     /// for every caller and target.
     #[tokio::test]
     async fn configured_agent_targets_grant_exactly_session_writer() {
+        let cases = tokio::task::spawn_blocking(
+            gents_lean_vocab::families::agent_target_access_access::cases,
+        )
+        .await
+        .unwrap();
         let (db, user, user_access) =
             crate::test_support::root::signed_test_node_without_agent("agent-target-access").await;
         let runtime = db.node_identity.clone();
@@ -117,7 +122,6 @@ mod agent_target_access {
             db.node.clone(),
             identity::Did::new(node_did.clone()).unwrap(),
         );
-        let cases = gents_lean_vocab::families::agent_target_access_access::cases();
         let pairs = [
             ("lead", "reviewer"),
             ("lead", "other"),
