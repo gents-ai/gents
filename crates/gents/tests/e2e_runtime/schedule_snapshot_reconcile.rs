@@ -31,7 +31,7 @@ async fn apply_documents(
     )
     .unwrap();
     access
-        .transact_write("test.automation_configuration", |txn| {
+        .transact_signed_conflict_rebuild("test.automation_configuration", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 gents_documents::apply_desired_state_plan(
