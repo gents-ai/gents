@@ -1,62 +1,10 @@
-use gents_lean_vocab::{lean_request_execution_lease_cases, LeanRequestExecutionAction};
-
-#[test]
-fn generated_request_execution_lease_contract_decodes_current_inventory() {
-    let cases = lean_request_execution_lease_cases();
-    assert_eq!(cases.len(), 49);
-
-    let kinds: std::collections::BTreeSet<_> =
-        cases.iter().map(|case| case.action.kind()).collect();
-    assert_eq!(
-        kinds,
-        [
-            "advance_time",
-            "append_output",
-            "authorize_producer_decision",
-            "begin",
-            "claim",
-            "drop",
-            "finalize",
-            "no_op",
-            "policy_revoke",
-            "recover_dropped",
-            "recover_dropped_and_fail",
-            "recover_expired",
-            "recover_expired_and_fail",
-            "recover_expired_terminal",
-            "renew",
-            "socket_traffic",
-        ]
-        .into_iter()
-        .collect(),
-        "the generated action vocabulary changed; update the native adapter contract",
-    );
-    assert!(
-        cases
-            .iter()
-            .any(|case| matches!(&case.action, LeanRequestExecutionAction::Renew { .. })),
-        "the generated contract must retain explicit renewal coverage",
-    );
-}
-
 #[test]
 fn generated_provider_eof_cases_fence_production_policy() {
-    let cases = gents_lean_vocab::lean_provider_eof_cases();
-    assert_eq!(cases.len(), 2);
-    for case in cases {
-        assert_eq!(
-            crate::request::lifecycle::execution_policy::provider_eof_is_failure(
-                case.saw_explicit_final
+    gents_lean_vocab::families::request_execution_lease_contracts_provider_eof::replay(|case| {
+        gents_lean_vocab::families::request_execution_lease_contracts_provider_eof::ProviderEofOutput {
+            failure: crate::request::lifecycle::execution_policy::provider_eof_is_failure(
+                case.saw_explicit_final,
             ),
-            case.expected_failure,
-            "{case:?}",
-        );
-    }
-}
-
-#[test]
-fn generated_request_execution_observed_contract_decodes_current_inventory() {
-    let cases = gents_lean_vocab::lean_request_execution_lease_observed_cases();
-    assert_eq!(cases.len(), 8);
-    assert!(cases.iter().all(|case| !case.name.is_empty()));
+        }
+    });
 }

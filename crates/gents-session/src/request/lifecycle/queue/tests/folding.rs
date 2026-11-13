@@ -1,6 +1,6 @@
 use super::*;
 use crate::request::lifecycle::RequestTerminalOutcome;
-use gents_lean_vocab::{LeanFoldQueueCase, LeanFoldQueueEntry, LeanFoldQueueInput};
+use gents_lean_vocab::LeanFoldQueueEntry;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::Deserialize;
 use serde_json::json;
@@ -275,14 +275,43 @@ async fn claim_request(
 
 #[tokio::test]
 async fn generated_fold_queue_cases_bind_to_native_claims() {
-    let cases = gents_lean_vocab::lean_fold_queue_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        drive(case).await;
+    for case in gents_lean_vocab::families::fold_queue_contracts_fold_script::cases::<
+        String,
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let observed = drive(&case.input).await;
+        case.check(Some(observed));
     }
 }
 
-async fn drive(case: &LeanFoldQueueCase) {
+pub(super) fn modeled_entry<T>(entry: &T) -> LeanFoldQueueEntry
+where
+    T: serde::Serialize,
+{
+    let mut value = serde_json::to_value(entry).unwrap();
+    let object = value.as_object_mut().unwrap();
+    for absent in ["queue_key", "execution_directory", "goal_assignment"] {
+        assert!(
+            object.remove(absent).unwrap().is_null(),
+            "the fixture builds no {absent}"
+        );
+    }
+    object.remove("created_at");
+    serde_json::from_value(value).unwrap()
+}
+
+async fn drive(
+    case: &gents_lean_vocab::families::fold_queue_contracts_fold_script::FoldInput<
+        String,
+        String,
+        String,
+        String,
+        String,
+    >,
+) -> gents_lean_vocab::families::fold_queue_contracts_fold_script::FoldObservation {
     assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     let db = test_db(&case.name).await;
     let session_id = case.session_id.to_string();
@@ -294,13 +323,16 @@ async fn drive(case: &LeanFoldQueueCase) {
         DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
             .unwrap();
     for event in &case.inputs {
-        match event {
-            LeanFoldQueueInput::Enqueue { entry } => {
+        match event.kind.as_str() {
+            "enqueue" => {
+                let entry = modeled_entry(event.entry.as_ref().expect("an enqueued entry"));
+                let entry = &entry;
                 let doc = enqueue(&db, &session_id, entry, bound.len()).await;
                 bound.insert(entry.request_id, doc);
                 arrivals.push(entry.request_id);
             }
-            LeanFoldQueueInput::Claim { admitted } => {
+            "claim" => {
+                let admitted = &event.admitted;
                 assert!(active.is_none(), "{}: claim while active", case.name);
                 let rows = fold_rows(&db, &session_id).await;
                 let head = *arrivals
@@ -316,7 +348,7 @@ async fn drive(case: &LeanFoldQueueCase) {
                 claims.push((head, turn.selected.clone()));
                 active = Some(turn);
             }
-            LeanFoldQueueInput::Consume => {
+            "consume" => {
                 let turn = active.as_mut().expect("consume requires an active turn");
                 turn.begin(&writer).await;
                 let folded = turn.selected[turn.consumed];
@@ -330,7 +362,7 @@ async fn drive(case: &LeanFoldQueueCase) {
                     .unwrap();
                 turn.consumed += 1;
             }
-            LeanFoldQueueInput::Finish => {
+            "finish" => {
                 let mut turn = active.take().expect("finish requires an active turn");
                 turn.begin(&writer).await;
                 turn.lifecycle
@@ -342,6 +374,7 @@ async fn drive(case: &LeanFoldQueueCase) {
                     .await
                     .unwrap();
             }
+            kind => panic!("{}: no fixture step for {kind}", case.name),
         }
     }
 
@@ -367,43 +400,30 @@ async fn drive(case: &LeanFoldQueueCase) {
         })
         .map(modeled_id)
         .collect::<Vec<_>>();
-    assert_eq!(
-        native_active,
-        case.expected.active.into_iter().collect::<Vec<_>>(),
-        "{}: active request",
+    assert!(
+        native_active.len() <= 1,
+        "{}: one active request",
         case.name
     );
     let native_folding = active
         .as_ref()
         .map(|turn| turn.selected[turn.consumed..].to_vec())
         .unwrap_or_default();
-    assert_eq!(
-        native_folding, case.expected.folding,
-        "{}: selected run",
-        case.name
-    );
+
     let native_pending = arrivals
         .iter()
         .copied()
         .filter(|id| by_id[id].lifecycle_state == RequestLifecycleState::Pending)
         .filter(|id| !native_folding.contains(id))
         .collect::<Vec<_>>();
-    assert_eq!(
-        native_pending, case.expected.pending,
-        "{}: pending queue",
-        case.name
-    );
+
     let mut native_terminal = rows
         .iter()
         .filter(|row| row.lifecycle_state.is_terminal())
         .map(modeled_id)
         .collect::<Vec<_>>();
     native_terminal.sort_unstable();
-    assert_eq!(
-        native_terminal, case.expected.terminal,
-        "{}: terminal requests",
-        case.name
-    );
+
     for row in rows
         .iter()
         .filter(|row| row.lifecycle_state == RequestLifecycleState::Superseded)
@@ -426,54 +446,71 @@ async fn drive(case: &LeanFoldQueueCase) {
             case.name
         );
     }
-    let expected_claims = case
-        .expected
-        .claims
-        .iter()
-        .map(|claim| (claim.head, claim.folded.clone()))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        claims, expected_claims,
-        "{}: per-claim selections",
-        case.name
-    );
+    gents_lean_vocab::families::fold_queue_contracts_fold_script::FoldObservation {
+        active: native_active.first().copied(),
+        pending: native_pending,
+        folding: native_folding,
+        terminal: native_terminal,
+        claims: claims
+            .into_iter()
+            .map(|(head, folded)| {
+                gents_lean_vocab::families::fold_queue_contracts_fold_script::ClaimWire {
+                    head,
+                    folded,
+                }
+            })
+            .collect(),
+    }
 }
 
 #[tokio::test]
 async fn generated_handover_fold_claims_bind_to_native_claims() {
-    let cases = gents_lean_vocab::lean_handover_fold_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let db = test_db(&case.name).await;
-        let session_id = format!("handover-{}", case.name);
+    for case in gents_lean_vocab::families::fold_queue_contracts_handover_claim::cases::<
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let db = test_db(&case.input.name).await;
+        let session_id = format!("handover-{}", case.input.name);
         let mut bound = RapidHashMap::new();
-        for (arrival, entry) in case.pending.iter().enumerate() {
+        for (arrival, entry) in case.input.pending.iter().enumerate() {
             bound.insert(
                 entry.request_id,
-                enqueue(&db, &session_id, entry, arrival).await,
+                enqueue(&db, &session_id, &modeled_entry(entry), arrival).await,
             );
         }
-        let head = case.pending[0].request_id;
-        let turn = claim_head(&db, &bound, head, &case.admitted).await;
-        assert_eq!(Some(head), case.expected.active, "{}: active", case.name);
-        assert_eq!(
-            turn.selected, case.expected.folding,
-            "{}: selection",
-            case.name
-        );
+        let head = case.input.pending[0].request_id;
+        let turn = claim_head(&db, &bound, head, &case.input.admitted).await;
         let rows = fold_rows(&db, &session_id).await;
-        let pending = case
-            .pending
-            .iter()
-            .map(|entry| entry.request_id)
+        let state = |id: u64| {
+            rows.iter()
+                .find(|row| modeled_id(row) == id)
+                .unwrap()
+                .lifecycle_state
+        };
+        let ids = case.input.pending.iter().map(|entry| entry.request_id);
+        let active = ids
+            .clone()
             .filter(|id| {
-                rows.iter().any(|row| {
-                    modeled_id(row) == *id && row.lifecycle_state == RequestLifecycleState::Pending
-                })
+                matches!(
+                    state(*id),
+                    RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+                )
             })
+            .collect::<Vec<_>>();
+        assert!(active.len() <= 1, "{}: one active request", case.input.name);
+        let pending = ids
+            .filter(|id| state(*id) == RequestLifecycleState::Pending)
             .filter(|id| !turn.selected.contains(id))
             .collect::<Vec<_>>();
-        assert_eq!(pending, case.expected.pending, "{}: pending", case.name);
+        case.check(Some(
+            gents_lean_vocab::families::fold_queue_contracts_handover_claim::HandoverQueue {
+                active: active.first().copied(),
+                folding: turn.selected.clone(),
+                pending,
+            },
+        ));
     }
 }
 
@@ -515,53 +552,12 @@ async fn durable_facts(db: &TestDb, session_id: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn generated_fold_publication_scripts_bind_to_native_owners() {
-    use gents_lean_vocab::LeanFoldPublicationStep as Step;
-
-    let cases = gents_lean_vocab::lean_fold_publication_cases();
-    let steering_cases = gents_lean_vocab::lean_steering_publication_cases();
-    assert!(!cases.is_empty());
-    assert!(!steering_cases.is_empty());
-    let loop_boundary_cases = steering_cases
-        .iter()
-        .filter(|case| {
-            case.steps.iter().any(|step| {
-                matches!(
-                    step,
-                    Step::Intake {
-                        safe_boundary: false,
-                        ..
-                    } | Step::FinishOrIntake {
-                        safe_boundary: false,
-                        ..
-                    }
-                )
-            })
-        })
-        .map(|case| case.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        loop_boundary_cases,
-        [
-            "streaming_boundary_does_not_take_input",
-            "natural_completion_during_stream_refuses"
-        ]
-    );
-    for case in cases.iter().chain(steering_cases).filter(|case| {
-        !case.steps.iter().any(|step| {
-            matches!(
-                step,
-                Step::Intake {
-                    safe_boundary: false,
-                    ..
-                } | Step::FinishOrIntake {
-                    safe_boundary: false,
-                    ..
-                }
-            )
-        })
-    }) {
-        let db = test_db(&case.name).await;
-        let session_id = format!("fold-publication-{}", case.name);
+    for case in
+        gents_lean_vocab::families::fold_queue_contracts_publication_script::cases::<String>()
+    {
+        let input = &case.input;
+        let db = test_db(&input.name).await;
+        let session_id = format!("fold-publication-{}", input.name);
         let (_authority_owner, authority) =
             gents_p2p::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
@@ -570,15 +566,15 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             authority,
         );
         let mut bound = RapidHashMap::new();
-        let mut arrival_ids = vec![case.head, case.selected];
+        let mut arrival_ids = vec![input.head, input.selected];
         let mut saved_message = None;
         let clock_origin = chrono::Utc::now();
         let mut observed_now = None;
-        for (arrival, id) in [case.head, case.selected].into_iter().enumerate() {
+        for (arrival, id) in [input.head, input.selected].into_iter().enumerate() {
             let entry = LeanFoldQueueEntry {
                 request_id: id,
                 execution_origin: "interactive".into(),
-                delivery: if id == case.selected {
+                delivery: if id == input.selected {
                     "steer"
                 } else {
                     "queue"
@@ -594,7 +590,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             };
             bound.insert(id, enqueue_signed(&db, &session_id, &entry, arrival).await);
         }
-        let head_doc = bound[&case.head].clone();
+        let head_doc = bound[&input.head].clone();
         let writer = DefraStreamWriter::new_managed(
             db.node.clone(),
             db.agent_identity.as_ref(),
@@ -602,54 +598,56 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         )
         .unwrap();
         let mut generations: RapidHashMap<u64, ActiveTurn> = RapidHashMap::new();
-        let mut first = claim_head(&db, &bound, case.head, &[case.selected]).await;
+        let mut first = claim_head(&db, &bound, input.head, &[input.selected]).await;
         first.begin(&writer).await;
         generations.insert(8, first);
         let scope: gents_protocol::rendered_request::CaptureScope = "inference.1".parse().unwrap();
-        assert_eq!(case.steps.len(), case.expected.len());
-        for (index, (step, expected)) in case.steps.iter().zip(&case.expected).enumerate() {
+        let mut observations = Vec::new();
+        for (index, step) in input.steps.iter().enumerate() {
+            let generation = step.generation.unwrap_or_default();
             let before = durable_facts(&db, &session_id).await;
-            let accepted = match step {
-                Step::ObserveDeadline { now, deadline } => {
-                    observed_now = Some(clock_origin + chrono::Duration::milliseconds(*now as i64));
+            let accepted = match step.kind.as_str() {
+                "observe_deadline" => {
+                    let (now, deadline) = (step.now.unwrap(), step.deadline.unwrap());
+                    observed_now = Some(clock_origin + chrono::Duration::milliseconds(now as i64));
                     for turn in generations.values_mut() {
                         turn.lifecycle.claimed_deadline_at =
-                            Some(clock_origin + chrono::Duration::milliseconds(*deadline as i64));
+                            Some(clock_origin + chrono::Duration::milliseconds(deadline as i64));
                     }
                     true
                 }
-                Step::PublishPrompt { generation } | Step::PublishChangedPrompt { generation } => {
-                    let content = if matches!(step, Step::PublishPrompt { .. }) {
+                "publish_prompt" | "publish_changed_prompt" => {
+                    let content = if step.kind == "publish_prompt" {
                         "prompt"
                     } else {
                         "changed prompt"
                     };
                     writer
                         .publish_authored_message(
-                            &generations[generation].lifecycle,
+                            &generations[&generation].lifecycle,
                             "prompt",
                             &gents_protocol::message::Message::user(content),
                         )
                         .await
                         .is_ok()
                 }
-                Step::PublishFolded {
-                    generation,
-                    request_id,
-                } => writer
+                "publish_folded" => writer
                     .publish_authored_message_with_time(
-                        &generations[generation].lifecycle,
-                        &folded_input_key(&bound[request_id]),
-                        &gents_protocol::message::Message::user(format!("message {request_id}")),
+                        &generations[&generation].lifecycle,
+                        &folded_input_key(&bound[&step.request_id.unwrap()]),
+                        &gents_protocol::message::Message::user(format!(
+                            "message {}",
+                            step.request_id.unwrap()
+                        )),
                         observed_now,
                     )
                     .await
                     .is_ok(),
-                Step::AcceptTurn { generation } => {
+                "accept_turn" => {
                     writer.start_provider_attempt(&head_doc, 0, 0, scope).await;
                     match writer
                         .publish_native_turn(
-                            &generations[generation].lifecycle,
+                            &generations[&generation].lifecycle,
                             0,
                             0,
                             &gents_protocol::message::Message::assistant("answer"),
@@ -663,8 +661,9 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         Err(_) => false,
                     }
                 }
-                Step::Recover { expected, fresh } => {
-                    let mut request = generations[expected].lifecycle.request().clone();
+                "recover" => {
+                    let (expected, fresh) = (step.expected.unwrap(), step.fresh.unwrap());
+                    let mut request = generations[&expected].lifecycle.request().clone();
                     request.deadline = None;
                     // The expired head is the Agent's own row; recovery resets it as the Agent.
                     db.agent_access.write(
@@ -680,18 +679,18 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         .await
                         .iter()
                         .filter(|row| {
-                            modeled_id(row) == case.selected
+                            modeled_id(row) == input.selected
                                 && row.lifecycle_state == RequestLifecycleState::Pending
                         })
                         .map(modeled_id)
                         .collect::<Vec<_>>();
                     let mut reclaimed = claim_request(&db, &bound, request, &still_queued).await;
                     reclaimed.begin(&writer).await;
-                    generations.insert(*fresh, reclaimed);
+                    generations.insert(fresh, reclaimed);
                     true
                 }
-                Step::Terminalize { generation } => generations
-                    .get_mut(generation)
+                "terminalize" => generations
+                    .get_mut(&generation)
                     .unwrap()
                     .lifecycle
                     .terminalize_owned(
@@ -701,38 +700,35 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     )
                     .await
                     .is_ok(),
-                Step::Finish => true,
-                Step::EnqueueSteering { request_id } => {
+                "finish" => {
+                    generations.clear();
+                    true
+                }
+                "enqueue_steering" => {
+                    let request_id = step.request_id.unwrap();
                     let entry = LeanFoldQueueEntry {
-                        request_id: *request_id,
+                        request_id,
                         execution_origin: "interactive".into(),
                         delivery: "steer".into(),
-                        order_key: *request_id,
+                        order_key: request_id,
                         source: "user".into(),
                         policy: "append".into(),
-                        queued_after: Some(case.head),
+                        queued_after: Some(input.head),
                         requester_id: Some(1),
                         turn_context: 0,
                         fresh: true,
                     };
                     let id = enqueue_signed(&db, &session_id, &entry, arrival_ids.len()).await;
-                    bound.insert(*request_id, id);
-                    arrival_ids.push(*request_id);
+                    bound.insert(request_id, id);
+                    arrival_ids.push(request_id);
                     true
                 }
-                Step::Intake {
-                    generation,
-                    safe_boundary,
-                }
-                | Step::FinishOrIntake {
-                    generation,
-                    safe_boundary,
-                } => {
+                "intake" | "finish_or_intake" => {
                     assert!(
-                        *safe_boundary,
+                        step.safe_boundary.unwrap(),
                         "unsafe provider boundary belongs to loop owner"
                     );
-                    let turn = generations.get_mut(generation).unwrap();
+                    let turn = generations.get_mut(&generation).unwrap();
                     if !turn.lifecycle.owns_execution().await.unwrap()
                         || !crate::request::lifecycle::RequestLifecycle::input_publication_before_deadline(
                             observed_now.unwrap_or_else(chrono::Utc::now),
@@ -760,7 +756,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                                     .0
                             })
                             .collect::<Vec<_>>();
-                        if !selected.is_empty() || matches!(step, Step::Intake { .. }) {
+                        if !selected.is_empty() || step.kind == "intake" {
                             turn.selected = selected;
                             true
                         } else {
@@ -774,7 +770,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         }
                     }
                 }
-                Step::CancelFirstPending => {
+                "cancel_first_pending" => {
                     let access = &db.agent_access;
                     let snapshot =
                         pending_user_queue(access, db.node_did(), &session_id, db.agent_did())
@@ -814,9 +810,9 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         false
                     }
                 }
+                kind => panic!("{}: no fixture step for {kind}", input.name),
             };
-            let label = format!("{} step {index} {step:?}", case.name);
-            assert_eq!(accepted, expected.accepted, "{label}: acceptance");
+            let label = format!("{} step {index} {step:?}", input.name);
             if !accepted {
                 assert_eq!(
                     durable_facts(&db, &session_id).await,
@@ -841,10 +837,6 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                         .unwrap_or(key)
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(keys, expected.authored_keys, "{label}: authored keys");
-            if matches!(step, Step::Terminalize { .. }) {
-                continue;
-            }
             let rows = fold_rows(&db, &session_id).await;
             let state = |id: u64| {
                 rows.iter()
@@ -853,39 +845,43 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     .lifecycle_state
             };
             let head_active = matches!(
-                state(case.head),
+                state(input.head),
                 RequestLifecycleState::Claimed | RequestLifecycleState::Processing
             );
-            let latest = generations.keys().max().copied().unwrap();
-            let folding = if head_active {
-                generations[&latest]
-                    .selected
-                    .iter()
-                    .copied()
-                    .filter(|id| state(*id) == RequestLifecycleState::Pending)
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
+            let folding = generations
+                .keys()
+                .max()
+                .map(|latest| {
+                    generations[latest]
+                        .selected
+                        .iter()
+                        .copied()
+                        .filter(|id| state(*id) == RequestLifecycleState::Pending)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             let pending = arrival_ids
                 .iter()
                 .copied()
-                .filter(|id| *id != case.head)
+                .filter(|id| *id != input.head)
                 .filter(|id| state(*id) == RequestLifecycleState::Pending && !folding.contains(id))
                 .collect::<Vec<_>>();
-            let terminal = [case.head, case.selected]
+            let terminal = [input.head, input.selected]
                 .into_iter()
                 .filter(|id| state(*id).is_terminal())
                 .collect::<Vec<_>>();
-            assert_eq!(
-                head_active.then_some(case.head),
-                expected.active,
-                "{label}: active"
+            observations.push(
+                gents_lean_vocab::families::fold_queue_contracts_publication_script::PublicationObservation {
+                    accepted,
+                    active: head_active.then_some(input.head),
+                    pending,
+                    folding,
+                    terminal,
+                    authored_keys: keys,
+                },
             );
-            assert_eq!(folding, expected.folding, "{label}: selected");
-            assert_eq!(pending, expected.pending, "{label}: pending");
-            assert_eq!(terminal, expected.terminal, "{label}: terminal");
         }
+        case.check(Some(observations));
     }
 }
 
@@ -962,133 +958,30 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
 
 #[tokio::test]
 async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .agent_steering_boundary_cases
-        .iter()
-        .find(|case| {
-            case.inputs
-                .iter()
-                .map(|item| item.kind.as_str())
-                .collect::<Vec<_>>()
-                == ["queued", "user_steer", "queued"]
-        })
-        .expect("modeled user steer behind queued messages");
-    let db = test_db("direct-steer-queued-followups").await;
-    let session_id = "direct-steer-queued-followups";
-    let entry = |id, delivery: &str| LeanFoldQueueEntry {
-        request_id: id,
-        execution_origin: "interactive".into(),
-        delivery: delivery.into(),
-        order_key: id,
-        source: "user".into(),
-        policy: "append".into(),
-        queued_after: Some(99),
-        requester_id: Some(1),
-        turn_context: 0,
-        fresh: true,
-    };
-    let mut bound = RapidHashMap::new();
-    let head = LeanFoldQueueEntry {
-        queued_after: None,
-        ..entry(99, "queue")
-    };
-    bound.insert(99, enqueue_signed(&db, session_id, &head, 0).await);
-    let mut active = claim_head(&db, &bound, 99, &[]).await;
-    let writer =
-        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
-            .unwrap();
-    active.begin(&writer).await;
-    for (index, item) in case.inputs.iter().enumerate() {
-        let delivery = if item.kind == "user_steer" {
-            "steer"
-        } else {
-            "queue"
-        };
-        bound.insert(
-            item.id,
-            enqueue_signed(&db, session_id, &entry(item.id, delivery), index + 1).await,
-        );
-    }
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-        db.node.clone(),
-        db.identity.clone(),
-        authority,
-    );
-    let snapshot = super::super::intake::steering_snapshot(
-        &db.node,
-        active.lifecycle.request(),
-        &verifier,
-        None,
-    )
-    .await
-    .unwrap();
-    let selected = case.expected.expect("modeled steer selection");
-    assert_eq!(snapshot.inputs.len(), 1);
-    assert_eq!(snapshot.inputs[0].key, folded_input_key(&bound[&selected]));
-    writer
-        .publish_authored_message(
-            &active.lifecycle,
-            &folded_input_key(&bound[&selected]),
-            &gents_protocol::message::Message::user(format!("message {selected}")),
-        )
-        .await
-        .unwrap();
-    let rows = fold_rows(&db, session_id).await;
-    let access = &db.agent_access;
-    let queue = pending_user_queue(access, db.node_did(), session_id, db.node_did())
-        .await
-        .unwrap();
-    assert_eq!(
-        queue
-            .entries
-            .iter()
-            .map(|item| item.request_id.clone())
-            .collect::<Vec<_>>(),
-        case.inputs
-            .iter()
-            .filter(|item| Some(item.id) != case.expected)
-            .map(|item| item.id.to_string())
-            .collect::<Vec<_>>()
-    );
-    for item in &case.inputs {
-        let row = rows
-            .iter()
-            .find(|row| row.request_id == item.id.to_string())
-            .unwrap();
-        if Some(item.id) == case.expected {
-            assert_eq!(row.lifecycle_state, RequestLifecycleState::Superseded);
-            assert_eq!(
-                row.superseded_by_request_doc_id.as_deref(),
-                Some(bound[&99].as_str())
-            );
-        } else {
-            assert_eq!(row.lifecycle_state, RequestLifecycleState::Pending);
-            assert!(row.superseded_by_request_doc_id.is_none());
-        }
-    }
-}
-
-#[tokio::test]
-async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
-    use gents_lean_vocab::LeanQueueManagementOperation;
-    let case = gents_lean_vocab::lean_queue_management_cases()
-        .iter()
-        .find(|case| case.name == "expired_steering_is_barrier")
-        .unwrap();
-    for (variant, ttl) in ["2000-01-01T00:00:00Z", "not-a-timestamp"]
-        .into_iter()
-        .enumerate()
+    for case in
+        gents_lean_vocab::families::contracts_steering_boundary_publication::cases::<String>()
     {
-        let name = &format!("{}-{variant}", case.name);
-        let LeanQueueManagementOperation::Intake { active: head, .. } = &case.operation else {
-            panic!("expected intake case");
+        let db = test_db("direct-steer-queued-followups").await;
+        let session_id = "direct-steer-queued-followups";
+        let entry = |id, delivery: &str| LeanFoldQueueEntry {
+            request_id: id,
+            execution_origin: "interactive".into(),
+            delivery: delivery.into(),
+            order_key: id,
+            source: "user".into(),
+            policy: "append".into(),
+            queued_after: Some(99),
+            requester_id: Some(1),
+            turn_context: 0,
+            fresh: true,
         };
-        let db = test_db(name).await;
-        let session_id = name;
-        let head_doc = enqueue_signed(&db, session_id, head, 0).await;
-        let mut bound = RapidHashMap::from_iter([(head.request_id, head_doc)]);
-        let mut active = claim_head(&db, &bound, head.request_id, &[]).await;
+        let mut bound = RapidHashMap::new();
+        let head = LeanFoldQueueEntry {
+            queued_after: None,
+            ..entry(99, "queue")
+        };
+        bound.insert(99, enqueue_signed(&db, session_id, &head, 0).await);
+        let mut active = claim_head(&db, &bound, 99, &[]).await;
         let writer = DefraStreamWriter::new_managed(
             db.node.clone(),
             db.agent_identity.as_ref(),
@@ -1096,13 +989,16 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
         )
         .unwrap();
         active.begin(&writer).await;
-        for (index, entry) in case.before.pending.iter().enumerate() {
-            let doc = if entry.fresh {
-                enqueue_signed(&db, session_id, entry, index + 1).await
-            } else {
-                enqueue_with_ttl(&db, session_id, entry, index + 1, Some(ttl)).await
+        for (index, item) in case.input.inputs.iter().enumerate() {
+            let delivery = match item.kind.as_str() {
+                "user_steer" => "steer",
+                "queued" => "queue",
+                other => panic!("the served fixture cannot enqueue a {other} input"),
             };
-            bound.insert(entry.request_id, doc);
+            bound.insert(
+                item.id,
+                enqueue_signed(&db, session_id, &entry(item.id, delivery), index + 1).await,
+            );
         }
         let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
         let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
@@ -1118,35 +1014,191 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
         )
         .await
         .unwrap();
-        let expected = case.expected.as_ref().unwrap();
-        assert_eq!(snapshot.inputs.len(), expected.folding.len(), "{name}");
-        assert!(snapshot.inputs.is_empty(), "{name}");
-        let blocked = &case.before.pending[0];
-        let error = writer
-            .publish_authored_message(
-                &active.lifecycle,
-                &folded_input_key(&bound[&blocked.request_id]),
-                &gents_protocol::message::Message::user(format!("message {}", blocked.request_id)),
+        let steered = snapshot
+            .inputs
+            .iter()
+            .map(|input| {
+                case.input
+                    .inputs
+                    .iter()
+                    .map(|item| item.id)
+                    .find(|id| folded_input_key(&bound[id]) == input.key)
+                    .expect("steering input is one of the enqueued turns")
+            })
+            .collect::<Vec<_>>();
+        for id in &steered {
+            writer
+                .publish_authored_message(
+                    &active.lifecycle,
+                    &folded_input_key(&bound[id]),
+                    &gents_protocol::message::Message::user(format!("message {id}")),
+                )
+                .await
+                .unwrap();
+        }
+        let rows = fold_rows(&db, session_id).await;
+        let queue = pending_user_queue(&db.agent_access, db.node_did(), session_id, db.node_did())
+            .await
+            .unwrap();
+        let state_of = |id: u64| {
+            rows.iter()
+                .find(|row| row.request_id == id.to_string())
+                .unwrap()
+        };
+        let ids = case.input.inputs.iter().map(|item| item.id);
+        let pending_rows = ids
+            .clone()
+            .filter(|id| {
+                let row = state_of(*id);
+                row.lifecycle_state == RequestLifecycleState::Pending
+                    && row.superseded_by_request_doc_id.is_none()
+            })
+            .collect::<Vec<_>>();
+        let superseded = ids
+            .filter(|id| {
+                let row = state_of(*id);
+                row.lifecycle_state == RequestLifecycleState::Superseded
+                    && row.superseded_by_request_doc_id.as_deref() == Some(bound[&99].as_str())
+            })
+            .collect::<Vec<_>>();
+        let pending = queue
+            .entries
+            .iter()
+            .map(|item| item.request_id.parse::<u64>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(pending, pending_rows, "{:?}", case.input);
+        case.check(
+            gents_lean_vocab::families::contracts_steering_boundary_publication::Publication {
+                steered,
+                pending,
+                superseded,
+            },
+        );
+    }
+}
+
+#[tokio::test]
+async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
+    for case in gents_lean_vocab::families::fold_queue_contracts_management_expired_intake::cases::<
+        String,
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let input = &case.input;
+        assert_eq!(input.operation.kind, "intake", "{}", input.name);
+        let head = modeled_entry(input.operation.active.as_ref().unwrap());
+        let pending = input
+            .before
+            .pending
+            .iter()
+            .map(modeled_entry)
+            .collect::<Vec<_>>();
+        let mut observed = Vec::new();
+        for (variant, ttl) in ["2000-01-01T00:00:00Z", "not-a-timestamp"]
+            .into_iter()
+            .enumerate()
+        {
+            let name = &format!("{}-{variant}", input.name);
+            let db = test_db(name).await;
+            let session_id = name;
+            let head_doc = enqueue_signed(&db, session_id, &head, 0).await;
+            let mut bound = RapidHashMap::from_iter([(head.request_id, head_doc)]);
+            let mut active = claim_head(&db, &bound, head.request_id, &[]).await;
+            let writer = DefraStreamWriter::new_managed(
+                db.node.clone(),
+                db.agent_identity.as_ref(),
+                Duration::ZERO,
+            )
+            .unwrap();
+            active.begin(&writer).await;
+            for (index, entry) in pending.iter().enumerate() {
+                let doc = if entry.fresh {
+                    enqueue_signed(&db, session_id, entry, index + 1).await
+                } else {
+                    enqueue_with_ttl(&db, session_id, entry, index + 1, Some(ttl)).await
+                };
+                bound.insert(entry.request_id, doc);
+            }
+            let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+            let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+                db.node.clone(),
+                db.identity.clone(),
+                authority,
+            );
+            let snapshot = super::super::intake::steering_snapshot(
+                &db.node,
+                active.lifecycle.request(),
+                &verifier,
+                None,
             )
             .await
-            .unwrap_err();
-        assert!(
-            error.is::<super::super::PendingInputChanged>(),
-            "{name}: {error:#}"
-        );
-        let rows = fold_rows(&db, session_id).await;
-        for entry in &expected.pending {
-            let row = rows
+            .unwrap();
+            let folding = snapshot
+                .inputs
                 .iter()
-                .find(|row| row.request_id == entry.request_id.to_string())
-                .unwrap();
-            assert_eq!(
-                row.lifecycle_state,
-                RequestLifecycleState::Pending,
-                "{name}"
+                .map(|input| {
+                    *bound
+                        .iter()
+                        .find(|(_, doc)| folded_input_key(doc) == input.key)
+                        .unwrap()
+                        .0
+                })
+                .collect::<Vec<_>>();
+            let blocked = &pending[0];
+            let error = writer
+                .publish_authored_message(
+                    &active.lifecycle,
+                    &folded_input_key(&bound[&blocked.request_id]),
+                    &gents_protocol::message::Message::user(format!(
+                        "message {}",
+                        blocked.request_id
+                    )),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error.is::<super::super::PendingInputChanged>(),
+                "{name}: {error:#}"
             );
-            assert!(row.superseded_by_request_doc_id.is_none(), "{name}");
+            let rows = fold_rows(&db, session_id).await;
+            let state = |id: u64| {
+                rows.iter()
+                    .find(|row| row.request_id == id.to_string())
+                    .unwrap()
+            };
+            let ids = std::iter::once(head.request_id)
+                .chain(pending.iter().map(|entry| entry.request_id));
+            observed.push(serde_json::to_value(Some(
+                gents_lean_vocab::families::fold_queue_contracts_management_expired_intake::QueueImageWire {
+                    active: ids
+                        .clone()
+                        .find(|id| {
+                            matches!(
+                                state(*id).lifecycle_state,
+                                RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+                            )
+                        }),
+                    pending: pending
+                        .iter()
+                        .map(|entry| entry.request_id)
+                        .filter(|id| {
+                            state(*id).lifecycle_state == RequestLifecycleState::Pending
+                                && state(*id).superseded_by_request_doc_id.is_none()
+                                && !folding.contains(id)
+                        })
+                        .collect(),
+                    folding,
+                    terminal: ids
+                        .filter(|id| state(*id).lifecycle_state.is_terminal())
+                        .collect(),
+                },
+            ))
+            .unwrap());
         }
+        assert_eq!(observed[0], observed[1], "{}: TTL variants", input.name);
+        case.check(serde_json::from_value(observed.pop().unwrap()).unwrap());
     }
 }
 

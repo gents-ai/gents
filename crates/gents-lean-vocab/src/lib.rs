@@ -127,7 +127,6 @@ mod compaction_canonical_projection;
 mod compaction_projection_join;
 pub mod consumer_scan;
 pub mod family;
-mod request_execution_lease;
 mod title;
 
 /// Family types generated from `families.schema.json`, which Lean emits.
@@ -141,7 +140,7 @@ pub use canonical_presentation::native_adapter::native_presentation;
 pub use canonical_presentation::*;
 pub use compaction_canonical_projection::*;
 pub use compaction_projection_join::*;
-pub use request_execution_lease::*;
+pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use title::*;
 
 #[cfg(test)]

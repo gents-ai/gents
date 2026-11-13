@@ -281,15 +281,15 @@ async fn exercise_readiness(same_agent: bool) {
         .bind_managed_agent(selected_identity.as_ref())
         .unwrap();
     lifecycle.set_client_claim_admission(Some(admission.clone()));
-    let cases = &snapshot.mailbox_claimed_recipient_cases;
-    let before = cases
-        .iter()
-        .find(|case| case.present && !case.committed)
-        .unwrap();
-    assert_eq!(
-        lifecycle.claimed_client_provenance().is_some(),
-        before.signer.is_some()
-    );
+    let unadmitted_before = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        request.clone(),
+        60,
+        ExecutionOrigin::Interactive,
+        String::new(),
+    )
+    .claimed_client_provenance();
+    let admitted_before = lifecycle.claimed_client_provenance();
     assert!(matches!(
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Queued
@@ -355,20 +355,37 @@ async fn exercise_readiness(same_agent: bool) {
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     ));
-    let after = cases
-        .iter()
-        .find(|case| case.present && case.committed)
-        .unwrap();
-    let retained = lifecycle
-        .claimed_client_provenance()
-        .expect("committed client claim retains provenance");
-    assert_eq!(after.signer.as_deref(), Some("delegate"));
-    assert_eq!(after.request_doc.as_deref(), Some("request"));
-    assert_eq!(after.session_doc.as_deref(), Some("session"));
-    assert_eq!(after.agent_doc.as_deref(), Some("agent"));
-    assert_eq!(retained.signer_did, signer.did());
-    assert_eq!(retained.request_doc_id, request_doc);
-    assert_eq!(retained.session_doc_id, session_doc);
-    assert_eq!(retained.agent_doc_id, agent_doc);
+    let admitted_after = lifecycle.claimed_client_provenance();
+    let label = |actual: &str, fixture: &str, modeled: &str| {
+        if actual == fixture {
+            modeled.to_owned()
+        } else {
+            actual.to_owned()
+        }
+    };
+    for case in gents_lean_vocab::families::mailbox_access_claimed_recipient_served::cases() {
+        let observed = match (case.input.present, case.input.committed) {
+            (false, false) => &unadmitted_before,
+            (true, false) => &admitted_before,
+            (true, true) => &admitted_after,
+            (false, true) => panic!("the readiness fixture commits only admitted claims"),
+        };
+        case.check(
+            gents_lean_vocab::families::mailbox_access_claimed_recipient_served::RecipientOutput {
+                signer: observed
+                    .as_ref()
+                    .map(|retained| label(&retained.signer_did, signer.did(), "delegate")),
+                request_doc: observed
+                    .as_ref()
+                    .map(|retained| label(&retained.request_doc_id, &request_doc, "request")),
+                session_doc: observed
+                    .as_ref()
+                    .map(|retained| label(&retained.session_doc_id, session_doc, "session")),
+                agent_doc: observed
+                    .as_ref()
+                    .map(|retained| label(&retained.agent_doc_id, &agent_doc, "agent")),
+            },
+        );
+    }
     node.shutdown().await.unwrap();
 }

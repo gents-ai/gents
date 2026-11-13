@@ -58,7 +58,7 @@
         "RequestExecutionLease.Action.reparkExpiredResume",
         "RequestExecutionLease.Action.finalizeParked"
       ],
-      "generated_groups": ["request_execution_lease_cases"],
+      "generated_groups": [],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": [
         "crates/gents-session/src/request/lifecycle/execution_lease.rs",
@@ -66,7 +66,7 @@
         "crates/gents-session/src/request/admission.rs"
       ],
       "consumer_paths": [
-        "crates/gents-lean-vocab/src/request_execution_lease.rs",
+        "crates/gents-loop/src/execution_policy.rs",
         "crates/gents-session/src/request/lifecycle/execution_lease/tests/generated_policy.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs"
       ],

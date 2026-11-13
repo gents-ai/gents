@@ -471,37 +471,3 @@ fn generated_plugin_job_lineage_cases_decode_strictly() {
 }
 
 #[test]
-fn queued_steering_traces_are_derived_from_connected_owners() {
-    let cases = lean_queued_steering_trace_cases();
-    assert_eq!(
-        cases.len(),
-        9,
-        "the connected owner traces must be exported"
-    );
-    for case in cases {
-        assert_eq!(case.request_id, case.entry.request_id, "{}", case.name);
-        assert_eq!(
-            case.capture.request_doc_id, case.request_doc_id,
-            "{}",
-            case.name
-        );
-        assert!(
-            !case.actions.is_empty(),
-            "{} has no generated script",
-            case.name
-        );
-        assert!(
-            case.accepted_input,
-            "{} lost its signed admission",
-            case.name
-        );
-        if matches!(case.lifecycle_state.as_str(), "failed" | "interrupted") {
-            assert_eq!(
-                case.queue_active, None,
-                "{} left terminal work active",
-                case.name
-            );
-        }
-    }
-}
-

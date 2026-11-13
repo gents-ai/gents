@@ -1,5 +1,4 @@
 use super::*;
-use gents_lean_vocab::LeanQueueManagementOperation;
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity as _;
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -30,383 +29,428 @@ async fn queue_image(
 
 #[tokio::test]
 async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
-    let cases = gents_lean_vocab::lean_queue_management_cases();
-    assert!(!cases.is_empty());
-    let mut exercised = Vec::new();
-    for (case, variant) in cases.iter().flat_map(|case| [(case, 0), (case, 1)]) {
-        let LeanQueueManagementOperation::Replace {
-            caller,
-            expected,
-            offset,
-            count,
-            replacements,
-        } = &case.operation
-        else {
-            continue;
-        };
-        let originals = case
-            .before
-            .folding
-            .iter()
-            .chain(&case.before.pending)
-            .collect::<Vec<_>>();
-        let selected =
-            &originals[(*offset).min(originals.len())..(offset + count).min(originals.len())];
-        if replacements.iter().any(|replacement| {
-            originals
-                .iter()
-                .any(|entry| entry.request_id == replacement.request_id)
-        }) || replacements
-            .iter()
-            .zip(selected)
-            .any(|(replacement, original)| replacement.order_key != original.order_key)
-        {
-            continue;
+    for case in gents_lean_vocab::families::fold_queue_contracts_management_replace::cases::<
+        String,
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let mut observed = Vec::new();
+        for variant in [0, 1] {
+            observed.push(
+                serde_json::to_value(replay_replacement(&case.input, variant).await).unwrap(),
+            );
         }
-        if variant == 0 {
-            exercised.push(case.name.as_str());
-        }
-        let db = test_db(&format!("{}-{variant}", case.name)).await;
-        let session_id = format!("management-{}", case.name);
-        let ttl = |entry: &gents_lean_vocab::LeanFoldQueueEntry| match (entry.fresh, variant) {
-            (true, 0) => None,
-            (true, _) => Some("2099-01-01T00:00:00Z"),
-            (false, 0) => Some("2000-01-01T00:00:00Z"),
-            (false, _) => Some("malformed"),
-        };
-        let mut bound = RapidHashMap::new();
-        let mut names: RapidHashMap<u64, String> = RapidHashMap::new();
-        let signed = |id: u64, arrival: usize| {
-            gents_protocol::request_admission::AgentRequestCreate::base(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                id.to_string(),
-                db.node_did(),
+        assert_eq!(
+            observed[0], observed[1],
+            "{}: TTL variants",
+            case.input.name
+        );
+        case.check(serde_json::from_value(observed.pop().unwrap()).unwrap());
+    }
+}
+
+fn image_of(
+    active: Option<u64>,
+    folding: &[u64],
+    pending: &[u64],
+    terminal: &[u64],
+    names: &RapidHashMap<u64, String>,
+) -> gents_lean_vocab::QueueImage {
+    gents_lean_vocab::QueueImage {
+        active: active.map(|id| names[&id].clone()),
+        folding: folding.iter().map(|id| names[id].clone()).collect(),
+        pending: pending.iter().map(|id| names[id].clone()).collect(),
+        terminal: terminal.iter().map(|id| names[id].clone()).collect(),
+    }
+}
+
+async fn replay_replacement(
+    input: &gents_lean_vocab::families::fold_queue_contracts_management_replace::ManagementInput<
+        String,
+        String,
+        String,
+        String,
+        String,
+    >,
+    variant: usize,
+) -> Option<gents_lean_vocab::families::fold_queue_contracts_management_replace::QueueImageWire> {
+    let case = input;
+    let operation = &input.operation;
+    assert_eq!(operation.kind, "replace", "{}", input.name);
+    let (caller, expected) = (&operation.caller, &operation.expected);
+    let (offset, count) = (operation.offset.unwrap(), operation.count.unwrap());
+    let replacements = operation
+        .replacements
+        .iter()
+        .map(super::folding::modeled_entry)
+        .collect::<Vec<_>>();
+    let before_folding = input
+        .before
+        .folding
+        .iter()
+        .map(super::folding::modeled_entry)
+        .collect::<Vec<_>>();
+    let before_pending = input
+        .before
+        .pending
+        .iter()
+        .map(super::folding::modeled_entry)
+        .collect::<Vec<_>>();
+    let originals = before_folding
+        .iter()
+        .chain(&before_pending)
+        .collect::<Vec<_>>();
+    let selected = &originals[offset.min(originals.len() as u64) as usize
+        ..(offset + count).min(originals.len() as u64) as usize];
+    let ids = |entries: &[gents_lean_vocab::LeanFoldQueueEntry]| {
+        entries
+            .iter()
+            .map(|entry| entry.request_id)
+            .collect::<Vec<_>>()
+    };
+    let db = test_db(&format!("{}-{variant}", case.name)).await;
+    let session_id = format!("management-{}", case.name);
+    let ttl = |entry: &gents_lean_vocab::LeanFoldQueueEntry| match (entry.fresh, variant) {
+        (true, 0) => None,
+        (true, _) => Some("2099-01-01T00:00:00Z"),
+        (false, 0) => Some("2000-01-01T00:00:00Z"),
+        (false, _) => Some("malformed"),
+    };
+    let mut bound = RapidHashMap::new();
+    let mut names: RapidHashMap<u64, String> = RapidHashMap::new();
+    let signed = |id: u64, arrival: usize| {
+        gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            id.to_string(),
+            db.node_did(),
+            db.agent_did(),
+            db.agent_did(),
+            &session_id,
+            format!("message {id}"),
+            "interactive",
+            format!("2026-09-01T00:00:{arrival:02}Z"),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
                 db.agent_did(),
-                db.agent_did(),
-                &session_id,
-                format!("message {id}"),
-                "interactive",
-                format!("2026-09-01T00:00:{arrival:02}Z"),
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                    db.agent_did(),
-                ),
-            )
-        };
-        if let Some(active) = case.before.active {
-            let mut create = signed(active, 0);
+            ),
+        )
+    };
+    if let Some(active) = case.before.active {
+        let mut create = signed(active, 0);
+        crate::request::admission::sign_agent_request_create(
+            db.agent_identity.as_ref(),
+            &mut create,
+        )
+        .await
+        .unwrap();
+        let response = agent_write(
+            &db,
+            "test.management.active",
+            &create.graphql_mutation().unwrap(),
+        )
+        .await;
+        bound.insert(
+            active,
+            gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap(),
+        );
+        names.insert(active, active.to_string());
+    }
+    for (arrival, entry) in originals.iter().enumerate() {
+        let arrival = arrival + 1;
+        names.insert(entry.request_id, entry.request_id.to_string());
+        let id = if entry.requester_id == Some(2) {
+            super::folding::enqueue(&db, &session_id, entry, arrival).await
+        } else {
+            let mut create = signed(entry.request_id, arrival);
+            create.input = super::folding::generated_input(entry);
+            create.valid_until = ttl(entry)
+                .filter(|ttl| *ttl != "malformed")
+                .map(str::to_owned);
             crate::request::admission::sign_agent_request_create(
                 db.agent_identity.as_ref(),
                 &mut create,
             )
             .await
             .unwrap();
-            let response = agent_write(
-                &db,
-                "test.management.active",
-                &create.graphql_mutation().unwrap(),
-            )
-            .await;
-            bound.insert(
-                active,
-                gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap(),
-            );
-            names.insert(active, active.to_string());
-        }
-        for (arrival, entry) in originals.iter().enumerate() {
-            let arrival = arrival + 1;
-            names.insert(entry.request_id, entry.request_id.to_string());
-            let id = if entry.requester_id == Some(2) {
-                super::folding::enqueue(&db, &session_id, entry, arrival).await
-            } else {
-                let mut create = signed(entry.request_id, arrival);
-                create.input = super::folding::generated_input(entry);
-                create.valid_until = ttl(entry)
-                    .filter(|ttl| *ttl != "malformed")
-                    .map(str::to_owned);
-                crate::request::admission::sign_agent_request_create(
-                    db.agent_identity.as_ref(),
-                    &mut create,
-                )
-                .await
-                .unwrap();
-                let mut mutation = create.graphql_mutation().unwrap();
-                if ttl(entry) == Some("malformed") {
-                    mutation = mutation.replacen(
-                        "create_AgentRequest(input: {",
-                        "create_AgentRequest(input: { valid_until: \"malformed\",",
-                        1,
-                    );
-                }
-                let response = agent_write(&db, "test.management.seed", &mutation).await;
-                gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
-            };
-            bound.insert(entry.request_id, id);
-        }
-        let active = match case.before.active {
-            Some(head) => Some(
-                super::folding::claim_head(
-                    &db,
-                    &bound,
-                    head,
-                    &case
-                        .before
-                        .folding
-                        .iter()
-                        .map(|entry| entry.request_id)
-                        .collect::<Vec<_>>(),
-                )
-                .await,
-            ),
-            None => None,
+            let mut mutation = create.graphql_mutation().unwrap();
+            if ttl(entry) == Some("malformed") {
+                mutation = mutation.replacen(
+                    "create_AgentRequest(input: {",
+                    "create_AgentRequest(input: { valid_until: \"malformed\",",
+                    1,
+                );
+            }
+            let response = agent_write(&db, "test.management.seed", &mutation).await;
+            gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
         };
-        assert_eq!(
-            queue_image(&db, &session_id, active.as_ref()).await,
-            case.before.image(|id| names[&id].clone()),
-            "{}: seeded queue",
-            case.name
-        );
-        let edit = PendingQueueEdit {
-            expected_request_doc_ids: expected.iter().map(|id| bound[id].clone()).collect(),
-            selected_request_doc_ids: selected
-                .iter()
-                .map(|entry| bound[&entry.request_id].clone())
-                .collect(),
-            messages: replacements
-                .iter()
-                .zip(selected)
-                .map(|(replacement, original)| PendingMessageEdit {
-                    authored_input: None,
-                    request_doc_id: bound[&original.request_id].clone(),
-                    content: format!("message {}", replacement.request_id),
-                })
-                .collect(),
-        };
-        let user_key = gents_store::identity::KeyIdentity::load_or_create(
-            db._tempdir.path().join("other-user.key"),
-            None,
-        )
-        .unwrap();
-        // Modeled requester 1 is the Agent that authored its own queued work;
-        // it edits through its managed signer.
-        let (signer, access): (&dyn gents_store::identity::NodeIdentity, ConfigAccess) =
-            match caller {
-                Some(1) => (db.agent_identity.as_ref(), db.agent_access.clone()),
-                Some(2) => (
-                    &user_key,
-                    ConfigAccess::local_as(
-                        db.node.clone(),
-                        ::identity::Did::new(user_key.did().to_owned()).unwrap(),
-                    ),
-                ),
-                _ => panic!("unsupported caller in {}", case.name),
-            };
-        let state_query = format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID content input admission_signature lifecycle_state valid_until }} }}"#,
-            escape_graphql_string(&session_id),
-        );
-        let snapshot = pending_user_queue(&access, db.node_did(), &session_id, signer.did())
-            .await
-            .unwrap();
-        let mut observed = snapshot
-            .entries
+        bound.insert(entry.request_id, id);
+    }
+    let active = match case.before.active {
+        Some(head) => {
+            Some(super::folding::claim_head(&db, &bound, head, &ids(&before_folding)).await)
+        }
+        None => None,
+    };
+    assert_eq!(
+        queue_image(&db, &session_id, active.as_ref()).await,
+        image_of(
+            case.before.active,
+            &ids(&before_folding),
+            &ids(&before_pending),
+            &case.before.terminal,
+            &names
+        ),
+        "{}: seeded queue",
+        case.name
+    );
+    let edit = PendingQueueEdit {
+        expected_request_doc_ids: expected.iter().map(|id| bound[id].clone()).collect(),
+        selected_request_doc_ids: selected
             .iter()
-            .map(|entry| entry.request_doc_id.clone())
-            .collect::<Vec<_>>();
-        let mut expected_order = observed.clone();
-        if let Some(head) = case.before.active {
-            observed.push(bound[&head].clone());
-            expected_order.insert(0, bound[&head].clone());
-        }
-        observed.reverse();
-        let projection = pending_user_queue_projection(
-            &access,
-            db.node_did(),
-            &session_id,
-            signer.did(),
-            &observed,
-        )
+            .map(|entry| bound[&entry.request_id].clone())
+            .collect(),
+        messages: replacements
+            .iter()
+            .zip(selected)
+            .map(|(replacement, original)| PendingMessageEdit {
+                authored_input: None,
+                request_doc_id: bound[&original.request_id].clone(),
+                content: format!("message {}", replacement.request_id),
+            })
+            .collect(),
+    };
+    let user_key = gents_store::identity::KeyIdentity::load_or_create(
+        db._tempdir.path().join("other-user.key"),
+        None,
+    )
+    .unwrap();
+    // Modeled requester 1 is the Agent that authored its own queued work;
+    // it edits through its managed signer.
+    let (signer, access): (&dyn gents_store::identity::NodeIdentity, ConfigAccess) = match caller {
+        Some(1) => (db.agent_identity.as_ref(), db.agent_access.clone()),
+        Some(2) => (
+            &user_key,
+            ConfigAccess::local_as(
+                db.node.clone(),
+                ::identity::Did::new(user_key.did().to_owned()).unwrap(),
+            ),
+        ),
+        _ => panic!("unsupported caller in {}", case.name),
+    };
+    let state_query = format!(
+        r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID content input admission_signature lifecycle_state valid_until }} }}"#,
+        escape_graphql_string(&session_id),
+    );
+    let snapshot = pending_user_queue(&access, db.node_did(), &session_id, signer.did())
         .await
         .unwrap();
-        assert_eq!(
-            projection.arrival_order, expected_order,
-            "{}: arrival order includes claimed requests",
+    let mut observed = snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.request_doc_id.clone())
+        .collect::<Vec<_>>();
+    let mut expected_order = observed.clone();
+    if let Some(head) = case.before.active {
+        observed.push(bound[&head].clone());
+        expected_order.insert(0, bound[&head].clone());
+    }
+    observed.reverse();
+    let projection =
+        pending_user_queue_projection(&access, db.node_did(), &session_id, signer.did(), &observed)
+            .await
+            .unwrap();
+    assert_eq!(
+        projection.arrival_order, expected_order,
+        "{}: arrival order includes claimed requests",
+        case.name
+    );
+    assert_eq!(
+        projection
+            .pending
+            .entries
+            .iter()
+            .map(|entry| &entry.request_doc_id)
+            .collect::<Vec<_>>(),
+        snapshot
+            .entries
+            .iter()
+            .map(|entry| &entry.request_doc_id)
+            .collect::<Vec<_>>()
+    );
+    for original in selected.iter().filter(|entry| !entry.fresh) {
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.request_doc_id == bound[&original.request_id])
+            .unwrap();
+        assert!(
+            !entry.editable,
+            "{}: stale TTL cannot offer an edit",
             case.name
         );
-        assert_eq!(
-            projection
-                .pending
-                .entries
-                .iter()
-                .map(|entry| &entry.request_doc_id)
-                .collect::<Vec<_>>(),
-            snapshot
-                .entries
-                .iter()
-                .map(|entry| &entry.request_doc_id)
-                .collect::<Vec<_>>()
-        );
-        for original in selected.iter().filter(|entry| !entry.fresh) {
-            let entry = snapshot
-                .entries
-                .iter()
-                .find(|entry| entry.request_doc_id == bound[&original.request_id])
-                .unwrap();
-            assert!(
-                !entry.editable,
-                "{}: stale TTL cannot offer an edit",
-                case.name
-            );
-        }
-        let before_rows = access.execute(&state_query).await.unwrap()["data"]["AgentRequest"]
-            .as_array()
-            .unwrap()
-            .clone();
-        let result = replace_pending_user_messages(
-            &access,
-            signer,
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(signer.did()),
-            PendingEditActor {
-                node_did: db.node_did(),
-                session_id: &session_id,
-                requester_did: signer.did(),
-            },
-            edit,
-            &replacements
-                .iter()
-                .map(|replacement| {
-                    super::folding::generated_input(replacement)
-                        .queue
-                        .unwrap()
-                        .delivery
-                })
-                .collect::<Vec<_>>(),
-        )
-        .await;
-        assert_eq!(
-            result.is_ok(),
-            case.expected.is_some(),
-            "{}: acceptance",
-            case.name
-        );
-        let actual_rows = access.execute(&state_query).await.unwrap()["data"]["AgentRequest"]
-            .as_array()
-            .unwrap()
-            .clone();
-        for original in &before_rows {
-            let current = actual_rows
-                .iter()
-                .find(|row| row["_docID"] == original["_docID"])
-                .unwrap();
-            for field in ["content", "input", "admission_signature", "valid_until"] {
-                assert_eq!(
-                    current[field], original[field],
-                    "{}: signed {field} remains immutable",
-                    case.name
-                );
-            }
-        }
-        if case.expected.is_none() {
+    }
+    let before_rows = access.execute(&state_query).await.unwrap()["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let result = replace_pending_user_messages(
+        &access,
+        signer,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(signer.did()),
+        PendingEditActor {
+            node_did: db.node_did(),
+            session_id: &session_id,
+            requester_did: signer.did(),
+        },
+        edit,
+        &replacements
+            .iter()
+            .map(|replacement| {
+                super::folding::generated_input(replacement)
+                    .queue
+                    .unwrap()
+                    .delivery
+            })
+            .collect::<Vec<_>>(),
+    )
+    .await;
+    let actual_rows = access.execute(&state_query).await.unwrap()["data"]["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .clone();
+    for original in &before_rows {
+        let current = actual_rows
+            .iter()
+            .find(|row| row["_docID"] == original["_docID"])
+            .unwrap();
+        for field in ["content", "input", "admission_signature", "valid_until"] {
             assert_eq!(
-                actual_rows.len(),
-                before_rows.len(),
-                "{}: rejection creates no requests",
+                current[field], original[field],
+                "{}: signed {field} remains immutable",
                 case.name
             );
-            for original in &before_rows {
-                assert!(
-                    actual_rows.contains(original),
-                    "{}: rejection leaves durable state unchanged",
-                    case.name
-                );
-            }
         }
-        if let Ok(receipt) = &result {
-            for (replacement, id) in replacements.iter().zip(&receipt.request_ids) {
-                names.insert(replacement.request_id, id.clone());
-            }
-        }
+    }
+    if result.is_err() {
         assert_eq!(
-            queue_image(&db, &session_id, active.as_ref()).await,
-            case.expected
-                .as_ref()
-                .unwrap_or(&case.before)
-                .image(|id| names[&id].clone()),
+            actual_rows.len(),
+            before_rows.len(),
+            "{}: rejection creates no requests",
+            case.name
+        );
+        for original in &before_rows {
+            assert!(
+                actual_rows.contains(original),
+                "{}: rejection leaves durable state unchanged",
+                case.name
+            );
+        }
+    }
+    if let Ok(receipt) = &result {
+        for (replacement, id) in replacements.iter().zip(&receipt.request_ids) {
+            names.insert(replacement.request_id, id.clone());
+        }
+    }
+    let after = queue_image(&db, &session_id, active.as_ref()).await;
+    if result.is_err() {
+        assert_eq!(
+            after,
+            image_of(
+                case.before.active,
+                &ids(&before_folding),
+                &ids(&before_pending),
+                &case.before.terminal,
+                &names
+            ),
             "{}: queue state",
             case.name
         );
-        if case.expected.is_some() {
-            let receipt = result.unwrap();
+    }
+    let model_id = |native: &String| {
+        *names
+            .iter()
+            .find(|(_, name)| *name == native)
+            .expect("a modeled request")
+            .0
+    };
+    let mut terminal = after.terminal.iter().map(model_id).collect::<Vec<_>>();
+    terminal.sort_unstable();
+    let outcome = result.is_ok().then(|| {
+        gents_lean_vocab::families::fold_queue_contracts_management_replace::QueueImageWire {
+            active: after.active.as_ref().map(model_id),
+            pending: after.pending.iter().map(model_id).collect(),
+            folding: after.folding.iter().map(model_id).collect(),
+            terminal,
+        }
+    });
+    if let Ok(receipt) = result {
+        assert_eq!(
+            receipt.request_ids.len(),
+            replacements.len(),
+            "{}",
+            case.name
+        );
+        for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
+            assert!(
+                !bound.values().any(|old| old == id),
+                "{}: physical identity is fresh",
+                case.name
+            );
+            bound.insert(replacement.request_id, id.clone());
+        }
+        for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
+            let row = crate::request::binding::load_agent_request_by_doc_id_with_access(
+                &db.agent_access,
+                id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
             assert_eq!(
-                receipt.request_ids.len(),
-                replacements.len(),
+                row.content,
+                format!("message {}", replacement.request_id),
                 "{}",
                 case.name
             );
-            for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
-                assert!(
-                    !bound.values().any(|old| old == id),
-                    "{}: physical identity is fresh",
-                    case.name
-                );
-                bound.insert(replacement.request_id, id.clone());
-            }
-            for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
-                let row = crate::request::binding::load_agent_request_by_doc_id_with_access(
-                    &db.agent_access,
-                    id,
-                )
-                .await
-                .unwrap()
+            let slot = originals
+                .iter()
+                .find(|entry| entry.order_key == replacement.order_key)
                 .unwrap();
-                assert_eq!(
-                    row.content,
-                    format!("message {}", replacement.request_id),
-                    "{}",
-                    case.name
-                );
-                let slot = originals
-                    .iter()
-                    .find(|entry| entry.order_key == replacement.order_key)
-                    .unwrap();
-                let queue = row.input.queue.unwrap();
-                assert_eq!(
-                    queue.position.unwrap().slot_request_doc_id,
-                    bound[&slot.request_id],
-                    "{}: immutable slot",
-                    case.name
-                );
-                assert_eq!(
-                    serde_json::to_value(queue.delivery).unwrap(),
-                    replacement.delivery,
-                    "{}: delivery",
-                    case.name
-                );
-                let persisted = access.execute(&format!(
+            let queue = row.input.queue.unwrap();
+            assert_eq!(
+                queue.position.unwrap().slot_request_doc_id,
+                bound[&slot.request_id],
+                "{}: immutable slot",
+                case.name
+            );
+            assert_eq!(
+                serde_json::to_value(queue.delivery).unwrap(),
+                replacement.delivery,
+                "{}: delivery",
+                case.name
+            );
+            let persisted = access.execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ admission_signature valid_until }} }}"#,
                     escape_graphql_string(id),
                 )).await.unwrap();
-                let predecessor = before_rows
-                    .iter()
-                    .find(|row| row["_docID"] == bound[&slot.request_id])
-                    .unwrap();
-                assert_eq!(
-                    persisted["data"]["AgentRequest"][0]["valid_until"], predecessor["valid_until"],
-                    "{}: signed expiry is retained rather than extended",
-                    case.name
-                );
-                assert!(
-                    persisted["data"]["AgentRequest"][0]["admission_signature"]
-                        .as_str()
-                        .is_some_and(|value| !value.is_empty()),
-                    "{}: replacement is signed",
-                    case.name
-                );
-            }
+            let predecessor = before_rows
+                .iter()
+                .find(|row| row["_docID"] == bound[&slot.request_id])
+                .unwrap();
+            assert_eq!(
+                persisted["data"]["AgentRequest"][0]["valid_until"], predecessor["valid_until"],
+                "{}: signed expiry is retained rather than extended",
+                case.name
+            );
+            assert!(
+                persisted["data"]["AgentRequest"][0]["admission_signature"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+                "{}: replacement is signed",
+                case.name
+            );
         }
     }
-    assert_eq!(
-        exercised.len(),
-        15,
-        "all representable generated management operations"
-    );
+    outcome
 }

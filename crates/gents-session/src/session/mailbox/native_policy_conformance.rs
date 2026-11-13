@@ -63,13 +63,8 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
             .await?,
     );
     let context = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
-    let modeled = &gents_lean_vocab::lean_contract_snapshot().mailbox_native_policy;
-    assert_eq!(
-        modeled["policy_yaml"].as_str(),
-        Some(gents_protocol::schemas::MAILBOX_POLICY)
-    );
     let policy = node
-        .add_dac_policy_with_counter_as(&context, modeled["policy_yaml"].as_str().unwrap(), 0)
+        .add_dac_policy_with_counter_as(&context, gents_protocol::schemas::MAILBOX_POLICY, 0)
         .await?;
     for actor in [agent.did(), other.did(), runtime.did()] {
         for permission in [
@@ -191,68 +186,74 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
     let absent = access
         .execute("{ MailboxItem(filter: { item_key: {_eq: \"mailbox:aborted\"} }) { _docID } }")
         .await?;
-    assert_eq!(
-        !envelope_rows(&absent, "MailboxItem")?.is_empty(),
-        modeled["aborted_document"].as_bool().unwrap()
-    );
-    let checks = modeled["checks"].as_array().unwrap();
-    assert!(!checks.is_empty());
+    let aborted_document = !envelope_rows(&absent, "MailboxItem")?.is_empty();
     let url = format!("http://{address}/api/v0/graphql");
-    for case in checks {
-        let actor = match case["actor"].as_str().unwrap() {
-            "agent" => agent.did(),
-            "user" => user.did(),
-            "other" => other.did(),
-            "runtime" => runtime.did(),
-            role => panic!("unknown modeled mailbox role {role}"),
-        };
-        let permission = match case["permission"].as_str().unwrap() {
-            "read" => defra_node::DocumentPermission::Read,
-            "update" => defra_node::DocumentPermission::Update,
-            "delete" => defra_node::DocumentPermission::Delete,
-            permission => panic!("unknown modeled permission {permission}"),
-        };
-        let allowed = node
-            .document_acp()
-            .check_doc_access(
-                &defra_node::AcpIdentity::Authenticated(actor.parse()?),
-                permission,
-                &policy,
-                "mailbox_items",
-                &doc,
-            )
-            .await?;
-        assert_eq!(allowed, case["expected"].as_bool().unwrap(), "{case}");
-        if case["permission"] == "read" && case["actor"] != "agent" {
-            let key = match case["actor"].as_str().unwrap() {
-                "user" => &user,
-                "other" => &other,
-                "runtime" => &runtime,
-                _ => unreachable!(),
-            };
-            let response = client(&url, key)?
-                .execute(&format!(
-                    "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-                    escape_graphql_string(&doc)
-                ))
-                .await?;
-            assert_eq!(
-                !envelope_rows(&response, "MailboxItem")?.is_empty(),
-                allowed,
-                "HTTP visibility: {case}"
-            );
+    let did_of = |actor: &str| match actor {
+        "agent" => agent.did(),
+        "user" => user.did(),
+        "other" => other.did(),
+        "runtime" => runtime.did(),
+        role => panic!("unknown modeled mailbox role {role}"),
+    };
+    let permission_of = |permission: &str| match permission {
+        "read" => defra_node::DocumentPermission::Read,
+        "update" => defra_node::DocumentPermission::Update,
+        "delete" => defra_node::DocumentPermission::Delete,
+        permission => panic!("unknown modeled permission {permission}"),
+    };
+    let granted = |actor: &str, permission: defra_node::DocumentPermission| {
+        let (node, policy, doc) = (&node, &policy, &doc);
+        let actor = did_of(actor).to_owned();
+        async move {
+            node.document_acp()
+                .check_doc_access(
+                    &defra_node::AcpIdentity::Authenticated(actor.parse()?),
+                    permission,
+                    policy,
+                    "mailbox_items",
+                    doc,
+                )
+                .await
+                .map_err(anyhow::Error::from)
         }
+    };
+    let cases = gents_lean_vocab::families::mailbox_access_native::cases();
+    let mut allowed = Vec::new();
+    for case in &cases {
+        let mut granted_now = Vec::new();
+        for actor in &case.input.actors {
+            for permission in &case.input.permissions {
+                let result = granted(actor, permission_of(permission)).await?;
+                if permission == "read" && actor != "agent" {
+                    let key = match actor.as_str() {
+                        "user" => &user,
+                        "other" => &other,
+                        "runtime" => &runtime,
+                        _ => unreachable!(),
+                    };
+                    let response = client(&url, key)?
+                        .execute(&format!(
+                            "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+                            escape_graphql_string(&doc)
+                        ))
+                        .await?;
+                    assert_eq!(
+                        !envelope_rows(&response, "MailboxItem")?.is_empty(),
+                        result,
+                        "HTTP visibility: {actor} {permission}"
+                    );
+                }
+                granted_now.push(result);
+            }
+        }
+        allowed.push(granted_now);
     }
     let user_access = client(&url, &user)?;
     let other_access = client(&url, &other)?;
-    let other_update = checks
-        .iter()
-        .find(|case| case["actor"] == "other" && case["permission"] == "update")
-        .unwrap();
     let outsider_result = crate::operations::mailbox::dismiss(&other_access, &doc).await;
     assert_eq!(
         outsider_result.is_ok(),
-        other_update["expected"].as_bool().unwrap()
+        granted("other", defra_node::DocumentPermission::Update).await?
     );
     assert_eq!(
         load_mailbox_item_with_access(&user_access, &doc)
@@ -323,15 +324,36 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
             escape_graphql_string(&doc)
         ))
         .await?;
-    let modeled_revocation = checks
-        .iter()
-        .find(|case| case["actor"] == "user" && case["permission"] == "read")
-        .unwrap();
     assert_eq!(
         !envelope_rows(&revoked, "MailboxItem")?.is_empty(),
-        modeled_revocation["revoked_expected"].as_bool().unwrap()
+        granted("user", defra_node::DocumentPermission::Read).await?
     );
-    assert!(crate::operations::mailbox::dismiss(&user_access, &doc).await.is_err());
+    for (case, allowed) in cases.iter().zip(allowed) {
+        let mut checks = Vec::new();
+        let mut allowed = allowed.into_iter();
+        for actor in &case.input.actors {
+            for permission in &case.input.permissions {
+                checks.push(
+                    gents_lean_vocab::families::mailbox_access_native::NativeCheck {
+                        actor: actor.clone(),
+                        permission: permission.clone(),
+                        expected: allowed.next().expect("one grant per modeled check"),
+                        revoked_expected: granted(actor, permission_of(permission)).await?,
+                    },
+                );
+            }
+        }
+        case.check(
+            gents_lean_vocab::families::mailbox_access_native::NativeOutput {
+                policy_yaml: gents_protocol::schemas::MAILBOX_POLICY.to_owned(),
+                aborted_document,
+                checks,
+            },
+        );
+    }
+    assert!(crate::operations::mailbox::dismiss(&user_access, &doc)
+        .await
+        .is_err());
     node.shutdown().await?;
     Ok(())
 }
