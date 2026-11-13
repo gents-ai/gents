@@ -126,9 +126,10 @@ where
         }
         repair().await.map_err(PairingFailure::Transient)?;
         if tokio::time::Instant::now() >= deadline {
-            return Err(PairingFailure::Transient(
-                "timed out waiting for managed runtime pairing".to_string(),
-            ));
+            return Err(PairingFailure::Transient(format!(
+                "the node did not approve this desktop's enrollment within {} seconds; its request is still pending",
+                window.as_secs()
+            )));
         }
         tokio::select! {
             () = tokio::time::sleep(interval) => {}
