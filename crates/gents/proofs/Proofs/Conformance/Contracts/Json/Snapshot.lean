@@ -413,8 +413,6 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
     ++ "\"goal_claimed_publication_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
-    ++ "\"goal_operator_resume_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
     ++ "\"goal_operator_resume_on_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
 
