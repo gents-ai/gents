@@ -630,6 +630,23 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
     );
 }
 
+/// Premise evidence for the ledger row `boundary.count-carrier.non-null-id`.
+#[tokio::test]
+async fn defradb_refuses_a_non_null_id_count_carrier() {
+    let node = gents_store::test_support::node_builder()
+        .build()
+        .await
+        .unwrap();
+    let error = node
+        .add_collection("type CountCarrierNonNullId { count: ID! }")
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("NonNull variant for type ID is not supported"),
+        "{error:#}"
+    );
+}
+
 #[tokio::test]
 async fn count_carriers_store_as_the_count_carrier_model() {
     let node = Arc::new(
