@@ -240,6 +240,7 @@ import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.Workspace
+import Proofs.Conformance.PairingReconcileSupervisor
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.SelfConfigAgent
@@ -345,8 +346,6 @@ def snapshotCaptureTailJson : String :=
       ++ compactionProjectionJoinCasesJson ++ ","
     ++ "\"compaction_canonical_projection_cases\":"
       ++ compactionCanonicalProjectionCasesJson ++ ","
-    ++ "\"repaired_projection_admission_cases\":"
-      ++ repairedProjectionAdmissionCasesJson ++ ","
     ++ "\"goal_link_cases\":"
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
@@ -360,10 +359,6 @@ def snapshotCoverageTailJson : String :=
   ""
     ++ "\"trigger_delivery_callback_visibility_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryCallbackVisibilityCasesJson ++ ","
     ++ "\"trigger_delivery_latest_admission_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryLatestAdmissionCasesJson ++ ","
-    ++ "\"event_group_capture_case_count\":" ++ toString Conformance.EventDelivery.eventGroupCaptureCaseCount ++ ","
-    ++ "\"event_group_capture_cases\":" ++ Conformance.EventDelivery.eventGroupCaptureCasesJson ++ ","
-    ++ "\"event_group_clock_case_count\":" ++ toString Conformance.EventDelivery.eventGroupClockCaseCount ++ ","
-    ++ "\"event_group_clock_cases\":" ++ Conformance.EventDelivery.eventGroupClockCasesJson ++ ","
     ++ "\"watcher_actor_cases\":"
       ++ EventDelivery.WatcherConformance.actorCasesJson ++ ","
     ++ "\"watcher_scoped_scan_cases\":"
@@ -468,8 +463,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
-    ++ "\"session_document_reference_encoding\":" ++ sessionDocumentReferenceEncodingJson ++ ","
-    ++ "\"session_document_retry_cases\":" ++ sessionDocumentRetryCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
@@ -539,8 +532,6 @@ def snapshotClientCasesJson : String :=
       ++ readinessPublicationCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
-    ++ "\"session_recovery_cases\":"
-      ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
 
 def snapshotRuntimeCasesJson : String :=
   ""
@@ -556,14 +547,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"managed_exec_tool_boundary_cases\":"
       ++ jsonArray
         (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_shutdown_boundary_cases\":"
-      ++ jsonArray
-        (pairingReconcileShutdownBoundaryCases.map
-          pairingReconcileShutdownBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_sweep_retry_boundary_cases\":"
-      ++ jsonArray
-        (pairingReconcileSweepRetryBoundaryCases.map
-          pairingReconcileSweepRetryBoundaryCaseJson) ++ ","
     ++ "\"managed_exec_liveness_cases\":"
       ++ jsonArray
         (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
@@ -641,9 +624,6 @@ def snapshotPluginCasesJson : String :=
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"workspace_binding_cases\":"
-      ++ workspaceBindingCasesJson ++ ","
-    ++ "\"callback_transition_case_count\":" ++ toString callbackTransitionCaseCount ++ ","
     ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray

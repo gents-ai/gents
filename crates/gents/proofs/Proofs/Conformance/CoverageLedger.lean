@@ -1148,10 +1148,15 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_self_config_sibling_tools")
       "self-config" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "session_recovery_cases"
-      "SessionRecoveryCases"
-      "Exercises desktop retry eligibility and successor lineage. Admission lease release remains an owner refinement: terminal-failed is the current adapter assumption, and emitted admission witnesses are not independently observed. Exact-row retryFromRows cases require the migrated query/transaction owner.")
+  , tagged (followUpCoverage
+      "family"
+      "contract_cases_session_recovery_unreached"
+      "model-production-gap: the model reissues over a session whose requests each carry an admission lease and a deadline clock; production reissue publishes a successor from persisted rows on a served node and records no per-request admission. The eligibility decision is replayed by session_operations_reissue_decision.")
+      "session-recovery" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "conformance_contract_cases_recovery_action_vocabulary"
+      "model-production-gap: the action vocabulary of contract_cases_session_recovery_unreached, which has no production path.")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1314,13 +1319,9 @@ def caseCoverage : List CoverageEntry :=
       "ManagedExecToolBoundaryCases"
       "Drive each generated native-tool route through its actual managed process boundary. Names and processTree flags are not evidence of runtime routing.")
       "managed-exec" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "pairing_reconcile_shutdown_boundary_cases"
-      "PairingReconcileShutdownBoundaryCases")
+  , tagged (consumerCoverage "family" "pairing_reconcile_supervisor_shutdown_race")
       "pairing-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "pairing_reconcile_sweep_retry_boundary_cases"
-      "PairingReconcileSweepRetryBoundaryCases")
+  , tagged (consumerCoverage "family" "pairing_reconcile_supervisor_sweep_retry")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2624,9 +2625,9 @@ def caseCoverage : List CoverageEntry :=
       "Concrete canonical records and selected identities exercise the composed reconstruction/projection/reduction entry. Compare full native messages at initial and checkpoint-rebuild callbacks, and reject missing or loading dependencies without shortened history. The native serializer and ACP-authorized snapshot remain external premises.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
-      "repaired_projection_admission_cases"
-      "RepairedProjectionAdmissionCases"
-      "Fresh provider-view admission reprojects and re-estimates supplied repaired input; generated observations cover failures, equality, over-threshold and output-capacity checks. This does not model the repair transformation or establish native consumer coverage.")
+      "family"
+      "contract_cases_compaction_canonical_projection_repaired_admission_unreached"
+      "model-production-gap: production admits a fresh provider request inside gents-loop request assembly over the serialized request, where projection and estimation are the provider's own calls; no production function takes a supplied projection outcome and estimate. This does not model the repair transformation.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "canonical_output_projection_cases"
@@ -3029,10 +3030,10 @@ def caseCoverage : List CoverageEntry :=
       "family" "contracts_workspace_transition_unreached"
       "model-production-gap: production has no lifecycle-transition owner; host executor plans write each transition inline and no scenario replays these transitions through them, and the illegal transitions have no production path.")
       "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "workspace_binding_cases"
-      "WorkspaceBindingCases"
-      "Replay these cases through the production Workspace binding admission owner after node-field migration; do not restore the deleted test-local binding predicate.")
+  , tagged (consumerCoverage "family" "contracts_workspace_binding_admission")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_workspace_binding_admission_unreached"
+      "model-production-gap: binding admission takes neither the workspace owner nor the command's git metadata writes; production sets a binding's owner from the workspace and denies git metadata writes in the command spawn policy, so the non-owner and git-metadata cases have no production path through admit_workspace_binding.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -3115,8 +3116,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "contracts_archive_transition_unreached"
       "model-production-gap: archive authorization is DefraDB ACP on the caller's transaction before the revision transition runs; no production scenario replays the unauthorized archive writes.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "session_document_retry_cases" "SessionDocumentCases"
-      "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
+  , tagged (followUpCoverage "family" "session_documents_retry_unreached"
+      "model-production-gap: the model selects the retry parent from the session document's observation and the exact physical request rows in one transaction; production retry eligibility reads persisted rows without that observation, so no production path takes these inputs. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "family" "contracts_background_wake_rows_unreached"
       "model-production-gap: background publication still redrives a failed wake through its pre-migration owner; no production path publishes the successor from exact physical-parent and cross-requester authoritative rows. Existing DB wake tests do not establish these row verdicts.")
@@ -3140,11 +3141,11 @@ def caseCoverage : List CoverageEntry :=
       "apply-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "initialization_initial_inference")
       "apply-reconcile" [Surface.operatorCli]
-  , tagged (followUpCoverage "event_group_clock_cases" "EventGroupClockCases"
-      "Drive the existing durable group clock owner after typed trigger/callback identity migration; preserve first-seen and quiescence across restart.")
+  , tagged (followUpCoverage "family" "event_delivery_group_clock_unreached"
+      "model-production-gap: the durable group clock stamps first-seen and quiescence with the wall clock inside a served transaction and keeps no cached first-seen observation; no production path takes now, timeout or a cached first-seen as an input.")
       "triggers" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "event_group_capture_cases" "EventGroupCaptureCases"
-      "Drive captured ordered input and typed origin through the callback capture owner; quiesced groups must reject capture.")
+  , tagged (followUpCoverage "family" "event_delivery_group_capture_unreached"
+      "model-production-gap: production captures a callback group only inside the served callback scan (materialize_group), which loads the group by the delivery's own key; mismatched or trigger candidates have no production path and the eligible and quiesced cases need a served callback-binding scenario.")
       "triggers" [Surface.runtimeInternal]
   , tagged (followUpCoverage "callback_transition_cases" "CallbackTransitionCases"
       "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through contracts_callback_recovery.")

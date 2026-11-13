@@ -66,21 +66,6 @@ def documentJson (d : AgentSession.Document) : Json := Json.mkObj
          [("doc_id", toJson r.docId), ("request_id", toJson r.requestId),
           ("state", toJson r.state.toDefraDB)]) |>.getD Json.null)]) |>.getD Json.null)]
 
-private def retryStateJson (s : SessionState) : Json := Json.mkObj
-  [("session_id", toJson s.sessionId), ("agent", toJson s.agentDid),
-   ("latest", toJson s.latest), ("requests", toJson ([1, 3].filter
-     (fun id => decide (id ∈ s.requestIds)) |>.map (fun id => Json.mkObj
-       [("request_id", toJson id), ("state", toJson (s.ctx id).state.toDefraDB),
-        ("origin", toJson (s.ctx id).origin.toDefraDB),
-        ("admission", toJson (Conformance.ContractCases.admissionName (s.ctx id).admission)),
-        ("deadline", toJson (s.ctx id).deadline), ("current_time", toJson (s.ctx id).currentTime),
-        ("retry_count", toJson (s.ctx id).retryCount), ("max_retries", toJson (s.ctx id).maxRetries)])))]
-private def retryJson (name : String) (rows : List AgentSession.RequestFact) (parentDoc : Nat) : Json :=
-  Json.mkObj [("name", toJson name), ("session", documentJson indexed),
-    ("before", retryStateJson retryState), ("rows", toJson (rows.map requestJson)),
-    ("parent_doc", toJson parentDoc), ("failed_id", toJson (1 : Nat)), ("new_id", toJson (3 : Nat)),
-    ("after", (SessionState.retryFromRows? retryState indexed rows parentDoc 1 3).map
-      retryStateJson |>.getD Json.null)]
 private def roleName : CanonicalOutput.MessageRole → String
   | .system => "system"
   | .user => "user"
@@ -302,17 +287,6 @@ def starterVerification : Family StarterInput Bool where
 
 example : starterVerification.inputs.any fun i =>
     i.name == "signature" && !starterVerification.model i := by native_decide
-
-
-def sessionDocumentReferenceEncodingJson : String :=
-  (toJson "interned collection plus _docID, not raw _docID").compress
-
-def sessionDocumentRetryCasesJson : String :=
-  (toJson [
-      retryJson "exact_parent" [old] 101,
-      retryJson "newer_authoritative_row" [old, newerRequest] 101,
-      retryJson "wrong_physical_parent" [old] 999,
-      retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]).compress
 
 structure RequestWire where
   purpose : String

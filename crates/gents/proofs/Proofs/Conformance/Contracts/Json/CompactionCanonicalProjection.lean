@@ -38,21 +38,4 @@ def compactionCanonicalProjectionCaseJson (w : CanonicalCase) : String :=
 def compactionCanonicalProjectionCasesJson : String :=
   jsonArray (canonicalCases.map compactionCanonicalProjectionCaseJson)
 
-def repairedProjectionAdmissionCaseJson (w : FreshCase) : String :=
-  let result := freshResult w
-  "{\"name\":" ++ jsonString w.name ++ ",\"input\":{" ++
-    "\"source\":" ++ natArray w.source ++
-    ",\"project_succeeds\":" ++ (if w.projectSucceeds then "true" else "false") ++
-    ",\"estimate_tokens\":" ++ jsonOptionalNat w.estimateTokens ++
-    ",\"effective_input_budget\":" ++ toString w.effectiveInputBudget ++
-    ",\"context_window\":" ++ toString w.contextWindow ++
-    ",\"configured_max_output_tokens\":" ++ toString w.configuredMaxOutputTokens ++ "}," ++
-    "\"expected\":{\"result\":" ++ jsonString (freshResultName result) ++
-    ",\"output_tokens\":" ++ jsonOptionalNat (freshOutput result) ++
-    ",\"projected_source\":" ++ (match freshProjectedSource result with
-      | none => "null" | some source => natArray source) ++ "}}"
-
-def repairedProjectionAdmissionCasesJson : String :=
-  jsonArray (freshCases.map repairedProjectionAdmissionCaseJson)
-
 end Conformance.Contracts

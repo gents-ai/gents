@@ -195,14 +195,6 @@ pub fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileC
         .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
 }
 
-pub fn lean_session_recovery_case(name: &str) -> &'static LeanSessionRecoveryCase {
-    lean_contract_snapshot()
-        .session_recovery_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean session-recovery case {name:?} was not emitted"))
-}
-
 pub fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
     lean_contract_snapshot()
         .frontend_client_shell_cases
@@ -298,8 +290,6 @@ impl LeanQueueManagementState {
             terminal: self.terminal.iter().copied().map(&native).collect(),
         }
     }
-}
-
 }
 
 pub fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {

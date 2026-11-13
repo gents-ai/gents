@@ -18,7 +18,6 @@ GROUPS = {
     "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
     "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
     "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
-    "repaired_projection_admission_cases": "LeanRepairedProjectionCase",
 }
 INT_RANGES = {
     "u8": (0, 2**8 - 1), "u16": (0, 2**16 - 1),

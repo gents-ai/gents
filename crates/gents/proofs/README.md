@@ -264,7 +264,8 @@ second implementation in Lean. `compaction_projection_join_cases` supplies
 controlled observations at that boundary; it does not establish that native
 serialization produced them. `compaction_canonical_projection_cases` supplies
 the immutable records and checks full reconstructed native messages;
-`repaired_projection_admission_cases` covers remeasurement of repaired input.
+the family `contract_cases_compaction_canonical_projection_repaired_admission_unreached`
+covers remeasurement of repaired input.
 The actual serialized-request/threshold experiment
 remains `native.external-projected-request-threshold` in the implementation layer.
 

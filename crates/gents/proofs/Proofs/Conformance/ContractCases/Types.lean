@@ -355,30 +355,6 @@ structure ManagedExecToolBoundaryCase where
   captureDrainBounded : Bool
   deriving Repr
 
-structure PairingReconcileShutdownBoundaryCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  perAdminCallTimeoutMs : Nat
-  cancellationObservedInsideSweep : Bool
-  currentAdminFutureDropped : Bool
-  remainingPeersSkipped : Bool
-  shutdownJoinBounded : Bool
-  deriving Repr
-
-structure PairingReconcileSweepRetryBoundaryCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  failureScope : String
-  failureTerminal : Bool
-  retryTrigger : String
-  cancellationPrioritized : Bool
-  convergenceRetried : Bool
-  deriving Repr
-
 structure ManagedExecLivenessCase where
   name : String
   trigger : String

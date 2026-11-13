@@ -259,7 +259,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         lean_vocabulary_values("RequestState").len().pow(2)
     );
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
-    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 16);
     assert_eq!(
         lean_contract_snapshot()
             .persistence_failure_policy_cases
@@ -306,43 +305,3 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
-
-#[test]
-fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
-    let cases = lean_pairing_reconcile_shutdown_boundary_cases();
-    assert_eq!(cases.len(), 1);
-    let case = &cases[0];
-    assert_eq!(
-        case.name,
-        "shutdown_preempts_in_flight_pairing_reconcile_sweep"
-    );
-    assert_eq!(case.supervisor, "pairingReconciler");
-    assert_eq!(case.work_class, "p2pReconcileSweep");
-    assert_eq!(case.boundary, "pairingReconcileSupervisorBoundary");
-    assert_eq!(case.per_admin_call_timeout_ms, 10_000);
-    assert!(case.cancellation_observed_inside_sweep);
-    assert!(case.current_admin_future_dropped);
-    assert!(case.remaining_peers_skipped);
-    assert!(case.shutdown_join_bounded);
-}
-
-#[test]
-fn pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried() {
-    let cases = lean_pairing_reconcile_sweep_retry_boundary_cases();
-    assert_eq!(cases.len(), 1);
-    let case = &cases[0];
-    assert_eq!(
-        case.name,
-        "initial_top_level_sweep_failure_retries_without_terminating_reconciler"
-    );
-    assert_eq!(case.supervisor, "pairingReconciler");
-    assert_eq!(case.work_class, "p2pReconcileSweep");
-    assert_eq!(case.boundary, "pairingReconcileSupervisorBoundary");
-    assert_eq!(case.failure_scope, "topLevelSweepEnumeration");
-    assert!(!case.failure_terminal);
-    assert_eq!(case.retry_trigger, "immediateFirstIntervalTick");
-    assert!(case.cancellation_prioritized);
-    assert!(case.convergence_retried);
-}
-
-#[test]

@@ -122,6 +122,5 @@ def callbackJournal : Family CallbackJournal.JournalInput Bool where
       journal := c.journal.map ActionJournalState.toDefraDB }
   model := fun i => CallbackInvocation.journalPrefixOk (CallbackJournal.journalOf i.journal)
 
-def callbackTransitionCaseCount : Nat := Callback.Conformance.transitionCases.length
 
 end Conformance.Contracts
