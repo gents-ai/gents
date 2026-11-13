@@ -1660,8 +1660,9 @@ lifecycle-only seal guard remains a coarse necessary condition, not sufficient
 authorization for host effects. Path normalization/encoding/alias and Git capture
 are observed host predicates, not claimed filesystem or hash proofs.
 
-Twenty-four explicit operation cases are consumed by the real Git/executor
-umbrella test `generated_workspace_path_capability_cases_drive_real_git_executor`.
+Twenty-four explicit operation cases are replayed through the real Git executor
+by the `workspace_path_capability_contracts_*` families (provision, sealing,
+integrate, replay and tree_delta).
 Operation cases cover legacy fresh denial, identity recovery, empty exact sets, both rename endpoints,
 symlink/gitlink denial, immutable-base/snapshot mismatch, denied receipt repair,
 authorized integration, absent-checkout receipt recovery and capability tampering.
