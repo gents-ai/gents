@@ -8,7 +8,7 @@ use gents_tools::surface::refuse_too_broad_root;
 use crate::cli::args::InitArgs;
 use crate::cli::{Cli, Command};
 use crate::commands::eval::terminal_size;
-use crate::commands::init::init_home;
+use crate::commands::init::{default_packs, init_home};
 use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
 use gents_host::args::StoreKeyCustodyArg;
 use gents_service::home_state::read_finished_init_config;
@@ -163,6 +163,12 @@ pub(super) async fn setup(
         remember_home(&home)?;
     }
     Ok(home)
+}
+
+/// Continues a setup that stopped before it installed every core pack.
+pub(super) async fn continue_setup(home: &Path) -> Result<()> {
+    default_packs::install_missing(home, gents_core_packs::archives()).await?;
+    default_packs::record_installed(home)
 }
 
 /// What the folder question accepts. A symlink or `..` is judged by where it leads.

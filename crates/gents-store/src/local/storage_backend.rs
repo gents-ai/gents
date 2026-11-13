@@ -164,14 +164,20 @@ pub fn incompatible_store(
             data_path: key.path.clone(),
         });
     }
-    if matches!(
-        find_source::<super::backend_protection::BackendProtectionError>(error),
-        Some(super::backend_protection::BackendProtectionError::MissingProvenance)
-    ) {
-        return Some(IncompatibleStore {
-            kind: IncompatibleStoreKind::UnknownLineage,
-            data_path: data_path.to_path_buf(),
-        });
+    match find_source::<super::backend_protection::BackendProtectionError>(error) {
+        Some(super::backend_protection::BackendProtectionError::MissingProvenance) => {
+            return Some(IncompatibleStore {
+                kind: IncompatibleStoreKind::UnknownLineage,
+                data_path: data_path.to_path_buf(),
+            });
+        }
+        Some(super::backend_protection::BackendProtectionError::InvalidBinding) => {
+            return Some(IncompatibleStore {
+                kind: IncompatibleStoreKind::OtherVersionSchema,
+                data_path: data_path.to_path_buf(),
+            });
+        }
+        _ => {}
     }
     find_source::<gents_migration::Error>(error)
         .and_then(|cause| {
@@ -410,7 +416,9 @@ mod tests {
             Some(IncompatibleStoreKind::LegacyRocksDb)
         );
 
-        assert!(error.to_string().contains("legacy RocksDB Gents store"));
+        assert!(error
+            .to_string()
+            .contains("older version of Gents (a RocksDB store)"));
         assert_eq!(
             incompatible_store(&error, tempdir.path()).map(|store| store.kind),
             Some(IncompatibleStoreKind::LegacyRocksDb)
@@ -424,7 +432,9 @@ mod tests {
 
         let error = reject_legacy_store(tempdir.path()).unwrap_err();
 
-        assert!(error.to_string().contains("legacy Lark Gents store"));
+        assert!(error
+            .to_string()
+            .contains("older version of Gents (a Lark store)"));
     }
 
     #[test]
@@ -434,7 +444,9 @@ mod tests {
 
         let error = reject_legacy_store(tempdir.path()).unwrap_err();
 
-        assert!(error.to_string().contains("unsupported or corrupt"));
+        assert!(error
+            .to_string()
+            .contains("is not a store this version can read"));
     }
 
     #[test]
@@ -525,8 +537,8 @@ mod tests {
         let store = incompatible_store(&error, &temp.path().join("data")).expect("typed");
         assert_eq!(store.kind, IncompatibleStoreKind::InsecureKey);
         assert_eq!(store.data_path, key);
-        assert!(store.kind.is_older());
-        assert!(store.to_string().contains("unsafe file permissions"));
+        assert!(!store.kind.made_by_older_version());
+        assert!(store.to_string().contains("chmod 600"));
         assert_eq!(
             std::fs::metadata(&key).unwrap().permissions().mode() & 0o777,
             0o644,
@@ -546,10 +558,10 @@ mod tests {
         .context("opening the home");
         let store = incompatible_store(error.as_ref(), path).expect("typed refusal");
         assert_eq!(store.kind, IncompatibleStoreKind::UnknownLineage);
-        assert!(store.kind.is_older());
+        assert!(store.kind.made_by_older_version());
         assert!(
-            store.to_string().contains("older Gents version")
-                && store.to_string().contains("start fresh"),
+            store.to_string().contains("older version of Gents")
+                && store.to_string().contains("Nothing in it was changed"),
             "{store}"
         );
         let tampered = anyhow::Error::new(
@@ -572,8 +584,8 @@ mod tests {
             let classified = classify_store_error(refused, path);
             let store = incompatible_store(&classified, path).expect("typed refusal");
             assert_eq!(store.kind, IncompatibleStoreKind::OtherVersionSchema);
-            assert!(store.kind.is_older());
-            assert!(store.to_string().contains("another Gents version"));
+            assert!(store.kind.made_by_older_version());
+            assert!(store.to_string().contains("older version of Gents"));
         }
     }
 
@@ -646,7 +658,7 @@ mod tests {
         assert_eq!(store.data_path, path);
         assert!(matches!(
             &classified,
-            ClassifiedStoreError::Refused { store, .. } if store.to_string().contains("older Gents version")
+            ClassifiedStoreError::Refused { store, .. } if store.to_string().contains("older version of Gents")
         ));
 
         let foreign = gents_migration::Error::ForeignVersion {
@@ -656,7 +668,7 @@ mod tests {
         let foreign = incompatible_store(&foreign, path).expect("typed refusal");
         assert_eq!(foreign.kind, IncompatibleStoreKind::ForeignVersion);
         assert!(!foreign.kind.is_older());
-        assert!(foreign.to_string().contains("different Gents version"));
+        assert!(foreign.to_string().contains("newer version of Gents"));
         assert!(!foreign.to_string().contains("older"));
 
         let unrelated = gents_migration::Error::CollectionMissing {
