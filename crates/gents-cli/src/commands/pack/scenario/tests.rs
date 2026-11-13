@@ -223,8 +223,7 @@ fn scenario_refuses_a_pack_that_selects_the_default_agent() {
     validate_scenario_defaults(authored_pack.path()).unwrap();
     let config_path = authored_pack.path().join("pack_config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    config["default_agent_selection"] =
-        json!({"node_did": config["node"]["node_did"], "default_agent_did": "fixture-worker"});
+    config["default_agent_selection"] = json!({"default_agent_did": "fixture-worker"});
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
     let error = format!(
