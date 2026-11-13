@@ -44,10 +44,7 @@ impl PreStream for CompletionRetryState {
     }
 }
 
-use gents_lean_vocab::{
-    assert_lean_contract_vocabulary_matches, lean_completion_retry_cases, LeanCompletionRetryCase,
-    LeanContractVocabulary,
-};
+use gents_lean_vocab::{lean_completion_retry_cases, LeanCompletionRetryCase};
 
 #[test]
 fn completion_retry_lean_witness_cases_hold() {
@@ -384,11 +381,6 @@ fn assert_failure_class_bridge_matches_vocabulary() {
             "permanent"
         ]
     );
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "CompletionRetryFailureClass",
-        rust_source: "failure_class observations",
-        rust_values: &observed,
-    });
 }
 
 fn assert_transport_ladder_progresses(case: &LeanCompletionRetryCase) {

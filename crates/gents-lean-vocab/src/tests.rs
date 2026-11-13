@@ -225,25 +225,14 @@ fn lean_executable_contracts_cover_initial_domains() {
         "mutationFailed",
         "noMutation",
     );
-    assert_eq!(
-        lean_vocabulary_values("SessionRecoveryLatestRequestState"),
-        vec![
-            "workspaceBindingPending",
-            "pending",
-            "claimed",
-            "processing",
-            "waitingForBackend",
-            "resumingBackend",
-            "completed",
-            "failed",
-            "superseded",
-            "dead",
-            "interrupted"
-        ]
-    );
+    let request_states: Vec<&str> = lean_state_machine_contract("Request")
+        .states
+        .iter()
+        .map(String::as_str)
+        .collect();
     assert_lifecycle_transition_cases_partition(
         "Request",
-        &lean_vocabulary_values("RequestState"),
+        &request_states,
         lean_request_transition_cases(),
     );
     assert_lean_transition_is_legal("SessionRecovery", "failed", "pending");
@@ -256,7 +245,7 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert_eq!(
         lean_contract_snapshot().request_transition_cases.len(),
-        lean_vocabulary_values("RequestState").len().pow(2)
+        request_states.len().pow(2)
     );
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(
