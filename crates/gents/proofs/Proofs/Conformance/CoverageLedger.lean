@@ -1253,14 +1253,10 @@ def caseCoverage : List CoverageEntry :=
       "StorageObservationRuntimeCases"
       "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
+  , tagged ({ consumerCoverage
       "family"
-      "backend_health_admission_admission"
-      "A provider models-endpoint probe does not establish completion health, remote-node reachability or fleet-wide document freshness.")
-      "backend-health" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "family"
-      "backend_health_admission_admission")
+      "backend_health_admission_admission" with
+      acceptedBoundary := "A provider models-endpoint probe does not establish completion health, remote-node reachability or fleet-wide document freshness." })
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
