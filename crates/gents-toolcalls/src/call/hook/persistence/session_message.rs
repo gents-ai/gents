@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Context;
 use gents_protocol::tool_names::{AGENT_NEW_TOOL_NAME, AGENT_SESSION_LIST_TOOL_NAME};
+use gents_session::session::message::MessageContent;
 
 use crate::call::lifecycle::ToolCallLifecycle;
 use gents_documents::AgentToolConfig;
@@ -425,7 +426,10 @@ impl DefraSessionHook {
             self.session_goals.as_ref(),
             &cause,
             &target,
-            (rendered, title.as_deref()),
+            MessageContent {
+                rendered,
+                title: title.as_deref(),
+            },
             delivery,
             &signer,
         )

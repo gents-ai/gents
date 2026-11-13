@@ -1,3 +1,4 @@
+use gents_session::session::message::MessageContent;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use defra_node::Node as EmbeddedNode;
@@ -924,13 +925,13 @@ pub async fn materialize_session_message(
         &gents_session::session::message::NoSessionMessageGoals,
         &cause,
         &target,
-        (
-            gents_session::session::message::RenderedBody {
+        MessageContent {
+            rendered: gents_session::session::message::RenderedBody {
                 content: prompt.to_owned(),
                 goal: None,
             },
-            None,
-        ),
+            title: None,
+        },
         false,
         &signer,
     )
