@@ -21,17 +21,24 @@ use std::fs;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
+#[cfg(feature = "live-e2e")]
+use anyhow::anyhow;
 use chrono::Utc;
 use gents::support::snapshots::{SnapshotChanges, SnapshotReader};
+#[cfg(feature = "live-e2e")]
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, CanonicalMessageProjection,
 };
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+#[cfg(feature = "live-e2e")]
 use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
-use gents_protocol::output::{MessageRole, TerminalOutput};
+use gents_protocol::output::TerminalOutput;
+#[cfg(feature = "live-e2e")]
+use gents_protocol::output::MessageRole;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+#[cfg(feature = "live-e2e")]
 use gents_protocol::row::AgentRequestRow;
 use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
@@ -45,6 +52,7 @@ fn enrollment_e2e_lock() -> &'static Mutex<()> {
     ENROLLMENT_E2E_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+#[cfg(feature = "live-e2e")]
 async fn grant_configured_workspace_root_readers(
     access: &gents_store::config_client::ConfigAccess,
     graphql: &str,
@@ -672,8 +680,12 @@ async fn wait_for_complete_agent_response_with_access(
                     else {
                         bail!("terminal message output lost its header identity for {request_id}: {row}");
                     };
+                    #[cfg(not(feature = "live-e2e"))]
+                    let _ = message_doc_id;
                     return Ok(RuntimeTerminalReply {
+                        #[cfg(feature = "live-e2e")]
                         header_doc_id: message_doc_id,
+                        #[cfg(feature = "live-e2e")]
                         text: visible,
                     });
                 }
@@ -702,10 +714,13 @@ async fn wait_for_complete_agent_response_with_access(
 
 #[derive(Debug, Clone)]
 struct RuntimeTerminalReply {
+    #[cfg(feature = "live-e2e")]
     header_doc_id: String,
+    #[cfg(feature = "live-e2e")]
     text: String,
 }
 
+#[cfg(feature = "live-e2e")]
 fn client_selected_reply(
     requests: &[AgentRequestRow],
     messages: &[TranscriptMessageRow],
@@ -735,6 +750,7 @@ fn client_selected_reply(
     }
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_for_client_complete_response(
     core: &ClientCore,
     session_id: &str,

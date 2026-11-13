@@ -145,11 +145,13 @@ async fn probe_services(
             access,
             node_did,
             &service.service_id,
-            &actor,
-            timeout,
-            local_hostname,
-            local_subnet,
             &pool,
+            gents_tools::mcp::probe::ProbeOptions {
+                actor: &actor,
+                timeout,
+                local_hostname,
+                local_subnet,
+            },
         )
     });
     futures_util::future::join_all(probes)
