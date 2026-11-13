@@ -322,7 +322,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "vocabulary"
       "PersistenceFailurePolicy"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through persistence_failure_policy_cases.")
+      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through hook_persistence_failure.")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -434,12 +434,12 @@ def stateMachineCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "state_machine"
       "Persistence.failClosed"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through persistence_failure_policy_cases.")
+      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through hook_persistence_failure.")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
       "Persistence.failOpen"
-      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through persistence_failure_policy_cases.")
+      "The database has no per-token persistence document; fail-closed and fail-open hook decisions are replayed through hook_persistence_failure.")
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
@@ -1245,13 +1245,22 @@ def caseCoverage : List CoverageEntry :=
       "fleet_slot_accounting_bound")
       "fleet-slot-accounting" [Surface.api]
   , tagged (consumerCoverage
-      "persistence_failure_policy_cases"
-      "PersistenceFailurePolicyCases")
+      "family"
+      "hook_persistence_failure")
       "persistence-failure-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "hook_persistence_mutation")
+      "storage-observation" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "native_completion_trace_unreached"
+      "model-production-gap: no served scenario blocks a transaction statement, observes the rollback owner's return and then retries, so the timeout, cancellation, drain-then-rollback and concurrent-drain traces reach no production path.")
+      "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
-      "storage_observation_runtime_cases"
-      "StorageObservationRuntimeCases"
-      "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
+      "family"
+      "hook_persistence_visibility_unreached"
+      "model-production-gap: the hook observes only its own mutation acknowledgements; read-your-writes, stale reads, stale events and late event delivery are DefraDB observations no production path classifies.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged ({ consumerCoverage
       "family"
@@ -2139,8 +2148,24 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobAdoptionCases")
       "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_control_cases"
-      "PluginJobControlCases")
+      "family"
+      "plugin_job_control_kill")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_resume")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_result_read")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_result_offer")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_control_step_failure")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"

@@ -260,18 +260,6 @@ fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(
-        lean_contract_snapshot()
-            .persistence_failure_policy_cases
-            .len(),
-        2
-    );
-    assert_eq!(
-        lean_contract_snapshot()
-            .storage_observation_runtime_cases
-            .len(),
-        8
-    );
-    assert_eq!(
         lean_contract_snapshot().frontend_client_shell_case_count,
         lean_contract_snapshot().frontend_client_shell_cases.len()
     );

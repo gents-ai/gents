@@ -267,6 +267,7 @@ import Proofs.Conformance.PromptAssemblyRepair
 import Proofs.Conformance.ProviderToolIdentity
 import Proofs.Conformance.ReasoningDeltas
 import Proofs.Conformance.AggregateBudget
+import Proofs.Conformance.HookPersistence
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.ContractCases.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
@@ -357,8 +358,6 @@ def snapshotCaptureTailJson : String :=
       ++ compactionCanonicalProjectionCasesJson ++ ","
     ++ "\"goal_link_cases\":"
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
-    ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
-    ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
 
@@ -486,12 +485,6 @@ def snapshotClientCasesJson : String :=
 
 def snapshotRuntimeCasesJson : String :=
   ""
-    ++ "\"persistence_failure_policy_cases\":"
-      ++ jsonArray
-        (persistenceFailurePolicyCases.map persistenceFailurePolicyCaseJson) ++ ","
-    ++ "\"storage_observation_runtime_cases\":"
-      ++ jsonArray
-        (storageObservationRuntimeCases.map storageObservationRuntimeCaseJson) ++ ","
     ++ "\"native_filesystem_boundary_cases\":"
       ++ jsonArray
         (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
@@ -535,7 +528,6 @@ def snapshotPluginCasesJson : String :=
   ""
     ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
     ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
-    ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
     ++ "\"workspace_path_capability_cases\":"

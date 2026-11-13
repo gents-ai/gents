@@ -895,12 +895,6 @@ theorem control_regressions :
           some "plugin_job_step_failed"⟩ ] := by
   native_decide
 
-private def controlJson : Control → Json
-  | .stop => toJson "stop"
-  | .pause => toJson "pause"
-  | .deadline => toJson "deadline"
-  | .resume .. => toJson "resume"
-
 private def jobStateJson : JobState → Json
   | .running => toJson "running"
   | .paused => toJson "paused"
@@ -918,64 +912,14 @@ private def observationsJson (j : Job) : Json :=
   toJson (j.children.map fun ch => Json.mkObj [("retry_key", toJson ch.key.retryKey),
     ("observation", toJson (killObservation ch.key).toContract)])
 
-private def renderKill (c : KillCase) : Json :=
-  let (row, kill) := Control.kill c.job c.control killObservation
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "kill"), ("job", jobJson c.job),
-    ("observations", observationsJson c.job), ("control", controlJson c.control),
-    ("expected", Json.mkObj [("row_state", rowStateJson row.state),
-      ("won", toJson (match c.control.ends with
-        | none => false
-        | some state => decide ((_root_.PluginJob.terminalizeRow c.job state).2 =
-            Background.CompletionDelivery.TerminalizationResult.won))),
-      ("job_state", jobStateJson (JobState.of row.state c.control.note)),
-      ("kill", killJson kill)])]
-
 private def echoJson (e : ControlEcho) : Json :=
   Json.mkObj [("kind", toJson e.kind), ("payload", toJson (e.payload.map resumeJson))]
-
-private def renderResume (c : ResumeCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "resume"),
-    ("caller", processScopeJson context.callerScope),
-    ("owner", processScopeJson context.callerScope), ("same_plugin", toJson true),
-    ("root", jobJson rowA), ("root_call_args", callArgsJson rowA.call),
-    ("prior", jobJson priorJob),
-    ("job", jobJson resumeCall), ("call_args", callArgsJson resumeCall.call),
-    ("guest_pin", guestPinJson c.guest), ("facts", hostFactsJson c.facts),
-    ("resume", resumeJson c.resume),
-    ("expected", Json.mkObj [("valid", toJson (resumeValidFor c)),
-      ("pin", if resumeValidFor c then pinJson (resumePinFor c) else Json.null),
-      ("control", echoJson (echo c.resume)), ("root_call", rootCallJson (rootCallOf rowA))])]
-
-private def renderResultRead (c : ResultReadCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "result_read"),
-    ("caller", processScopeJson c.caller), ("owner", processScopeJson context.callerScope),
-    ("same_plugin", toJson c.samePlugin), ("terminal", toJson c.terminal),
-    ("expected", Json.mkObj [("authorized", toJson (resultReadVerdict c))])]
 
 private def invocationJson : PluginData.Invocation → Json
   | .toolCall => toJson "tool_call"
   | .jobStep => toJson "job_step"
   | .callback => toJson "callback"
   | .ux => toJson "ux"
-
-private def renderResultOffer (c : String × PluginData.Invocation) : Json :=
-  Json.mkObj [("name", toJson c.1), ("kind", toJson "result_offer"),
-    ("invocation", invocationJson c.2),
-    ("expected", Json.mkObj [("offered", toJson (resultOffered c.2))])]
-
-private def renderStepFailure (c : StepFailureCase) : Json :=
-  let (row, kill, refusal) := Step.onInvocationFailure (failingJob c) killObservation
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "step_failure"),
-    ("job", jobJson (failingJob c)), ("consecutive_failures", toJson c.failures),
-    ("observations", observationsJson (failingJob c)),
-    ("expected", Json.mkObj [("row_state", rowStateJson row.state),
-      ("consecutive_failures", toJson row.consecutiveFailures), ("kill", killJson kill),
-      ("code", toJson (refusal.bind Refusal.code))])]
-
-def controlCasesJson : String :=
-  (toJson (killCases.map renderKill ++ resumeCases.map renderResume ++
-    resultReadCases.map renderResultRead ++ resultOfferCases.map renderResultOffer ++
-    stepFailureCases.map renderStepFailure)).compress
 
 /-- A newly committed spawn must be visible to every subsequent kill transaction,
 even when recovery originally observed the empty pre-step row. -/
@@ -1160,6 +1104,205 @@ def commitKills : Family CommitKillInput CommitKillOutput where
 
 example : commitKills.inputs.map (·.committed.children.length) = [1, 1, 1, 1, 1] := by
   native_decide
+
+private def viaWire {α : Type} [FromJson α] [Inhabited α] (json : Json) : α :=
+  match fromJson? json with
+  | .ok wire => wire
+  | .error _ => default
+
+structure ObservationWire where
+  retry_key : String
+  observation : String
+  deriving ToJson, FromJson, Inhabited
+
+structure KillEntryWire where
+  retry_key : String
+  action : String
+  deriving ToJson, FromJson, Inhabited
+
+structure ProcessScopeWire where
+  request_id : String
+  session_id : String
+  node_did : String
+  requester_did : Option String
+  deriving ToJson, FromJson, Inhabited
+
+structure HostFactsWire where
+  engine_digest : String
+  plugin_ref : String
+  cwd : String
+  args_digest : String
+  chain_root : String
+  origin : String
+  adopted_at : Nat
+  resume_of : Option String
+  replayed_from : Option String
+  ceiling_at_pin : CeilingWire
+  deriving ToJson, FromJson, Inhabited
+
+structure ControlEchoWire where
+  kind : String
+  payload : Option ResumeWire
+  deriving ToJson, FromJson, Inhabited
+
+private def killEntries (kill : List (SpawnKey × Recovery.KillAction)) : List KillEntryWire :=
+  viaWire (killJson kill)
+
+private def observationWires (j : Job) : List ObservationWire := viaWire (observationsJson j)
+
+private def scopeWire (s : Background.ProcessControl.Scope) : ProcessScopeWire :=
+  viaWire (processScopeJson s)
+
+private def controlName : Control → String
+  | .stop => "stop"
+  | .pause => "pause"
+  | .deadline => "deadline"
+  | .resume .. => "resume"
+
+private def jobStateName (s : JobState) : String :=
+  match jobStateJson s with
+  | .str name => name
+  | _ => ""
+
+structure KillInput where
+  name : String
+  job : JobWire
+  observations : List ObservationWire
+  control : String
+  deriving ToJson
+
+structure KillOutput where
+  rowState : String
+  won : Bool
+  /-- The state a stop or pause control answers with; a deadline has no
+  control answer. -/
+  jobState : Option String
+  kill : List KillEntryWire
+  deriving ToJson
+
+private def killCaseNamed (name : String) : KillCase :=
+  (killCases.find? (·.name == name)).getD { name, control := .stop }
+
+@[conformance_family]
+def controlKill : Family KillInput KillOutput where
+  inputs := killCases.map fun c =>
+    { name := c.name, job := jobWire c.job, observations := observationWires c.job
+      control := controlName c.control }
+  model := fun i =>
+    let c := killCaseNamed i.name
+    let (row, kill) := Control.kill c.job c.control killObservation
+    { rowState := rowStateSpelling row.state
+      won := match c.control.ends with
+        | none => false
+        | some state => decide ((_root_.PluginJob.terminalizeRow c.job state).2 =
+            Background.CompletionDelivery.TerminalizationResult.won)
+      jobState := match c.control with
+        | .deadline | .resume .. => none
+        | _ => some (jobStateName (JobState.of row.state c.control.note))
+      kill := killEntries kill }
+
+structure ResumeInput where
+  name : String
+  caller : ProcessScopeWire
+  owner : ProcessScopeWire
+  samePlugin : Bool
+  root : JobWire
+  prior : JobWire
+  guestPin : GuestPinWire
+  facts : HostFactsWire
+  resume : ResumeWire
+  deriving ToJson
+
+structure ResumeOutput where
+  valid : Bool
+  pin : Option PinWire
+  control : ControlEchoWire
+  rootCall : RootCallWire
+  deriving ToJson
+
+private def resumeCaseNamed (name : String) : ResumeCase :=
+  (resumeCases.find? (·.name == name)).getD ⟨name, guestPin, resumeFacts, resumeBlock⟩
+
+@[conformance_family]
+def controlResume : Family ResumeInput ResumeOutput where
+  inputs := resumeCases.map fun c =>
+    { name := c.name, caller := scopeWire context.callerScope
+      owner := scopeWire context.callerScope, samePlugin := true, root := jobWire rowA
+      prior := jobWire priorJob, guestPin := viaWire (guestPinJson c.guest)
+      facts := viaWire (hostFactsJson c.facts), resume := viaWire (resumeJson c.resume) }
+  model := fun i =>
+    let c := resumeCaseNamed i.name
+    { valid := resumeValidFor c
+      pin := if resumeValidFor c then some (viaWire (pinJson (resumePinFor c))) else none
+      control := viaWire (echoJson (echo c.resume))
+      rootCall := viaWire (rootCallJson (rootCallOf rowA)) }
+
+structure ResultReadInput where
+  name : String
+  caller : ProcessScopeWire
+  owner : ProcessScopeWire
+  samePlugin : Bool
+  terminal : Bool
+  deriving ToJson
+
+structure ResultReadOutput where
+  authorized : Bool
+  deriving ToJson
+
+private def resultReadCaseNamed (name : String) : ResultReadCase :=
+  (resultReadCases.find? (·.name == name)).getD ⟨name, context.callerScope, true, true⟩
+
+@[conformance_family]
+def controlResultRead : Family ResultReadInput ResultReadOutput where
+  inputs := resultReadCases.map fun c =>
+    { name := c.name, caller := scopeWire c.caller, owner := scopeWire context.callerScope
+      samePlugin := c.samePlugin, terminal := c.terminal }
+  model := fun i => { authorized := resultReadVerdict (resultReadCaseNamed i.name) }
+
+structure ResultOfferInput where
+  name : String
+  invocation : String
+  deriving ToJson
+
+structure ResultOfferOutput where
+  offered : Bool
+  deriving ToJson
+
+private def invocationName (invocation : PluginData.Invocation) : String :=
+  match invocationJson invocation with
+  | .str name => name
+  | _ => ""
+
+@[conformance_family]
+def controlResultOffer : Family ResultOfferInput ResultOfferOutput where
+  inputs := resultOfferCases.map fun c => { name := c.1, invocation := invocationName c.2 }
+  model := fun i =>
+    { offered := ((resultOfferCases.find? (·.1 == i.name)).map (resultOffered ·.2)).getD false }
+
+structure StepFailureInput where
+  name : String
+  job : JobWire
+  consecutiveFailures : Nat
+  observations : List ObservationWire
+  deriving ToJson
+
+structure StepFailureOutput where
+  rowState : String
+  consecutiveFailures : Nat
+  kill : List KillEntryWire
+  code : Option String
+  deriving ToJson
+
+@[conformance_family]
+def controlStepFailure : Family StepFailureInput StepFailureOutput where
+  inputs := stepFailureCases.map fun c =>
+    { name := c.name, job := jobWire (failingJob c), consecutiveFailures := c.failures
+      observations := observationWires (failingJob c) }
+  model := fun i =>
+    let (row, kill, refusal) :=
+      Step.onInvocationFailure (failingJob ⟨i.name, i.consecutiveFailures⟩) killObservation
+    { rowState := rowStateSpelling row.state, consecutiveFailures := row.consecutiveFailures
+      kill := killEntries kill, code := refusal.bind Refusal.code }
 
 private def allKinds : List PackKind := [.documents, .assets, .plugins]
 

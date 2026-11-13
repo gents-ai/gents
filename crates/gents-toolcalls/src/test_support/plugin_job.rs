@@ -1,28 +1,26 @@
 use crate::background::job::admit::{
     HostFacts, RootCall, StepCall, StepChild, StepContext, StepRow,
 };
-use crate::background::job::control::{KillAction, KillObservation};
+use crate::background::job::control::KillAction;
 use crate::background::job::dispatch::{Delivery, ToolCallView};
 use crate::background::status::ProcessControlScope;
 use crate::call::lifecycle::ToolRowKind;
 use crate::plugin::data::StampContext;
 use gents_lean_vocab::{
-    LeanPluginJobCeiling, LeanPluginJobContext, LeanPluginJobControlEcho, LeanPluginJobExtras,
-    LeanPluginJobGuestPin, LeanPluginJobHostFacts, LeanPluginJobKill, LeanPluginJobObservation,
-    LeanPluginJobOutput, LeanPluginJobPin, LeanPluginJobPolicy, LeanPluginJobProcessScope,
-    LeanPluginJobResume, LeanPluginJobRootCall, LeanPluginJobRow, LeanPluginJobScope,
-    LeanPluginJobTarget, LeanPluginJobToolCall,
+    LeanPluginJobCeiling, LeanPluginJobContext, LeanPluginJobExtras, LeanPluginJobGuestPin,
+    LeanPluginJobHostFacts, LeanPluginJobKill, LeanPluginJobOutput, LeanPluginJobPin,
+    LeanPluginJobPolicy, LeanPluginJobProcessScope, LeanPluginJobResume, LeanPluginJobRootCall,
+    LeanPluginJobRow, LeanPluginJobScope, LeanPluginJobTarget, LeanPluginJobToolCall,
 };
 use gents_protocol::job::{
-    DataOp, DataWrite, JobBudget, JobCeiling, JobControlEcho, JobControlRequest, JobEffects,
-    JobFailure, JobGuestPin, JobInterrupt, JobMessage, JobPin, JobPolicy, JobProgress, JobResume,
+    DataOp, DataWrite, JobBudget, JobCeiling, JobControlRequest, JobEffects, JobFailure,
+    JobGuestPin, JobInterrupt, JobMessage, JobPin, JobPolicy, JobProgress, JobResume,
     JobResumeEngine, JobScratch, JobSpawn, JobState, JobStepOutput, JobSuspend,
 };
 use gents_protocol::tool_call::AwaitMode;
 use gents_session::session::tool_call_state::ToolCallState;
 use gents_tools::surface::EndpointScope;
 use serde::de::DeserializeOwned;
-use std::collections::BTreeMap;
 
 /// A closed Lean spelling decoded by the native enum's own serde names.
 pub fn spelled<T>(spelling: &str) -> T
@@ -416,14 +414,6 @@ pub fn delivery_spelling(delivery: Option<Delivery>) -> Option<&'static str> {
     })
 }
 
-/// What the kill reads about each child's caused request, by retry key.
-pub fn observations(observed: &[LeanPluginJobObservation]) -> BTreeMap<&str, KillObservation> {
-    observed
-        .iter()
-        .map(|o| (o.retry_key.as_str(), spelled(&o.observation)))
-        .collect()
-}
-
 /// The killed children and their actions, ordered by retry key.
 pub fn kills(killed: &[LeanPluginJobKill]) -> Vec<(String, KillAction)> {
     let mut kills: Vec<_> = killed
@@ -463,12 +453,5 @@ pub fn stamp_context(invocation: &str) -> StampContext {
         },
         "callback" => StampContext::Callback { caller_did },
         other => panic!("unknown Lean invocation {other}"),
-    }
-}
-
-pub fn control_echo(e: &LeanPluginJobControlEcho) -> JobControlEcho {
-    JobControlEcho {
-        kind: spelled(&e.kind),
-        payload: e.payload.as_ref().map(resume),
     }
 }

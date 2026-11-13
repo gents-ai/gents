@@ -74,18 +74,6 @@ impl LeanPluginJobAdoptionCase {
     }
 }
 
-impl LeanPluginJobControlCase {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Kill { name, .. }
-            | Self::Resume { name, .. }
-            | Self::ResultRead { name, .. }
-            | Self::ResultOffer { name, .. }
-            | Self::StepFailure { name, .. } => name,
-        }
-    }
-}
-
 impl LeanSurface {
     pub const fn as_str(self) -> &'static str {
         match self {

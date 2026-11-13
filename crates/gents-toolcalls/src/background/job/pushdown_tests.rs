@@ -1,6 +1,6 @@
 use crate::background::job::admit;
 use crate::background::job::admit::{is_stalled, Refusal};
-use crate::background::job::control::{self, KillCause};
+use crate::background::job::control::{self, KillCause, KillObservation};
 use crate::background::job::dispatch::{host_pin, split_address, unique_handle, Delivery};
 use crate::background::job::driver;
 use crate::background::job::recovery::{
@@ -9,12 +9,11 @@ use crate::background::job::recovery::{
 use crate::plugin::job_calls;
 use crate::test_support::plugin_job::*;
 use gents_lean_vocab::{
-    lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases, lean_plugin_job_control_cases,
-    LeanPluginJobAdoptionCase, LeanPluginJobControlCase,
+    lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases, LeanPluginJobAdoptionCase,
 };
 use gents_lean_vocab::{lean_recovery_sweep_cases, LeanPluginJobRecoveryRow};
-use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState, JobStepOutput};
-use std::collections::BTreeSet;
+use gents_protocol::job::{JobControlKind, JobControlOutcome, JobResume, JobState, JobStepOutput};
+use std::collections::{BTreeMap, BTreeSet};
 
 const PLUGIN_JOB_SWEEP_ID: &str = "tool_call_lifecycle_recover_plugin_job_rows";
 
@@ -294,185 +293,229 @@ fn generated_plugin_job_adoption_cases_drive_adopt() {
     }
 }
 
-/// Lean `Control.kill`, `resumeValid`, `resumePin`, `echo`, `rootCallOf`,
-/// `resultReadAuthorized`, `resultOffered` and `onInvocationFailure` through
-/// the pure decision cores that sit beside the frozen async owners
-/// `plugin_job::control::{control, kill, validate_resume}`,
-/// `plugin::job_calls::result` and `plugin_job::driver::on_step_failure`,
-/// which call them: the ended row and the killed children, the
-/// resume pin with its echo and root call, the `job_calls.result` read scope
-/// and offer, and the third consecutive step failure.
+fn observed_by_key<'a, I>(observed: I) -> BTreeMap<String, KillObservation>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    observed
+        .into_iter()
+        .map(|(key, observation)| (key.to_owned(), spelled(observation)))
+        .collect()
+}
+
+fn spelling<T>(value: &T) -> String
+where
+    T: serde::Serialize,
+{
+    serde_json::to_value(value)
+        .unwrap()
+        .as_str()
+        .expect("a closed enum spells as a string")
+        .to_owned()
+}
+
+/// Lean `Control.kill` through `control::kill_decision`, and for a stop or
+/// pause the control answer `control::control_outcome` gives on the same row.
 #[test]
-fn generated_plugin_job_control_cases_drive_control_owners() {
-    let cases = lean_plugin_job_control_cases();
-    assert_eq!(
-        cases.len(),
-        23,
-        "Lean pins five kill, six resume, six result-read, three result-offer and three step-failure rows in `control_regressions`"
-    );
-    let mut names = BTreeSet::new();
-    for case in cases {
-        assert!(names.insert(case.name()), "duplicate {}", case.name());
-        match case {
-            LeanPluginJobControlCase::Kill {
-                name,
-                job,
-                observations: observed,
-                control: kind,
-                expected,
-            } => {
-                let observed = observations(observed);
-                let observe = |key: &str| observed[key];
-                let job = row(job);
-                let cause = match kind.as_str() {
-                    "stop" => KillCause::Stop,
-                    "pause" => KillCause::Pause,
-                    "deadline" => KillCause::Deadline,
-                    other => panic!("{name}: unknown Lean kill cause {other}"),
-                };
-                let outcome = control::kill_decision(&job, cause, &observe);
-                assert_eq!(outcome.won, expected.won, "{name}: terminal winner");
-                assert_eq!(
-                    outcome.row.state,
-                    spelled::<JobState>(&expected.row_state),
-                    "{name}: row state"
-                );
-                assert_eq!(
-                    by_retry_key(outcome.killed),
-                    kills(&expected.kill),
-                    "{name}: killed children"
-                );
-                let requested = match kind.as_str() {
-                    "stop" => Some(JobControlKind::Stop),
-                    "pause" => Some(JobControlKind::Pause),
-                    _ => None,
-                };
-                if let Some(requested) = requested {
-                    assert_eq!(
-                        control::control_outcome(&job, requested, &observe),
-                        if expected.won {
-                            JobControlOutcome::Applied {
-                                state: spelled(&expected.job_state),
-                                killed_children: expected.kill.len() as u32,
-                            }
-                        } else {
-                            JobControlOutcome::AlreadyTerminal {
-                                state: spelled(&expected.job_state),
-                            }
-                        },
-                        "{name}: control outcome"
-                    );
-                }
-            }
-            LeanPluginJobControlCase::Resume {
-                name,
-                caller,
-                owner,
-                same_plugin,
-                root,
-                prior,
-                guest_pin: guest,
-                facts,
-                resume: block,
-                expected,
-                ..
-            } => {
-                let (caller, owner) = (process_scope(caller), process_scope(owner));
-                let (root, prior) = (row(root), row(prior));
-                let (guest, facts, block) = (guest_pin(guest), host_facts(facts), resume(block));
-                let valid = admit::resume_valid(
-                    &caller,
-                    &owner,
-                    *same_plugin,
-                    &prior,
-                    &guest,
-                    &facts,
-                    &block,
-                );
-                assert_eq!(valid, expected.valid, "{name}: resume validity");
-                if valid {
-                    assert_eq!(
-                        Some(admit::resume_pin(&root, &prior, &guest, &facts)),
-                        expected.pin.as_ref().map(pin),
-                        "{name}: written pin"
-                    );
-                    assert_eq!(
-                        control::resume_echo(&block),
-                        control_echo(&expected.control),
-                        "{name}: control echo"
-                    );
-                    assert_eq!(
-                        admit::root_call_of(&root),
-                        root_call(&expected.root_call),
-                        "{name}: echoed root call"
-                    );
-                } else {
-                    assert!(expected.pin.is_none(), "{name}");
-                }
-            }
-            LeanPluginJobControlCase::ResultRead {
-                name,
-                caller,
-                owner,
-                same_plugin,
-                terminal,
-                expected,
-            } => {
-                assert_eq!(
-                    job_calls::result_read(
-                        &process_scope(caller),
-                        &process_scope(owner),
-                        *same_plugin,
-                        *terminal
-                    ),
-                    expected.authorized,
-                    "{name}: result read"
-                );
-            }
-            LeanPluginJobControlCase::ResultOffer {
-                name,
-                invocation,
-                expected,
-            } => {
-                assert_eq!(
-                    job_calls::result_offer(&stamp_context(invocation)),
-                    expected.offered,
-                    "{name}: result offer"
-                );
-            }
-            LeanPluginJobControlCase::StepFailure {
-                name,
-                job,
-                observations: observed,
-                expected,
-                ..
-            } => {
-                let observed = observations(observed);
-                let observe = |key: &str| observed[key];
-                let (outcome, refusal) = driver::step_failure_decision(&row(job), &observe);
-                let failed = &outcome.row;
-                assert_eq!(
-                    failed.state,
-                    spelled::<JobState>(&expected.row_state),
-                    "{name}: row state"
-                );
-                assert_eq!(
-                    failed.consecutive_failures, expected.consecutive_failures,
-                    "{name}: failure count"
-                );
-                assert_eq!(
-                    by_retry_key(outcome.killed),
-                    kills(&expected.kill),
-                    "{name}: killed children"
-                );
-                assert_eq!(
-                    refusal.as_ref().and_then(|r| r.code()),
-                    expected.code.as_deref(),
-                    "{name}: refusal code"
-                );
-            }
+fn plugin_job_kills_follow_the_lean_control_model() {
+    gents_lean_vocab::families::plugin_job_control_kill::replay(|input| {
+        let observed = observed_by_key(
+            input
+                .observations
+                .iter()
+                .map(|o| (o.retry_key.as_str(), o.observation.as_str())),
+        );
+        let observe = |key: &str| observed[key];
+        let job = row(&gents_lean_vocab::family::recode(&input.job));
+        let cause = match input.control.as_str() {
+            "stop" => KillCause::Stop,
+            "pause" => KillCause::Pause,
+            "deadline" => KillCause::Deadline,
+            other => panic!("{}: unknown Lean kill cause {other}", input.name),
+        };
+        let outcome = control::kill_decision(&job, cause, &observe);
+        let requested = match input.control.as_str() {
+            "stop" => Some(JobControlKind::Stop),
+            "pause" => Some(JobControlKind::Pause),
+            _ => None,
+        };
+        let job_state =
+            requested.map(
+                |requested| match control::control_outcome(&job, requested, &observe) {
+                    JobControlOutcome::Applied {
+                        state,
+                        killed_children,
+                    } => {
+                        assert!(outcome.won, "{}: applied control wins the row", input.name);
+                        assert_eq!(
+                            killed_children as usize,
+                            outcome.killed.len(),
+                            "{}",
+                            input.name
+                        );
+                        spelling(&state)
+                    }
+                    JobControlOutcome::AlreadyTerminal { state } => {
+                        assert!(!outcome.won, "{}: a terminal row is not won", input.name);
+                        spelling(&state)
+                    }
+                    other => panic!("{}: a pure control decision answered {other:?}", input.name),
+                },
+            );
+        gents_lean_vocab::families::plugin_job_control_kill::KillOutput {
+            row_state: spelling(&outcome.row.state),
+            won: outcome.won,
+            job_state,
+            kill: by_retry_key(outcome.killed)
+                .into_iter()
+                .map(|(retry_key, action)| {
+                    gents_lean_vocab::families::plugin_job_control_kill::KillEntryWire {
+                        retry_key,
+                        action: spelling(&action),
+                    }
+                })
+                .collect(),
+        }
+    });
+}
+
+/// Lean `resumeValid`, `resumePin`, `echo` and `rootCallOf` through
+/// `admit::resume_valid`, `admit::resume_pin`, `control::resume_echo` and
+/// `admit::root_call_of`.
+#[test]
+fn plugin_job_resumes_follow_the_lean_control_model() {
+    use gents_lean_vocab::family::recode;
+    fn resume_wire(
+        r: &JobResume,
+    ) -> gents_lean_vocab::families::plugin_job_control_resume::ResumeWire {
+        gents_lean_vocab::families::plugin_job_control_resume::ResumeWire {
+            row_doc_id: r.row_doc_id.clone(),
+            engine_current: r.engine.is_some(),
+            answer: r.answer.clone(),
+            budget: r.budget.map(u64::from),
         }
     }
+    gents_lean_vocab::families::plugin_job_control_resume::replay(|input| {
+        let (caller, owner) = (
+            process_scope(&recode(&input.caller)),
+            process_scope(&recode(&input.owner)),
+        );
+        let (root, prior) = (row(&recode(&input.root)), row(&recode(&input.prior)));
+        let (guest, facts, block) = (
+            guest_pin(&recode(&input.guest_pin)),
+            host_facts(&recode(&input.facts)),
+            resume(&recode(&input.resume)),
+        );
+        let valid = admit::resume_valid(
+            &caller,
+            &owner,
+            input.same_plugin,
+            &prior,
+            &guest,
+            &facts,
+            &block,
+        );
+        let pin = valid.then(|| {
+            let p = admit::resume_pin(&root, &prior, &guest, &facts);
+            gents_lean_vocab::families::plugin_job_control_resume::PinWire {
+                script_id: p.script_id,
+                source_digest: p.source_digest,
+                engine_digest: p.engine_digest,
+                plugin_ref: p.plugin_ref,
+                handle: p.handle,
+                cwd: p.cwd,
+                args_digest: p.args_digest,
+                chain_root: p.chain_root_doc_id,
+                origin: spelling(&p.origin),
+                agent_budget: u64::from(p.agent_budget),
+                adopted_at: p.adopted_at,
+                resume_of: p.resume_of,
+                replayed_from: p.replayed_from,
+                ceiling_at_pin:
+                    gents_lean_vocab::families::plugin_job_control_resume::CeilingWire {
+                        targets: p.ceiling_at_pin.targets,
+                        max_live: u64::from(p.ceiling_at_pin.max_live),
+                        max_spawns: u64::from(p.ceiling_at_pin.max_spawns),
+                        max_messages_per_slot: u64::from(p.ceiling_at_pin.max_messages_per_slot),
+                        result_bytes: p.ceiling_at_pin.result_bytes,
+                        max_wall_secs: p.ceiling_at_pin.max_wall_secs,
+                    },
+            }
+        });
+        let echo = control::resume_echo(&block);
+        let root_call = admit::root_call_of(&root);
+        gents_lean_vocab::families::plugin_job_control_resume::ResumeOutput {
+            valid,
+            pin,
+            control: gents_lean_vocab::families::plugin_job_control_resume::ControlEchoWire {
+                kind: spelling(&echo.kind),
+                payload: echo.payload.as_ref().map(resume_wire),
+            },
+            root_call: gents_lean_vocab::families::plugin_job_control_resume::RootCallWire {
+                argv: root_call.argv,
+                args: root_call.args,
+                agent_budget: root_call.agent_budget.map(u64::from),
+            },
+        }
+    });
+}
+
+/// Lean `resultReadAuthorized` through `job_calls::result_read`.
+#[test]
+fn plugin_job_result_reads_follow_the_lean_control_model() {
+    use gents_lean_vocab::family::recode;
+    gents_lean_vocab::families::plugin_job_control_result_read::replay(|input| {
+        gents_lean_vocab::families::plugin_job_control_result_read::ResultReadOutput {
+            authorized: job_calls::result_read(
+                &process_scope(&recode(&input.caller)),
+                &process_scope(&recode(&input.owner)),
+                input.same_plugin,
+                input.terminal,
+            ),
+        }
+    });
+}
+
+/// Lean `resultOffered` through `job_calls::result_offer`.
+#[test]
+fn plugin_job_result_offers_follow_the_lean_control_model() {
+    gents_lean_vocab::families::plugin_job_control_result_offer::replay(|input| {
+        gents_lean_vocab::families::plugin_job_control_result_offer::ResultOfferOutput {
+            offered: job_calls::result_offer(&stamp_context(&input.invocation)),
+        }
+    });
+}
+
+/// Lean `onInvocationFailure` through `driver::step_failure_decision`.
+#[test]
+fn plugin_job_step_failures_follow_the_lean_control_model() {
+    gents_lean_vocab::families::plugin_job_control_step_failure::replay(|input| {
+        let observed = observed_by_key(
+            input
+                .observations
+                .iter()
+                .map(|o| (o.retry_key.as_str(), o.observation.as_str())),
+        );
+        let observe = |key: &str| observed[key];
+        let (outcome, refusal) = driver::step_failure_decision(
+            &row(&gents_lean_vocab::family::recode(&input.job)),
+            &observe,
+        );
+        gents_lean_vocab::families::plugin_job_control_step_failure::StepFailureOutput {
+            row_state: spelling(&outcome.row.state),
+            consecutive_failures: u64::from(outcome.row.consecutive_failures),
+            kill: by_retry_key(outcome.killed)
+                .into_iter()
+                .map(|(retry_key, action)| {
+                    gents_lean_vocab::families::plugin_job_control_step_failure::KillEntryWire {
+                        retry_key,
+                        action: spelling(&action),
+                    }
+                })
+                .collect(),
+            code: refusal.as_ref().and_then(|r| r.code()).map(str::to_owned),
+        }
+    });
 }
 
 /// One tick of the row: the owner's `tick_action` is the first application of

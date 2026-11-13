@@ -81,20 +81,12 @@ pub fn lean_native_filesystem_boundary_cases() -> &'static [LeanNativeFilesystem
     &lean_contract_snapshot().native_filesystem_boundary_cases
 }
 
-pub fn lean_persistence_failure_policy_cases() -> &'static [LeanPersistenceFailurePolicyCase] {
-    &lean_contract_snapshot().persistence_failure_policy_cases
-}
-
 pub fn lean_plugin_job_admission_cases() -> &'static [LeanPluginJobAdmissionCase] {
     &lean_contract_snapshot().plugin_job_admission_cases
 }
 
 pub fn lean_plugin_job_adoption_cases() -> &'static [LeanPluginJobAdoptionCase] {
     &lean_contract_snapshot().plugin_job_adoption_cases
-}
-
-pub fn lean_plugin_job_control_cases() -> &'static [LeanPluginJobControlCase] {
-    &lean_contract_snapshot().plugin_job_control_cases
 }
 
 pub fn lean_process_stop_cases() -> &'static [LeanProcessStopCase] {
@@ -139,10 +131,6 @@ pub fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
 
 pub fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
     &lean_contract_snapshot().session_input_edit_cases
-}
-
-pub fn lean_storage_observation_runtime_cases() -> &'static [LeanStorageObservationRuntimeCase] {
-    &lean_contract_snapshot().storage_observation_runtime_cases
 }
 
 pub fn lean_task_goal_publication_cases() -> &'static [LeanTaskGoalPublicationCase] {
@@ -1135,7 +1123,6 @@ pub struct LeanContractSnapshot {
     pub schema_argument_repair_cases: Vec<LeanSchemaArgumentRepairCase>,
     pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
     pub plugin_job_adoption_cases: Vec<LeanPluginJobAdoptionCase>,
-    pub plugin_job_control_cases: Vec<LeanPluginJobControlCase>,
     pub identity_publication_cases: Vec<LeanIdentityPublicationCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub client_publication_protected_collection: String,
@@ -1169,8 +1156,6 @@ pub struct LeanContractSnapshot {
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub client_session_turn_cases: Vec<LeanSessionTurnCase>,
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
-    pub persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
-    pub storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
     pub native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
@@ -1195,8 +1180,6 @@ pub struct LeanContractSnapshot {
     >,
     pub canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
-    pub native_completion_cases: Vec<LeanNativeCompletionCase>,
-    pub native_claim_lifetime_cases: Vec<LeanNativeClaimLifetimeCase>,
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
@@ -2771,88 +2754,6 @@ pub struct LeanNamedTransition {
     pub to: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanNativeClaimLifetimeCase {
-    pub events: Vec<String>,
-    pub initial: LeanNativeClaimLifetimeCaseInitial,
-    pub name: String,
-    pub observations: Vec<LeanNativeClaimLifetimeCaseObservationsItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanNativeClaimLifetimeCaseInitial {
-    pub access_owner_alive: bool,
-    pub caller: String,
-    pub claim_attached: bool,
-    pub claim_held: bool,
-    pub cleanup_pending: bool,
-    pub lane: String,
-    pub lifecycle_guard_held: bool,
-    pub mutation_gate_held: bool,
-    pub native_outstanding: u64,
-    pub next_renewal_started: bool,
-    pub poisoned: bool,
-    pub renewal_attempt_returned: bool,
-    pub retry_started: bool,
-    pub rollback_returned: bool,
-    pub transaction_owner_alive: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanNativeClaimLifetimeCaseObservationsItem {
-    pub access_owner_alive: bool,
-    pub caller: String,
-    pub claim_attached: bool,
-    pub claim_held: bool,
-    pub cleanup_pending: bool,
-    pub lane: String,
-    pub lifecycle_guard_held: bool,
-    pub mutation_gate_held: bool,
-    pub native_outstanding: u64,
-    pub next_renewal_started: bool,
-    pub poisoned: bool,
-    pub renewal_attempt_returned: bool,
-    pub retry_started: bool,
-    pub rollback_returned: bool,
-    pub transaction_owner_alive: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanNativeCompletionCase {
-    pub events: Vec<String>,
-    pub initial: LeanNativeCompletionCaseInitial,
-    pub name: String,
-    pub observations: Vec<LeanNativeCompletionCaseObservationsItem>,
-    pub periodic_renewal: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanNativeCompletionCaseInitial {
-    pub cleanup_required: bool,
-    pub gate_held: bool,
-    pub native_outstanding: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanNativeCompletionCaseObservationsItem {
-    pub caller: String,
-    pub gate_held: bool,
-    pub native_outstanding: u64,
-    pub next_renewal_started: bool,
-    pub poisoned: bool,
-    pub registry_abandoned: bool,
-    pub renewal_attempt_returned: bool,
-    pub retry_started: bool,
-    pub rollback_returned: bool,
-    pub caller_abandonment_observed: bool,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanNativeFilesystemBoundaryCase {
     pub name: String,
@@ -2961,20 +2862,6 @@ pub struct LeanPayloadSpec {
 pub enum LeanPermissionChange {
     Revoke,
     Grant,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanPersistenceFailurePolicyCase {
-    pub name: String,
-    pub policy: String,
-    pub action: String,
-    pub pre_persistence: String,
-    pub post_persistence: String,
-    pub post_storage_observation: String,
-    pub hook_decision: String,
-    pub records_failure: bool,
-    pub records_success: bool,
-    pub external_durability_claimed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -3211,62 +3098,6 @@ pub struct LeanPluginJobControl {
     pub control: String,
 }
 
-/// `Conformance.PluginJob.controlCasesJson`, tagged by `kind`: kills, resumes,
-/// `job_calls.result` reads and offers, and step failures.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanPluginJobControlCase {
-    Kill {
-        name: String,
-        job: Box<LeanPluginJobRow>,
-        observations: Vec<LeanPluginJobObservation>,
-        control: String,
-        expected: Box<LeanPluginJobKillExpected>,
-    },
-    Resume {
-        name: String,
-        caller: Box<LeanPluginJobProcessScope>,
-        owner: Box<LeanPluginJobProcessScope>,
-        same_plugin: bool,
-        root: Box<LeanPluginJobRow>,
-        root_call_args: Box<LeanPluginJobCall>,
-        prior: Box<LeanPluginJobRow>,
-        job: Box<LeanPluginJobRow>,
-        call_args: Box<LeanPluginJobCall>,
-        guest_pin: Box<LeanPluginJobGuestPin>,
-        facts: Box<LeanPluginJobHostFacts>,
-        resume: Box<LeanPluginJobResume>,
-        expected: Box<LeanPluginJobResumeExpected>,
-    },
-    ResultRead {
-        name: String,
-        caller: Box<LeanPluginJobProcessScope>,
-        owner: Box<LeanPluginJobProcessScope>,
-        same_plugin: bool,
-        terminal: bool,
-        expected: Box<LeanPluginJobResultReadExpected>,
-    },
-    ResultOffer {
-        name: String,
-        invocation: String,
-        expected: Box<LeanPluginJobResultOfferExpected>,
-    },
-    StepFailure {
-        name: String,
-        job: Box<LeanPluginJobRow>,
-        consecutive_failures: u32,
-        observations: Vec<LeanPluginJobObservation>,
-        expected: Box<LeanPluginJobStepFailureExpected>,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobControlEcho {
-    pub kind: String,
-    pub payload: Option<LeanPluginJobResume>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPluginJobControlOwner {
@@ -3340,24 +3171,6 @@ pub struct LeanPluginJobHostPinExpected {
 pub struct LeanPluginJobKill {
     pub retry_key: String,
     pub action: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobKillExpected {
-    pub row_state: String,
-    pub won: bool,
-    pub job_state: String,
-    pub kill: Vec<LeanPluginJobKill>,
-}
-
-/// What a kill observes about the request one child caused
-/// (`Recovery.KillObservation`'s contract spelling).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobObservation {
-    pub retry_key: String,
-    pub observation: String,
 }
 
 /// A step output, tagged by `kind`; the sibling riders follow the variant.
@@ -3448,32 +3261,11 @@ pub struct LeanPluginJobRecoveryRow {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPluginJobResultOfferExpected {
-    pub offered: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobResultReadExpected {
-    pub authorized: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPluginJobResume {
     pub row_doc_id: String,
     pub engine_current: bool,
     pub answer: Option<String>,
     pub budget: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobResumeExpected {
-    pub valid: bool,
-    pub pin: Option<LeanPluginJobPin>,
-    pub control: LeanPluginJobControlEcho,
-    pub root_call: LeanPluginJobRootCall,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3550,15 +3342,6 @@ pub struct LeanPluginJobStep0Expected {
     pub continuation_appended: bool,
     pub receipt: Option<LeanPluginJobReceiptDecisions>,
     pub next_resume_valid: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobStepFailureExpected {
-    pub row_state: String,
-    pub consecutive_failures: u32,
-    pub kill: Vec<LeanPluginJobKill>,
-    pub code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4093,22 +3876,6 @@ pub struct LeanStateMachineContract {
     pub legal_transitions: Vec<LeanTransitionPair>,
     pub illegal_transitions: Vec<LeanTransitionPair>,
     pub named_transitions: Vec<LeanNamedTransition>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanStorageObservationRuntimeCase {
-    pub name: String,
-    pub policy: String,
-    pub action: String,
-    pub pre_observation: String,
-    pub mutation_result: String,
-    pub post_observation: String,
-    pub post_persistence: String,
-    pub hook_result: String,
-    pub records_failure: bool,
-    pub records_success: bool,
-    pub terminal_write_observed: bool,
-    pub external_visibility_claimed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
