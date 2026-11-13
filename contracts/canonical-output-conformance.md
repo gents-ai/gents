@@ -55,10 +55,11 @@ not just a successful return code.
 
 ## Exported execution scripts
 
-`canonical_execution_gate_cases` carries native scripts, explicitly model-only
-scripts with binding gaps, and summary witnesses. The native runner executes
-every exported `native_execution` script through every step; it does not execute
-`model_execution` scripts. Every script expectation is computed by folding the inputs through
+The family `native_execution_contracts_script` carries the native scripts and
+`native_execution_contracts_script_unreached` the model-only scripts with their
+binding gaps; summary witnesses are Lean examples. The native runner executes
+every `native_execution_contracts_script` case through every step; it does not
+execute the unreached scripts. Every script expectation is computed by folding the inputs through
 the modeled gate (`acquire`, `commit`, release through the scheduling owner) and
 projecting the resulting world; none is a literal.
 

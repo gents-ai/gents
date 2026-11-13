@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 GROUPS = {
-    "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_dispatch_observation_cases": "LeanDispatchObservationCase",
 }
 INT_RANGES = {

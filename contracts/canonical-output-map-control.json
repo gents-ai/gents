@@ -286,7 +286,7 @@
       "exercise storage return, cleanup return and drop return paths before release",
       "bind detached rollback handoff and cleanup timeout to the actual transaction and mutation gate without asserting spawned native work completed",
       "retain the suspended-forever counterexample: executor service and storage or cleanup return are external premises, not proved liveness",
-      "The sibling-wait boundary is exercised at operation level by suspended_same_task_holder_append_rejected in canonical_execution_gate_cases, and rejected commits release through storageReturned. The event vocabulary itself is still not exported as inputs, so this entry stays not_exported."
+      "The sibling-wait boundary is exercised at operation level by suspended_same_task_holder_append_rejected in native_execution_contracts_script, and rejected commits release through storageReturned. The event vocabulary itself is still not exported as inputs, so this entry stays not_exported."
     ],
     "retired_bindings": [],
     "admission": {

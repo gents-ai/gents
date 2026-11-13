@@ -2886,10 +2886,52 @@ def caseCoverage : List CoverageEntry :=
       "Bind modeled acquire, full-capacity refusal and release to the slot-owned Rust capacity scheduler. No request parks a worker while waiting on another session.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "canonical_execution_gate_cases"
-      "CanonicalExecutionGateCases"
-      "Generated native scripts bind transactional lease, publication, recovery and tool owners. Title scripts bind signed parent-only admission, own claim/begin, renewal, Complete/Partial/retracted audit closure, retry coordinates, terminal-parent isolation and purpose denial. Rows marked nativeGap retain explicit replication or unmaterialized-input premises; trace summaries and finite cases do not establish the application's universal invariants in Rust.")
+      "family"
+      "native_execution_contracts_script"
+      "Generated native scripts bind transactional lease, publication, recovery and tool owners. Title scripts bind signed parent-only admission, own claim/begin, renewal, Complete/Partial/retracted audit closure, retry coordinates, terminal-parent isolation and purpose denial. Finite scripts do not establish the application's universal invariants in Rust.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_renewal_under_held_gate")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_tool_append_deadline")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_foreground_dispatch_prefix")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_background_handoff")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_parent_terminal")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_watcher_dispatch")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_timeout")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_reasoning_only")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_crash_recovery")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (followUpCoverage "family" "execution_gate_contracts_trace_summary_unreached"
+      "model-production-gap: each summary folds a whole modeled application trace into one witness; production has no single owner that executes a whole trace, so native_execution_contracts_script binds its steps.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "native_execution_contracts_script_unreached"
+      "model-production-gap: these scripts need a product transaction production lacks: the resume-to-active recovery primitive, a split tool close and delivery, a bridge background receipt with a late result, a candidate spawned-child document, or unmaterialized tool and header inputs on a title request; each names its premise in native_gap.")
+      "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "dispatch_observation_contracts_spawned_target")

@@ -17,6 +17,8 @@ use gents_protocol::output::{
     StreamPayload, TerminalOutput, ToolResultPart, TranscriptMessage,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use gents_protocol::request_admission::RequestPurpose;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 /// The node every translated canonical record and message belongs to; the
@@ -395,6 +397,380 @@ pub enum AuditResult {
     Loading,
     Conflicted,
     Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolAdmission {
+    pub document: u64,
+    pub call_id: u64,
+    pub request_id: u64,
+    pub state: String,
+    pub operation: String,
+    pub deadline: u64,
+    pub started_at: Option<u64>,
+    pub current_time: u64,
+    pub failure_class: Option<String>,
+    pub persistence: String,
+    pub await_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnedToolAdmission {
+    pub document: u64,
+    pub parent_tool_document: u64,
+    pub call_id: u64,
+    pub request_id: u64,
+    pub state: String,
+    pub operation: String,
+    pub deadline: u64,
+    pub started_at: Option<u64>,
+    pub current_time: u64,
+    pub failure_class: Option<String>,
+    pub persistence: String,
+    pub await_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryItem {
+    pub closing: Segment,
+    pub message: Option<Message<PayloadSpec>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TitleBinding {
+    pub purpose: RequestPurpose,
+    pub physical_request: u64,
+    pub logical_request: u64,
+    pub parent_physical: u64,
+    pub parent_logical: u64,
+    pub node: u64,
+    pub session: u64,
+    pub authenticated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseStatus {
+    Vacant,
+    Active,
+    Recoverable,
+    Terminal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionOutcome {
+    Completed,
+    Failed,
+    Interrupted,
+    Dead,
+    Superseded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lease {
+    pub status: LeaseStatus,
+    pub generation: Option<u64>,
+    pub duration: Option<u64>,
+    pub explicit_deadline: Option<u64>,
+    pub outcome: Option<ExecutionOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseWorld {
+    pub request: RequestLifecycleState,
+    pub lease: Lease,
+    pub used_generations: Vec<u64>,
+    pub now: u64,
+    pub effective_expiry: u64,
+    pub continuation_required: bool,
+    pub token_charge_required: bool,
+    pub continuation_count: u64,
+    pub token_charge_count: u64,
+}
+
+/// The modeled request a native execution script starts from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Seed {
+    pub purpose: RequestPurpose,
+    pub title_binding: Option<TitleBinding>,
+    pub request_id: u64,
+    pub session_id: u64,
+    pub node_did: u64,
+    pub lease: LeaseWorld,
+    pub transcript_session_id: u64,
+    pub next_sequence: u64,
+    pub segments: Vec<Segment>,
+    pub messages: Vec<Message<PayloadSpec>>,
+    pub tool_calls: Vec<u64>,
+    pub in_flight: Vec<u64>,
+}
+
+/// One modeled execution operation, tagged by its `operation` name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Operation {
+    AcceptForeground {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: Segment,
+        message: Message<PayloadSpec>,
+        admissions: Vec<ToolAdmission>,
+    },
+    AcceptBackground {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: Segment,
+        message: Message<PayloadSpec>,
+        admissions: Vec<ToolAdmission>,
+    },
+    Dispatch {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        call: u64,
+        cancellation_allows: bool,
+        tool_policy_allows: bool,
+    },
+    CloseForegroundTool {
+        actor: u64,
+        now: u64,
+        document: u64,
+        authority_outcome: String,
+        record: Segment,
+    },
+    CompleteForegroundTool {
+        actor: u64,
+        now: u64,
+        document: u64,
+        authority_outcome: String,
+        record: Segment,
+        message: Message<PayloadSpec>,
+    },
+    DeliverForegroundResult {
+        actor: u64,
+        now: u64,
+        document: u64,
+        message: Message<PayloadSpec>,
+    },
+    TerminalizeCompleted {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        outcome: String,
+        selection: TerminalSelection,
+    },
+    RecoverExpiredGeneration {
+        actor: u64,
+        now: u64,
+        expected_generation: u64,
+        fresh_generation: u64,
+        duration: u64,
+        deadline: u64,
+        items: Vec<RecoveryItem>,
+    },
+    RecoverExpiredTerminal {
+        actor: u64,
+        now: u64,
+        expected_generation: u64,
+        fresh_generation: u64,
+        outcome: String,
+        selection: TerminalSelection,
+        items: Vec<RecoveryItem>,
+    },
+    ClosePartial {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        item: RecoveryItem,
+    },
+    CloseAuxiliary {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: Segment,
+    },
+    RetractBeforeRetry {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        record: Segment,
+    },
+    RenewLease {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        expected_deadline: u64,
+    },
+    AppendOutput {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        record: Segment,
+    },
+    AppendToolOutput {
+        actor: u64,
+        now: u64,
+        document: u64,
+        record: Segment,
+    },
+    AppendOutputWhileSiblingWaits {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        record: Segment,
+    },
+    AcceptTurn {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: Segment,
+        message: Message<PayloadSpec>,
+        admissions: Vec<ToolAdmission>,
+    },
+    BackgroundTool {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        document: u64,
+        action: String,
+    },
+    PublishBackgroundReceipt {
+        actor: u64,
+        now: u64,
+        parent_document: u64,
+        closing: Segment,
+        message: Message<PayloadSpec>,
+    },
+    AdmitSpawnedBackground {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        admission: SpawnedToolAdmission,
+    },
+    PublishAuthored {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: Segment,
+        message: Message<PayloadSpec>,
+    },
+    AdvanceCompactionCursor {
+        actor: u64,
+        now: u64,
+        cursor: u64,
+    },
+    RevokeCorrupt {
+        actor: u64,
+        now: u64,
+        expected_generation: u64,
+        fresh_generation: u64,
+        outcome: String,
+        selection: TerminalSelection,
+    },
+    DeliverReplicatedSegment {
+        actor: u64,
+        now: u64,
+        record: Segment,
+    },
+}
+
+impl Operation {
+    pub fn actor_and_now(&self) -> (u64, u64) {
+        match self {
+            Self::AcceptForeground { actor, now, .. }
+            | Self::AcceptBackground { actor, now, .. }
+            | Self::Dispatch { actor, now, .. }
+            | Self::CloseForegroundTool { actor, now, .. }
+            | Self::CompleteForegroundTool { actor, now, .. }
+            | Self::DeliverForegroundResult { actor, now, .. }
+            | Self::TerminalizeCompleted { actor, now, .. }
+            | Self::RecoverExpiredGeneration { actor, now, .. }
+            | Self::RecoverExpiredTerminal { actor, now, .. }
+            | Self::ClosePartial { actor, now, .. }
+            | Self::CloseAuxiliary { actor, now, .. }
+            | Self::RetractBeforeRetry { actor, now, .. }
+            | Self::RenewLease { actor, now, .. }
+            | Self::AppendOutput { actor, now, .. }
+            | Self::AppendToolOutput { actor, now, .. }
+            | Self::AppendOutputWhileSiblingWaits { actor, now, .. }
+            | Self::AcceptTurn { actor, now, .. }
+            | Self::BackgroundTool { actor, now, .. }
+            | Self::PublishBackgroundReceipt { actor, now, .. }
+            | Self::AdmitSpawnedBackground { actor, now, .. }
+            | Self::PublishAuthored { actor, now, .. }
+            | Self::AdvanceCompactionCursor { actor, now, .. }
+            | Self::RevokeCorrupt { actor, now, .. }
+            | Self::DeliverReplicatedSegment { actor, now, .. } => (*actor, *now),
+        }
+    }
+}
+
+/// What a native execution step leaves durable. Segments and messages are a
+/// set; `ExecutionObservation::wire` orders them as the Lean family does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionObservation {
+    pub accepted: bool,
+    pub generation: Option<u64>,
+    pub terminal_generation: Option<u64>,
+    pub request_state: String,
+    pub terminal_selection: Option<TerminalSelection>,
+    pub tool_state: Option<String>,
+    pub tool_stuck_since: Option<u64>,
+    pub in_flight: bool,
+    pub next_sequence: u64,
+    pub accepted_sequence: Option<u64>,
+    pub physical_tool_request: Option<u64>,
+    pub lease_deadline: Option<u64>,
+    pub compaction_cursor: Option<u64>,
+    pub segments: Vec<Segment>,
+    pub messages: Vec<Message<PayloadSpec>>,
+}
+
+impl ExecutionObservation {
+    /// The observation as a JSON value, its segments ordered by identifier
+    /// then by `compact_model_json`, and its messages by header identifier
+    /// then by `compact_model_json`: the order
+    /// `Conformance.NativeExecutionContracts.observationWire` writes.
+    pub fn wire(&self) -> serde_json::Value {
+        let mut segments = self
+            .segments
+            .iter()
+            .map(|segment| {
+                let value = encode(segment);
+                ((segment.id, crate::compact_model_json(&value)), value)
+            })
+            .collect::<Vec<_>>();
+        segments.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut messages = self
+            .messages
+            .iter()
+            .map(|message| {
+                let value = encode(message);
+                (
+                    (message.header.id, crate::compact_model_json(&value)),
+                    value,
+                )
+            })
+            .collect::<Vec<_>>();
+        messages.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut value = encode(self);
+        value["segments"] =
+            serde_json::Value::Array(segments.into_iter().map(|(_, value)| value).collect());
+        value["messages"] =
+            serde_json::Value::Array(messages.into_iter().map(|(_, value)| value).collect());
+        value
+    }
 }
 
 pub fn decode<T>(value: &serde_json::Value) -> T

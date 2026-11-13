@@ -1,11 +1,9 @@
 import Proofs.Runtime.CanonicalOutput.Execution.GateCases
-import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.Conformance.Contracts.Json.NativeExecution
+import Proofs.Conformance.Family
 
 namespace Conformance.ExecutionGateContracts
 
 open CanonicalOutput.Execution.Gate.Cases
-open Conformance.Contracts
 
 structure Case where
   name : String
@@ -27,16 +25,24 @@ def cases : List Case :=
      , ⟨"spawned_background_lost_ack_replays", some spawnedAdmissionReplayCases⟩
      , ⟨"corrupt_payload_revocation_preserves_facts", some corruptRevocationCases⟩ ]
 
-def caseJson (value : Case) : String :=
-  "{" ++ "\"kind\":\"trace_summary\","
-    ++ "\"name\":" ++ jsonString value.name ++ ","
-    ++ "\"completed\":" ++ jsonOptionalBool (some (value.observed == some true)) ++ "}"
-
-def casesJson : String := jsonArray
-  (cases.map caseJson ++ Conformance.NativeExecutionContracts.cases.map
-    Conformance.NativeExecutionContracts.caseJson)
-
 example : cases.all (fun value => value.observed == some true) = true := by
   native_decide
+
+structure SummaryInput where
+  name : String
+  deriving Lean.ToJson
+
+structure SummaryOutput where
+  completed : Bool
+  deriving Lean.ToJson
+
+/-- model-production-gap: each summary folds a whole modeled application
+trace (several requests, tools and recoveries) into one witness; production
+has no single owner that executes a whole trace, so the scripts of
+`native_execution_contracts_script` bind its steps instead. -/
+@[conformance_family]
+def traceSummaryUnreached : Family SummaryInput SummaryOutput where
+  inputs := cases.map fun value => { name := value.name }
+  model := fun i => { completed := (cases.find? (·.name == i.name)).any (·.observed == some true) }
 
 end Conformance.ExecutionGateContracts
