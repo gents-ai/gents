@@ -43,7 +43,7 @@ help:
 	@echo "Checks:"
 	@echo "  make fmt                   Format Rust and desktop UI code"
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
-	@echo "  make lint                  Run clippy on all workspace targets (-D warnings)"
+	@echo "  make lint                  Check the product build, then clippy all targets (-D warnings)"
 	@echo "  make proofs                Build Lean proofs"
 	@echo
 	@echo "Tests:"
@@ -180,6 +180,7 @@ fmt-check:
 	$(NPM) --prefix $(DESKTOP_DIR) run format:check
 
 lint:
+	$(CARGO) check --workspace $(CARGO_PROFILE_FLAG)
 	$(CARGO) clippy --workspace --all-targets $(CARGO_PROFILE_FLAG) -- -D warnings
 
 proofs:
