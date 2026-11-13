@@ -49,18 +49,6 @@ pub struct BuiltPrompt {
     pub messages: Vec<TaggedMessage>,
 }
 
-impl BuiltPrompt {
-    /// Continuation evidence stays on `messages` until the owned provider boundary
-    /// narrows one prepared request for estimate, capture and send.
-    #[cfg(test)]
-    pub(crate) fn native_messages(&self) -> Vec<Message> {
-        self.messages
-            .iter()
-            .map(|row| row.message.clone())
-            .collect()
-    }
-}
-
 pub trait PromptBuilder: Send + Sync {
     fn build(
         &self,

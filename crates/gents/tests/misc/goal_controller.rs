@@ -344,22 +344,10 @@ async fn boot_goal_background_handoff_with_plans(
 struct ChildRow {
     #[serde(rename = "_docID")]
     doc_id: String,
-    request_id: String,
     node_did: String,
     session_id: String,
-    agent_did: Option<String>,
     caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
     input: Option<serde_json::Value>,
-    lifecycle_state: Option<String>,
-    retry_key: Option<String>,
-    request_hop: Option<i64>,
-    workspace_id: Option<String>,
-    workspace_authority: Option<String>,
-    workspace_owner_node_did: Option<String>,
-    workspace_seal_hash: Option<String>,
 }
 
 #[tokio::test]
@@ -881,9 +869,7 @@ async fn goal_recovery_actors(
 async fn goal_children_from_access(access: &ConfigAccess) -> Vec<ChildRow> {
     let response = access.execute(r#"{
         AgentRequest(filter: {caused_by_trigger_kind: {_eq: "goal"}}) {
-            _docID request_id node_did requester_did session_id agent_did caused_by_parent_request_id caused_by_parent_request_doc_id
-            caused_by_trigger_id caused_by_trigger_kind input lifecycle_state retry_key request_hop workspace_id workspace_authority
-            workspace_owner_node_did workspace_seal_hash
+            _docID node_did session_id caused_by_parent_request_id input
         }
     }"#).await.expect("query selected Agent's goal children");
     serde_json::from_value(response["data"]["AgentRequest"].clone()).expect("decode goal children")

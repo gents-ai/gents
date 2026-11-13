@@ -25,7 +25,6 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
     use gents_inference::auth::credential::{
         resolve_oauth_credential, set_account_enabled, store_sign_in, AccountPick,
     };
-    use gents_store::identity::NodeIdentity;
     let (db, _user, user_access, _binding) =
         crate::test_support::root::signed_test_node("account-events-profile").await;
     let node = db.node.clone();

@@ -215,11 +215,13 @@ async fn fixture(name: &str) -> Fixture {
         &gents_automation::goal::session_message::SessionGoals,
         &cause,
         &target,
-        RenderedBody {
-            content: "work".into(),
-            goal: None,
-        },
-        None,
+        (
+            RenderedBody {
+                content: "work".into(),
+                goal: None,
+            },
+            None,
+        ),
         AgentMessageDelivery::Queue,
         &signer,
     )
@@ -653,11 +655,13 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 &gents_automation::goal::session_message::SessionGoals,
                 &forged,
                 &target,
-                RenderedBody {
-                    content: "forged".into(),
-                    goal: None,
-                },
-                None,
+                (
+                    RenderedBody {
+                        content: "forged".into(),
+                        goal: None,
+                    },
+                    None,
+                ),
                 AgentMessageDelivery::Queue,
                 &signer,
             )
@@ -684,11 +688,13 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             &gents_automation::goal::session_message::SessionGoals,
             &cause,
             &target,
-            RenderedBody {
-                content: "follow up".into(),
-                goal: None,
-            },
-            None,
+            (
+                RenderedBody {
+                    content: "follow up".into(),
+                    goal: None,
+                },
+                None,
+            ),
             if active {
                 AgentMessageDelivery::Steer
             } else {

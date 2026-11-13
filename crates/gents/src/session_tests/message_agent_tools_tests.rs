@@ -108,11 +108,13 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
             &NoSessionMessageGoals,
             &cause,
             &target,
-            RenderedBody {
-                content: "change course".to_owned(),
-                goal: None,
-            },
-            None,
+            (
+                RenderedBody {
+                    content: "change course".to_owned(),
+                    goal: None,
+                },
+                None,
+            ),
             AgentMessageDelivery::Steer,
             &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
         )
@@ -145,11 +147,13 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        RenderedBody {
-            content: "queued turn".to_owned(),
-            goal: None,
-        },
-        None,
+        (
+            RenderedBody {
+                content: "queued turn".to_owned(),
+                goal: None,
+            },
+            None,
+        ),
         AgentMessageDelivery::Queue,
         &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )

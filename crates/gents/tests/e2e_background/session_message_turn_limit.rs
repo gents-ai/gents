@@ -40,14 +40,11 @@ const PINNED_PREFIX: &str = "agent stream failed: PromptError: MaxTurnError: ";
 struct ChildRequestRow {
     #[serde(rename = "_docID")]
     doc_id: String,
-    request_id: String,
     session_id: String,
     session_doc_id: Option<String>,
     agent_doc_id: Option<String>,
     relationships_pending: Option<bool>,
     agent_did: Option<String>,
-    requester_did: Option<String>,
-    admission_signer_did: Option<String>,
     lifecycle_state: Option<String>,
     failure_reason: Option<String>,
 }
@@ -259,7 +256,7 @@ async fn child_of(
     child_did: &str,
 ) -> Option<ChildRequestRow> {
     let escaped = escape_graphql_string(parent_request_id);
-    let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped}" }} }}) {{ _docID request_id session_id session_doc_id agent_doc_id relationships_pending agent_did requester_did admission_signer_did lifecycle_state failure_reason }} }}"#)).await.expect("read child request");
+    let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped}" }} }}) {{ _docID session_id session_doc_id agent_doc_id relationships_pending agent_did lifecycle_state failure_reason }} }}"#)).await.expect("read child request");
     response["data"]["AgentRequest"]
         .as_array()
         .into_iter()

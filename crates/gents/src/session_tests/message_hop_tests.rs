@@ -64,8 +64,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             &NoSessionMessageGoals,
             &cause,
             &target,
-            body,
-            None,
+            (body, None),
             if input.delivery == "steer" {
                 AgentMessageDelivery::Steer
             } else {
