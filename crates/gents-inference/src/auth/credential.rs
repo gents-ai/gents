@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 pub use account_backend::preset_account_backend;
 use account_backend::sync_account_backend;
 pub use accounts::{
-    enabled_accounts_note, list_accounts, no_switch_candidate_note, remove_account_in_txn,
-    list_stored_accounts, set_account_enabled, set_account_label, AccountSummary, StoredAccount,
+    enabled_accounts_note, list_accounts, list_stored_accounts, no_switch_candidate_note,
+    remove_account_in_txn, set_account_enabled, set_account_label, AccountSummary, StoredAccount,
 };
 pub use auth_error::account_failure;
 use auth_error::MOVE_OFF_ACCOUNT;
