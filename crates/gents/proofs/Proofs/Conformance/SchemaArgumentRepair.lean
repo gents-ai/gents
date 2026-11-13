@@ -1,4 +1,5 @@
 import Proofs.Session.PromptAssembly.SchemaArgumentRepair
+import Proofs.Conformance.Family
 
 namespace Conformance.SchemaArgumentRepair
 open Lean PromptAssembly.SchemaArgumentRepair
@@ -127,18 +128,70 @@ theorem generated_cases_are_idempotent :
       let twice := run parsed c.schema once.value
       twice.value == once.value && twice.paths.isEmpty) = true := by native_decide
 
-private def caseJson (c : Case) : Json :=
-  let parsed := caseObservations c
-  let result := run parsed c.schema c.input
-  let native := run parsed (callSchema c) (callInput c)
-  Json.mkObj [("name", toJson c.name), ("schema", c.schema), ("input", c.input),
-    ("expected", result.value), ("paths", toJson result.paths),
-    ("parses", toJson (parsed.map (fun observation => Json.mkObj
-      [("raw", toJson observation.raw), ("accepted", toJson observation.parsed.isSome),
-       ("parsed", toJson observation.parsed)]))),
-    ("native_schema", callSchema c), ("native_input", callInput c),
-    ("native_expected", native.value), ("native_paths", toJson native.paths)]
+/-- One string the native argument decoder reads, and what it decodes to. The
+surrogate, `1e400` and depth-130 overrides are serde_json facts the model
+takes as given; consumers assert each against the native decoder. `parsed` is
+`null` when the decoder refuses the text. -/
+structure ParseInput where
+  raw : String
+  accepted : Bool
+  parsed : Json
+  deriving ToJson
 
-def casesJson : String := (toJson (cases.map caseJson)).compress
+private def parseInputs (c : Case) : List ParseInput :=
+  (caseObservations c).map fun observation =>
+    ⟨observation.raw, observation.parsed.isSome, observation.parsed.getD .null⟩
+
+private def observationsOf (parses : List ParseInput) : List ParseObservation :=
+  parses.map fun observation =>
+    ⟨observation.raw, if observation.accepted then some observation.parsed else none⟩
+
+structure ToolArgumentsInput where
+  name : String
+  schema : Json
+  input : Json
+  parses : List ParseInput
+  nativeSchema : Json
+  nativeInput : Json
+  deriving ToJson
+
+structure ToolArgumentsOutput where
+  expected : Json
+  paths : List String
+  repeated : Json
+  repeatedPaths : List String
+  nativeExpected : Json
+  nativePaths : List String
+  deriving ToJson
+
+@[conformance_family]
+def toolArguments : Family ToolArgumentsInput ToolArgumentsOutput where
+  inputs := cases.map fun c =>
+    ⟨c.name, c.schema, c.input, parseInputs c, callSchema c, callInput c⟩
+  model := fun i =>
+    let parsed := observationsOf i.parses
+    let once := run parsed i.schema i.input
+    let twice := run parsed i.schema once.value
+    let native := run parsed i.nativeSchema i.nativeInput
+    { expected := once.value
+      paths := once.paths
+      repeated := twice.value
+      repeatedPaths := twice.paths
+      nativeExpected := native.value
+      nativePaths := native.paths }
+
+structure OwnedLoopInput where
+  name : String
+  parses : List ParseInput
+  nativeSchema : Json
+  nativeInput : Json
+  deriving ToJson
+
+/-- The owned loop admits, dispatches, persists and replays a tool call's
+arguments; each observation is the repaired arguments. -/
+@[conformance_family]
+def ownedLoop : Family OwnedLoopInput Json where
+  inputs := cases.map fun c => ⟨c.name, parseInputs c, callSchema c, callInput c⟩
+  model := fun i => (run (observationsOf i.parses) i.nativeSchema i.nativeInput).value
 
 end Conformance.SchemaArgumentRepair

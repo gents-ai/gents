@@ -2017,8 +2017,12 @@ def caseCoverage : List CoverageEntry :=
       "Refines source projection scope, terminal coverage, path coherence, authenticated native owners and unsigned bounded pages. Remaining canonical admission, fork and publication refinements stay separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "schema_argument_repair_cases"
-      "SchemaArgumentRepairCases")
+      "family"
+      "schema_argument_repair_tool_arguments")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "schema_argument_repair_owned_loop")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
