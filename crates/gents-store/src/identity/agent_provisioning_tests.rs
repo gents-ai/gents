@@ -65,3 +65,94 @@ async fn modeled_agent_creator_and_node_owner_control_native_agent() -> anyhow::
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn modeled_application_pairing_access_controls_native_overlay() -> anyhow::Result<()> {
+    use acp::policy_yaml::{build_policy, parse_policy_yaml};
+    use acp::{
+        DocumentACP, DocumentPermission, Identity, MemoryZanzibarStore, ZanzibarDocumentACP,
+        ZanzibarStore,
+    };
+    let cases = gents_lean_vocab::families::application_pairing_access_cases::cases();
+    let dir = tempfile::tempdir()?;
+    let mut actors = Vec::new();
+    for name in [
+        "user", "author", "engineer", "runtime", "manager", "sibling",
+    ] {
+        let key = KeyIdentity::load_or_create(dir.path().join(name), None)?;
+        actors.push((name, identity::Did::new(key.did())?));
+    }
+    let did = |name: &str| -> identity::Did {
+        actors
+            .iter()
+            .find(|(actor, _)| *actor == name)
+            .map(|(_, did)| did.clone())
+            .unwrap_or_else(|| panic!("unknown modeled actor {name}"))
+    };
+    let policy = build_policy(
+        &parse_policy_yaml(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY)
+            .map_err(anyhow::Error::msg)?,
+        0,
+    )?;
+    let store = Arc::new(MemoryZanzibarStore::new());
+    store.store_policy(&policy).await?;
+    let acp = ZanzibarDocumentACP::new(store);
+    acp.register_doc_object(&did("user"), &policy.id, "nodes", "node")
+        .await?;
+    acp.register_doc_object(
+        &did("author"),
+        &policy.id,
+        "application_pairings",
+        "overlay",
+    )
+    .await?;
+    for (relation, actor) in [
+        ("administrator", "engineer"),
+        ("runtime_reader", "runtime"),
+        ("agent_manager", "manager"),
+    ] {
+        assert!(
+            acp.add_relationship(
+                &did("user"),
+                acp::Subject::Entity(did(actor)),
+                &policy.id,
+                "nodes",
+                "node",
+                relation,
+                &[]
+            )
+            .await?
+        );
+    }
+    assert!(
+        acp.add_relationship(
+            &did("author"),
+            acp::Subject::entity_set("nodes", "node", ""),
+            &policy.id,
+            "application_pairings",
+            "overlay",
+            "parent",
+            &[]
+        )
+        .await?
+    );
+    for case in cases {
+        let permission = match case.input.permission.as_str() {
+            "read" => DocumentPermission::Read,
+            "update" => DocumentPermission::Update,
+            "delete" => DocumentPermission::Delete,
+            permission => panic!("unknown modeled permission {permission}"),
+        };
+        let actual = acp
+            .check_doc_access(
+                &Identity::Authenticated(did(&case.input.actor)),
+                permission,
+                &policy.id,
+                "application_pairings",
+                "overlay",
+            )
+            .await?;
+        case.check(actual);
+    }
+    Ok(())
+}
