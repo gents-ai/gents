@@ -59,9 +59,10 @@ async fn observe_finalization(case: &family::FinalizationInput) -> family::Final
     };
     let mut owner: BoxFuture<'static, ()> = if case.independently_scheduled {
         Box::pin(async move {
-            let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(
-                vec![Ok(RawStreamingChoice::FinalResponse(()))],
-            )));
+            let inner =
+                StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(
+                    RawStreamingChoice::FinalResponse(()),
+                )])));
             let mut guarded = hold_stream_guard(inner, finalizer);
             assert!(guarded.next().await.is_some());
         })

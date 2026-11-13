@@ -869,11 +869,16 @@ async fn goal_recovery_actors(
 }
 
 async fn goal_children_from_access(access: &ConfigAccess) -> Vec<ChildRow> {
-    let response = access.execute(r#"{
+    let response = access
+        .execute(
+            r#"{
         AgentRequest(filter: {caused_by_trigger_kind: {_eq: "goal"}}) {
             _docID request_id node_did session_id caused_by_parent_request_id input
         }
-    }"#).await.expect("query selected Agent's goal children");
+    }"#,
+        )
+        .await
+        .expect("query selected Agent's goal children");
     serde_json::from_value(response["data"]["AgentRequest"].clone()).expect("decode goal children")
 }
 

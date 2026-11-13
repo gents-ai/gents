@@ -77,10 +77,7 @@ impl Driver {
         Self {
             fixture,
             session_doc_id: session.doc_id,
-            revisions: BTreeMap::from([(
-                text(&goal["revision"], "composite").to_owned(),
-                current,
-            )]),
+            revisions: BTreeMap::from([(text(&goal["revision"], "composite").to_owned(), current)]),
             commands: BTreeMap::new(),
         }
     }
@@ -137,12 +134,17 @@ impl Driver {
         }
         let access = self.fixture.user_access();
         let doc_id = persist_command(&access, &command).await;
-        self.commands
-            .insert(id, (number(model, "digest"), doc_id.clone(), command.clone()));
+        self.commands.insert(
+            id,
+            (number(model, "digest"), doc_id.clone(), command.clone()),
+        );
         (doc_id, command)
     }
 
-    fn receipt_wire(&self, receipt: &gents_protocol::goal_control::SessionGoalControlReceipt) -> Value {
+    fn receipt_wire(
+        &self,
+        receipt: &gents_protocol::goal_control::SessionGoalControlReceipt,
+    ) -> Value {
         let (id, (digest, _, _)) = self
             .commands
             .iter()
@@ -221,11 +223,7 @@ impl Driver {
 
     async fn state(&self) -> Value {
         let current_goal = self.fixture.current_goal().await;
-        let current = self
-            .fixture
-            .goal_commit(&current_goal.doc_id)
-            .await
-            .cid;
+        let current = self.fixture.goal_commit(&current_goal.doc_id).await.cid;
         let composite = self
             .revisions
             .iter()

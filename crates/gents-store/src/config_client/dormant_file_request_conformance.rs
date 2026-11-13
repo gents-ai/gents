@@ -258,7 +258,10 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
             .await?;
         let updated =
             crate::graphql::mutation_documents(&update_result, &format!("update_{name}"))?.unwrap();
-        assert_eq!(updated.len() == 1, granted_to(&granted, "runtime", "update"));
+        assert_eq!(
+            updated.len() == 1,
+            granted_to(&granted, "runtime", "update")
+        );
         user_access
             .transact_write("test.file_request.revoke", |txn| {
                 let doc = &doc;

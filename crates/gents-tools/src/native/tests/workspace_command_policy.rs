@@ -7,10 +7,10 @@ use crate::native::{
     apply_workspace_authority, validate_command_policy, CommandConstraints, CommandExecutionPolicy,
 };
 use gents_session::workspace::{
-    admit_workspace_binding, bind_integrate, emit_create_workspace_plan, BindingWorkspace, CreationPolicy,
+    admit_workspace_binding, bind_integrate, emit_create_workspace_plan,
     execute_create_workspace_plan, git, git_worktree_caps, integrate_writer, new_binding,
-    seal_writer, workspace_integrate_docs_mutation, AdmitBinding, Fixture,
-    MemoryWorkspaceDocuments, WorkspaceDocuments,
+    seal_writer, workspace_integrate_docs_mutation, AdmitBinding, BindingWorkspace, CreationPolicy,
+    Fixture, MemoryWorkspaceDocuments, WorkspaceDocuments,
 };
 
 #[test]

@@ -626,7 +626,7 @@ async fn task_run_fires_a_task_now_and_reuses_target_id() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(missing.contains("task not found"), "{missing}");
+    assert!(missing.contains("task absent was not found"), "{missing}");
 }
 
 #[tokio::test]

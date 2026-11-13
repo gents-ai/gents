@@ -327,9 +327,7 @@ async fn content_tool_provenance_follows_lean_model() {
             );
             previous_doc = Some(doc);
         }
-        case.check(
-            gents_lean_vocab::families::mailbox_content_provenance::Output { observations },
-        );
+        case.check(gents_lean_vocab::families::mailbox_content_provenance::Output { observations });
         node.shutdown().await.expect("shut down test node");
     }
 }

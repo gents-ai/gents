@@ -840,8 +840,8 @@ mod capture_scope_tests {
     fn capture_scope_labels_parse_as_modeled() {
         use gents_lean_vocab::families::capture_scope_parse as wire;
 
-        gents_lean_vocab::families::capture_scope_parse::replay(
-            |input: &wire::LabelInput| match input.label.parse::<CaptureScope>() {
+        gents_lean_vocab::families::capture_scope_parse::replay(|input: &wire::LabelInput| {
+            match input.label.parse::<CaptureScope>() {
                 Ok(scope) => {
                     assert_eq!(
                         scope.to_string(),
@@ -859,7 +859,7 @@ mod capture_scope_tests {
                     kind: String::new(),
                     seq: 0,
                 },
-            },
-        );
+            }
+        });
     }
 }

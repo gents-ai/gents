@@ -625,7 +625,10 @@ async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) 
     admission_gate.open().await;
     let mut admission_rx = admission_gate.subscribe();
     let (_readiness_tx, mut readiness_rx) = watch::channel(
-        crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(input.pre_active_generation, []),
+        crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(
+            input.pre_active_generation,
+            [],
+        ),
     );
     let mut pending_request = None;
     let mut deferred = Default::default();
@@ -666,7 +669,10 @@ async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) 
     assert_eq!(routed_snapshot.generation, input.pre_active_generation);
     assert_eq!(routed_snapshot.default_agent_did, "code");
     assert_eq!(active_snapshot.default_agent_did, "code");
-    (request.request_id == "req-router", active_snapshot.generation)
+    (
+        request.request_id == "req-router",
+        active_snapshot.generation,
+    )
 }
 
 async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) {

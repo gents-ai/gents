@@ -33,8 +33,6 @@ mod pack_config;
 pub mod pack_spec;
 mod page;
 pub mod patch;
-#[cfg(test)]
-mod trigger_budget_contract;
 pub mod plugin_coordinate;
 pub mod plugin_job_settings;
 mod plugin_source;
@@ -54,6 +52,8 @@ pub mod template;
 pub mod tool_limits;
 mod tool_modes;
 mod tools;
+#[cfg(test)]
+mod trigger_budget_contract;
 
 pub use tool_modes::{BashMode, FileToolMode};
 mod trigger;
@@ -86,8 +86,8 @@ pub use desired_state::validate::{
     event_trigger_document_field_names, validate_event_trigger_document_fields,
 };
 pub use desired_state::{
-    apply_desired_state_plan, grant_agent_catalog, grant_node_administration,
-    grant_selected_self_configuration, revoke_agent_catalog,
+    apply_desired_state_plan, grant_agent_catalog, grant_selected_self_configuration,
+    provision_engineer, revoke_agent_catalog,
 };
 pub use desired_state::{
     apply_desired_state_plan_with_node_binding, configuration_node_doc, ConfigurationNodeBinding,
