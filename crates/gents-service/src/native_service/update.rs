@@ -293,7 +293,7 @@ where
                 let target = format!("{domain}/{label}");
                 let current =
                     self.run_allow_failure("launchctl", &["print".into(), target.clone().into()])?;
-                ensure_launchd_print_result(&current)?;
+                ensure_launchd_result(&current, LaunchdOperation::Inspect)?;
                 if !current.success {
                     self.run_checked(
                         "launchctl",
