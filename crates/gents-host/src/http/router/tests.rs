@@ -8,6 +8,7 @@ use gents_protocol::row::{
     AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState, NodeReadinessRow,
     NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
 };
+
 use serde_json::{json, Value};
 
 use super::metrics::{
@@ -578,6 +579,7 @@ fn readiness(default_agent_did: &str) -> NodeReadinessRow {
                 agent_did: default_agent_did.to_string(),
                 state: AgentReadinessState::Ready,
                 reason: None,
+                effective_inference: None,
             }],
         })
         .unwrap(),

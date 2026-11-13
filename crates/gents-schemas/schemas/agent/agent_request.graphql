@@ -36,6 +36,11 @@ type AgentRequest @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf405676885841
     input: JSON @immutable
     lifecycle_state: String @index
     backend_id: String @index
+    executed_model_name: String
+    executed_reasoning_effort: String
+    executed_service_tier: String
+    executed_inference_profile_id: String
+    executed_runtime_generation: Int
     execution_origin: String @immutable
     caused_by_trigger_id: String @index @immutable
     caused_by_trigger_doc_id: String @index @immutable

@@ -32,7 +32,6 @@ fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
     })
 }
 
-/// Which admission [`CallKind`](crate::inference::admission::CallKind) legitimately
 /// produces captures of which [`CaptureScopeKind`]. `OneShot` maps to nothing:
 /// one-shot runs have no admission scope at all, so a join observed under a
 /// oneshot capture could only be another loop's call.
@@ -753,6 +752,11 @@ mod tests {
             workspace_authority: None,
             workspace_owner_node_did: None,
             workspace_seal_hash: None,
+            executed_model_name: None,
+            executed_reasoning_effort: None,
+            executed_service_tier: None,
+            executed_inference_profile_id: None,
+            executed_runtime_generation: None,
         }
     }
 

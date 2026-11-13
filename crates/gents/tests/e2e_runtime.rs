@@ -8,6 +8,8 @@ mod completion_retry_tape;
 mod disabled_agent_sweep;
 #[path = "e2e_runtime/document_config_bootstrap.rs"]
 mod document_config_bootstrap;
+#[path = "e2e_runtime/effective_model_binding.rs"]
+mod effective_model_binding;
 #[path = "e2e_runtime/fork_invariants.rs"]
 mod fork_invariants;
 #[path = "e2e_runtime/mailbox_tool_turn.rs"]

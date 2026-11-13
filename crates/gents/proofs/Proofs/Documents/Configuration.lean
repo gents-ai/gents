@@ -89,6 +89,18 @@ structure SelectedModel where
   effort : Option ReasoningEffort
 deriving DecidableEq, Repr
 
+/-- Canonical persisted effort names, the only spelling the runtime parses or
+writes. -/
+def ReasoningEffort.wireName : ReasoningEffort → String
+  | .none => "none"
+  | .minimal => "minimal"
+  | .low => "low"
+  | .medium => "medium"
+  | .high => "high"
+  | .xhigh => "xhigh"
+  | .max => "max"
+  | .ultra => "ultra"
+
 /-- Capability projection of one advertised model. Unknown efforts and a known
 empty effort catalog remain distinct, matching AdvertisedModel. -/
 structure AdvertisedModel where

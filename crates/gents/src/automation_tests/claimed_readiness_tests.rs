@@ -23,6 +23,7 @@ use gents_protocol::node_readiness::{
     NodeReadinessProcessState, NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
 };
 use gents_protocol::row::{AgentRequest, AgentRequestRow};
+
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::{json, Value};
@@ -316,6 +317,7 @@ async fn publish_readiness(
                 agent_did: "other-assigned-behavior".to_owned(),
                 state: AgentReadinessState::Ready,
                 reason: None,
+                effective_inference: None,
             }]
         } else {
             vec![AgentReadinessEntry {
@@ -326,6 +328,7 @@ async fn publish_readiness(
                     AgentReadinessState::Ready
                 },
                 reason: unavailable,
+                effective_inference: None,
             }]
         },
     };
@@ -808,6 +811,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
                     AgentReadinessState::Ready
                 },
                 reason,
+                effective_inference: None,
             }],
         };
         crate::runtime::node_readiness_publisher::upsert_node_readiness(

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents_automation::goal::{session_token_usage, seed_goal_from_access};
+use gents_automation::goal::{seed_goal_from_access, session_token_usage};
 use gents_automation::{
     triggers::engine::goal_source::GoalSource, triggers::engine::TriggerSource,
     triggers::runtime_snapshot::ActiveRuntimeSnapshot,
@@ -89,6 +89,7 @@ async fn publish_node_readiness_for_agent(
         AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
         NODE_READINESS_FORMAT_VERSION,
     };
+
     let snapshot = NodeReadinessSnapshot {
         format_version: NODE_READINESS_FORMAT_VERSION,
         process_state,
@@ -103,6 +104,7 @@ async fn publish_node_readiness_for_agent(
                 AgentReadinessState::Ready
             },
             reason: behavior,
+            effective_inference: None,
         }],
     };
     let did = gents_store::graphql::escape_graphql_string(db.node_identity.did());

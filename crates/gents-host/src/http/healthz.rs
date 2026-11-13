@@ -252,6 +252,7 @@ mod tests {
                     agent_did: "default".to_string(),
                     state: AgentReadinessState::Ready,
                     reason: None,
+                    effective_inference: None,
                 }],
             })
             .unwrap(),
@@ -361,7 +362,8 @@ mod tests {
                     reason: Some(
                         gents_protocol::row::AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
                     ),
-                }],
+                effective_inference: None,
+                    }],
             })
             .unwrap(),
             updated_at: "2026-05-13T11:59:30Z".to_string(),

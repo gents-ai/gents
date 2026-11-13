@@ -8,6 +8,7 @@ use gents_protocol::row::{
     project_node_readiness_source, AgentReadinessSourceEntry, AgentReadinessUnavailableReason,
     NodeReadinessProcessState, NodeReadinessSnapshot,
 };
+
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -320,6 +321,10 @@ impl NodeReadinessPublisherHandle {
                         .get(&agent_did)
                         .map(|unavailable| unavailable.public_reason),
                     startup_demoted: false,
+                    effective_inference: snapshot
+                        .agents
+                        .get(&agent_did)
+                        .map(|agent| agent.effective_inference()),
                 };
                 (agent_did, entry)
             })
@@ -517,6 +522,7 @@ async fn run_publisher(
                                 AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                             ),
                             startup_demoted: false,
+                            effective_inference: None,
                         },
                     )]),
                     slot_generations: BTreeMap::new(),
@@ -1103,6 +1109,8 @@ mod candidate_conformance {
                     entries: BTreeMap::from([(
                         "agent".into(),
                         AgentReadinessSourceEntry {
+                            effective_inference: None,
+
                             agent_did: "agent".into(),
                             dispatcher_present: false,
                             unavailable_reason: Some(

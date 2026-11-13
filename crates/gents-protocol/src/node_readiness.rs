@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-pub const NODE_READINESS_FORMAT_VERSION: u32 = 2;
+pub const NODE_READINESS_FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeReadinessProcessState {
@@ -113,11 +113,45 @@ pub fn unavailable_rejection_reason(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServiceTierBinding {
+    Unset,
+    Selected { tier: String },
+    NotSupportedByProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReasoningEffortBinding {
+    Unset,
+    Sent {
+        effort: String,
+    },
+    DroppedUnsupported {
+        effort: String,
+        advertised: Option<Vec<String>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveInferenceSettings {
+    pub profile_id: Option<String>,
+    pub backend_id: Option<String>,
+    pub model_name: String,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: ServiceTierBinding,
+    pub reasoning_effort_dispatch: ReasoningEffortBinding,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentReadinessEntry {
     pub agent_did: String,
     pub state: AgentReadinessState,
     pub reason: Option<AgentReadinessUnavailableReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_inference: Option<EffectiveInferenceSettings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +171,7 @@ pub struct AgentReadinessSourceEntry {
     pub dispatcher_present: bool,
     pub unavailable_reason: Option<AgentReadinessUnavailableReason>,
     pub startup_demoted: bool,
+    pub effective_inference: Option<EffectiveInferenceSettings>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,11 +230,13 @@ pub fn project_node_readiness_source(
                 agent_did: source.agent_did.clone(),
                 state: AgentReadinessState::Ready,
                 reason: None,
+                effective_inference: source.effective_inference,
             }),
             EffectiveAgentReadinessAdmission::Unavailable(reason) => Some(AgentReadinessEntry {
                 agent_did: source.agent_did.clone(),
                 state: AgentReadinessState::Unavailable,
                 reason: Some(reason),
+                effective_inference: None,
             }),
             EffectiveAgentReadinessAdmission::Unassigned => None,
         };

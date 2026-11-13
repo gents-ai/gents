@@ -237,6 +237,11 @@ pub(super) fn request(request_id: &str) -> AgentRequest {
         workspace_authority: None,
         workspace_owner_node_did: None,
         workspace_seal_hash: None,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
     }
 }
 
@@ -585,7 +590,10 @@ fn rust_inference_call_state_vocabulary_matches_lean_model() {
         rust_source: "admission source call_state literals",
         rust_values: &rust_states,
     });
-    let owned: Vec<String> = rust_states.iter().map(|state| (*state).to_owned()).collect();
+    let owned: Vec<String> = rust_states
+        .iter()
+        .map(|state| (*state).to_owned())
+        .collect();
     gents_lean_vocab::families::inference_call_state_vocabulary::replay(&owned);
 }
 

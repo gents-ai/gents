@@ -67,6 +67,7 @@ pub(super) async fn diagnose_backends(
                     profile,
                     observation.as_ref(),
                 )
+                .map(|unsent| unsent.to_string())
             })
             .collect::<Vec<_>>();
         if !warnings.is_empty() {
