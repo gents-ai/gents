@@ -275,10 +275,14 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
     } else {
         AgentCreateOperation::Create
     };
+    let owner = gents_service::home_state::resolve_node_did(
+        args.home.as_deref(),
+        args.node_did.as_deref(),
+    )?;
     submit_create(
         args.home.as_deref(),
-        Some(&args.graphql),
-        &args.node_did,
+        args.graphql.as_deref(),
+        &owner,
         AgentCreateInput {
             operation,
             clone_from: args.clone_from,
@@ -298,7 +302,7 @@ pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
     submit_create(
         args.home.as_deref(),
-        Some(&args.graphql),
+        args.graphql.as_deref(),
         &owner,
         AgentCreateInput {
             operation: AgentCreateOperation::Clone,

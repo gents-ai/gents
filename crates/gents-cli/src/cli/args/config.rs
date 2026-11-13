@@ -452,10 +452,13 @@ pub(crate) struct AgentUpsertArgs {
 pub(crate) struct AgentCreateArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: String,
-    #[arg(long)]
-    pub(crate) node_did: String,
+    #[arg(
+        long,
+        help = "Runtime GraphQL endpoint; defaults to the home's running runtime"
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Owning node; defaults to the home's node")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, help = "Agent display name")]
     pub(crate) display_name: String,
     #[arg(long, help = "Concise purpose for the created agent")]
@@ -488,8 +491,11 @@ pub(crate) struct AgentCreateArgs {
 pub(crate) struct AgentCloneArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: String,
+    #[arg(
+        long,
+        help = "Runtime GraphQL endpoint; defaults to the home's running runtime"
+    )]
+    pub(crate) graphql: Option<String>,
     #[arg(value_name = "SOURCE_AGENT_DID")]
     pub(crate) source_agent_did: String,
     #[arg(long, help = "Display name for the cloned agent")]
