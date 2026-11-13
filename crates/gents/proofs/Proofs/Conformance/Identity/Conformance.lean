@@ -1408,6 +1408,8 @@ def toolOperationCaseJson (name : String) (schema history goal create selfConfig
     ("goal", toJson goal), ("create", toJson create), ("self_config", toJson selfConfig),
     ("category", toJson category), ("pack", toJson pack),
     ("query", toJson false), ("write", toJson false),
+    ("live_agent_reads_collections", toJson (GrantSets.agentEffective ⟨true, true, true⟩
+      ((Configuration.toolOperationSources surface pack).map (·.2)) [] "get-collection")),
     ("sources", toJson ((Configuration.toolOperationSources surface pack).map fun (purpose, permission) =>
       Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
 
@@ -1422,6 +1424,8 @@ def datastoreOperationCaseJson (name : String) (query write : Bool) : Json :=
     ("goal", toJson false), ("create", toJson false), ("self_config", toJson false),
     ("category", toJson "none"), ("pack", toJson false),
     ("query", toJson query), ("write", toJson write),
+    ("live_agent_reads_collections", toJson (GrantSets.agentEffective ⟨true, true, true⟩
+      ((Configuration.toolOperationSources surface false).map (·.2)) [] "get-collection")),
     ("sources", toJson ((Configuration.toolOperationSources surface false).map fun (purpose, permission) =>
       Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
 
@@ -2127,7 +2131,9 @@ def json : Json := Json.mkObj
         ["user", "runtime", "agent", "sibling", "outsider"].flatMap fun actor =>
           ["read", "update"].map fun permission => Json.mkObj
             [("revoked", toJson revoked), ("actor", toJson actor), ("permission", toJson permission),
-             ("expected", toJson (Household.allowed 5 state actor "application_pairings" "overlay" permission))])),
+             ("expected", toJson (if permission == "read" then
+               Household.nativeRead (actor == "runtime") 5 state actor "application_pairings" "overlay"
+               else Household.allowed 5 state actor "application_pairings" "overlay" permission))])),
    ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
       checks withReader ++ [actionJson withReader (.grant writer)] ++ checks withWriter ++
       [actionJson withWriter (.revoke writer)] ++ checks withoutWriter ++

@@ -46,6 +46,7 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
     let runtime = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did())?);
     for did in [owner.did(), selected.did()] {
         for permission in [
+            NodePermission::CollectionGet,
             NodePermission::DocumentRead,
             NodePermission::DocumentUpdate,
             NodePermission::DacRelationAdd,
