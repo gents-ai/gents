@@ -117,7 +117,7 @@ def main():
                 argv = ["runtime", "service", "stop", "--home", str(home)]
                 call_id = "unsafe-stop"
             elif tools and not any(operation in json.dumps(result) for result in results):
-                assert any("disrupt the runtime" in json.dumps(result) for result in results), results
+                assert any("would end the runtime executing your turn" in json.dumps(result) for result in results), results
                 argv = update_args
                 call_id = "managed-update"
             else:

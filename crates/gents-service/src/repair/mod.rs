@@ -1,6 +1,6 @@
 use gents_protocol::operations::install_repair::{
-    Blocker, Finding, HomeChoice, HomeDecision, HomeState, OlderData, RepairOperation,
-    RepairOutcome, RepairReceipt, RepairStep, ServiceMove,
+    Blocker, Finding, HomeChoice, HomeDecision, HomeState, OlderData, RepairAnswer,
+    RepairOperation, RepairOutcome, RepairReceipt, RepairStep, ServiceMove, StoreVerdict,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
-use gents_store::config_client::GraphqlEndpoint;
 use gents_store::local::file_lock::FileLock;
 use gents_store::local::home::default_data_dir;
 use gents_store::local::storage_backend::incompatible_store_kind;
@@ -20,7 +19,7 @@ use crate::native_service::{
 };
 use crate::repair::crash_loop::{job_sample, CrashLoopWatch};
 use crate::repair::home::{
-    aside_label, classify_home, held_by_another, older_label, set_aside_home_as,
+    aside_label, classify_home, held_by_another, set_aside_home_as, store_check,
     unless_being_set_up,
 };
 use crate::repair::port::{
@@ -79,11 +78,24 @@ async fn resolve(program: &ServiceProgram) -> Result<PathBuf, Blocker> {
             })
         })
 }
+/// What the user can be asked, and what they answered.
+#[derive(Debug, Clone, Copy)]
+struct Asked {
+    interactive: bool,
+    answer: RepairAnswer,
+}
+
+const UNASKED: Asked = Asked {
+    interactive: false,
+    answer: RepairAnswer::None,
+};
+
 async fn prepare(
     choice: &HomeChoice,
     program: &ServiceProgram,
     service_move: ServiceMove,
     operation: RepairOperation,
+    asked: Asked,
     progress: &mut dyn Progress,
 ) -> Result<RepairReceipt> {
     prepare_with_lock(
@@ -95,6 +107,7 @@ async fn prepare(
         program,
         service_move,
         operation,
+        asked,
         progress,
     )
     .await
@@ -109,6 +122,7 @@ async fn restore(choice: &HomeChoice, progress: &mut dyn Progress) -> Result<Rep
         &ServiceProgram::new(current_program),
         ServiceMove::AfterSetup,
         RepairOperation::Repoint,
+        UNASKED,
         progress,
     )
     .await
@@ -126,6 +140,7 @@ async fn prepare_with_lock(
     program: &ServiceProgram,
     service_move: ServiceMove,
     operation: RepairOperation,
+    asked: Asked,
     progress: &mut dyn Progress,
 ) -> Result<RepairReceipt> {
     let _lock = hold_lock(lock).await?;
@@ -150,17 +165,20 @@ async fn prepare_with_lock(
         None => (None, false),
     };
     let last_refusal = last_exit.as_ref().and_then(ServiceExit::refusal);
+    let mut refusal = store_check(&choice.home).await;
+    if refusal.is_none() && !running {
+        refusal = older_refused(&choice.home, last_exit.as_ref()).await;
+    }
+    let verdict = refusal
+        .as_ref()
+        .map_or(StoreVerdict::Fine, |store| StoreVerdict::of(store.kind));
     let chosen = choice.home.clone();
     let home =
-        match tokio::task::spawn_blocking(move || classify_home(&chosen, last_refusal)).await? {
+        match tokio::task::spawn_blocking(move || classify_home(&chosen, last_refusal, verdict))
+            .await?
+        {
             Ok(home) => home,
             Err(blocker) => return Ok(blocked(blocker)),
-        };
-    let home =
-        if home == HomeState::Healthy && older_refused(choice, last_exit.as_ref(), running).await {
-            HomeState::OlderStore
-        } else {
-            home
         };
     let home = if home == HomeState::Interrupted {
         let serving = node_serves(manager.as_ref(), &choice.home).await;
@@ -202,13 +220,15 @@ async fn prepare_with_lock(
     facts.operation = operation;
     facts.served_home_present =
         served_home_present(facts.definition_home.as_deref(), &choice.home).await;
-    let busy = home_busy(manager.as_ref(), &facts, &choice.home).await;
+    let busy = !refuses_home(home) && home_busy(manager.as_ref(), &facts, &choice.home).await;
     let serving_home =
         serving_home(facts.definition_home.as_deref(), &facts.port, &choice.home).await;
     let mut report = settle(
         choice,
         &facts,
         busy,
+        asked,
+        refusal,
         manager.as_ref(),
         serving_home.as_deref(),
         program,
@@ -230,10 +250,21 @@ async fn served_home_present(definition_home: Option<&Path>, chosen: &Path) -> b
     };
     let served = served.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        !matches!(classify_home(&served, None), Ok(HomeState::Absent))
+        !matches!(
+            classify_home(&served, None, StoreVerdict::Fine),
+            Ok(HomeState::Absent)
+        )
     })
     .await
     .unwrap_or(true)
+}
+/// A home the plan refuses as it is: probing its store lock would write the
+/// lock file, and nothing in such a home is touched.
+fn refuses_home(home: HomeState) -> bool {
+    matches!(
+        home,
+        HomeState::OlderStore | HomeState::NewerStore | HomeState::InsecureKey
+    )
 }
 async fn home_busy(
     manager: Option<&NativeServiceManager>,
@@ -285,10 +316,16 @@ async fn serving_home(
         .then(|| home.to_path_buf())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the observed facts, the user's answer and the injected manager each decide part of the plan"
+)]
 async fn settle(
     choice: &HomeChoice,
     facts: &ServiceFacts,
     busy: bool,
+    asked: Asked,
+    refusal: Option<IncompatibleStore>,
     manager: Option<&NativeServiceManager>,
     serving_home: Option<&Path>,
     program: &ServiceProgram,
@@ -305,7 +342,8 @@ async fn settle(
             Some(service::NodeVersion::Newer(_)) => RepairVersion::Newer,
             None => RepairVersion::Unknown,
         },
-        explicit_home: choice.explicit,
+        interactive: asked.interactive,
+        answer: asked.answer,
         busy,
         keychain_locked: false,
         foreign_process: false,
@@ -322,7 +360,9 @@ async fn settle(
     let plan = planning::plan(&observation);
     match plan.blocker {
         RepairPlanBlocker::None => {}
-        RepairPlanBlocker::ExplicitHome => {
+        RepairPlanBlocker::Ask
+        | RepairPlanBlocker::Unattended
+        | RepairPlanBlocker::UnfinishedSetup => {
             return Ok(RepairReceipt {
                 client: None,
                 repaired: Vec::new(),
@@ -331,17 +371,31 @@ async fn settle(
                 ),
                 serving_home: serving_home.map(Path::to_path_buf),
                 older_data: None,
+                unfinished_setup: false,
             });
+        }
+        RepairPlanBlocker::OlderStore | RepairPlanBlocker::InsecureKey => {
+            let store = refusal.unwrap_or_else(|| IncompatibleStore {
+                kind: match plan.blocker {
+                    RepairPlanBlocker::InsecureKey => IncompatibleStoreKind::InsecureKey,
+                    _ => IncompatibleStoreKind::OtherVersionSchema,
+                },
+                data_path: default_data_dir(&choice.home),
+            });
+            return Ok(blocked(Blocker::StoreRefused {
+                kind: store.kind,
+                message: store.to_string(),
+            }));
         }
         RepairPlanBlocker::NewerVersion => {
             return Ok(blocked(newer_node(facts).unwrap_or_else(|| {
-                Blocker::StoreRefused {
+                let store = refusal.unwrap_or_else(|| IncompatibleStore {
                     kind: IncompatibleStoreKind::ForeignVersion,
-                    message: IncompatibleStore {
-                        kind: IncompatibleStoreKind::ForeignVersion,
-                        data_path: default_data_dir(&choice.home),
-                    }
-                    .to_string(),
+                    data_path: default_data_dir(&choice.home),
+                });
+                Blocker::StoreRefused {
+                    kind: store.kind,
+                    message: store.to_string(),
                 }
             })))
         }
@@ -351,9 +405,14 @@ async fn settle(
             }))
         }
     }
-    let actions = plan_service(facts, &choice.home);
+    let archive = planning::sets_aside(&observation);
+    let continuing = plan.needs_setup && !archive && facts.home == HomeState::UnfinishedSetup;
+    let actions = if archive || continuing {
+        stop_for_setup(facts)
+    } else {
+        plan_service(facts, &choice.home)
+    };
     let answered = answered_switch(&actions);
-    let answered_from = answered.as_ref().and_then(|(from, _)| from.clone());
     let started_from = answered
         .clone()
         .filter(|(_, started)| *started)
@@ -366,11 +425,14 @@ async fn settle(
     if started_from.is_some() || replacing == Some(true) {
         steps.push(RepairStep::WaitForNode);
     }
-    if home::broken(facts.home).is_some() {
+    if archive {
         steps.push(RepairStep::SetAsideFolder);
     }
     let mut repairs = Repairs::new(progress, steps.len());
-    for finding in actions.iter().filter_map(finding_for) {
+    for finding in actions
+        .iter()
+        .filter_map(|action| finding_for(action, facts))
+    {
         repairs.found(finding);
     }
     let mut applied_services = Vec::new();
@@ -414,51 +476,41 @@ async fn settle(
             repairs.found(Finding::MovedToThisVersion { from: from.clone() });
         }
     }
-    let mut outcome = match (&facts.home, started_from, manager) {
-        (HomeState::Healthy, Some(from), Some(manager)) => {
-            repairs.step(RepairStep::WaitForNode);
-            opens_after_switch(&choice.home, manager, from, &mut repairs)
-                .await
-                .unwrap_or_else(repair_error)
-        }
-        (HomeState::Healthy, None, Some(manager)) if replacing == Some(true) => {
-            repairs.step(RepairStep::WaitForNode);
-            let serving = serving_home.filter(|_| choice.explicit);
-            opens_after_replacing(
-                &choice.home,
-                manager,
-                serving,
-                replaced.as_ref(),
-                &mut repairs,
-            )
-            .await
-            .unwrap_or_else(repair_error)
-        }
-        (HomeState::Absent, ..) => RepairOutcome::NeedsSetup,
-        (HomeState::Healthy, ..) => RepairOutcome::Ready,
-        (why, ..) => {
-            repairs.step(RepairStep::SetAsideFolder);
-            let (older, label) = match why {
-                HomeState::OlderStore => {
-                    let from = answered_from
-                        .clone()
-                        .or_else(|| replaced.as_ref().and_then(|replaced| replaced.from.clone()));
-                    let label = older_label(from.as_ref());
-                    (Some(from), label)
-                }
-                _ => {
-                    let older = answered.map(|(from, _)| from);
-                    let label = aside_label(older.as_ref().and_then(Option::as_ref));
-                    (older, label)
-                }
-            };
-            match set_aside_home_as(&choice.home, label).await {
-                Ok(kept_at) => {
-                    repairs.found(broken_set_aside(*why, older, kept_at));
-                    RepairOutcome::NeedsSetup
-                }
-                Err(blocker) => RepairOutcome::Blocked(blocker),
+    let mut outcome = if archive {
+        repairs.step(RepairStep::SetAsideFolder);
+        let label = match facts.home {
+            HomeState::UnfinishedSetup => "unfinished".to_owned(),
+            _ => aside_label(None),
+        };
+        match set_aside_home_as(&choice.home, label).await {
+            Ok(kept_at) => {
+                repairs.found(Finding::BrokenHome {
+                    why: facts.home,
+                    kept_at,
+                });
+                RepairOutcome::NeedsSetup
             }
+            Err(blocker) => RepairOutcome::Blocked(blocker),
+        }
+    } else if continuing {
+        RepairOutcome::NeedsSetup
+    } else {
+        match (&facts.home, started_from, manager) {
+            (home, Some(_), Some(manager)) if home.is_complete() => {
+                repairs.step(RepairStep::WaitForNode);
+                opens_after_switch(&choice.home, manager)
+                    .await
+                    .unwrap_or_else(repair_error)
+            }
+            (home, None, Some(manager)) if home.is_complete() && replacing == Some(true) => {
+                repairs.step(RepairStep::WaitForNode);
+                let serving = serving_home.filter(|_| choice.explicit);
+                opens_after_replacing(&choice.home, manager, serving)
+                    .await
+                    .unwrap_or_else(repair_error)
+            }
+            (HomeState::Absent, ..) => RepairOutcome::NeedsSetup,
+            _ => RepairOutcome::Ready,
         }
     };
     if matches!(outcome, RepairOutcome::Blocked(_)) {
@@ -473,11 +525,23 @@ async fn settle(
     let mut report = repairs.report(outcome);
     report.older_data = replaced.or_else(|| {
         (!choice.explicit).then(|| OlderData {
-            from: answered_from,
+            from: answered.and_then(|(from, _)| from),
         })
     });
+    report.unfinished_setup = facts.home == HomeState::UnfinishedSetup && !continuing && !archive;
     Ok(report)
 }
+
+/// The home is set aside or set up again only once its node is stopped,
+/// which is all the service needs before setup.
+fn stop_for_setup(facts: &ServiceFacts) -> Vec<ServiceAction> {
+    if facts.job_running || (facts.job_loaded && facts.definition_home.is_some()) {
+        vec![ServiceAction::StopStale]
+    } else {
+        Vec::new()
+    }
+}
+
 fn repair_error(error: anyhow::Error) -> RepairOutcome {
     RepairOutcome::Blocked(Blocker::ServiceUpdateFailed {
         reason: gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string(),
@@ -503,29 +567,13 @@ async fn opens_after_replacing(
     home: &Path,
     manager: &NativeServiceManager,
     serving_home: Option<&Path>,
-    older_data: Option<&OlderData>,
-    repairs: &mut Repairs<'_>,
 ) -> Result<RepairOutcome> {
     let since = Since {
         platform: NativeServicePlatform::current()?,
         runs: None,
         started: true,
     };
-    let kept = |kept_at| Finding::BrokenHome {
-        why: HomeState::MissingStoreKey,
-        kept_at,
-    };
-    let waited = wait_for_node(
-        home,
-        manager,
-        since,
-        serving_home,
-        &aside_label(None),
-        &kept,
-        older_data,
-        repairs,
-    )
-    .await?;
+    let waited = wait_for_node(home, manager, since, serving_home).await?;
     Ok(after_replacing(waited))
 }
 
@@ -545,50 +593,15 @@ fn answered_switch(actions: &[ServiceAction]) -> Option<(Option<semver::Version>
         _ => None,
     })
 }
-fn broken_set_aside(
-    why: HomeState,
-    older: Option<Option<semver::Version>>,
-    kept_at: PathBuf,
-) -> Finding {
-    match older {
-        Some(from) => Finding::OlderDataSetAside { from, kept_at },
-        None => Finding::BrokenHome { why, kept_at },
-    }
-}
-async fn opens_after_switch(
-    home: &Path,
-    manager: &NativeServiceManager,
-    from: Option<semver::Version>,
-    repairs: &mut Repairs<'_>,
-) -> Result<RepairOutcome> {
+async fn opens_after_switch(home: &Path, manager: &NativeServiceManager) -> Result<RepairOutcome> {
     let since = Since {
         platform: NativeServicePlatform::current()?,
         runs: None,
         started: true,
     };
-    let label = aside_label(from.as_ref());
-    let kept = |kept_at| Finding::OlderDataSetAside {
-        from: from.clone(),
-        kept_at,
-    };
-    let waited = wait_for_node(home, manager, since, None, &label, &kept, None, repairs).await?;
-    Ok(match waited {
-        RepairOutcome::Answering(_) => RepairOutcome::Ready,
-        RepairOutcome::Ready => RepairOutcome::Ready,
-        RepairOutcome::NeedsSetup => RepairOutcome::NeedsSetup,
-        RepairOutcome::Decide(decision) => RepairOutcome::Decide(decision),
-        RepairOutcome::Blocked(blocker) => RepairOutcome::Blocked(blocker),
-    })
-}
-async fn stop_and_set_aside(
-    home: &Path,
-    manager: &NativeServiceManager,
-    label: &str,
-    repairs: &mut Repairs<'_>,
-) -> Result<PathBuf, Blocker> {
-    apply(&ServiceAction::StopStale, manager, false, false).await?;
-    repairs.extra_step(RepairStep::SetAsideFolder);
-    set_aside_home_as(home, label.to_string()).await
+    Ok(after_replacing(
+        wait_for_node(home, manager, since, None).await?,
+    ))
 }
 
 async fn decision(home: &Path, why: HomeState, serving: Option<&Path>) -> Result<HomeDecision> {
@@ -607,18 +620,23 @@ fn step_for(action: &ServiceAction) -> RepairStep {
         ServiceAction::MoveFrom { .. }
         | ServiceAction::Reinstall { .. }
         | ServiceAction::SwitchProgram { .. }
-        | ServiceAction::RefreshLog { .. } => RepairStep::UpdateService,
+        | ServiceAction::RefreshLog { .. }
+        | ServiceAction::RewriteDefinition => RepairStep::UpdateService,
     }
 }
 
-fn finding_for(action: &ServiceAction) -> Option<Finding> {
+/// What a step repairs, said only when it is a repair: a node stopped so the
+/// user's chosen setup can run is not one.
+fn finding_for(action: &ServiceAction, facts: &ServiceFacts) -> Option<Finding> {
     match action {
         ServiceAction::MoveFrom { from, .. } => {
             Some(Finding::ServiceForAnotherFolder { from: from.clone() })
         }
-        ServiceAction::StopStale => Some(Finding::StaleNode),
+        ServiceAction::StopStale if facts.home.is_complete() => Some(Finding::StaleNode),
         ServiceAction::Reinstall { .. } => Some(Finding::ServiceProgramMissing),
-        ServiceAction::SwitchProgram { .. }
+        ServiceAction::RewriteDefinition => Some(Finding::ServiceDefinitionMissing),
+        ServiceAction::StopStale
+        | ServiceAction::SwitchProgram { .. }
         | ServiceAction::RefreshLog { .. }
         | ServiceAction::Restart => None,
     }
@@ -626,7 +644,6 @@ fn finding_for(action: &ServiceAction) -> Option<Finding> {
 async fn start(
     home: &Path,
     serving_home: Option<&Path>,
-    older_data: Option<&OlderData>,
     progress: &mut dyn Progress,
 ) -> Result<RepairReceipt> {
     let _lock = hold_lock(&repair_lock_path()?).await?;
@@ -634,12 +651,18 @@ async fn start(
     if let Some(graphql) = answering_graphql(home).await? {
         let server = answering_server(home, &graphql)?;
         let observed = observe_port(&server, read_initialized_did(home).await.as_deref()).await;
-        return Ok(
-            repairs.report(match hand_started(server.http_port, observed) {
-                Some(blocker) => RepairOutcome::Blocked(blocker),
-                None => RepairOutcome::Answering(graphql.url().to_owned()),
-            }),
-        );
+        let outcome = match hand_started(server.http_port, observed) {
+            Some(blocker) => RepairOutcome::Blocked(service_serving_another(home).await.map_or(
+                blocker,
+                |serving| Blocker::ServiceServesAnotherHome {
+                    home: home.to_path_buf(),
+                    serving,
+                    free_port: free_port_after(server.http_port),
+                },
+            )),
+            None => RepairOutcome::Answering(graphql),
+        };
+        return Ok(repairs.report(outcome));
     }
     let Some(manager) = local_service(home, &current_executable()?)? else {
         return Ok(
@@ -670,12 +693,14 @@ async fn start(
     let (running, runs) = match sample {
         Ok(Ok(sample)) => sample,
         Ok(Err(serving)) => {
+            let port = ServerConfig::standard(home.to_path_buf()).http_port;
             return Ok(
                 repairs.report(RepairOutcome::Blocked(Blocker::ServiceServesAnotherHome {
                     home: home.to_path_buf(),
                     serving,
+                    free_port: free_port_after(port),
                 })),
-            )
+            );
         }
         Err(blocker) => return Ok(repairs.report(RepairOutcome::Blocked(blocker))),
     };
@@ -719,25 +744,35 @@ async fn start(
         runs,
         started,
     };
-    let kept = |kept_at| Finding::BrokenHome {
-        why: HomeState::MissingStoreKey,
-        kept_at,
-    };
-    let outcome = wait_for_node(
-        home,
-        &manager,
-        since,
-        serving_home,
-        &aside_label(None),
-        &kept,
-        older_data,
-        &mut repairs,
-    )
-    .await?;
+    let outcome = wait_for_node(home, &manager, since, serving_home).await?;
     Ok(repairs.report(outcome))
 }
-fn answering_server(home: &Path, graphql: &GraphqlEndpoint) -> Result<ServerConfig> {
-    let url = url::Url::parse(graphql.url()).context("parsing the recorded GraphQL endpoint")?;
+
+/// The other home the per-user service runs a node for, when it does: a
+/// node on this home's port that is not this home's is then the service's.
+async fn service_serving_another(home: &Path) -> Option<PathBuf> {
+    let manager = local_service(home, &current_executable().ok()?).ok()??;
+    on_manager(manager.config(), |manager| {
+        Ok(match manager.installed_home()? {
+            Some(installed) if installed != manager.home() && manager.job_pid()?.is_some() => {
+                Some(installed)
+            }
+            _ => None,
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// The first loopback port after `taken` that nothing listens on now, for a
+/// node started by hand beside the service's.
+fn free_port_after(taken: u16) -> Option<u16> {
+    (taken.checked_add(1)?..=taken.saturating_add(100))
+        .find(|port| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, *port)).is_ok())
+}
+fn answering_server(home: &Path, graphql: &str) -> Result<ServerConfig> {
+    let url = url::Url::parse(graphql).context("parsing the recorded GraphQL endpoint")?;
     let http_addr = match url.host() {
         Some(url::Host::Ipv4(ip)) => ip.into(),
         Some(url::Host::Ipv6(ip)) => ip.into(),
@@ -764,19 +799,11 @@ fn hand_started(port: u16, observed: PortObservation) -> Option<Blocker> {
         _ => None,
     }
 }
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each caller names its own set-aside, and the manager is injected"
-)]
 async fn wait_for_node(
     home: &Path,
     manager: &NativeServiceManager,
     since: Since,
     serving_home: Option<&Path>,
-    label: &str,
-    kept: &(dyn Fn(PathBuf) -> Finding + Sync),
-    older_data: Option<&OlderData>,
-    repairs: &mut Repairs<'_>,
 ) -> Result<RepairOutcome> {
     let config = manager.config();
     let deadline = Instant::now() + ENDPOINT_WAIT;
@@ -784,7 +811,7 @@ async fn wait_for_node(
     let mut watch = CrashLoopWatch::default();
     loop {
         if let Some(graphql) = answering_graphql(home).await? {
-            return Ok(RepairOutcome::Answering(graphql.url().to_owned()));
+            return Ok(RepairOutcome::Answering(graphql));
         }
         let now = Instant::now();
         if now >= deadline {
@@ -804,56 +831,20 @@ async fn wait_for_node(
                 Err(blocker) => return Ok(RepairOutcome::Blocked(blocker)),
             };
             match last_exit.as_ref().and_then(|exit| {
-                let action = on_refusal(
-                    exit,
-                    since.platform,
-                    since.runs,
-                    since.started,
-                    serving_home,
-                )?;
+                let action = on_refusal(exit, since.platform, since.runs, since.started)?;
                 Some((exit, action))
             }) {
                 Some((exit, OnRefusal::Block)) => {
-                    let older = match older_data {
-                        Some(older_data) => {
-                            refused_older_data(home, exit).await.map(|_| older_data)
-                        }
-                        None => None,
-                    };
-                    if let Some(older_data) = older {
-                        let from = older_data.from.clone();
-                        let label = older_label(from.as_ref());
-                        return Ok(
-                            match stop_and_set_aside(home, manager, &label, repairs).await {
-                                Ok(kept_at) => {
-                                    repairs.found(Finding::OlderDataSetAside { from, kept_at });
-                                    RepairOutcome::NeedsSetup
-                                }
-                                Err(blocker) => RepairOutcome::Blocked(blocker),
-                            },
-                        );
-                    }
                     return Ok(RepairOutcome::Blocked(blocker_in(
                         home,
                         exit,
                         last_error(config).await,
                     )));
                 }
-                Some((_, OnRefusal::Ask(serving))) => {
+                Some((_, OnRefusal::Ask)) => {
                     return Ok(RepairOutcome::Decide(
-                        decision(home, HomeState::MissingStoreKey, Some(serving)).await?,
+                        decision(home, HomeState::MissingStoreKey, serving_home).await?,
                     ));
-                }
-                Some((_, OnRefusal::SetAside)) => {
-                    return Ok(
-                        match stop_and_set_aside(home, manager, label, repairs).await {
-                            Ok(kept_at) => {
-                                repairs.found(kept(kept_at));
-                                RepairOutcome::NeedsSetup
-                            }
-                            Err(blocker) => RepairOutcome::Blocked(blocker),
-                        },
-                    );
                 }
                 None => {}
             }
@@ -872,9 +863,8 @@ async fn wait_for_node(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OnRefusal<'a> {
-    Ask(&'a Path),
-    SetAside,
+enum OnRefusal {
+    Ask,
     Block,
 }
 #[derive(Debug, Clone, Copy)]
@@ -883,13 +873,12 @@ struct Since {
     runs: Option<u64>,
     started: bool,
 }
-fn on_refusal<'a>(
+fn on_refusal(
     exit: &ServiceExit,
     platform: NativeServicePlatform,
     runs: Option<u64>,
     started: bool,
-    serving_home: Option<&'a Path>,
-) -> Option<OnRefusal<'a>> {
+) -> Option<OnRefusal> {
     let fresh = match platform {
         NativeServicePlatform::Linux if started => true,
         _ => runs.is_none_or(|runs| exit.restarts > runs),
@@ -899,86 +888,40 @@ fn on_refusal<'a>(
     }
     use gents_protocol::operations::install_repair::{RefusalAction, RefusalObservation};
     let refusal = exit.refusal()?;
+    let kind = match refusal {
+        ServiceRefusal::Store(kind) => Some(kind),
+        _ => None,
+    };
     let action = planning::refusal_action(&RefusalObservation {
         fresh,
-        missing_key: refusal == ServiceRefusal::Store(IncompatibleStoreKind::MissingStoreKey),
-        explicit_home: serving_home.is_some(),
-        older_store: false,
-        newer_store: refusal == ServiceRefusal::Store(IncompatibleStoreKind::ForeignVersion),
+        missing_key: kind == Some(IncompatibleStoreKind::MissingStoreKey),
+        older_store: kind.is_some_and(IncompatibleStoreKind::is_older),
+        newer_store: kind == Some(IncompatibleStoreKind::ForeignVersion),
     });
     match action {
         RefusalAction::Ignore => None,
-        RefusalAction::Ask => serving_home.map(OnRefusal::Ask),
-        RefusalAction::Archive => Some(OnRefusal::SetAside),
+        RefusalAction::Ask => Some(OnRefusal::Ask),
         RefusalAction::Block => Some(OnRefusal::Block),
     }
 }
-async fn refused_older_data(home: &Path, exit: &ServiceExit) -> Option<IncompatibleStoreKind> {
-    let Some(ServiceRefusal::Store(reported)) = exit.refusal() else {
+/// The store a node's last exit refused as an older version's, read from the
+/// store's own markers first since one exit code covers several kinds.
+async fn older_refused(home: &Path, last_exit: Option<&ServiceExit>) -> Option<IncompatibleStore> {
+    let Some(ServiceRefusal::Store(reported)) = last_exit?.refusal() else {
         return None;
     };
     let data = default_data_dir(home);
-    let on_disk = tokio::task::spawn_blocking(move || incompatible_store_kind(&data))
+    let probe = data.clone();
+    let on_disk = tokio::task::spawn_blocking(move || incompatible_store_kind(&probe))
         .await
         .ok()
         .and_then(Result::ok)
         .flatten();
-    Some(on_disk.unwrap_or(reported)).filter(|kind| cannot_open(*kind))
-}
-fn cannot_open(kind: IncompatibleStoreKind) -> bool {
-    !matches!(
+    let kind = on_disk.unwrap_or(reported);
+    kind.made_by_older_version().then_some(IncompatibleStore {
         kind,
-        IncompatibleStoreKind::ForeignVersion | IncompatibleStoreKind::MissingStoreKey
-    )
-}
-pub fn sets_aside_refused(choice: &HomeChoice, kind: IncompatibleStoreKind) -> bool {
-    use gents_protocol::operations::install_repair::{RefusalAction, RefusalObservation};
-    planning::refusal_action(&RefusalObservation {
-        fresh: true,
-        missing_key: false,
-        explicit_home: choice.explicit,
-        older_store: cannot_open(kind),
-        newer_store: kind == IncompatibleStoreKind::ForeignVersion,
-    }) == RefusalAction::Archive
-}
-async fn set_aside_refused(
-    choice: &HomeChoice,
-    progress: &mut dyn Progress,
-) -> Result<RepairReceipt> {
-    let _lock = hold_lock(&repair_lock_path()?).await?;
-    let mut repairs = Repairs::new(progress, 1);
-    repairs.step(RepairStep::StopOldNode);
-    let Some(manager) = local_service(&choice.home, &current_executable()?)? else {
-        return Ok(
-            repairs.report(RepairOutcome::Blocked(Blocker::NoServiceManager {
-                home: choice.home.clone(),
-            })),
-        );
-    };
-    let outcome =
-        match stop_and_set_aside(&choice.home, &manager, &older_label(None), &mut repairs).await {
-            Ok(kept_at) => {
-                repairs.found(Finding::OlderDataSetAside {
-                    from: None,
-                    kept_at,
-                });
-                RepairOutcome::NeedsSetup
-            }
-            Err(blocker) => RepairOutcome::Blocked(blocker),
-        };
-    Ok(repairs.report(outcome))
-}
-async fn older_refused(
-    choice: &HomeChoice,
-    last_exit: Option<&ServiceExit>,
-    running: bool,
-) -> bool {
-    match last_exit {
-        Some(exit) if !choice.explicit && !running => {
-            refused_older_data(&choice.home, exit).await.is_some()
-        }
-        _ => false,
-    }
+        data_path: data,
+    })
 }
 fn blocker_in(home: &Path, exit: &ServiceExit, last_error: Option<String>) -> Blocker {
     let logged = last_error.is_some();
@@ -1003,7 +946,9 @@ async fn last_error(config: &NativeServiceConfig) -> Option<String> {
     read_last_error(&config.user_home, Some(&legacy)).await
 }
 
-pub(crate) async fn answering_graphql(home: &Path) -> Result<Option<GraphqlEndpoint>> {
+/// Whether the runtime `home` records answers, and where. Only that it
+/// answers matters here, so no client identity is loaded.
+pub(crate) async fn answering_graphql(home: &Path) -> Result<Option<String>> {
     match read_runtime_state(home)? {
         Some(state)
             if graphql_endpoint_available(
@@ -1016,10 +961,7 @@ pub(crate) async fn answering_graphql(home: &Path) -> Result<Option<GraphqlEndpo
             )
             .await =>
         {
-            Ok(Some(crate::home_state::resolve_graphql_endpoint(
-                Some(&state.graphql),
-                Some(home),
-            )?))
+            Ok(Some(state.graphql))
         }
         _ => Ok(None),
     }
@@ -1071,6 +1013,7 @@ fn blocked(blocker: Blocker) -> RepairReceipt {
         outcome: RepairOutcome::Blocked(blocker),
         serving_home: None,
         older_data: None,
+        unfinished_setup: false,
     }
 }
 
@@ -1112,6 +1055,7 @@ impl<'a> Repairs<'a> {
             outcome,
             serving_home: None,
             older_data: None,
+            unfinished_setup: false,
         }
     }
 }
@@ -1149,22 +1093,28 @@ pub async fn execute(
             choice,
             service_move,
             operation,
-        } => prepare(&choice, program, service_move, operation, progress).await,
-        RepairInput::Start {
-            home,
-            serving_home,
-            older_data,
+            interactive,
+            answer,
         } => {
-            start(
-                &home,
-                serving_home.as_deref(),
-                older_data.as_ref(),
+            prepare(
+                &choice,
+                program,
+                service_move,
+                operation,
+                Asked {
+                    interactive,
+                    answer,
+                },
                 progress,
             )
             .await
         }
+        RepairInput::Start {
+            home,
+            serving_home,
+            older_data: _,
+        } => start(&home, serving_home.as_deref(), progress).await,
         RepairInput::Restore { choice } => restore(&choice, progress).await,
-        RepairInput::Refused { choice } => set_aside_refused(&choice, progress).await,
         RepairInput::Client { input } => {
             let lifecycle = client_lifecycle.ok_or_else(|| Blocker::ServiceUpdateFailed {
                 reason: "client repair requires its lifecycle owner".to_owned(),
@@ -1180,6 +1130,7 @@ pub async fn execute(
                 outcome,
                 serving_home: None,
                 older_data: None,
+                unfinished_setup: false,
             });
         }
     };

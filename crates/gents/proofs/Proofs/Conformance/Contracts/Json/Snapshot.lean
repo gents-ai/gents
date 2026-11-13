@@ -348,6 +348,7 @@ import Proofs.Conformance.LspServerStart
 import Proofs.Conformance.WorkspacePermissions
 
 import Proofs.Conformance.InstallRepair
+import Proofs.Conformance.RepairBackups
 
 namespace Conformance.Contracts
 

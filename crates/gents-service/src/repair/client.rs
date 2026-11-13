@@ -11,8 +11,8 @@ use gents_desktop_core::preference::{
     read_home_identity, StoredManagedServer, MANAGED_SERVER_CONFIG,
 };
 use gents_protocol::operations::install_repair::{
-    Blocker, ClientObservation, Finding, IncompatibleStore, IncompatibleStoreKind, RefusalAction,
-    RefusalObservation, RepairClientInput, RepairClientReceipt, RepairClientScope,
+    Blocker, ClientObservation, Finding, IncompatibleStore, IncompatibleStoreKind,
+    RepairClientInput, RepairClientReceipt, RepairClientScope,
 };
 
 use super::ClientExclusion;
@@ -144,14 +144,7 @@ pub async fn execute(
     receipt: &mut RepairClientReceipt,
 ) -> Result<(), Blocker> {
     let result = if let RepairClientScope::Store { kind } = input.scope {
-        let action = super::planning::refusal_action(&RefusalObservation {
-            fresh: true,
-            missing_key: kind == IncompatibleStoreKind::MissingStoreKey,
-            explicit_home: false,
-            older_store: kind.is_older(),
-            newer_store: !kind.is_older(),
-        });
-        if action != RefusalAction::Archive {
+        if kind == IncompatibleStoreKind::ForeignVersion {
             return Err(Blocker::StoreRefused {
                 kind,
                 message: IncompatibleStore {

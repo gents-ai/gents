@@ -77,7 +77,8 @@ pub enum HomeResetReason {
     FullReset,
 }
 
-/// A home whose provisioning committed a node name but never served or paired.
+/// A home whose setup recorded core packs it never installed, or whose
+/// provisioning committed a node name but never served or paired.
 /// `runtime.json` is written only by a serving runtime and removed only by an
 /// explicit reset, so its absence, with `init.json` present and no peer record
 /// naming the node, is evidence that no start ever completed.
@@ -89,6 +90,11 @@ pub fn local_setup_unfinished<'a, I>(
 where
     I: IntoIterator<Item = &'a str>,
 {
+    if gents_store::local::home::init_config_path(node_home).is_file()
+        && gents_store::local::home::unfinished_setup(node_home).is_some()
+    {
+        return true;
+    }
     let Some(node_did) = node_did.map(str::trim).filter(|did| !did.is_empty()) else {
         return false;
     };
@@ -998,7 +1004,7 @@ impl HomeResetPlan {
                 scope,
                 path: store.data_path.to_string_lossy().into_owned(),
                 detail: store.to_string(),
-                older: store.kind.is_older(),
+                older: store.kind.made_by_older_version(),
                 unsafe_key: store.kind
                     == gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey,
             }

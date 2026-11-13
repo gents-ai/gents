@@ -405,28 +405,6 @@ pub async fn render_prometheus_metrics(
     );
     push_metric_prelude(
         &mut lines,
-        "gents_ignored_foreign_processing_requests",
-        "Number of processing AgentRequest rows ignored because they belong to a different node DID.",
-    );
-    push_metric_sample(
-        &mut lines,
-        "gents_ignored_foreign_processing_requests",
-        &[],
-        data.liveness.ignored_foreign_processing_count,
-    );
-    push_metric_prelude(
-        &mut lines,
-        "gents_ignored_foreign_running_tool_calls",
-        "Number of running AgentToolCall rows ignored because they belong to a different node DID.",
-    );
-    push_metric_sample(
-        &mut lines,
-        "gents_ignored_foreign_running_tool_calls",
-        &[],
-        data.liveness.ignored_foreign_tool_call_count,
-    );
-    push_metric_prelude(
-        &mut lines,
         "gents_active_native_executors",
         "Number of active managed native executor processes visible in this HTTP server process.",
     );
