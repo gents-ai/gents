@@ -1,12 +1,17 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 import { fleetNodes } from "../src/ui/lib/scope";
 import { AgentHoverCard, NodeHoverCard } from "../src/ui/screens/HoverCards";
 import { avatarSrc } from "@/lib/avatar";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { node, renderIn, renderRouted, testApp } from "./app-fixture";
+
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
+}));
 
 function cardFor(
   nodeDid: string,
@@ -217,8 +222,10 @@ describe("an agent's hover card", () => {
 });
 
 describe("starting this machine's node from its card", () => {
-  const withServer = (state: string) => {
-    const startManagedServer = vi.fn().mockResolvedValue({ state: "running" });
+  const withServer = (
+    state: string,
+    startManagedServer = vi.fn().mockResolvedValue({ state: "running" }),
+  ) => {
     const app = testApp({
       api: {
         managedServerStatus: vi.fn().mockResolvedValue({ state, nodeName: "Forge" }),
@@ -254,6 +261,27 @@ describe("starting this machine's node from its card", () => {
     );
     await userEvent.click(button);
     expect(start).toHaveBeenCalled();
+  });
+
+  it("reads Stopped, not as a connection being retried, while it is stopped", async () => {
+    withServer("stopped");
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await screen.findByRole("button", { name: /Start node/ }, { timeout: 2000 });
+    expect(screen.getByText("Stopped")).toBeVisible();
+    expect(screen.queryByText("Reconnecting")).toBeNull();
+  });
+
+  it("says in words that the node couldn't start", async () => {
+    withServer("stopped", vi.fn().mockRejectedValue(new Error("the port is taken")));
+    await userEvent.hover(screen.getByRole("button", { name: "avatar" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Start node/ }, { timeout: 2000 }),
+    );
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringMatching(/^Couldn’t start the node: .*the port is taken/),
+      ),
+    );
   });
 
   it("offers nothing to start while it runs", async () => {

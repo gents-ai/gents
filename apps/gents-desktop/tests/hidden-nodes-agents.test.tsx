@@ -75,10 +75,9 @@ describe("the startup node", () => {
         act(() => applyFleetSnapshot(stores.fleet, snapshot(next))),
     };
   };
-  const unreached = (lastError: string | null) => ({
+  const unreached = (runtimeConnection: string) => ({
     ...remote("did:key:vega", "Vega"),
-    dialSucceeded: false,
-    lastError,
+    runtimeConnection,
   });
   const withoutVega = () => fleet().filter((n) => n.nodeDid !== "did:key:vega");
 
@@ -88,9 +87,20 @@ describe("the startup node", () => {
   });
 
   it("falls back from a chosen node that can't be reached, and says so", () => {
-    const app = launch("did:key:vega", [...withoutVega(), unreached("dial failed")]);
+    const app = launch("did:key:vega", [...withoutVega(), unreached("disconnected")]);
     expect(app.at()).toBe(HOME);
     expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(
+      "Vega isn't reachable, so the app opened on Local Agent",
+    );
+  });
+
+  it("falls back from a chosen node that refuses this app, though its dial succeeded", () => {
+    const app = launch("did:key:vega", [
+      ...withoutVega(),
+      { ...unreached("refused"), dialSucceeded: true },
+    ]);
+    expect(app.at()).toBe(HOME);
     expect(toast).toHaveBeenCalledWith(
       "Vega isn't reachable, so the app opened on Local Agent",
     );
@@ -107,9 +117,9 @@ describe("the startup node", () => {
     expect(toast).not.toHaveBeenCalled();
   });
 
-  it("opens on a chosen node once its first dial succeeds", () => {
+  it("opens on a chosen node once it connects", () => {
     vi.useFakeTimers();
-    const app = launch("did:key:vega", [...withoutVega(), unreached(null)]);
+    const app = launch("did:key:vega", [...withoutVega(), unreached("connecting")]);
     expect(app.at()).toBe(HOME);
     app.arrive(fleet());
     expect(app.at()).toBe("did:key:vega");

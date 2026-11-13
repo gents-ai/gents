@@ -300,7 +300,6 @@ export function AgentCard({
   }, [fetchOperationsSnapshot, deployment.nodeDid, sessions]);
   const now = pulse(sessions, ops);
   const limit = limitNote(useProviderUsage(deployment.nodeDid).usage, useMinute());
-  const online = deployment.dialSucceeded;
   const backends = deployment.inferenceBackends;
   const section = (section: string): Route => ({
     name: "agent",
@@ -327,7 +326,7 @@ export function AgentCard({
               {name}
             </h2>
             {node.enabled === false && <Badge variant="outline">Disabled</Badge>}
-            <OnlineStatus online={online} />
+            <OnlineStatus deployment={deployment} />
             {edit && (
               <Button
                 size="xs"

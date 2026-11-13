@@ -14,11 +14,12 @@ permissions = [
 
 [[set]]
 identifier = "client-lifecycle"
-description = "Client start/shutdown, selected-agent, and application quit"
+description = "Client start/shutdown, selected-agent, runtime reconnect, and application quit"
 permissions = [
   "allow-desktop-client-start",
   "allow-desktop-client-shutdown",
   "allow-desktop-set-selected-node",
+  "allow-desktop-node-reconnect",
   "allow-desktop-app-quit",
 ]
 
@@ -84,10 +85,8 @@ permissions = [
 
 [[set]]
 identifier = "fleet-read"
-description = "Peer status (by saved id)"
-permissions = [
-  "allow-desktop-peer-status-fetch",
-]
+description = "Node addresses, routes and enrollment requests in the client snapshot"
+permissions = []
 
 [[set]]
 identifier = "workspace-read"

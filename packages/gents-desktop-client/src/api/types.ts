@@ -225,10 +225,11 @@ export type DesktopApiAdapter = {
     enabled: boolean,
   ) => Promise<ManagedServerStatus>;
   setSelectedNode: (nodeDid: string | null) => Promise<void>;
+
+  reconnectNode?: (nodeDid: string | null) => Promise<string | null>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   dismissEndedAccess: (nodeDid: string) => Promise<DesktopClientSnapshot>;
-  fetchPeerStatus: (peerId: string) => Promise<unknown>;
   requestStatusEnrollment: (
     serverAddress: string,
     candidateName?: string,
@@ -249,10 +250,7 @@ export type DesktopApiAdapter = {
       limit?: number;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
-  reloadSession: (
-    sessionId: string,
-    nodeDid?: string | null,
-  ) => Promise<void>;
+  reloadSession: (sessionId: string, nodeDid?: string | null) => Promise<void>;
   /** A stretch of a session's display rows by message number, without the
    *  session's request state. */
   fetchSessionRows: (request: {
@@ -290,8 +288,14 @@ export type DesktopApiAdapter = {
     request: MailboxItemObservationRequest,
   ) => Promise<MailboxItemObservation | null>;
   /** `nodeDid` is the node whose store lists the item. */
-  startMailboxRequest: (itemId: string, nodeDid?: string | null) => Promise<MailboxItemView>;
-  dismissMailboxItem: (itemId: string, nodeDid?: string | null) => Promise<void>;
+  startMailboxRequest: (
+    itemId: string,
+    nodeDid?: string | null,
+  ) => Promise<MailboxItemView>;
+  dismissMailboxItem: (
+    itemId: string,
+    nodeDid?: string | null,
+  ) => Promise<void>;
   forkSessionBeforeMessage: (
     request: SessionForkBeforeRequest,
   ) => Promise<SessionForkResult>;
@@ -489,7 +493,9 @@ export type DesktopApiAdapter = {
   /** the packs the Engineer starts with on the local node, and how each stands */
   listDefaultPacks: () => Promise<DefaultPacks>;
   /** installs the approved packs; the local node restarts around the install */
-  approveDefaultPacks: (packs: DefaultPackApproval[]) => Promise<DefaultPacksApproval>;
+  approveDefaultPacks: (
+    packs: DefaultPackApproval[],
+  ) => Promise<DefaultPacksApproval>;
   listDynamicWorkflows: () => Promise<DynamicWorkflows>;
   getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
   promoteWorkflow: (
@@ -516,7 +522,10 @@ export type DesktopApiAdapter = {
   listUxPlugins: (
     nodeDid?: string | null,
   ) => Promise<{ plugins: UxPluginListing[]; pagesError?: string | null }>;
-  readUxPluginSource: (id: string, nodeDid?: string | null) => Promise<UxPluginSource>;
+  readUxPluginSource: (
+    id: string,
+    nodeDid?: string | null,
+  ) => Promise<UxPluginSource>;
   callPackPlugin: (
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;

@@ -40,7 +40,7 @@ use port::{
 use preference::{load_bound_preference, refuse_renaming_home, save_confirmed_preference};
 use readiness::ensure_selected_restart_compatible;
 use reset::{plan_state_reset, retire_incompatible_home};
-use start::start_managed_server;
+use start::{reconnect_started_runtime, start_managed_server};
 use start_wait::{
     begin_start_wait, cancel_start_wait, ensure_no_start_waiting, finish_start_wait,
     lock_lifecycle_superseding_start,
@@ -678,6 +678,7 @@ where
     .map(|external| project_external_status(external, &native))
     .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
     status.pairing_ready = pairing_is_ready(state, status.node_did.as_deref()).await;
+    reconnect_started_runtime(state, &status).await;
     Ok(status)
 }
 

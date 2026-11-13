@@ -706,19 +706,81 @@ fn generated_runtime_connection_observations_drive_the_owner() {
             "{case}"
         );
     }
-    for (rust, lean) in [
-        (
-            gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
-            "renewalPeriodMs",
-        ),
-        (SNAPSHOT_RETRY_DELAY, "snapshotRetryDelayMs"),
-    ] {
-        assert_eq!(
-            u64::try_from(rust.as_millis()).unwrap(),
-            contract[lean].as_u64().unwrap(),
-            "{lean}"
-        );
+    assert_eq!(
+        u64::try_from(gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD.as_millis()).unwrap(),
+        contract["renewalPeriodMs"].as_u64().unwrap()
+    );
+    let retries = contract["snapshotRetries"].as_array().unwrap();
+    assert!(retries.len() > 30);
+    for case in retries {
+        let failures = u32::try_from(case["failures"].as_u64().unwrap()).unwrap();
+        let settlements: &[Settlement] = match case["outcome"].as_str().unwrap() {
+            "succeeded" => &[Settlement::Published, Settlement::Superseded],
+            "refused" => &[Settlement::Refused],
+            "unreachable" => &[Settlement::TransportFailed],
+            other => panic!("unexpected snapshot outcome {other}"),
+        };
+        for settlement in settlements {
+            let mut queue = Queue::default();
+            queue.failures.insert("node".into(), failures);
+            queue.settle("node", *settlement, base);
+            assert_eq!(
+                u64::from(queue.failures.get("node").copied().unwrap_or_default()),
+                case["failuresAfter"].as_u64().unwrap(),
+                "{case} {settlement:?}"
+            );
+            assert_eq!(
+                queue
+                    .retry_at
+                    .get("node")
+                    .map(|due| u64::try_from(due.duration_since(base).as_millis()).unwrap()),
+                case["retryDelayMs"].as_u64(),
+                "{case} {settlement:?}"
+            );
+        }
     }
+}
+
+#[tokio::test]
+async fn retry_now_answers_a_connected_runtime_without_reconnecting() {
+    let fixture = ObservedRuntime::start().await;
+    let configured =
+        ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let store = ObservedStores::new();
+    let handle = spawn_observer(
+        store.clone(),
+        configured,
+        fixture.client.client_signing_capability().unwrap(),
+    );
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
+    let mut changes = store.subscribe();
+
+    handle.retry_all_now();
+    let answer = tokio::time::timeout(
+        Duration::from_secs(1),
+        handle.retry_now(&fixture.runtime_did),
+    )
+    .await
+    .expect("a connected runtime is answered at once");
+    assert_eq!(answer, Some(RuntimeConnectionStatus::Connected));
+    let _ = tokio::time::timeout(Duration::from_millis(500), async {
+        loop {
+            assert_eq!(
+                store.runtime_connection(&fixture.runtime_did),
+                Some(RuntimeConnectionStatus::Connected),
+                "no source restarted"
+            );
+            changes.changed().await.unwrap();
+        }
+    })
+    .await;
+    handle.shutdown().await;
+    fixture.stop().await;
 }
 
 /// The snapshot owner's failures map to `RuntimeConnectionObservation.SnapshotOutcome`:
@@ -1015,6 +1077,10 @@ fn generated_reconnect_backoff_drives_the_sources() {
     assert_eq!(
         u64::try_from(remote::RECONNECT_STABLE.as_millis()).unwrap(),
         contract["stableMs"].as_u64().unwrap()
+    );
+    assert_eq!(
+        u64::from(remote::RETRY_NOW_COUNT),
+        contract["retryNowCount"].as_u64().unwrap()
     );
 }
 
@@ -1483,6 +1549,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("publish", 0, ""),
         op("publish", 1, ""),
         op("timer", 0, ""),
+        op("retry_now", 0, ""),
         op("finish", 0, "rows"),
         op("finish", 0, "transport_failed"),
         op("finish", 0, "refused"),
@@ -1535,6 +1602,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
 
     let metrics = ObserverMetrics::default();
     let mut settlements = BTreeSet::new();
+    let mut retries = BTreeSet::new();
     for (trace, expected) in traces.iter().zip(&modeled) {
         let stores = ObservedStores::new();
         let mut queue = Queue::default();
@@ -1647,6 +1715,14 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 "timer" => {
                     queue.retry_at.remove(&node_did);
                 }
+                "retry_now" => {
+                    let restarted =
+                        apply_retry_now(&mut queue, &mut sources, &stores, &node_did, now);
+                    if restarted {
+                        in_flight.remove(&node_did);
+                    }
+                    retries.insert(restarted);
+                }
                 "finish" => {
                     if let Some(captured) = in_flight.remove(&node_did) {
                         let patch_accepted = store.accepts_chat_patch_read(&captured);
@@ -1714,6 +1790,11 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         }
     }
     assert_eq!(settlements.len(), 4, "every settlement is exercised");
+    assert_eq!(
+        retries.len(),
+        2,
+        "a retry of a connected and of an unconnected node is exercised"
+    );
 }
 
 fn desktop_snapshot(body: &str) -> bool {

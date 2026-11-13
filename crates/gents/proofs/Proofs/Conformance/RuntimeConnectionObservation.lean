@@ -98,6 +98,18 @@ def renewalStartsJson : String :=
       ",\"nextMs\":" ++ toString (renewalStartMs started arm) ++ "}"
   "[" ++ String.intercalate "," cases ++ "]"
 
+def snapshotRetriesJson : String :=
+  let counts : List Nat := [0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 40]
+  let outcomes : List SnapshotOutcome := [.succeeded, .refused, .unreachable]
+  let cases := counts.flatMap fun failures => outcomes.map fun outcome =>
+    let retry := match outcome with
+      | .unreachable => toString (snapshotRetryDelayMs failures)
+      | _ => "null"
+    "{\"failures\":" ++ toString failures ++ ",\"outcome\":\"" ++
+    snapshotOutcomeName outcome ++ "\",\"failuresAfter\":" ++
+    toString (snapshotFailuresAfter failures outcome) ++ ",\"retryDelayMs\":" ++ retry ++ "}"
+  "[" ++ String.intercalate "," cases ++ "]"
+
 /-- `cases` keeps its original shape (one row per status and event); the
 presentation, stream-end, notice, snapshot-outcome, renewal and retry rows are
 additional keys. -/
@@ -108,7 +120,7 @@ def casesJson : String :=
   ",\"snapshotOutcomes\":" ++ snapshotOutcomesJson ++
   ",\"renewalStarts\":" ++ renewalStartsJson ++
   ",\"renewalPeriodMs\":" ++ toString renewalPeriodMs ++
-  ",\"snapshotRetryDelayMs\":" ++ toString snapshotRetryDelayMs ++ "}"
+  ",\"snapshotRetries\":" ++ snapshotRetriesJson ++ "}"
 end Conformance.RuntimeConnectionObservation
 
 def main : IO Unit := IO.println Conformance.RuntimeConnectionObservation.casesJson

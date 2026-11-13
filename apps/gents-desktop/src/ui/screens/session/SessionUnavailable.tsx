@@ -1,22 +1,21 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronRight } from "lucide-react";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+} from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
 import { useSelectedNodeDid, useSessionLoad } from "@/hooks/useClient";
 import { toastFailure } from "@/lib/failure";
+import { connectionLine } from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
 import { type FleetState, nodeOf } from "../../../hooks/fleetStore";
 import { nameOf, OPEN_ON_WAIT_MS, reachOf } from "../../../hooks/selectionReconcile";
 import { CopyButton } from "../Markdown";
 import { useFleet } from "../../hooks/useFleet";
 
-/** How a look for the selected session ended, when nothing came back: gone
-    from what this app can see, or too early to say because its node isn't
-    connected yet. A node that dropped looks the same as one not yet dialled,
-    so that wait is bounded. A first send adopts its session before any
-    node has it, so a session this app just sent into is never missing, and
-    neither is one a node lists. */
 export function useSessionAbsence(
   nothingLoaded: boolean,
 ): "missing" | "waiting" | null {
@@ -63,10 +62,11 @@ export function missingSessionText(
   nodeDid: string | null,
 ): { title: string; detail: string } {
   const node = nodeOf(fleet, nodeDid);
-  if (node && !node.dialSucceeded) {
+  if (node && runtimeConnectionBlocksAdmission(node.runtimeConnection)) {
+    const status = projectRuntimeConnectionStatus(node.runtimeConnection);
     return {
-      title: `Can't reach ${nameOf(node)}`,
-      detail: "This session may be there. Try again once the node is back.",
+      title: connectionLine(nameOf(node), status),
+      detail: `This session may be there. ${status.detail}`,
     };
   }
   const where = node ? `${nameOf(node)} or your other nodes` : "your nodes";
@@ -79,7 +79,7 @@ export function missingSessionText(
 export function SessionUnavailable() {
   const {
     stores,
-    actions: { refreshSession, refreshSnapshot },
+    actions: { reconnectNode, refreshSession, refreshSnapshot },
   } = useApp();
   const sessionId = stores.selection.use.sessionId();
   const nodeDid = useSelectedNodeDid();
@@ -90,6 +90,7 @@ export function SessionUnavailable() {
   const retry = async () => {
     setBusy(true);
     try {
+      if (nodeDid) await reconnectNode(nodeDid);
       await Promise.all([refreshSnapshot(), refreshSession(sessionId)]);
     } catch (e) {
       toastFailure("load the session", e);

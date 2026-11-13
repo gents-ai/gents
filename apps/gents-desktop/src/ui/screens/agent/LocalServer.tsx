@@ -26,10 +26,11 @@ import {
 import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
 import { useFleet } from "@/hooks/useFleet";
-import { nodeOf } from "../../../hooks/fleetStore";
+import { nodeOf, type NodeView } from "../../../hooks/fleetStore";
 import { engineerAgentOf } from "@/lib/engineer";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
-import { useStartup } from "@/hooks/useClient";
+import { useHomeDid, useStartup } from "@/hooks/useClient";
+import { isLocalNode } from "@/lib/firstRun";
 import { errorText } from "../../../lib/errorText";
 
 /** Starting and stopping the local node, for the node page's header. */
@@ -39,14 +40,15 @@ export function useLocalServerRun() {
   const status = stores.localServer.use.status();
   const operating = stores.localServer.use.operation() !== null;
   const [acting, setActing] = useState(false);
-  const run = async (label: string, op: () => Promise<unknown>) => {
+  const run = async (done: string, failed: string, op: () => Promise<unknown>) => {
     setActing(true);
     try {
       await op();
       await actions.refreshSnapshot();
-      toast(label);
+      toast(done);
     } catch (e) {
-      if (!(await incompatibleHome?.adopt(e))) toast(`${label} failed: ${String(e)}`);
+      if (!(await incompatibleHome?.adopt(e)))
+        toast.error(`${failed}: ${errorText(e)}`);
     } finally {
       setActing(false);
     }
@@ -60,10 +62,13 @@ export function useLocalServerRun() {
     starting: status?.state === "starting",
     busy: acting || operating,
     start: () =>
-      void run("Node started", () =>
+      void run("Node started", "Couldn’t start the node", () =>
         actions.startLocalServer(status?.nodeName ?? "gents"),
       ),
-    stop: () => void run("Node stopped", () => actions.stopLocalServer()),
+    stop: () =>
+      void run("Node stopped", "Couldn’t stop the node", () =>
+        actions.stopLocalServer(),
+      ),
   };
 }
 
@@ -117,15 +122,15 @@ export function LocalServer() {
   > | null>(null);
   useEffect(() => actions.watchLocalServer(), [actions]);
   if (!actions.localServerOffers.status) return null;
-  const act = async (label: string, run: () => Promise<unknown>) => {
+  const act = async (done: string, failed: string, run: () => Promise<unknown>) => {
     setBusy(true);
     try {
       await run();
       await refreshSnapshot();
-      toast(label);
+      toast(done);
     } catch (e) {
       if (!(await incompatibleHome?.adopt(e))) {
-        toast(`${label} failed: ${String(e)}`);
+        toast.error(`${failed}: ${errorText(e)}`);
       }
     } finally {
       setBusy(false);
@@ -266,7 +271,9 @@ export function LocalServer() {
             variant="outline"
             disabled={busy}
             onClick={() =>
-              void act("Desktop connected", () => actions.enrollLocalServer())
+              void act("Desktop connected", "Couldn’t connect this desktop", () =>
+                actions.enrollLocalServer(),
+              )
             }
           >
             Connect this desktop
@@ -288,8 +295,10 @@ export function LocalServer() {
           checked={status?.autoStart ?? false}
           disabled={busy || !status}
           onCheckedChange={(on) =>
-            void act(on ? "Auto-start on" : "Auto-start off", () =>
-              actions.setLocalServerAutoStart(on),
+            void act(
+              on ? "Auto-start on" : "Auto-start off",
+              "Couldn’t change auto-start",
+              () => actions.setLocalServerAutoStart(on),
             )
           }
         />
@@ -368,4 +377,17 @@ export function LocalServer() {
       </Row>
     </Group>
   );
+}
+
+export function useStoppedLocalNode(deployment: NodeView | null) {
+  const { actions } = useApp();
+  const homeDid = useHomeDid();
+  const local = useLocalServerRun();
+  const watched =
+    deployment !== null && isLocalNode(deployment, homeDid) && local.offered;
+  useEffect(
+    () => (watched ? actions.watchLocalServer() : undefined),
+    [actions, watched],
+  );
+  return watched && local.known && !local.running ? local : null;
 }

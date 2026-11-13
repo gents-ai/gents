@@ -134,8 +134,6 @@ export function createBridgeHttpAdapter(
     setSelectedNode: async (nodeDid) => {
       await client.postJson("/desktop/selected-node", { nodeDid });
     },
-    fetchPeerStatus: async (peerId) =>
-      client.postJson("/desktop/peer/status", { peerId }),
     requestStatusEnrollment: async (serverAddress) =>
       client.postJson("/desktop/peer/enroll-status", { serverAddress }),
     fetchSessionSnapshot: async (sessionId, nodeDid, requestId, timelinePage) =>

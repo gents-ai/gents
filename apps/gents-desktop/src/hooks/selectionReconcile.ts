@@ -1,4 +1,8 @@
-import { selectedAgentDidForDeployment } from "@source-inc/gents-desktop-client";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+  selectedAgentDidForDeployment,
+} from "@source-inc/gents-desktop-client";
 
 import { toast } from "sonner";
 import { routeMoves } from "../ui/lib/router";
@@ -19,10 +23,12 @@ import type { ShellStores } from "./shellProjection";
     reachability isn't known yet, may still arrive and be opened on. */
 export const OPEN_ON_WAIT_MS = 5000;
 
-/* a dial that failed leaves its error; before the first dial there is
-   neither a connection nor an error */
 export const reachOf = (node: NodeView) =>
-  node.dialSucceeded ? "reachable" : node.lastError ? "failed" : "unknown";
+  !runtimeConnectionBlocksAdmission(node.runtimeConnection)
+    ? "reachable"
+    : projectRuntimeConnectionStatus(node.runtimeConnection).reason === "connecting"
+      ? "unknown"
+      : "failed";
 
 export const nameOf = (node: NodeView) => node.node.displayName ?? node.label;
 

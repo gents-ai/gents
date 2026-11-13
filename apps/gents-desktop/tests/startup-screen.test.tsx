@@ -193,8 +193,9 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
+
     await waitFor(() => {
-      expect(managedServerStatus).toHaveBeenCalledTimes(2);
+      expect(managedServerStatus).toHaveBeenCalledTimes(3);
     });
   });
 

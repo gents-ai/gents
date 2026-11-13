@@ -42,8 +42,6 @@ pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
 pub use writes::{ChatRouteRefusal, LocalHomeAccessError, RefreshedRequestProjection};
 
-/// Peer bootstrap retries need a deadline so an unreachable peer does not hold
-/// startup indefinitely.
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 /// Route installation must report an unresponsive peer-add operation.
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -325,7 +323,6 @@ pub struct ClientCore {
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
-    bootstrap_errors: Vec<String>,
 }
 
 #[cfg(test)]
@@ -508,10 +505,6 @@ impl ClientCore {
         self.stores.subscribe()
     }
 
-    pub fn bootstrap_errors(&self) -> &[String] {
-        &self.bootstrap_errors
-    }
-
     pub fn last_mutation_error(&self) -> Option<String> {
         self.last_mutation_error
             .read()
@@ -521,6 +514,23 @@ impl ClientCore {
 
     pub async fn request_p2p_repair(&self) -> Result<()> {
         self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
+    }
+
+    pub async fn reconnect_runtime_now(
+        &self,
+        node_did: &str,
+    ) -> Option<super::RuntimeConnectionStatus> {
+        let settled = self.observer.lock().await.as_ref()?.retry_now(node_did);
+        settled.await
+    }
+
+    pub async fn request_runtime_reconnect(&self, node_did: Option<&str>) {
+        if let Some(observer) = self.observer.lock().await.as_ref() {
+            match node_did {
+                Some(node_did) => drop(observer.retry_now(node_did)),
+                None => observer.retry_all_now(),
+            }
+        }
     }
 
     /// Reads `node_did` through its own connection and publishes the read

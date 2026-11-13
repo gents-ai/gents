@@ -1087,6 +1087,18 @@
           "markdownDescription": "Denies the desktop_node_config_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_node_reconnect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-node-reconnect",
+          "markdownDescription": "Enables the desktop_node_reconnect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_node_reconnect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-node-reconnect",
+          "markdownDescription": "Denies the desktop_node_reconnect command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_observer_metrics command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-observer-metrics",
@@ -1325,18 +1337,6 @@
           "type": "string",
           "const": "deny-desktop-peer-rename",
           "markdownDescription": "Denies the desktop_peer_rename command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_peer_status_fetch command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-peer-status-fetch",
-          "markdownDescription": "Enables the desktop_peer_status_fetch command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_peer_status_fetch command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-peer-status-fetch",
-          "markdownDescription": "Denies the desktop_peer_status_fetch command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_pending_message_steer command without any pre-configured scope.",
@@ -2035,10 +2035,10 @@
           "markdownDescription": "Denies the desktop_workspace_list command without any pre-configured scope."
         },
         {
-          "description": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`",
+          "description": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-node-reconnect`\n- `allow-desktop-app-quit`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
+          "markdownDescription": "Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)\n#### This default permission set includes:\n\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-node-reconnect`\n- `allow-desktop-app-quit`"
         },
         {
           "description": "Aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`",
@@ -2047,10 +2047,10 @@
           "markdownDescription": "Aggregate snapshot, observer metrics\n#### This permission set includes:\n\n- `allow-desktop-client-snapshot`\n- `allow-desktop-observer-metrics`"
         },
         {
-          "description": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`",
+          "description": "Client start/shutdown, selected-agent, runtime reconnect, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-node-reconnect`\n- `allow-desktop-app-quit`",
           "type": "string",
           "const": "client-lifecycle",
-          "markdownDescription": "Client start/shutdown, selected-agent, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-app-quit`"
+          "markdownDescription": "Client start/shutdown, selected-agent, runtime reconnect, and application quit\n#### This permission set includes:\n\n- `allow-desktop-client-start`\n- `allow-desktop-client-shutdown`\n- `allow-desktop-set-selected-node`\n- `allow-desktop-node-reconnect`\n- `allow-desktop-app-quit`"
         },
         {
           "description": "Session/conversation snapshot, live-delta and selected attachment reads\n#### This permission set includes:\n\n- `allow-desktop-session-snapshot`\n- `allow-desktop-attachment-read`\n- `allow-desktop-request-attachments`\n- `allow-desktop-session-context-details`\n- `allow-desktop-session-live-delta`\n- `allow-desktop-session-rows`\n- `allow-desktop-tool-file-changes`\n- `allow-desktop-session-goal`",
@@ -2095,10 +2095,10 @@
           "markdownDescription": "Request retry\n#### This permission set includes:\n\n- `allow-desktop-request-retry`"
         },
         {
-          "description": "Peer status (by saved id)\n#### This permission set includes:\n\n- `allow-desktop-peer-status-fetch`",
+          "description": "Node addresses, routes and enrollment requests in the client snapshot",
           "type": "string",
           "const": "fleet-read",
-          "markdownDescription": "Peer status (by saved id)\n#### This permission set includes:\n\n- `allow-desktop-peer-status-fetch`"
+          "markdownDescription": "Node addresses, routes and enrollment requests in the client snapshot"
         },
         {
           "description": "Workspace browser\n#### This permission set includes:\n\n- `allow-desktop-workspace-list`",

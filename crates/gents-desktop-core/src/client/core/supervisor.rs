@@ -344,6 +344,35 @@ async fn run_saved_peer_repair_cycle(
     }
 }
 
+#[cfg(test)]
+pub(super) struct FirstRepairCycle<'a> {
+    pub(super) bus: &'a dyn events::Bus,
+    pub(super) p2p: &'a Arc<dyn P2POps>,
+    pub(super) sync_state: &'a ClientSyncStateOwner,
+    pub(super) remote_admin_actor: &'a Arc<PrincipalIdentity>,
+    pub(super) route_manager: &'a Arc<ClientRouteManager>,
+    pub(super) install_replicators_on_bootstrap: bool,
+    pub(super) force_repair: bool,
+}
+
+#[cfg(test)]
+impl FirstRepairCycle<'_> {
+    pub(super) async fn run(self) {
+        run_saved_peer_repair_cycle(
+            self.bus,
+            self.p2p,
+            self.sync_state,
+            self.remote_admin_actor,
+            self.route_manager,
+            self.install_replicators_on_bootstrap,
+            self.force_repair,
+            &mut BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .await;
+    }
+}
+
 /// Persist readiness before publishing the configured-peer revision.
 async fn persist_pairing_readiness(
     sync_state: &ClientSyncStateOwner,

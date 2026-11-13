@@ -145,9 +145,14 @@ export function startClientObservation(
       void controller.request("session");
     });
 
-    /* showing the window reads it in full */
+    let wasHidden = hidden();
     const refreshForegroundState = () => {
-      if (hidden()) return;
+      if (hidden()) {
+        wasHidden = true;
+        return;
+      }
+      if (wasHidden) void actions.reconnectNode(null).catch(() => {});
+      wasHidden = false;
       void controller.request("full");
     };
     document.addEventListener("visibilitychange", refreshForegroundState);

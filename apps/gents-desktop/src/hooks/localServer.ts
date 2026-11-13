@@ -76,10 +76,16 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
         reads.supersede();
         waits.supersede();
         publishWait(null);
+        let failed = false;
         try {
           return await run();
+        } catch (error) {
+          failed = true;
+          throw error;
         } finally {
           localServer.operating(store, null);
+
+          if (failed) void refreshLocalServer();
         }
       });
     running = { key, done };

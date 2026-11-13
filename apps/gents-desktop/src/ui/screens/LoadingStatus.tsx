@@ -22,7 +22,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
   const status = useView((view) => view.loadingStatus);
   const {
     stores,
-    actions: { refreshSession, refreshSnapshot, reloadSession },
+    actions: { reconnectNode, refreshSession, refreshSnapshot, reloadSession },
   } = useApp();
   const nodeDid = useSelectedNodeDid();
   const selectedSessionId = stores.selection.use.sessionId();
@@ -39,6 +39,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
     }
     setBusy(true);
     try {
+      if (nodeDid) await reconnectNode(nodeDid);
       if (action === "reloadSession") await reloadSession(selectedSessionId);
       else await Promise.all([refreshSnapshot(), refreshSession(selectedSessionId)]);
     } catch (e) {

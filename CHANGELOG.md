@@ -4,6 +4,15 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- Breaking for desktop package consumers: `desktop_peer_status_fetch`,
+  `DesktopApiAdapter.fetchPeerStatus` and `PeerStatusFetchRequest` are
+  removed. A node's connection is checked with `reconnectNode`
+  (`desktop_node_reconnect`), which asks the client's observer and answers
+  with the node's runtime connection; the `fleet-read` grant still governs
+  what the client snapshot shows.
+
 ## 1.0.0-rc2 - 2026-11-10
 
 - Breaking: a home created by v1.0.0-rc1 or v1.0.0-rc0 is not opened,
