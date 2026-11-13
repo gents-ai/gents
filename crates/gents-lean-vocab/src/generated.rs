@@ -13,10 +13,6 @@ pub fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecution
     &lean_contract_snapshot().canonical_execution_gate_cases
 }
 
-pub fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
-    &lean_contract_snapshot().completion_retry_cases
-}
-
 pub fn lean_feature_matrix() -> &'static LeanFeatureMatrix {
     &lean_contract_snapshot().feature_matrix
 }
@@ -402,28 +398,6 @@ pub enum LeanClaimedDid {
     Derived { node_key: String, creation_nonce: String },
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCompletionRetryCase {
-    pub name: String,
-    pub domain: String,
-    pub action: String,
-    pub failure_origin: Option<String>,
-    pub classified_failure: Option<String>,
-    pub legal: bool,
-    pub pre_phase: String,
-    pub pre_now: i64,
-    pub pre_deadline: Option<i64>,
-    pub pre_scheduled_wake: Option<i64>,
-    pub expected_phase: Option<String>,
-    pub expected_transport_used: Option<usize>,
-    pub expected_resample_used: Option<usize>,
-    pub expected_attempt: Option<usize>,
-    pub expected_account_used: Option<usize>,
-    pub expected_repair_used: Option<bool>,
-    pub expected_usage_charged: Option<usize>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanConfigurationImmutableCase {
@@ -461,7 +435,6 @@ pub struct LeanContractSnapshot {
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
-    pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,

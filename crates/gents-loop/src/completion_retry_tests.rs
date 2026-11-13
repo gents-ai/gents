@@ -391,3 +391,192 @@ fn empty_output_retries_independently_of_transport_and_resets_for_next_turn() {
         MidStreamDirective::Fail { .. }
     ));
 }
+
+#[derive(serde::Deserialize)]
+struct RetryTrace {
+    policy: RetryTracePolicy,
+    now: i64,
+    deadline: Option<i64>,
+    steps: Vec<RetryTraceStep>,
+}
+
+#[derive(serde::Deserialize)]
+struct RetryTracePolicy {
+    backoff: Vec<u64>,
+    max_resample: u32,
+    max_empty_resample: u32,
+    allow_repair: bool,
+    account_hops: u32,
+}
+
+#[derive(serde::Deserialize)]
+struct RetryTraceStep {
+    entry: String,
+    failure: String,
+    error: String,
+    effects: bool,
+}
+
+#[derive(serde::Serialize)]
+struct RetryTraceOutcome {
+    kind: &'static str,
+    retry_count: u32,
+}
+
+fn trace_failure(failure: &str, error: &str) -> crate::error::ClassifiedFailure {
+    match failure {
+        "transport" => classified(&transient(error), error),
+        "parse_bad_request" => {
+            let text = parse_400_text(error);
+            classified(&transient("parse"), &text)
+        }
+        "reasoning_rejected" => {
+            let text = format!(
+                "400 invalid_request_error: messages.5.content.0: Invalid `signature` in `thinking` block [{error}]"
+            );
+            classified(
+                &InferenceError::PermanentFailure {
+                    reason: text.clone(),
+                },
+                &text,
+            )
+        }
+        "context_overflow" => classified(
+            &InferenceError::ContextLengthExceeded {
+                reason: error.to_string(),
+                input_tokens: Some(1_001_685),
+                limit: Some(1_000_000),
+            },
+            error,
+        ),
+        "account_limited" => account_limited(
+            &InferenceError::UsageLimited(crate::provider_limit::UsageLimit {
+                resets_at: None,
+                detail: error.to_string(),
+            }),
+            error,
+        ),
+        "permanent" => classified(
+            &InferenceError::PermanentFailure {
+                reason: error.to_string(),
+            },
+            error,
+        ),
+        other => panic!("no modeled pre-stream failure class {other}"),
+    }
+}
+
+fn pre_stream_kind(directive: PreStreamDirective) -> (&'static str, Duration) {
+    match directive {
+        PreStreamDirective::RetryAfter {
+            delay,
+            kind: RetryKind::Transport,
+        } => ("retry_transport", delay),
+        PreStreamDirective::RetryAfter {
+            delay,
+            kind: RetryKind::Resample,
+        } => ("retry_resample", delay),
+        PreStreamDirective::RetryAfter {
+            delay,
+            kind: RetryKind::Account,
+        } => ("retry_account", delay),
+        PreStreamDirective::Repair => ("repair", Duration::ZERO),
+        PreStreamDirective::CompactAndRetry { .. } => ("compact_and_retry", Duration::ZERO),
+        PreStreamDirective::Fail { .. } => ("fail", Duration::ZERO),
+    }
+}
+
+fn mid_stream_kind(directive: MidStreamDirective) -> (&'static str, Duration) {
+    match directive {
+        MidStreamDirective::RetractAndResample { delay } => ("retract_and_resample", delay),
+        MidStreamDirective::CloseAndContinue { delay } => ("close_and_continue", delay),
+        MidStreamDirective::Fail { .. } => ("fail", Duration::ZERO),
+    }
+}
+
+fn replay_retry_trace(trace: &RetryTrace) -> Vec<RetryTraceOutcome> {
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy {
+        transport_backoff: trace
+            .policy
+            .backoff
+            .iter()
+            .map(|seconds| Duration::from_secs(*seconds))
+            .collect(),
+        max_resample: trace.policy.max_resample,
+        max_empty_resample: trace.policy.max_empty_resample,
+        allow_repair: trace.policy.allow_repair,
+        account_hops: trace.policy.account_hops,
+    });
+    let mut now = chrono::DateTime::from_timestamp(trace.now, 0).expect("modeled clock");
+    let deadline = trace
+        .deadline
+        .map(|deadline| chrono::DateTime::from_timestamp(deadline, 0).expect("modeled deadline"));
+    let mut outcomes = Vec::new();
+    for step in &trace.steps {
+        let (kind, delay) = match step.entry.as_str() {
+            "pre_stream" => pre_stream_kind(state.on_pre_stream_failure(
+                &trace_failure(&step.failure, &step.error),
+                now,
+                deadline,
+            )),
+            "mid_stream" => {
+                mid_stream_kind(state.on_mid_stream_failure(step.effects, now, deadline))
+            }
+            "no_visible_output" => mid_stream_kind(state.on_no_visible_output(now, deadline)),
+            "repair_issued" => {
+                state.mark_repair_used();
+                continue;
+            }
+            "compaction_issued" => {
+                state.mark_compaction_used();
+                continue;
+            }
+            other => panic!("no retry entry point {other}"),
+        };
+        now += chrono::Duration::from_std(delay).expect("retry delay in range");
+        outcomes.push(RetryTraceOutcome {
+            kind,
+            retry_count: state.retry_count(),
+        });
+    }
+    outcomes
+}
+
+#[test]
+fn pre_stream_retry_traces_follow_the_lean_directive_projection() {
+    gents_lean_vocab::families::completion_retry_contracts_pre_stream::replay::<
+        String,
+        String,
+        String,
+    >(|trace| {
+        gents_lean_vocab::family::recode(&replay_retry_trace(&gents_lean_vocab::family::recode(
+            trace,
+        )))
+    });
+}
+
+#[test]
+fn mid_stream_retry_traces_follow_the_lean_directive_projection() {
+    gents_lean_vocab::families::completion_retry_contracts_mid_stream::replay::<
+        String,
+        String,
+        String,
+    >(|trace| {
+        gents_lean_vocab::family::recode(&replay_retry_trace(&gents_lean_vocab::family::recode(
+            trace,
+        )))
+    });
+}
+
+#[test]
+fn no_visible_output_retry_traces_follow_the_lean_directive_projection() {
+    gents_lean_vocab::families::completion_retry_contracts_no_visible_output::replay::<
+        String,
+        String,
+        String,
+    >(|trace| {
+        gents_lean_vocab::family::recode(&replay_retry_trace(&gents_lean_vocab::family::recode(
+            trace,
+        )))
+    });
+}

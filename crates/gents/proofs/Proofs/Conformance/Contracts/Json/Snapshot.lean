@@ -419,8 +419,6 @@ def snapshotRuntimeCasesJson : String :=
         (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
     ++ "\"process_stop_cases\":"
       ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
-    ++ "\"completion_retry_cases\":"
-      ++ CompletionRetry.Contracts.casesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=
   ""
