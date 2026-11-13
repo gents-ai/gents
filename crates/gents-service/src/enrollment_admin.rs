@@ -95,6 +95,12 @@ pub struct EnrollmentDecisionRejected {
     pub code: Option<gents_protocol::enrollment::EnrollmentDecisionRefusalCode>,
 }
 
+impl EnrollmentDecisionRejected {
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+}
+
 pub async fn load_pending_enrollments(
     home: &std::path::Path,
     graphql: &str,

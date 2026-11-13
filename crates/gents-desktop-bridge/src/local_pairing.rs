@@ -367,10 +367,9 @@ where
 }
 
 pub(crate) fn enrollment_request_is_not_visible_yet(error: &anyhow::Error) -> bool {
-    gents_protocol::error_chain::find_source::<
-        gents_service::enrollment_admin::EnrollmentDecisionRejected,
-    >(error.as_ref())
-    .is_some_and(|rejected| {
-        rejected.code == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)
-    })
+    gents_service::enrollment_admin::EnrollmentDecisionRejected::in_chain(error.as_ref())
+        .is_some_and(|rejected| {
+            rejected.code
+                == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)
+        })
 }

@@ -1995,8 +1995,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-client-host/src/editor_store.rs", 1),
     // Error in Listener::bind
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
-    // EnrollmentDecisionRejected in enrollment_request_is_not_visible_yet
-    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
     // TryLockError in reserve_client_listener
     ("crates/gents-desktop-bridge/src/tauri_commands/lifecycle/single_flight.rs", 1),
     // RemoteP2pAdminError in ClientRouteManager::reconcile_route
@@ -2087,6 +2085,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
     ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
+    ("crates/gents-service/src/enrollment_admin.rs", &["EnrollmentDecisionRejected::in_chain"]),
     ("crates/gents-service/src/native_service.rs", &["BackgroundApprovalPending::take", "UnsupportedNativeServicePlatform::occurs_in"]),
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
