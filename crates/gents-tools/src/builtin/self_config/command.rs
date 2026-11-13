@@ -115,6 +115,13 @@ pub(super) struct CommandGuidance {
     pub(super) next_call: Value,
 }
 
+impl CommandGuidance {
+    /// The declared next call an erased error carries as its root or as a context value.
+    pub(super) fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigCommandParams {
@@ -446,7 +453,7 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
                 let (message, recovery) = call.failure_guidance(&error, &words, deleting);
                 let failure = ordered! {
                     "error": message,
-                    "batch": error.downcast_ref::<crud::BatchFailure>().map(|failure| json!({"atomic":false,"results":failure.results,"failed_index":failure.failed_index,"unattempted":failure.unattempted})),
+                    "batch": crud::BatchFailure::in_error(&error).map(|failure| json!({"atomic":false,"results":failure.results,"failed_index":failure.failed_index,"unattempted":failure.unattempted})),
                     "recovery": recovery,
                     "config_execution": receipt,
                 };

@@ -26,7 +26,7 @@ impl ConfigCommandTool {
                             "id": id,
                             "error": format!("{error:#}")
                         });
-                        if let Some(missing) = error.downcast_ref::<gents_documents::MissingReference>() {
+                        if let Some(missing) = gents_documents::MissingReference::in_error(&error) {
                             diagnostic["field"] = json!(missing.field);
                             diagnostic["missing"] = json!({"collection":missing.target.graphql_type(),"id":missing.target_id});
                         }
