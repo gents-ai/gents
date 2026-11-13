@@ -33,25 +33,37 @@ def selfConfigFieldTable : Family FieldTableInput (Option FieldTable) where
   inputs := allTargets.map fun t => { collection := t.collectionName }
   model := fun i => (allTargets.find? (·.collectionName == i.collection)).map fieldTable
 
-def selfConfigResourceReadExposureCasesJson : String :=
-  let cases : List (String × Target × List String) :=
-    [("backend", .inferenceBackend, ["backend"]),
-     ("backend", .inferenceBackend, ["backend", "node"]),
-     ("backend", .inferenceBackend, ["backend", "agent"]),
-     ("backend", .inferenceBackend, ["node"]),
-     ("backend", .inferenceBackend, ["agent"]),
-     ("tools", .tools, ["tools"]),
-     ("profile", .inferenceProfile, ["profile"]),
-     ("automation", .task, ["automation"]),
-     ("automation", .task, ["backend"]),
-     ("effective", .agent, ["backend"]),
-     ("effective", .agent, ["automation"]),
-     ("effective", .agent, ["tools"])]
-  jsonArray (cases.map fun (resource, target, enabled) =>
-    "{\"resource\":" ++ jsonString resource ++
-    ",\"categories\":" ++ jsonStringArray enabled ++
-    ",\"exposed\":" ++ scBool (if resource == "effective" then effectiveReadExposed enabled
-      else resourceReadExposed enabled target) ++ "}")
+structure ResourceReadExposureInput where
+  resource : String
+  categories : List String
+  deriving Lean.ToJson
+
+structure ResourceReadExposureOutput where
+  exposed : Bool
+  deriving Lean.ToJson
+
+/-- The configuration document each config-tool read resource lists; the
+`effective` read has none and is exposed by `effectiveReadExposed`. -/
+def readResourceTarget : String → Option Target
+  | "backend" => some .inferenceBackend
+  | "tools" => some .tools
+  | "profile" => some .inferenceProfile
+  | "automation" => some .task
+  | _ => none
+
+@[conformance_family]
+def selfConfigResourceReadExposure :
+    Conformance.Family ResourceReadExposureInput ResourceReadExposureOutput where
+  inputs :=
+    [("backend", ["backend"]), ("backend", ["backend", "node"]), ("backend", ["backend", "agent"]),
+     ("backend", ["node"]), ("backend", ["agent"]), ("tools", ["tools"]),
+     ("profile", ["profile"]), ("automation", ["automation"]), ("automation", ["backend"]),
+     ("effective", ["backend"]), ("effective", ["automation"]), ("effective", ["tools"])].map
+      fun (resource, categories) => { resource, categories }
+  model := fun i =>
+    { exposed := match readResourceTarget i.resource with
+        | some target => resourceReadExposed i.categories target
+        | none => effectiveReadExposed i.categories }
 
 structure PolicyResourceExposureInput where
   categories : List String

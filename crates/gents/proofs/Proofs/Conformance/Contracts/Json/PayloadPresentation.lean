@@ -1,5 +1,6 @@
 import Proofs.Runtime.CanonicalOutput.Execution.GateCases
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 
 /-!
@@ -132,22 +133,78 @@ def cases : List Case :=
   , ⟨"invalid_cause_rejected", [65], [255], 16⟩
   , ⟨"multibyte_cause_preserved", [65], [226, 130, 172], 1⟩ ]
 
-def resultJson : Except MessageError (Presentation × List UInt8) → String
+structure PartWire where
+  kind : String
+  start : Option Nat
+  stop : Option Nat
+  bytes : Option (List Nat)
+  deriving Lean.ToJson
+
+structure PresentationWire where
+  kind : String
+  parts : List PartWire
+  deriving Lean.ToJson
+
+def PresentationWire.ofModel : Presentation → PresentationWire
+  | .full => { kind := "full", parts := [] }
+  | .composed parts =>
+      { kind := "composed"
+        parts := parts.map fun
+          | .range start stop =>
+              { kind := "range", start := some start, stop := some stop, bytes := none }
+          | .literal bytes =>
+              { kind := "literal", start := none, stop := none, bytes := some (bytes.map (·.toNat)) } }
+
+def PresentationWire.toModel (wire : PresentationWire) : Presentation :=
+  if wire.kind == "full" then .full
+  else .composed (wire.parts.map fun part =>
+    match part.bytes with
+    | some bytes => .literal (bytes.map UInt8.ofNat)
+    | none => .range (part.start.getD 0) (part.stop.getD 0))
+
+structure PlanInput where
+  raw : List Nat
+  cause : List Nat
+  tailBudget : Nat
+  deriving Lean.ToJson
+
+def PlanInput.toCase (input : PlanInput) : Case :=
+  ⟨"", input.raw.map UInt8.ofNat, input.cause.map UInt8.ofNat, input.tailBudget⟩
+
+def PlanInput.ofCase (value : Case) : PlanInput :=
+  ⟨value.raw.map (·.toNat), value.cause.map (·.toNat), value.tailBudget⟩
+
+structure PlanOutput where
+  kind : String
+  presentation : Option PresentationWire
+  rendered : Option (List Nat)
+  deriving Lean.ToJson
+
+def PlanOutput.ofResult : Except MessageError (Presentation × List UInt8) → PlanOutput
   | .ok (presentation, rendered) =>
-      "{\"kind\":\"ok\",\"presentation\":" ++ presentationJson presentation ++
-      ",\"rendered\":" ++ byteArrayJson rendered ++ "}"
-  | .error .invalidUtf8 => "{\"kind\":\"invalid_utf8\"}"
-  | .error error =>
-      "{\"kind\":\"unexpected_error\",\"error\":" ++ jsonString (reprStr error) ++ "}"
+      ⟨"ok", some (PresentationWire.ofModel presentation), some (rendered.map (·.toNat))⟩
+  | .error .invalidUtf8 => ⟨"invalid_utf8", none, none⟩
+  | .error _ => ⟨"unexpected_error", none, none⟩
 
-def caseJson (value : Case) : String :=
-  "{\"name\":" ++ jsonString value.name ++
-  ",\"raw\":" ++ byteArrayJson value.raw ++
-  ",\"cause\":" ++ byteArrayJson value.cause ++
-  ",\"tail_budget\":" ++ toString value.tailBudget ++
-  ",\"expected\":" ++ resultJson (result value) ++ "}"
+@[conformance_family]
+def presentationPlan : Conformance.Family PlanInput PlanOutput where
+  inputs := cases.map PlanInput.ofCase
+  model := fun i => PlanOutput.ofResult (result i.toCase)
 
-def casesJson : String := jsonArray (cases.map caseJson)
+structure StreamedFailureOutput where
+  rendered : Option (List Nat)
+  deriving Lean.ToJson
+
+/-- The streamed-failure scenario appends the raw prefix as tool output text and
+fails the running call with the cause under the configured output budget, so it
+builds only a valid source whose whole prefix fits that budget. -/
+def streamedFailureCases : List Case :=
+  cases.filter fun value => value.name ∈ ["whole_prefix_then_cause"]
+
+@[conformance_family]
+def streamedFailure : Conformance.Family PlanInput StreamedFailureOutput where
+  inputs := streamedFailureCases.map PlanInput.ofCase
+  model := fun i => ⟨(result i.toCase).toOption.map fun (_, rendered) => rendered.map (·.toNat)⟩
 
 example : (cases.map fun value => (result value).toOption.map Prod.snd) =
     [some [116], some [65, 66, 10, 116], some [67, 68, 10, 116], some [116],
@@ -206,15 +263,29 @@ def cases : List Case :=
   , ⟨"different_cause_rejected", raw20, cause, 5,
       .composed [.range 15 20, .literal [10], .literal "tool call cancelled".toUTF8.toList]⟩ ]
 
-def caseJson (value : Case) : String :=
-  "{\"name\":" ++ jsonString value.name ++
-  ",\"raw\":" ++ byteArrayJson value.raw ++
-  ",\"cause\":" ++ byteArrayJson value.cause ++
-  ",\"configured_budget\":" ++ toString value.configuredBudget ++
-  ",\"stored\":" ++ presentationJson value.stored ++
-  ",\"accepted\":" ++ (if accepted value then "true" else "false") ++ "}"
+structure ReplayInput where
+  raw : List Nat
+  cause : List Nat
+  configuredBudget : Nat
+  stored : TerminalDiagnosticContracts.PresentationWire
+  deriving Lean.ToJson
 
-def casesJson : String := jsonArray (cases.map caseJson)
+structure ReplayOutput where
+  accepted : Bool
+  deriving Lean.ToJson
+
+def ReplayInput.ofCase (value : Case) : ReplayInput :=
+  ⟨value.raw.map (·.toNat), value.cause.map (·.toNat), value.configuredBudget,
+    TerminalDiagnosticContracts.PresentationWire.ofModel value.stored⟩
+
+def ReplayInput.toCase (input : ReplayInput) : Case :=
+  ⟨"", input.raw.map UInt8.ofNat, input.cause.map UInt8.ofNat, input.configuredBudget,
+    input.stored.toModel⟩
+
+@[conformance_family]
+def storedReplay : Conformance.Family ReplayInput ReplayOutput where
+  inputs := cases.map ReplayInput.ofCase
+  model := fun i => ⟨accepted i.toCase⟩
 
 example : cases.map accepted =
     [true, true, true, true, true, false, false, false, false, false, false, false] := by

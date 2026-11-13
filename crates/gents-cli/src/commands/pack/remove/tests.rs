@@ -700,130 +700,136 @@ async fn build_shared_plugin(source: &'static [u8]) -> Vec<u8> {
 
 #[tokio::test]
 async fn wiring_holds_store_lock_through_pin_commit() {
-    let home = initialized_home().await;
-    let old = build_shared_plugin(b"fn main() { println!(\"old\"); }").await;
-    let new = build_shared_plugin(b"fn main() { println!(\"new\"); }").await;
-    let original = plugin_pack_dir("acme", "tools", "shared", &old);
-    let replacement = plugin_pack_dir("acme", "tools", "shared", &new);
-    install(home.path(), original.path().to_str().unwrap().to_owned())
-        .await
-        .unwrap();
-    let (access, owner) = super::super::resolve_scope_owner(&scope(home.path()))
-        .await
-        .unwrap();
-    let expected_digest = gents_pack::plugin::store::read_record(home.path(), "acme", "shared")
-        .unwrap()
-        .digest;
-    let pause = std::sync::Arc::new(gents_pack::pack::plugin_wire::WireTestPause {
-        home: home.path().to_owned(),
-        reached: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
-    });
-    *gents_pack::pack::plugin_wire::WIRE_TEST_PAUSE
-        .lock()
-        .unwrap() = Some(pause.clone());
-    let writer = tokio::spawn({
-        let access = access.clone();
-        let owner = owner.clone();
-        let path = home.path().to_owned();
-        async move {
-            let request = gents_pack::pack::plugin_wire::WireRequest {
-                plugin: "acme/shared".into(),
-                agent: selected_agent(&access, &owner).await,
-                targets_from: Vec::new(),
-                remove: false,
-                preview: false,
-                dynamic_consent: false,
-                tool_calls_consent: false,
-            };
-            gents_pack::pack::plugin_wire::wire_in(
-                &access,
-                &owner,
-                &path,
-                &request,
-                gents_service::home_state::load_held_user_identity,
-            )
-            .await
-        }
-    });
-    pause.reached.notified().await;
-    let (archive_bytes, _) = gents_pack::pack::archive::pack_dir(replacement.path()).unwrap();
-    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
-    let notify_access = access.clone();
-    let notify_owner = owner.clone();
-    let notify_home = home.path().to_owned();
-    let result = gents_pack::pack::plugin_lifecycle::install(
-        home.path(),
-        &archive,
-        false,
-        Some(&owner),
-        &std::collections::BTreeMap::new(),
-        gents_pack::pack::InstalledVia::Operator,
-        gents_pack::pack::PackSource::Local { file_name: None },
-        move |identity, _| async move {
-            gents_pack::pack::record_plugin_store_change(
-                &notify_access,
-                &notify_owner,
-                &notify_home,
-                &identity.coordinate,
-                Some(&identity),
-                &gents_inference::resolved::ProviderProfilePolicy,
-            )
-            .await
-        },
-    )
-    .await;
-    let snapshot: Value =
-        tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
+    for case in
+        gents_lean_vocab::families::contracts_pack_installation_wire_lock_install_during_wire::cases(
+        )
+    {
+        let home = initialized_home().await;
+        let old = build_shared_plugin(b"fn main() { println!(\"old\"); }").await;
+        let new = build_shared_plugin(b"fn main() { println!(\"new\"); }").await;
+        let original = plugin_pack_dir("acme", "tools", "shared", &old);
+        let replacement = plugin_pack_dir("acme", "tools", "shared", &new);
+        install(home.path(), original.path().to_str().unwrap().to_owned())
             .await
             .unwrap();
-    let allowed = snapshot["pack_wire_lock_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["held"] == true)
-        .unwrap()["publish_allowed"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(
-        result.is_ok(),
-        allowed,
-        "replacement must contend with the wire lock: {result:?}"
-    );
-    assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
-    pause.release.notify_one();
-    writer.await.unwrap().unwrap();
-    *gents_pack::pack::plugin_wire::WIRE_TEST_PAUSE
-        .lock()
-        .unwrap() = None;
-    let agent = selected_agent(&access, &owner).await;
-    let (_, tools) = access
-        .transact_write("test.wire.pin", |txn| {
-            let owner = &owner;
-            let agent = &agent;
-            Box::pin(async move {
-                gents_documents::load_agent_context_and_tools_in_txn(txn, owner, agent).await
+        let (access, owner) = super::super::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
+        let expected_digest = gents_pack::plugin::store::read_record(home.path(), "acme", "shared")
+            .unwrap()
+            .digest;
+        let pause = std::sync::Arc::new(gents_pack::pack::plugin_wire::WireTestPause {
+            home: home.path().to_owned(),
+            reached: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let writer = case.input.held.then(|| {
+            *gents_pack::pack::plugin_wire::WIRE_TEST_PAUSE
+                .lock()
+                .unwrap() = Some(pause.clone());
+            tokio::spawn({
+                let access = access.clone();
+                let owner = owner.clone();
+                let path = home.path().to_owned();
+                async move {
+                    let request = gents_pack::pack::plugin_wire::WireRequest {
+                        plugin: "acme/shared".into(),
+                        agent: selected_agent(&access, &owner).await,
+                        targets_from: Vec::new(),
+                        remove: false,
+                        preview: false,
+                        dynamic_consent: false,
+                        tool_calls_consent: false,
+                    };
+                    gents_pack::pack::plugin_wire::wire_in(
+                        &access,
+                        &owner,
+                        &path,
+                        &request,
+                        gents_service::home_state::load_held_user_identity,
+                    )
+                    .await
+                }
             })
-        })
-        .await
-        .unwrap();
-    let tools = tools.unwrap();
-    let pin = tools
-        .integrations
-        .unwrap()
-        .plugins
-        .unwrap()
-        .into_iter()
-        .find(|entry| entry.plugin == "acme/shared")
-        .unwrap()
-        .digest;
-    assert_eq!(pin.as_deref(), Some(expected_digest.as_str()));
-    access
-        .local_node()
-        .unwrap()
-        .shutdown()
-        .await
-        .expect("node shutdown");
+        });
+        if writer.is_some() {
+            pause.reached.notified().await;
+        }
+        let (archive_bytes, _) = gents_pack::pack::archive::pack_dir(replacement.path()).unwrap();
+        let archive = gents_pack::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let notify_access = access.clone();
+        let notify_owner = owner.clone();
+        let notify_home = home.path().to_owned();
+        let result = gents_pack::pack::plugin_lifecycle::install(
+            home.path(),
+            &archive,
+            false,
+            Some(&owner),
+            &std::collections::BTreeMap::new(),
+            gents_pack::pack::InstalledVia::Operator,
+            gents_pack::pack::PackSource::Local { file_name: None },
+            move |identity, _| async move {
+                gents_pack::pack::record_plugin_store_change(
+                    &notify_access,
+                    &notify_owner,
+                    &notify_home,
+                    &identity.coordinate,
+                    Some(&identity),
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            },
+        )
+        .await;
+        case.check(
+        gents_lean_vocab::families::contracts_pack_installation_wire_lock_install_during_wire::WireLockPublish {
+            publish_allowed: result.is_ok(),
+        },
+    );
+        let Some(writer) = writer else {
+            access
+                .local_node()
+                .unwrap()
+                .shutdown()
+                .await
+                .expect("node shutdown");
+            continue;
+        };
+        assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
+        pause.release.notify_one();
+        writer.await.unwrap().unwrap();
+        *gents_pack::pack::plugin_wire::WIRE_TEST_PAUSE
+            .lock()
+            .unwrap() = None;
+        let agent = selected_agent(&access, &owner).await;
+        let (_, tools) = access
+            .transact_write("test.wire.pin", |txn| {
+                let owner = &owner;
+                let agent = &agent;
+                Box::pin(async move {
+                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, agent).await
+                })
+            })
+            .await
+            .unwrap();
+        let tools = tools.unwrap();
+        let pin = tools
+            .integrations
+            .unwrap()
+            .plugins
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.plugin == "acme/shared")
+            .unwrap()
+            .digest;
+        assert_eq!(pin.as_deref(), Some(expected_digest.as_str()));
+        access
+            .local_node()
+            .unwrap()
+            .shutdown()
+            .await
+            .expect("node shutdown");
+    }
 }
 
 #[tokio::test]
@@ -1002,71 +1008,75 @@ async fn wire_reports_unconfirmed_when_the_served_endpoint_is_unreachable() {
 
 #[tokio::test]
 async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
-    let home = initialized_home().await;
-    let afb = build_shared_plugin(b"fn main() { println!(\"{{}}\"); }").await;
-    let pack = plugin_pack_dir("acme", "tools", "shared", &afb);
-    install(home.path(), pack.path().to_str().unwrap().to_owned())
-        .await
-        .unwrap();
-    let pause = std::sync::Arc::new(super::RemovalTestPause {
-        home: home.path().to_owned(),
-        reached: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
-    });
-    *super::REMOVAL_TEST_PAUSE.lock().unwrap() = Some(pause.clone());
-    let remover = tokio::spawn({
-        let home = home.path().to_owned();
-        async move { super::remove_home_install(&home, "acme/tools").await }
-    });
-    pause.reached.notified().await;
-    // A wire while the removal holds the plugin store lock is refused, whether
-    // at the offline open that reads installed plugins or at the pin publish.
-    let result = async {
-        let (access, owner) = super::super::resolve_scope_owner(&scope(home.path())).await?;
-        let request = gents_pack::pack::plugin_wire::WireRequest {
-            plugin: "acme/shared".into(),
-            agent: selected_agent(&access, &owner).await,
-            targets_from: vec![],
-            remove: false,
-            preview: false,
-            dynamic_consent: false,
-            tool_calls_consent: false,
-        };
-        let wired = gents_pack::pack::plugin_wire::wire_in(
-            &access,
-            &owner,
-            home.path(),
-            &request,
-            gents_service::home_state::load_held_user_identity,
+    for case in
+        gents_lean_vocab::families::contracts_pack_installation_wire_lock_wire_during_removal::cases(
         )
-        .await;
-        access
-            .local_node()
-            .unwrap()
-            .shutdown()
-            .await
-            .expect("node shutdown");
-        wired
-    }
-    .await;
-    let snapshot: Value =
-        tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
+    {
+        let home = initialized_home().await;
+        let afb = build_shared_plugin(b"fn main() { println!(\"{{}}\"); }").await;
+        let pack = plugin_pack_dir("acme", "tools", "shared", &afb);
+        install(home.path(), pack.path().to_str().unwrap().to_owned())
             .await
             .unwrap();
-    let allowed = snapshot["pack_wire_lock_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["held"] == true)
-        .unwrap()["publish_allowed"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(result.is_ok(), allowed, "{result:?}");
-    assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
-    pause.release.notify_one();
-    remover.await.unwrap().unwrap();
-    *super::REMOVAL_TEST_PAUSE.lock().unwrap() = None;
-    assert!(gents_pack::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+        let pause = std::sync::Arc::new(super::RemovalTestPause {
+            home: home.path().to_owned(),
+            reached: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let remover = case.input.held.then(|| {
+            *super::REMOVAL_TEST_PAUSE.lock().unwrap() = Some(pause.clone());
+            tokio::spawn({
+                let home = home.path().to_owned();
+                async move { super::remove_home_install(&home, "acme/tools").await }
+            })
+        });
+        if remover.is_some() {
+            pause.reached.notified().await;
+        }
+        // A wire while the removal holds the plugin store lock is refused, whether
+        // at the offline open that reads installed plugins or at the pin publish.
+        let result = async {
+            let (access, owner) = super::super::resolve_scope_owner(&scope(home.path())).await?;
+            let request = gents_pack::pack::plugin_wire::WireRequest {
+                plugin: "acme/shared".into(),
+                agent: selected_agent(&access, &owner).await,
+                targets_from: vec![],
+                remove: false,
+                preview: false,
+                dynamic_consent: false,
+                tool_calls_consent: false,
+            };
+            let wired = gents_pack::pack::plugin_wire::wire_in(
+                &access,
+                &owner,
+                home.path(),
+                &request,
+                gents_service::home_state::load_held_user_identity,
+            )
+            .await;
+            access
+                .local_node()
+                .unwrap()
+                .shutdown()
+                .await
+                .expect("node shutdown");
+            wired
+        }
+        .await;
+        case.check(
+        gents_lean_vocab::families::contracts_pack_installation_wire_lock_wire_during_removal::WireLockPublish {
+            publish_allowed: result.is_ok(),
+        },
+    );
+        let Some(remover) = remover else {
+            continue;
+        };
+        assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
+        pause.release.notify_one();
+        remover.await.unwrap().unwrap();
+        *super::REMOVAL_TEST_PAUSE.lock().unwrap() = None;
+        assert!(gents_pack::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+    }
 }
 
 #[tokio::test]

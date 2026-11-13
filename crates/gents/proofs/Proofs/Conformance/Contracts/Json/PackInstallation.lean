@@ -211,10 +211,32 @@ def pinInstalledCommit : Conformance.Family PinInput Bool where
   inputs := pinCases.filter (·.source == .installed)
   model := fun i => Configuration.pluginPinMatches i.pin i.actual
 
-def wireLockCasesJson : String := jsonArray ([false, true].map fun held =>
-  "{\"held\":" ++ toString held ++ ",\"publish_allowed\":" ++
-    toString (Configuration.wireAndPluginPublishAllowed held) ++
-    ",\"resolve_allowed\":" ++ toString (Configuration.stagedPluginResolutionAllowed held) ++ "}")
+structure WireLockInput where
+  held : Bool
+  deriving Lean.ToJson
+
+structure WireLockResolution where
+  resolveAllowed : Bool
+  deriving Lean.ToJson
+
+structure WireLockPublish where
+  publishAllowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def wireLockResolution : Conformance.Family WireLockInput WireLockResolution where
+  inputs := [false, true].map WireLockInput.mk
+  model := fun i => WireLockResolution.mk (Configuration.stagedPluginResolutionAllowed i.held)
+
+@[conformance_family]
+def wireLockInstallDuringWire : Conformance.Family WireLockInput WireLockPublish where
+  inputs := [false, true].map WireLockInput.mk
+  model := fun i => WireLockPublish.mk (Configuration.wireAndPluginPublishAllowed i.held)
+
+@[conformance_family]
+def wireLockWireDuringRemoval : Conformance.Family WireLockInput WireLockPublish where
+  inputs := [false, true].map WireLockInput.mk
+  model := fun i => WireLockPublish.mk (Configuration.wireAndPluginPublishAllowed i.held)
 
 structure WireTargetInput where
   «local» : Bool

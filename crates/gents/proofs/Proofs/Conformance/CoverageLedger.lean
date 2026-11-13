@@ -831,8 +831,16 @@ def caseCoverage : List CoverageEntry :=
       "Binds client signer, exact create and update graphs, and relationship scope to an embedded transaction. Full plan validation, deletion and native denial remain to be exercised.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pack_wire_lock_cases"
-      "PackWireLockCases")
+      "family"
+      "contracts_pack_installation_wire_lock_resolution")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_wire_lock_install_during_wire")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_wire_lock_wire_during_removal")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1084,8 +1092,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_tool_policy_composition")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
   , tagged (consumerCoverage
-      "application_write_cases"
-      "ApplicationWriteCases")
+      "family"
+      "contracts_application_write")
       "tool-policy" [Surface.agentFacing, Surface.operatorCli]
   , tagged (consumerCoverage
       "family"
@@ -1123,6 +1131,10 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "contracts_self_config_scope")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_self_config_resource_read_exposure")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -1231,8 +1243,8 @@ def caseCoverage : List CoverageEntry :=
       "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
-      "backend_health_admission_cases"
-      "BackendHealthAdmissionCases"
+      "family"
+      "backend_health_admission_admission"
       "A provider models-endpoint probe does not establish completion health, remote-node reachability or fleet-wide document freshness.")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1499,8 +1511,28 @@ def caseCoverage : List CoverageEntry :=
       "Sequential cases bind Local and HTTP latch/drain, scheduled-origin eligibility, exact pending membership, notification bindings and replay. Native publisher timestamps do not bind modeled equal-time queue ordering. Background-process survival is a separate obligation.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_control_cases"
-      "SessionControlCases")
+      "family"
+      "session_control_contracts_interrupt_idle")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_stop_drains")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_resume_terminal_goal")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_resume_after_settlement")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_resume_waits_for_live_worker")
+      "session-control" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_control_contracts_resume_waits_for_process_record")
       "session-control" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1642,6 +1674,18 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_message_kill_action")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_message_kill_drive")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "session_message_kill_observed")
       "recovery" [Surface.runtimeInternal]
   , tagged { boundaryCoverage
       "family"
@@ -2128,6 +2172,10 @@ def caseCoverage : List CoverageEntry :=
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
+      "contracts_plugin_job_opening")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
       "tool_timeouts_foreground_pair")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -2553,13 +2601,17 @@ def caseCoverage : List CoverageEntry :=
       "The four generated cases bind presented payload-field bytes and missing-dependency failure to native canonical reconstruction; stored-byte quantities remain Lean expectations. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
       "canonical-output" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "terminal_diagnostic_presentation_cases"
-      "TerminalDiagnosticPresentationCases"
+      "family"
+      "terminal_diagnostic_contracts_presentation_plan"
       "Eight valid generated inputs bind exact native presentation ranges, literals, and rendered bytes. Two invalid UTF-8 inputs are rejected at the adapter representation boundary via String::from_utf8; the production presentation helper accepts typed strings. This pure binding does not establish capture of uncommitted process bytes, terminal CAS authority, crash recovery, or provider continuation; those remain obligations of their existing owners.")
       "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "terminal_diagnostic_replay_cases"
-      "TerminalDiagnosticReplayCases")
+      "family"
+      "terminal_diagnostic_contracts_streamed_failure")
+      "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "terminal_diagnostic_replay_contracts_stored_replay")
       "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "compaction_projection_join_cases"

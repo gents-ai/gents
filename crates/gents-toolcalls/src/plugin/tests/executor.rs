@@ -12,18 +12,14 @@ use gents_pack::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
 
 #[test]
 fn staged_plugin_resolution_conforms_to_lean() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().pack_wire_lock_cases;
     let (home, _) = installed_echo();
     let executor = PluginExecutor::new(Some(home.path().to_owned()));
-    for case in cases {
-        let held = case["held"].as_bool().unwrap();
-        let _stage = held.then(|| store::try_lock_store(home.path()).unwrap());
-        assert_eq!(
-            executor.resolve("team/plugin", None).is_ok(),
-            case["resolve_allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+    gents_lean_vocab::families::contracts_pack_installation_wire_lock_resolution::replay(|i| {
+        let _stage = i.held.then(|| store::try_lock_store(home.path()).unwrap());
+        gents_lean_vocab::families::contracts_pack_installation_wire_lock_resolution::WireLockResolution {
+            resolve_allowed: executor.resolve("team/plugin", None).is_ok(),
+        }
+    });
 }
 
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
@@ -1887,8 +1883,6 @@ mod job_calls {
             )
             .await
             .unwrap();
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_opening_cases;
-        let expected = |name: &str| cases.iter().find(|case| case.name == name).unwrap().commits;
         let mut wrong_pin = create.clone();
         wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
         let wrong_plan =
@@ -1908,7 +1902,6 @@ mod job_calls {
                 })
             })
             .await;
-        assert_eq!(rejected.is_ok(), expected("wrong_pin"));
         let escaped = gents_store::graphql::escape_graphql_string(&session);
         let absent = access.execute(&format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
@@ -1940,7 +1933,6 @@ mod job_calls {
                 })
             })
             .await;
-        assert_eq!(rolled_back.is_ok(), expected("failed_transaction"));
         assert!(
             staged_before_abort.load(std::sync::atomic::Ordering::SeqCst),
             "{rolled_back:?}"
@@ -1971,7 +1963,20 @@ mod job_calls {
                 })
             })
             .await;
-        assert_eq!(committed.is_ok(), expected("valid"), "{committed:?}");
+        for case in gents_lean_vocab::families::contracts_plugin_job_opening::cases::<String>() {
+            let commits = match case.input.name.as_str() {
+                "valid" => committed.is_ok(),
+                "wrong_pin" => rejected.is_ok(),
+                "failed_transaction" => rolled_back.is_ok(),
+                other => panic!("unknown modeled plugin-job opening attempt {other}"),
+            };
+            case.check(
+                gents_lean_vocab::families::contracts_plugin_job_opening::PluginJobOpeningOutput {
+                    commits,
+                },
+            );
+        }
+        committed.unwrap();
 
         let origin = gents_session::session::origin::verified_creation_origin(
             &access,

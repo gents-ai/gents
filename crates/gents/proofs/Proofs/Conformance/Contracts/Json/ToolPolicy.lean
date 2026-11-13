@@ -327,28 +327,49 @@ def goalCapabilityResolution :
 end Conformance.Contracts
 
 namespace Conformance.Contracts
-def applicationWriteCasesJson : String := Id.run do
-  let mut rows := []
-  for op in [ToolPolicy.ApplicationWrite.Operation.create, .update, .delete] do
-    for granted in [false, true] do
-      for application in [false, true] do
-        for blocked in [false, true] do
-          for credential in [false, true] do
-            for bounded in [false, true] do
-              for targets in [0, 1, 3, 101] do
-                for limit in [0, 2, 100, 101] do
-                  for preview in [false, true] do
-                    for digestMatches in [false, true] do
-                      let o : ToolPolicy.ApplicationWrite.Observation :=
-                        ⟨granted, application, blocked, credential, bounded, targets, limit, preview, digestMatches⟩
-                      let name := match op with | .create => "create" | .update => "update" | .delete => "delete"
-                      rows := rows ++ ["{\"operation\":" ++ jsonString name
-                        ++ ",\"granted\":" ++ boolJson granted ++ ",\"application\":" ++ boolJson application
-                        ++ ",\"protected\":" ++ boolJson blocked ++ ",\"credential\":" ++ boolJson credential
-                        ++ ",\"bounded\":" ++ boolJson bounded ++ ",\"targets\":" ++ toString targets
-                        ++ ",\"limit\":" ++ toString limit ++ ",\"preview\":" ++ boolJson preview
-                        ++ ",\"digest_matches\":" ++ boolJson digestMatches
-                        ++ ",\"admitted\":" ++ boolJson (ToolPolicy.ApplicationWrite.admitted op o)
-                        ++ ",\"may_apply\":" ++ boolJson (ToolPolicy.ApplicationWrite.mayApply op o) ++ "}"]
-  return jsonArray rows
+
+open Lean
+
+deriving instance ToJson for ToolPolicy.ApplicationWrite.Operation
+
+structure ApplicationWriteInput where
+  operation : ToolPolicy.ApplicationWrite.Operation
+  granted : Bool
+  application : Bool
+  isProtected : Bool
+  credential : Bool
+  bounded : Bool
+  targets : Nat
+  limit : Nat
+  preview : Bool
+  digestMatches : Bool
+  deriving ToJson
+
+structure ApplicationWriteOutput where
+  admitted : Bool
+  mayApply : Bool
+  deriving ToJson
+
+@[conformance_family]
+def applicationWrite : Family ApplicationWriteInput ApplicationWriteOutput where
+  inputs :=
+    [ToolPolicy.ApplicationWrite.Operation.create, .update, .delete].flatMap fun operation =>
+    [false, true].flatMap fun granted =>
+    [false, true].flatMap fun application =>
+    [false, true].flatMap fun isProtected =>
+    [false, true].flatMap fun credential =>
+    [false, true].flatMap fun bounded =>
+    [0, 1, 3, 101].flatMap fun targets =>
+    [0, 2, 100, 101].flatMap fun limit =>
+    [false, true].flatMap fun preview =>
+    [false, true].map fun digestMatches =>
+      { operation, granted, application, isProtected, credential, bounded, targets, limit,
+        preview, digestMatches }
+  model := fun i =>
+    let o : ToolPolicy.ApplicationWrite.Observation :=
+      ⟨i.granted, i.application, i.isProtected, i.credential, i.bounded, i.targets, i.limit,
+        i.preview, i.digestMatches⟩
+    { admitted := ToolPolicy.ApplicationWrite.admitted i.operation o
+      mayApply := ToolPolicy.ApplicationWrite.mayApply i.operation o }
+
 end Conformance.Contracts

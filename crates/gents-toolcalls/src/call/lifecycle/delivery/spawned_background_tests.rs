@@ -18,61 +18,81 @@ use gents_protocol::output::{
 use gents_session::session::tool_presentation::render_presentation;
 use gents_store::graphql::escape_graphql_string;
 
+fn modeled_bytes(bytes: &[u64]) -> Vec<u8> {
+    bytes
+        .iter()
+        .map(|byte| u8::try_from(*byte).expect("modeled byte"))
+        .collect()
+}
+
+fn wire_bytes(bytes: &[u8]) -> Vec<u64> {
+    bytes.iter().map(|byte| u64::from(*byte)).collect()
+}
+
 #[test]
 fn generated_terminal_diagnostic_cases_bind_native_presentation() {
-    use gents_lean_vocab::LeanTerminalDiagnosticPresentationExpected;
-
-    let cases = gents_lean_vocab::lean_terminal_diagnostic_presentation_cases();
-    assert_eq!(
-        cases.len(),
-        10,
-        "all generated terminal diagnostic boundaries must be bound"
-    );
-    for case in cases {
-        let raw = String::from_utf8(case.raw.clone());
-        let cause = String::from_utf8(case.cause.clone());
-        match &case.expected {
-            LeanTerminalDiagnosticPresentationExpected::InvalidUtf8 => {
-                assert!(
-                    raw.is_err() || cause.is_err(),
-                    "{}: model rejected valid native UTF-8 input",
-                    case.name
-                );
-            }
-            LeanTerminalDiagnosticPresentationExpected::UnexpectedError { error } => {
-                panic!(
-                    "{}: model produced unexpected presentation error: {error}",
-                    case.name
-                )
-            }
-            LeanTerminalDiagnosticPresentationExpected::Ok {
-                presentation,
-                rendered,
-            } => {
-                let raw = raw.unwrap_or_else(|error| panic!("{}: {error}", case.name));
-                let cause = cause.unwrap_or_else(|error| panic!("{}: {error}", case.name));
-                let budget = usize::try_from(case.tail_budget)
-                    .unwrap_or_else(|error| panic!("{}: {error}", case.name));
-                let actual = terminal_diagnostic_presentation(&raw, &cause, budget)
-                    .expect("valid native diagnostic input");
-                assert_eq!(
-                    actual,
-                    gents_lean_vocab::native_presentation(presentation)
-                        .expect("modeled presentation translates"),
-                    "{}: native terminal diagnostic presentation diverged",
-                    case.name
-                );
-                assert_eq!(
+    use gents_lean_vocab::families::terminal_diagnostic_contracts_presentation_plan::{
+        PartWire, PlanOutput, PresentationWire,
+    };
+    use gents_protocol::output::{PayloadPresentation, PresentationPart};
+    let wire = |presentation: &PayloadPresentation| match presentation {
+        PayloadPresentation::Full => PresentationWire {
+            kind: "full".into(),
+            parts: Vec::new(),
+        },
+        PayloadPresentation::Composed { parts } => PresentationWire {
+            kind: "composed".into(),
+            parts: parts
+                .iter()
+                .map(|part| match part {
+                    PresentationPart::OutputRange {
+                        start_byte,
+                        end_byte,
+                    } => PartWire {
+                        kind: "range".into(),
+                        start: Some(*start_byte),
+                        stop: Some(*end_byte),
+                        bytes: None,
+                    },
+                    PresentationPart::Literal { text } => PartWire {
+                        kind: "literal".into(),
+                        start: None,
+                        stop: None,
+                        bytes: Some(wire_bytes(text.as_bytes())),
+                    },
+                })
+                .collect(),
+        },
+    };
+    gents_lean_vocab::families::terminal_diagnostic_contracts_presentation_plan::replay(|i| {
+        let (Ok(raw), Ok(cause)) = (
+            String::from_utf8(modeled_bytes(&i.raw)),
+            String::from_utf8(modeled_bytes(&i.cause)),
+        ) else {
+            return PlanOutput {
+                kind: "invalid_utf8".into(),
+                presentation: None,
+                rendered: None,
+            };
+        };
+        let budget = usize::try_from(i.tail_budget).expect("modeled tail budget");
+        match terminal_diagnostic_presentation(&raw, &cause, budget) {
+            Ok(actual) => PlanOutput {
+                kind: "ok".into(),
+                rendered: Some(wire_bytes(
                     render_presentation(&raw, &actual)
                         .expect("native presentation renders")
                         .as_bytes(),
-                    rendered,
-                    "{}: native rendered diagnostic diverged",
-                    case.name
-                );
-            }
+                )),
+                presentation: Some(wire(&actual)),
+            },
+            Err(_) => PlanOutput {
+                kind: "unexpected_error".into(),
+                presentation: None,
+                rendered: None,
+            },
         }
-    }
+    });
 }
 
 fn admission(deadline_at: DateTime<Utc>) -> SpawnedBackgroundToolAdmission {
@@ -207,65 +227,58 @@ async fn terminal_point_selection_retains_state_and_tool_identity_fences() {
 
 #[tokio::test]
 async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failure() {
-    let case = gents_lean_vocab::lean_terminal_diagnostic_presentation_cases()
-        .iter()
-        .find(|case| case.name == "whole_prefix_then_cause")
-        .expect("generated terminal diagnostic fixture");
-    let raw = String::from_utf8(case.raw.clone()).unwrap();
-    let cause = String::from_utf8(case.cause.clone()).unwrap();
-    let gents_lean_vocab::LeanTerminalDiagnosticPresentationExpected::Ok { rendered, .. } =
-        &case.expected
-    else {
-        panic!("generated valid terminal diagnostic result");
-    };
-    let (node, path, mut tool) = published_spawn_parent("streamed-failure").await;
-    let tool_doc_id = tool.doc_id().unwrap().to_owned();
-    let request_doc_id = tool.request_doc_id.as_deref().unwrap().to_owned();
-    let binding = tool
-        .tool_output_binding()
-        .expect("running tool output binding");
-    append_tool_output(&binding, &raw).await.unwrap();
+    for case in gents_lean_vocab::families::terminal_diagnostic_contracts_streamed_failure::cases()
+    {
+        let raw = String::from_utf8(modeled_bytes(&case.input.raw)).unwrap();
+        let cause = String::from_utf8(modeled_bytes(&case.input.cause)).unwrap();
+        let (node, path, mut tool) = published_spawn_parent("streamed-failure").await;
+        let tool_doc_id = tool.doc_id().unwrap().to_owned();
+        let request_doc_id = tool.request_doc_id.as_deref().unwrap().to_owned();
+        let binding = tool
+            .tool_output_binding()
+            .expect("running tool output binding");
+        append_tool_output(&binding, &raw).await.unwrap();
 
-    assert!(tool
-        .fail_owned(&cause, FailureClass::External, None)
+        assert!(tool
+            .fail_owned(&cause, FailureClass::External, None)
+            .await
+            .unwrap());
+
+        let rows = tool_delivery_rows(&tool).await;
+        let delivery = rows
+            .iter()
+            .find(|row| {
+                matches!(
+                    row.message.publication,
+                    MessagePublication::ToolDelivery { ref tool_call_doc_id }
+                        if tool_call_doc_id == &tool_doc_id
+                )
+            })
+            .expect("failed tool delivery header");
+        let MessageBlock::ToolResult { parts, .. } = &delivery.message.blocks[0] else {
+            panic!("failed tool delivery is not a ToolResult")
+        };
+        let gents_protocol::output::ToolResultPart::Text { text } = &parts[0] else {
+            panic!("failed tool delivery does not select text")
+        };
+        let delivered = render_presentation(&raw, &text.presentation).unwrap();
+        let observed = gents_session::tool_call::query::result::load_tool_call_presentation(
+            &tool.access().unwrap(),
+            &tool_doc_id,
+            &tool.node_did,
+            &tool.session_id,
+            tool.requester_did.as_deref(),
+        )
         .await
-        .unwrap());
-
-    let rows = tool_delivery_rows(&tool).await;
-    let delivery = rows
-        .iter()
-        .find(|row| {
-            matches!(
-                row.message.publication,
-                MessagePublication::ToolDelivery { ref tool_call_doc_id }
-                    if tool_call_doc_id == &tool_doc_id
-            )
-        })
-        .expect("failed tool delivery header");
-    let MessageBlock::ToolResult { parts, .. } = &delivery.message.blocks[0] else {
-        panic!("failed tool delivery is not a ToolResult")
-    };
-    let gents_protocol::output::ToolResultPart::Text { text } = &parts[0] else {
-        panic!("failed tool delivery does not select text")
-    };
-    assert_eq!(
-        render_presentation(&raw, &text.presentation)
-            .unwrap()
-            .as_bytes(),
-        rendered
+        .unwrap();
+        assert_eq!(observed.result.as_deref(), Some(delivered.as_str()));
+        case.check(
+        gents_lean_vocab::families::terminal_diagnostic_contracts_streamed_failure::StreamedFailureOutput {
+            rendered: Some(wire_bytes(delivered.as_bytes())),
+        },
     );
-    let observed = gents_session::tool_call::query::result::load_tool_call_presentation(
-        &tool.access().unwrap(),
-        &tool_doc_id,
-        &tool.node_did,
-        &tool.session_id,
-        tool.requester_did.as_deref(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(observed.result.unwrap().as_bytes(), rendered);
 
-    let segments = observe(
+        let segments = observe(
         &tool,
         &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
@@ -274,40 +287,41 @@ async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failu
         ),
     )
     .await;
-    assert!(!segments.has_errors(), "{:#?}", segments.errors);
-    let rows = segments.data.as_ref().unwrap()["AgentOutputSegment"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    let tool_rows = rows
-        .iter()
-        .filter(|row| {
-            row.segment.source
-                == OutputSource::ToolCall {
-                    tool_call_doc_id: tool_doc_id.clone(),
-                }
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        tool_rows
+        assert!(!segments.has_errors(), "{:#?}", segments.errors);
+        let rows = segments.data.as_ref().unwrap()["AgentOutputSegment"]
+            .as_array()
+            .unwrap()
             .iter()
-            .map(|row| row.segment.payload.as_str())
-            .collect::<String>(),
-        raw
-    );
-    assert_eq!(
-        tool_rows
+            .map(decode_output_segment_row)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let tool_rows = rows
             .iter()
-            .filter(|row| row.segment.close.is_some())
-            .count(),
-        1
-    );
+            .filter(|row| {
+                row.segment.source
+                    == OutputSource::ToolCall {
+                        tool_call_doc_id: tool_doc_id.clone(),
+                    }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tool_rows
+                .iter()
+                .map(|row| row.segment.payload.as_str())
+                .collect::<String>(),
+            raw
+        );
+        assert_eq!(
+            tool_rows
+                .iter()
+                .filter(|row| row.segment.close.is_some())
+                .count(),
+            1
+        );
 
-    node.shutdown().await.expect("shut down test node");
-    let _ = std::fs::remove_dir_all(path);
+        node.shutdown().await.expect("shut down test node");
+        let _ = std::fs::remove_dir_all(path);
+    }
 }
 
 #[tokio::test]
@@ -653,30 +667,45 @@ async fn interrupted_tool_diagnostics_follow_the_lean_output_budget() {
 
 #[test]
 fn generated_terminal_diagnostic_replay_cases_bind_native_replay() {
-    let cases = gents_lean_vocab::lean_terminal_diagnostic_replay_cases();
-    assert_eq!(cases.len(), 12, "all generated replay shapes must be bound");
-    assert!(cases.iter().any(|case| case.accepted) && cases.iter().any(|case| !case.accepted));
-    for case in cases {
-        let raw = String::from_utf8(case.raw.clone()).expect("valid replay source");
-        let cause = String::from_utf8(case.cause.clone()).expect("valid replay cause");
-        let stored = gents_lean_vocab::native_presentation(&case.stored)
-            .expect("modeled presentation translates");
-        assert_eq!(
-            diagnostic_replay_matches(&raw, &cause, &stored).expect("replay check"),
-            case.accepted,
-            "{}: native diagnostic replay diverged from the model",
-            case.name
-        );
-        if case.accepted {
-            let budget = usize::try_from(case.configured_budget).unwrap();
+    use gents_lean_vocab::families::terminal_diagnostic_replay_contracts_stored_replay::{
+        PresentationWire, ReplayOutput,
+    };
+    use gents_protocol::output::{PayloadPresentation, PresentationPart};
+    let native = |wire: &PresentationWire| {
+        if wire.kind == "full" {
+            return PayloadPresentation::Full;
+        }
+        PayloadPresentation::Composed {
+            parts: wire
+                .parts
+                .iter()
+                .map(|part| match &part.bytes {
+                    Some(bytes) => PresentationPart::Literal {
+                        text: String::from_utf8(modeled_bytes(bytes)).expect("modeled literal"),
+                    },
+                    None => PresentationPart::OutputRange {
+                        start_byte: part.start.expect("modeled range start"),
+                        end_byte: part.stop.expect("modeled range end"),
+                    },
+                })
+                .collect(),
+        }
+    };
+    gents_lean_vocab::families::terminal_diagnostic_replay_contracts_stored_replay::replay(|i| {
+        let raw = String::from_utf8(modeled_bytes(&i.raw)).expect("valid replay source");
+        let cause = String::from_utf8(modeled_bytes(&i.cause)).expect("valid replay cause");
+        let accepted =
+            diagnostic_replay_matches(&raw, &cause, &native(&i.stored)).expect("replay check");
+        if accepted {
+            let budget = usize::try_from(i.configured_budget).unwrap();
             let current = terminal_diagnostic_presentation(&raw, &cause, budget).unwrap();
             assert!(
                 diagnostic_replay_matches(&raw, &cause, &current).unwrap(),
-                "{}: freshly planned diagnostic must also replay",
-                case.name
+                "freshly planned diagnostic must also replay"
             );
         }
-    }
+        ReplayOutput { accepted }
+    });
 }
 
 #[tokio::test]

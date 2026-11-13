@@ -12,13 +12,31 @@ import Proofs.Conformance.Functions.Session
 namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
 
-def pluginJobOpeningCasesJson : String :=
-  let good : AgentSession.PluginJobOpening := ⟨true, true, true, true, true⟩
-  let cases : List (String × AgentSession.PluginJobOpening) :=
-    [("valid", good), ("wrong_pin", { good with pinnedSpawnMatches := false }),
-     ("failed_transaction", { good with writesComplete := false })]
-  (toJson (cases.map fun (name, opening) => Json.mkObj [
-    ("name", toJson name), ("commits", toJson (AgentSession.pluginJobOpeningCommits opening))])).compress
+inductive PluginJobOpeningAttempt where
+  | valid
+  | wrongPin
+  | failedTransaction
+  deriving ToJson
+
+/-- What each staged opening attempt presents: a spawn key pinned to another
+job root, or a transaction that aborts after staging its writes. -/
+def PluginJobOpeningAttempt.opening : PluginJobOpeningAttempt → AgentSession.PluginJobOpening
+  | .valid => ⟨true, true, true, true, true⟩
+  | .wrongPin => ⟨true, true, false, true, true⟩
+  | .failedTransaction => ⟨true, true, true, true, false⟩
+
+structure PluginJobOpeningInput where
+  name : PluginJobOpeningAttempt
+  deriving ToJson
+
+structure PluginJobOpeningOutput where
+  commits : Bool
+  deriving ToJson
+
+@[conformance_family]
+def pluginJobOpening : Conformance.Family PluginJobOpeningInput PluginJobOpeningOutput where
+  inputs := [.valid, .wrongPin, .failedTransaction].map PluginJobOpeningInput.mk
+  model := fun i => ⟨AgentSession.pluginJobOpeningCommits i.name.opening⟩
 
 def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
   [("node", toJson s.node), ("session", toJson s.session), ("requester", toJson s.requester)]

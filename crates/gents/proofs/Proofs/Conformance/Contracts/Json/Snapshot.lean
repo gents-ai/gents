@@ -67,6 +67,7 @@ import Proofs.Conformance.Identity.Operations
 import Proofs.Conformance.ToolDispatch
 import Proofs.Conformance.RequestAssembly
 import Proofs.Conformance.UsageWrite
+import Proofs.Conformance.SessionMessageKill
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming
 import Proofs.Conformance.BackendHealthRetention
@@ -432,8 +433,6 @@ def snapshotRequestCasesJson : String :=
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
-    ++ "\"session_control_cases\":"
-      ++ Conformance.SessionControlContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
     ++ "\"session_input_edit_client_observation_cases\":"
       ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
@@ -449,10 +448,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
-    ++ "\"terminal_diagnostic_presentation_cases\":"
-      ++ Conformance.TerminalDiagnosticContracts.casesJson ++ ","
-    ++ "\"terminal_diagnostic_replay_cases\":"
-      ++ Conformance.TerminalDiagnosticReplayContracts.casesJson ++ ","
     ++ "\"process_transition_cases\":"
       ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"goal_claimed_readiness_cases\":"
@@ -475,7 +470,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"session_document_reference_encoding\":" ++ sessionDocumentReferenceEncodingJson ++ ","
     ++ "\"session_document_retry_cases\":" ++ sessionDocumentRetryCasesJson ++ ","
-    ++ "\"plugin_job_opening_cases\":" ++ pluginJobOpeningCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
@@ -536,7 +530,6 @@ def snapshotClientCasesJson : String :=
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
     ++ "\"client_live_delta_cases\":"
       ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
-    ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
     ++ "\"snapshot_demotion_cases\":"
       ++ snapshotDemotionCasesJson ++ ","
@@ -546,9 +539,6 @@ def snapshotClientCasesJson : String :=
       ++ readinessPublicationCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
-    ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","
-    ++ "\"self_config_resource_read_exposure_cases\":"
-      ++ selfConfigResourceReadExposureCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
 
@@ -599,17 +589,6 @@ def snapshotRecoveryCasesJson : String :=
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
     ++ "\"recovery_sweep_ids\":"
       ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
-    ++ "\"session_message_kill_cases\":"
-      ++ jsonArray (Recovery.killCases.map fun (observation, action) =>
-        "{\"observation\":" ++ jsonString observation.toContract
-          ++ ",\"action\":" ++ jsonString action.toContract ++ "}") ++ ","
-    ++ "\"session_message_kill_observation_cases\":"
-      ++ jsonArray (Recovery.killObservationCases.map fun (caused, observation) =>
-        "{\"caused\":" ++ (match caused with
-          | none => "null"
-          | some facts => "{\"terminal\":" ++ toString facts.terminal
-              ++ ",\"this_runtime\":" ++ toString facts.thisRuntime ++ "}")
-          ++ ",\"observation\":" ++ jsonString observation.toContract ++ "}") ++ ","
     ++ "\"r4c_background_work_cases\":"
       ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
