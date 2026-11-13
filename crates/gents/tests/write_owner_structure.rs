@@ -1991,8 +1991,6 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// for in an adapter classifier instead. This list only shrinks.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    // HistoryUnlockRequired in Provider::failed
-    ("crates/gents-client-host/src/editor_store.rs", 1),
     // Error in Listener::bind
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     // EnrollmentDecisionRejected in enrollment_request_is_not_visible_yet
@@ -2080,6 +2078,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 /// a new entry is a reviewed addition.
 #[rustfmt::skip]
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
+    ("crates/gents-client-host/src/editor_store.rs", &["HistoryUnlockRequired::occurs_in"]),
     ("crates/gents-desktop-core/src/error.rs", &["BridgeError::classify_transport_error"]),
     ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
     ("crates/gents-eval/src/optimization/driver.rs", &["job_refused"]),
