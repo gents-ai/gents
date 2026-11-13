@@ -125,10 +125,6 @@ pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
     &lean_contract_snapshot().recovery_sweep_cases
 }
 
-pub fn lean_request_progress_cases() -> &'static [LeanRequestProgressCase] {
-    &lean_contract_snapshot().request_progress_cases
-}
-
 pub fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
     &lean_contract_snapshot().request_transition_cases
 }
@@ -1176,7 +1172,6 @@ pub struct LeanContractSnapshot {
     pub managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub request_progress_cases: Vec<LeanRequestProgressCase>,
     pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
@@ -3839,15 +3834,6 @@ pub struct LeanRequestExecutionWorld {
     pub token_charge_required: bool,
     pub continuation_count: u64,
     pub token_charge_count: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanRequestProgressCase {
-    pub name: String,
-    #[serde(rename = "lifecycleState")]
-    pub lifecycle_state: String,
-    pub label: String,
-    pub animated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

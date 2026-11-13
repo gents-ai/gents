@@ -964,8 +964,8 @@ def caseCoverage : List CoverageEntry :=
       "task_hooks_contracts_recovery")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "request_progress_cases"
-      "RequestProgressCases")
+      "family"
+      "contracts_request_progress")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"

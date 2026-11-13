@@ -17,9 +17,7 @@ structure LiveOverlayCase where
 
 structure RequestProgressCase where
   name           : String
-  lifecycleState : String
-  label          : String
-  animated       : Bool
+  lifecycleState : RequestState
   deriving Repr
 
 structure PendingUserTurnCase where
@@ -52,11 +50,7 @@ def pendingUserTurnCases : List PendingUserTurnCase :=
 
 def requestProgressCase
     (name : String) (state : RequestState) : RequestProgressCase :=
-  let progress := projectRequestProgress state
-  { name := name
-  , lifecycleState := state.toDefraDB
-  , label := progress.label
-  , animated := progress.animated }
+  { name := name, lifecycleState := state }
 
 def requestProgressCases : List RequestProgressCase :=
   [ requestProgressCase "workspace_binding_pending_is_queued" .workspaceBindingPending

@@ -127,13 +127,13 @@ type LeanClientShellCase = {
 type LeanContractSnapshot = {
   frontend_client_shell_case_count: number;
   frontend_client_shell_cases: LeanClientShellCase[];
-  request_progress_cases: Array<{
-    name: string;
-    lifecycleState: RequestLifecycleState;
-    label: string;
-    animated: boolean;
-  }>;
+  families: Record<
+    string,
+    { cases: Array<{ input: unknown; expected: unknown }> }
+  >;
 };
+
+type LeanFamilyCase<Input, Output> = { input: Input; expected: Output };
 
 let leanContractSnapshot: LeanContractSnapshot | null = null;
 
@@ -206,6 +206,20 @@ async function loadLeanContractSnapshot(): Promise<LeanContractSnapshot> {
   }
 
   return leanContractSnapshot;
+}
+
+async function leanFamilyCases<Input, Output>(
+  path: string,
+): Promise<Array<LeanFamilyCase<Input, Output>>> {
+  const key = /^families::(\w+)::cases\(\)$/.exec(path)?.[1];
+  if (!key) {
+    throw new Error(`not a Lean family path: ${path}`);
+  }
+  const family = (await loadLeanContractSnapshot()).families[key];
+  if (!family) {
+    throw new Error(`Lean family ${key} was not emitted`);
+  }
+  return family.cases as Array<LeanFamilyCase<Input, Output>>;
 }
 
 async function loadLeanClientShellCases() {
@@ -751,15 +765,16 @@ describe("requestProgressPresentation", () => {
   test(
     "matches every generated Lean request lifecycle projection",
     async () => {
-      const cases = (await loadLeanContractSnapshot()).request_progress_cases;
+      const cases = await leanFamilyCases<
+        { name: string; lifecycle_state: RequestLifecycleState },
+        { label: string; animated: boolean }
+      >("families::contracts_request_progress::cases()");
       expect(cases.length).toBeGreaterThan(0);
       for (const contractCase of cases) {
         expect(
-          requestProgressPresentation(contractCase.lifecycleState),
-        ).toEqual({
-          label: contractCase.label,
-          animated: contractCase.animated,
-        });
+          requestProgressPresentation(contractCase.input.lifecycle_state),
+          contractCase.input.name,
+        ).toEqual(contractCase.expected);
       }
     },
     GENERATED_CONTRACT_TEST_TIMEOUT_MS,

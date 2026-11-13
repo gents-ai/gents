@@ -504,8 +504,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
-    ++ "\"request_progress_cases\":"
-      ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
     ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=
