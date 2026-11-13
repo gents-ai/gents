@@ -245,6 +245,7 @@ where
             request.requester_did.as_deref(),
             &agent_did,
             workspace.workspace_cwd.as_deref(),
+            Some(session_id.as_str()),
         )?
         .map(|context| context.with_reviewer(reviewer.callback.clone()));
         let backend_id = lifecycle.backend_id().to_string();

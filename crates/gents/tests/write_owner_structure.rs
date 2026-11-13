@@ -236,6 +236,57 @@ fn production_defradb_writes_have_one_owner() {
     );
 }
 
+#[test]
+fn workspace_consent_resolution_has_one_owner() {
+    #[rustfmt::skip]
+    const EXACT_KEY_READER_SITES: &[(&str, usize)] = &[
+        ("crates/gents-tools/src/plugin/approval/workspace.rs", 1),
+        ("crates/gents-tools/src/plugin/approval/workspace/context.rs", 1),
+    ];
+    let root = repo_root();
+    let owner = root.join("crates/gents-tools/src/plugin/approval/workspace.rs");
+    let source = std::fs::read_to_string(&owner).expect("workspace consent owner");
+    assert_eq!(
+        source
+            .matches("fn entry(home: &Path, key: &WorkspaceKey)")
+            .count(),
+        1,
+        "the exact-key reader moved or changed shape"
+    );
+    assert!(
+        !source.contains("pub fn entry")
+            && !source.contains("pub(crate) fn entry")
+            && !source.contains("pub(super) fn entry"),
+        "the exact-key reader must stay private to its module"
+    );
+    let mut violations = Vec::new();
+    for path in production_sources(&root) {
+        let relative = path
+            .strip_prefix(&root)
+            .expect("repository path")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let count = std::fs::read_to_string(&path)
+            .expect("production source")
+            .matches("entry(home")
+            .count();
+        let allowed = EXACT_KEY_READER_SITES
+            .iter()
+            .find(|(file, _)| *file == relative)
+            .map_or(0, |(_, count)| *count);
+        if count != allowed {
+            violations.push(format!(
+                "{relative}: {count} exact-key reads, expected {allowed}"
+            ));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "workspace consent is read without resolving the session:\n{}",
+        violations.join("\n")
+    );
+}
+
 fn toml_file(path: &Path) -> toml::Table {
     std::fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))

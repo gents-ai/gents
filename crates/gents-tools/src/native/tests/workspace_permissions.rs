@@ -33,6 +33,7 @@ impl Fixture {
             Some("requester"),
             "agent",
             Some(self.root.path()),
+            None,
         )
         .unwrap();
         let tool = UnrestrictedBashTool::with_policy(
@@ -115,7 +116,7 @@ async fn command_consent_precedes_execution_and_cannot_remember_a_folder() {
     assert!(approval::pending_requests(fixture.home.path())
         .unwrap()
         .is_empty());
-    assert!(workspace::get(fixture.home.path(), &fixture.key)
+    assert!(workspace::resolve(fixture.home.path(), &fixture.key, None)
         .unwrap()
         .unwrap()
         .dirs
@@ -280,6 +281,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
         Some("requester"),
         "agent",
         Some(&project),
+        None,
     )
     .unwrap();
     let context =

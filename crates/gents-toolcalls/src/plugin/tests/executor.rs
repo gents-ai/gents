@@ -283,6 +283,7 @@ mod bound {
                 Some("requester"),
                 "agent",
                 Some(&work),
+                None,
             )
             .unwrap();
             let tool = tool_for(&fx.home, &fx.record);
@@ -324,6 +325,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
@@ -392,6 +394,7 @@ mod bound {
                 Some("requester"),
                 "agent",
                 Some(&work),
+                None,
             )
             .unwrap();
             let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
@@ -464,6 +467,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
@@ -492,6 +496,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
@@ -517,7 +522,9 @@ mod bound {
             declined.await.unwrap();
         })
         .await;
-        let ask = workspace::get(fx.home.path(), &key).unwrap().unwrap();
+        let ask = workspace::resolve(fx.home.path(), &key, None)
+            .unwrap()
+            .unwrap();
         workspace::save_mode(
             fx.home.path(),
             &key,
@@ -533,6 +540,7 @@ mod bound {
                 Some("requester"),
                 agent,
                 Some(folder),
+                None,
             )
             .unwrap();
             let error = workspace::scope(other_context, in_session(&tool, &target, folder, false))
@@ -557,6 +565,7 @@ mod bound {
             Some("requester"),
             "agent",
             Some(&work),
+            None,
         )
         .unwrap();
         std::fs::rename(&work, fx.root.join("original-work")).unwrap();
@@ -1849,13 +1858,7 @@ mod job_calls {
             .await
             .unwrap();
         let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_opening_cases;
-        let expected = |name: &str| {
-            cases
-                .iter()
-                .find(|case| case.name == name)
-                .unwrap()
-                .commits
-        };
+        let expected = |name: &str| cases.iter().find(|case| case.name == name).unwrap().commits;
         let mut wrong_pin = create.clone();
         wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
         let wrong_plan =

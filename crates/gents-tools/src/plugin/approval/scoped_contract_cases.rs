@@ -127,7 +127,7 @@ fn assert_scoped_state(
         allowed::list(home).unwrap().is_empty(),
         "workspace answers must not widen global grants: {context}"
     );
-    let dirs = workspace::get(home, &binding.scope.workspace)
+    let dirs = workspace::resolve(home, &binding.scope.workspace, None)
         .unwrap()
         .map(|settings| settings.dirs)
         .unwrap_or_default();

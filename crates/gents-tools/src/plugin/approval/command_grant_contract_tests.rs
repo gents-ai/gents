@@ -151,7 +151,7 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
             Queue::Workspace.request_file(&home, "q1").exists(),
             case.expected.question.present
         );
-        let settings = workspace::get(&home, &bound.scope.workspace).unwrap();
+        let settings = workspace::resolve(&home, &bound.scope.workspace, None).unwrap();
         assert_eq!(
             settings
                 .as_ref()
@@ -213,7 +213,9 @@ fn generated_command_revocation_preserves_the_selected_mode() {
         let result = workspace::revoke_commands(&root, &workspace, case.expected_revision);
         assert_eq!(result.is_ok(), case.result.accepted);
         assert_eq!(case.result.changed, case.result.accepted);
-        let observed = workspace::get(&root, &workspace).unwrap().unwrap();
+        let observed = workspace::resolve(&root, &workspace, None)
+            .unwrap()
+            .unwrap();
         let expected = case.result.next.unwrap();
         assert_eq!(observed.selection.revision, expected.revision);
         assert_eq!(observed.selection.mode, expected.mode);
@@ -253,6 +255,7 @@ async fn remembered_invocations_until_revocation(launch: bool) {
         Some("requester"),
         "agent",
         Some(&project),
+        None,
     )
     .unwrap();
     workspace::scope(
@@ -296,7 +299,7 @@ async fn remembered_invocations_until_revocation(launch: bool) {
             first.unwrap();
             run().await.unwrap();
             assert!(pending_requests(&home).unwrap().is_empty());
-            let current = workspace::get(&home, &key).unwrap().unwrap();
+            let current = workspace::resolve(&home, &key, None).unwrap().unwrap();
             workspace::revoke_commands(&home, &key, current.selection.revision).unwrap();
             let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Once)
                 .await
@@ -332,6 +335,7 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
         Some("requester"),
         "agent",
         Some(&project),
+        None,
     )
     .unwrap();
     workspace::scope(
@@ -494,6 +498,7 @@ async fn guarded_command_launch_rejects_unsupported_isolation_before_asking() {
         Some("requester"),
         "agent",
         Some(&project),
+        None,
     )
     .unwrap();
     let tools = crate::native::ToolContext::new(project.clone(), false).unwrap();

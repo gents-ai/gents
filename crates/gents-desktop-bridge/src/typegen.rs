@@ -194,6 +194,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::host::permissions::WorkspacePermissionsRequest,
         crate::host::permissions::WorkspacePermissionsSaveRequest,
         crate::host::permissions::WorkspacePermissionsForgetCommandsRequest,
+        crate::host::permissions::WorkspacePermissionScope,
         crate::host::permissions::WorkspacePermissionsState,
         RequestOutputView,
         gents_protocol::file_changes::ToolFileChanges,

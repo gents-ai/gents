@@ -25,6 +25,7 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
         Some("requester"),
         "agent",
         Some(&project),
+        None,
     )
     .unwrap();
     workspace::scope(
@@ -106,7 +107,7 @@ async fn one_time_workspace_approval_runs_the_reported_six_browser_cases() {
                 "{output}"
             );
             assert!(pending_requests(&home).unwrap().is_empty());
-            assert!(workspace::get(&home, &key)
+            assert!(workspace::resolve(&home, &key, None)
                 .unwrap()
                 .unwrap()
                 .command_grants

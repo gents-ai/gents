@@ -45,6 +45,7 @@ impl Fixture {
             Some("requester"),
             "agent",
             Some(&self.key.path),
+            None,
         )
         .unwrap();
         tokio::time::timeout(
@@ -157,7 +158,7 @@ async fn new_file_consent_precedes_directory_creation_and_cannot_be_remembered()
     let (result, ()) = tokio::join!(fixture.write(&path), answer);
     result.unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world");
-    assert!(workspace::get(fixture.home.path(), &fixture.key)
+    assert!(workspace::resolve(fixture.home.path(), &fixture.key, None)
         .unwrap()
         .unwrap()
         .dirs

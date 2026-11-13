@@ -28,8 +28,15 @@ async fn run(
     command: &str,
     args: &[String],
 ) -> (Option<i32>, Vec<u8>) {
-    let scope =
-        workspace::for_request(Some(home), "node", Some("requester"), "agent", Some(root)).unwrap();
+    let scope = workspace::for_request(
+        Some(home),
+        "node",
+        Some("requester"),
+        "agent",
+        Some(root),
+        None,
+    )
+    .unwrap();
     let policy = if mode == CommandExecutionMode::ReadOnly {
         CommandExecutionPolicy::read_only(vec!["cat".into()])
     } else {
@@ -218,9 +225,15 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
             false,
         ),
     ] {
-        let scope =
-            workspace::for_request(Some(&home), "node", Some("requester"), "agent", Some(&root))
-                .unwrap();
+        let scope = workspace::for_request(
+            Some(&home),
+            "node",
+            Some("requester"),
+            "agent",
+            Some(&root),
+            None,
+        )
+        .unwrap();
         let args = serde_json::json!({"argv": ["-c", "printf '%s' \"$FIXTURE_WORD\" > \"$1\"", "fixture", target]}).to_string();
         let result = workspace::scope(scope, tool.call(args)).await;
         if allowed {

@@ -262,6 +262,7 @@
   "workspace_callback_selection_visibility": {"input":{"fields":[["actor","string"]],"struct":"Input"},"output":{"fields":[["before","bool"],["after_revocation","bool"],["after_disabled","bool"],["after_reenabled","bool"]],"struct":"Output"}},
   "workspace_command_root_selection": {"input":{"fields":[["mode",{"enum":"ExecutionMode","values":["read_only","workspace_write","artifact_write","unrestricted"]}],["configured","bool"],["full_access","bool"],["within","bool"]],"struct":"Input"},"output":"bool"},
   "workspace_completion_access": {"input":{"fields":[["actor","string"]],"struct":"CompletionAccessInput"},"output":{"fields":[["read","bool"]],"struct":"CompletionAccessOutput"}},
+  "workspace_permission_resolution_selection": {"input":{"fields":[["entries",{"list":{"fields":[["key",{"fields":[["workspace","nat"],["session",{"option":"nat"}]],"struct":"Key"}],["preference",{"fields":[["revision","nat"],["mode",{"enum":"Mode","values":["ask","autoReview","fullAccess"]}],["review_task",{"option":"nat"}]],"struct":"Preference"}]],"struct":"Entry"}}],["workspace","nat"],["session",{"option":"nat"}],["bound",{"fields":[["workspace","nat"],["session",{"option":"nat"}]],"struct":"Key"}]],"struct":"ResolutionCase"},"output":{"fields":[["resolved",{"option":{"fields":[["key",{"fields":[["workspace","nat"],["session",{"option":"nat"}]],"struct":"Key"}],["preference",{"fields":[["revision","nat"],["mode",{"enum":"Mode","values":["ask","autoReview","fullAccess"]}],["review_task",{"option":"nat"}]],"struct":"Preference"}]],"struct":"Entry"}}],["admits","bool"]],"struct":"Result"}},
   "workspace_root_completeness": {"input":{"fields":[["complete","bool"],["visible_configured","bool"]],"struct":"CompletenessInput"},"output":"bool"},
   "workspace_root_operations_enabled_after": {"input":{"fields":[["stored",{"enum":"Stored","values":["absent","enabled","disabled"]}],["toggle",{"enum":"Toggle","values":["omitted","enable","disable"]}]],"struct":"Input"},"output":"bool"},
   "workspace_root_operations_reader_decision": {"input":{"fields":[["change",{"enum":"ReaderChange","values":["grant","revoke"]}],["subject",{"enum":"ReaderSubject","values":["enabled_agent","disabled_agent","unknown_actor","node_actor"]}]],"struct":"Input"},"output":{"enum":"ReaderDecision","values":["admitted","agent_unavailable","node_actor"]}},
@@ -289,6 +290,7 @@
   "tool_execution_await_mode_vocabulary": {"enum":"AwaitMode","values":["foreground","background"]},
   "tool_execution_cancel_cause_vocabulary": {"enum":"CancelCause","values":["interrupted","deadline","userCancelled"]},
   "tool_execution_failure_class_vocabulary": {"enum":"FailureClass","values":["argumentInvalid","serviceUnavailable","transport","toolReturnedError","policyDenied","external"]},
-  "tool_execution_tool_call_state_vocabulary": {"enum":"ToolCallState","values":["pending","running","completed","failed","timedOut","cancelled"]}
+  "tool_execution_tool_call_state_vocabulary": {"enum":"ToolCallState","values":["pending","running","completed","failed","timedOut","cancelled"]},
+  "tool_policy_workspace_permissions_mode_vocabulary": {"enum":"Mode","values":["ask","autoReview","fullAccess"]}
  }
 }

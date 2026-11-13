@@ -45,6 +45,7 @@ impl Fixture {
             Some("requester"),
             "agent",
             Some(&self.key.path),
+            None,
         )
         .unwrap()
         .unwrap()
@@ -152,14 +153,16 @@ async fn a_routine_decision_cannot_be_carried_to_another_workspace() {
         Some("requester"),
         "agent",
         Some(other.path()),
+        None,
     )
     .unwrap();
-    assert!(!scope(
+    let error = scope(
         context,
-        workspace::consent_binding(&fixture.home, decision, false, None,)
+        workspace::consent_binding(&fixture.home, decision, false, None),
     )
     .await
-    .unwrap());
+    .unwrap_err();
+    assert!(error.is::<workspace::SelectionChanged>(), "{error}");
 }
 
 #[tokio::test]

@@ -314,6 +314,215 @@ theorem stale_write_keeps_the_prior_selection (previous : Option Preference)
     (selectMode previous expected mode requestedTask).next = previous := by
   simp [selectMode, stale, Id.run]
 
+/-- The host consent store addresses a stored selection by a key. Node,
+requester, agent and the canonical workspace folder are abstracted into
+`workspace`: canonicalizing them is the host adapter's premise. The session
+component is absent for the agent and workspace default entry and present for
+one session's own entry. -/
+structure Key where
+  workspace : Nat
+  session : Option Nat
+  deriving DecidableEq, Repr
+
+structure Entry where
+  key : Key
+  preference : Preference
+  deriving DecidableEq, Repr
+
+/-- Only a request's own session entry and the agent and workspace default are
+candidates for it. A sibling session's entry is never one. -/
+def candidate (workspace : Nat) (session : Option Nat) (key : Key) : Bool :=
+  key.workspace == workspace && (key.session == none || key.session == session)
+
+/-- A request resolves to its own session's selection when one is stored and
+otherwise to the agent and workspace default. Absence of both leaves the
+workspace consent layer disengaged under the configured ceiling, so resolving
+a session that has made no selection to nothing would drop the gate its
+default configured; the default is the only stored object carrying that
+selection's reviewer and allowed folders. A request carrying no session, such
+as a scheduled run, takes the same path and can never reach a session entry. -/
+def resolve (entries : List Entry) (workspace : Nat) (session : Option Nat) :
+    Option Entry :=
+  let own : Option Entry := match session with
+    | none => none
+    | some s => entries.find? fun entry => entry.key == { workspace := workspace, session := some s }
+  match own with
+  | some entry => some entry
+  | none => entries.find? fun entry => entry.key == { workspace := workspace, session := none }
+
+/-- An action may resume only under the selection it was authorized by. A
+session entry stored while its question was pending changes the resolution and
+withdraws a binding captured under the default. -/
+def resolutionAdmits (entries : List Entry) (workspace : Nat) (session : Option Nat)
+    (bound : Key) : Bool :=
+  (resolve entries workspace session).map Entry.key == some bound
+
+theorem session_selection_wins (entries : List Entry) (workspace session : Nat)
+    (entry : Entry)
+    (own : entries.find? (fun e => e.key == { workspace := workspace, session := some session })
+      = some entry) :
+    resolve entries workspace (some session) = some entry := by
+  simp [resolve, own]
+
+theorem absent_session_uses_the_default (entries : List Entry) (workspace session : Nat)
+    (missing : entries.find? (fun e => e.key == { workspace := workspace, session := some session })
+      = none) :
+    resolve entries workspace (some session) = resolve entries workspace none := by
+  simp [resolve, missing]
+
+/-- The gate a user configured for an agent and folder still governs a session
+that has made no selection: resolution never returns nothing while a default
+is stored. -/
+theorem a_new_session_cannot_lose_the_default_gate (entries : List Entry) (workspace : Nat)
+    (session : Option Nat) (configured : resolve entries workspace none ≠ none) :
+    resolve entries workspace session ≠ none := by
+  cases session with
+  | none => exact configured
+  | some s =>
+    simp only [resolve]
+    cases own : entries.find? (fun e => e.key == { workspace := workspace, session := some s }) with
+    | some entry => simp
+    | none => simpa [resolve] using configured
+
+/-- Whatever governs a request is one of its own two candidates, so a sibling
+session's selection is never inherited. -/
+theorem a_sibling_session_is_never_inherited (entries : List Entry) (workspace : Nat)
+    (session : Option Nat) (entry : Entry)
+    (resolved : resolve entries workspace session = some entry) :
+    candidate workspace session entry.key = true := by
+  cases session with
+  | none =>
+    simp only [resolve] at resolved
+    have := List.find?_some resolved
+    simp only [beq_iff_eq] at this
+    simp [candidate, this]
+  | some s =>
+    simp only [resolve] at resolved
+    cases own : entries.find? (fun e => e.key == { workspace := workspace, session := some s }) with
+    | some found =>
+      rw [own] at resolved
+      have := List.find?_some own
+      simp only [beq_iff_eq] at this
+      simp_all [candidate]
+    | none =>
+      rw [own] at resolved
+      have := List.find?_some resolved
+      simp only [beq_iff_eq] at this
+      simp [candidate, this]
+
+theorem no_session_request_uses_the_default (entries : List Entry) (workspace : Nat)
+    (entry : Entry) (resolved : resolve entries workspace none = some entry) :
+    entry.key.session = none := by
+  have := a_sibling_session_is_never_inherited entries workspace none entry resolved
+  simp [candidate] at this
+  simp [this]
+
+theorem a_resolved_entry_is_stored (entries : List Entry) (workspace : Nat)
+    (session : Option Nat) (entry : Entry)
+    (resolved : resolve entries workspace session = some entry) :
+    entry ∈ entries := by
+  cases session with
+  | none => exact List.mem_of_find?_eq_some (by simpa [resolve] using resolved)
+  | some s =>
+    simp only [resolve] at resolved
+    cases own : entries.find? (fun e => e.key == { workspace := workspace, session := some s }) with
+    | some found =>
+      rw [own] at resolved
+      cases resolved
+      exact List.mem_of_find?_eq_some own
+    | none =>
+      rw [own] at resolved
+      exact List.mem_of_find?_eq_some resolved
+
+/-- Resolution selects a stored mode; it cannot raise the configured ceiling. -/
+theorem a_resolved_selection_cannot_exceed_the_ceiling (entries : List Entry)
+    (workspace : Nat) (session : Option Nat) (entry : Entry) (input : Input)
+    (_resolved : resolve entries workspace session = some entry)
+    (_selected : input.mode = entry.preference.mode)
+    (ceiling : input.ceilingAllows = false) :
+    route input = .deny := by
+  simp [route, ceiling]
+
+theorem a_sibling_binding_is_never_admitted (entries : List Entry) (workspace : Nat)
+    (session : Option Nat) (bound : Key)
+    (other : bound.session ≠ none) (sibling : bound.session ≠ session) :
+    resolutionAdmits entries workspace session bound = false := by
+  simp only [resolutionAdmits]
+  cases resolved : resolve entries workspace session with
+  | none => simp
+  | some entry =>
+    have cand := a_sibling_session_is_never_inherited entries workspace session entry resolved
+    simp only [candidate, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq] at cand
+    simp only [Option.map_some', beq_eq_false_iff_ne, ne_eq, Option.some.injEq]
+    intro equal
+    rcases cand.2 with h | h <;> rw [← equal] at other sibling <;> simp_all
+
+/-- A chat that chooses its own selection withdraws the folder default's
+authority over it, including for an action already bound under the default. -/
+theorem a_session_selection_invalidates_a_default_binding (entries : List Entry)
+    (workspace session : Nat) (entry : Entry) (bound : Key)
+    (own : entries.find? (fun e => e.key == { workspace := workspace, session := some session })
+      = some entry)
+    (fromDefault : bound.session = none) :
+    resolutionAdmits entries workspace (some session) bound = false := by
+  have resolved : resolve entries workspace (some session) = some entry := by
+    simp [resolve, own]
+  have stored := List.find?_some own
+  simp only [beq_iff_eq] at stored
+  simp only [resolutionAdmits, resolved, Option.map_some', beq_eq_false_iff_ne, ne_eq,
+    Option.some.injEq]
+  intro equal
+  rw [← equal, stored] at fromDefault
+  simp at fromDefault
+
+structure ResolutionCase where
+  entries : List Entry
+  workspace : Nat
+  session : Option Nat
+  bound : Key
+
+def resolutionKeys : List Key :=
+  [ { workspace := 1, session := none }
+  , { workspace := 1, session := some 1 }
+  , { workspace := 1, session := some 2 }
+  , { workspace := 2, session := none }
+  , { workspace := 2, session := some 1 } ]
+
+def resolutionPreference (key : Key) : Preference :=
+  let revision := key.workspace * 10 + (match key.session with | none => 0 | some s => s)
+  let mode : Mode := match key.session with
+    | none => Mode.ask
+    | some 1 => Mode.fullAccess
+    | some _ => Mode.autoReview
+  let reviewTask : Option Nat := match key.session with | none => some 7 | some _ => none
+  { revision := revision, mode := mode, reviewTask := reviewTask }
+
+def resolutionEntry (key : Key) : Entry :=
+  { key := key, preference := resolutionPreference key }
+
+/-- Every subset of the stored keys, so the cases cover an empty store, a
+default alone, a session alone, both, a sibling alone and two siblings. -/
+def keySubsets : List Key → List (List Key)
+  | [] => [[]]
+  | key :: rest =>
+    let tails := keySubsets rest
+    tails.map (fun tail => key :: tail) ++ tails
+
+def resolutionCases : List ResolutionCase := Id.run do
+  let bounds : List Key :=
+    [ { workspace := 1, session := none }
+    , { workspace := 1, session := some 1 }
+    , { workspace := 1, session := some 2 }
+    , { workspace := 2, session := none } ]
+  let mut rows : List ResolutionCase := []
+  for keys in keySubsets resolutionKeys do
+    let entries := keys.map resolutionEntry
+    for workspace in [1, 2] do
+      for session in [none, some 1, some 2, some 3] do
+        for bound in bounds do
+          rows := rows ++ [(⟨entries, workspace, session, bound⟩ : ResolutionCase)]
+  return rows
+
 structure WriteCase where
   previous : Option Preference
   expected : Nat

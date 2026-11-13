@@ -109,6 +109,7 @@ import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
 import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.EnrollmentInvite
+import Proofs.Conformance.WorkspacePermissionResolution
 import Proofs.Conformance.EnrollmentCandidateName
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
