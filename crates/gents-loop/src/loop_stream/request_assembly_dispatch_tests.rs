@@ -63,6 +63,7 @@ fn claude_config_without_compactor(
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: crate::tool::ToolCallEnvelope::ambient(),
     }
 }
 

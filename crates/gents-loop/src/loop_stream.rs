@@ -81,8 +81,8 @@ pub use request_assembly::tagged_history::{
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
 pub use request_assembly::{assemble_provider_request, replay_compaction_prefix_bound};
 use tool_dispatch::admit_tool;
-pub use tool_dispatch::dispatch_tool;
 pub use tool_dispatch::tool_effect_dispatcher;
+pub use tool_dispatch::{child_envelope, dispatch_tool, foreground_envelope};
 
 use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::dispatch::{context_accounting_for_request, prepare_dispatch_attempt};
@@ -176,6 +176,7 @@ fn admission_work<H>(
     call_id: Option<String>,
     internal_id: String,
     arguments: String,
+    context: crate::tool::ToolCallEnvelope,
 ) -> (
     AdmissionWork,
     tokio::sync::oneshot::Receiver<ToolCallHookAction>,
@@ -185,7 +186,7 @@ where
 {
     let (reply, receiver) = tokio::sync::oneshot::channel();
     let future = Box::pin(async move {
-        hook.on_tool_call(&name, call_id, &internal_id, &arguments)
+        hook.on_tool_call(&name, call_id, &internal_id, &arguments, &context)
             .await
     });
     (AdmissionWork { future, reply }, receiver)
@@ -1320,6 +1321,7 @@ where
             }
 
             let tool_scope = current_tool_runtime_context();
+            let tool_context = config.tool_context.clone();
             let mut pending_calls: std::collections::VecDeque<_> = pending_calls.into();
             while let Some((first_call, _)) = pending_calls.front() {
                 let first_args = value_to_json_string(&first_call.function.arguments);
@@ -1338,7 +1340,7 @@ where
                 if batch_len > 1 {
                     let batch = (0..batch_len).map(|_| pending_calls.pop_front().expect("batch prefix exists")).collect();
                     let (admission_tx, mut admission_rx) = tokio::sync::mpsc::unbounded_channel();
-                    let batch_work = parallel::run_batch(batch, tools.clone(), hook.clone(), tool_scope.clone(), activity.as_ref().is_some_and(|activity| activity.token_limit_reached()), Some(admission_tx));
+                    let batch_work = parallel::run_batch(batch, tools.clone(), hook.clone(), tool_scope.clone(), tool_context.clone(), activity.as_ref().is_some_and(|activity| activity.token_limit_reached()), Some(admission_tx));
                     tokio::pin!(batch_work);
                     let (results, termination) = loop {
                         tokio::select! {
@@ -1451,7 +1453,7 @@ where
                     Some(hook) => {
                         let (work, reply) = admission_work(
                             Arc::clone(hook), tool_name.clone(), tool_call.call_id.clone(),
-                            internal_call_id.clone(), tool_args.clone(),
+                            internal_call_id.clone(), tool_args.clone(), tool_context.clone(),
                         );
                         yield OwnedLoopItem::Admission(work);
                         reply.await.map_err(|_| StreamingError::Completion(
@@ -1509,11 +1511,12 @@ where
                             let execution_hook = hook.clone();
                             let execution_name = tool_name.clone();
                             let execution_id = internal_call_id.clone();
+                            let execution_context = tool_context.clone();
                             let (reply, result) = tokio::sync::oneshot::channel();
                             yield OwnedLoopItem::ForegroundWork(Box::pin(async move {
                                 let execution = match execution_hook {
-                                    Some(hook) => hook.run_foreground_tool(&execution_name, &execution_id, call).await,
-                                    None => crate::session_hook::ForegroundResult::Settled(call(Default::default(), None).await),
+                                    Some(hook) => hook.run_foreground_tool(&execution_name, &execution_id, call, &execution_context).await,
+                                    None => crate::session_hook::ForegroundResult::Settled(call(crate::tool::ToolCallEnvelope::default().with_extensions(execution_context.extensions().clone()), None).await),
                                 };
                                 let _ = reply.send(execution);
                             }));

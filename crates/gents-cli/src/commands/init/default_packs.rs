@@ -642,7 +642,10 @@ async fn install_as_engineer(
 ) -> Result<Value> {
     let receipt = engineer_config(access, owner, home, engineer)
         .await?
-        .call(json!({"argv": ["pack", "install", package, "--digest", digest]}).to_string())
+        .call(
+            json!({"argv": ["pack", "install", package, "--digest", digest]}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::default(),
+        )
         .await
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     serde_json::from_str(&receipt).context("the Engineer's install receipt is not JSON")
@@ -1140,7 +1143,12 @@ mod tests {
         let call = |call: Value| {
             let config = &config;
             async move {
-                let answer = config.call(call.to_string()).await;
+                let answer = config
+                    .call(
+                        call.to_string(),
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    )
+                    .await;
                 let answer = answer.unwrap_or_else(|error| panic!("{call}: {error}"));
                 serde_json::from_str::<Value>(&answer).unwrap()
             }
@@ -1170,7 +1178,16 @@ mod tests {
         );
         let refused = |call: Value| {
             let config = &config;
-            async move { config.call(call.to_string()).await.unwrap_err().to_string() }
+            async move {
+                config
+                    .call(
+                        call.to_string(),
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    )
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            }
         };
         // The Engineer wires and unwires a pack itself, through the owner the
         // operator's command uses; a preview writes nothing.

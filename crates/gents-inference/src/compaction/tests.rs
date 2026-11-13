@@ -86,6 +86,7 @@ fn gate_test_loop_config() -> gents_loop::loop_stream::LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
     }
 }
 

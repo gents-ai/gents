@@ -57,18 +57,11 @@ impl DefraSessionHook {
         name: &str,
         internal_id: &str,
         call: ForegroundCall,
+        envelope: &gents_loop::tool::ToolCallEnvelope,
     ) -> ForegroundResult {
         let context = current_tool_runtime_context();
         if !gents_tools::native::is_bash_tool_name(name) {
-            return ForegroundResult::Settled(
-                call(
-                    context
-                        .map(|value| value.cancellation_token)
-                        .unwrap_or_default(),
-                    None,
-                )
-                .await,
-            );
+            return ForegroundResult::Settled(call(envelope.clone(), None).await);
         }
         let Some(context) = context else {
             return ForegroundResult::Settled(
@@ -148,6 +141,12 @@ impl DefraSessionHook {
             .await
             .insert(doc.clone(), evidence);
         drop(in_flight);
+        let handoff = crate::call::spawned_envelope::handoff_envelope(
+            envelope,
+            process_token.clone(),
+            recorder.clone(),
+        )
+        .unwrap_or_else(gents_loop::tool::ToolCallEnvelope::ambient);
         tokio::spawn(gents_tools::plugin::approval::carry_interactive(
             async move {
                 let mut lifecycle = lifecycle;
@@ -190,7 +189,9 @@ impl DefraSessionHook {
                             context.correlation,
                             context.source_fields,
                             false,
-                            call(process_token.clone(), Some(cleanup)),
+                            async {
+                                call(handoff.clone(), Some(cleanup)).await
+                            },
                         ),
                     ))
                     .catch_unwind();

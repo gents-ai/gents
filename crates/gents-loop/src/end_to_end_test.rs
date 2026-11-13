@@ -115,7 +115,11 @@ impl Tool for EchoTool {
         error
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &crate::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         self.calls
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -191,6 +195,7 @@ impl SessionHook for RecordingHook {
         _tool_call_id: Option<String>,
         _internal_call_id: &str,
         _args: &str,
+        _context: &crate::tool::ToolCallEnvelope,
     ) -> ToolCallHookAction {
         self.log(RecordedCall::ToolCall {
             tool_name: tool_name.to_string(),
@@ -321,6 +326,7 @@ pub(crate) fn test_loop_config() -> LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: crate::tool::ToolCallEnvelope::ambient(),
     }
 }
 
@@ -418,6 +424,7 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
         fn call<'a>(
             &'a self,
             _: String,
+            _context: &'a crate::tool::ToolCallEnvelope,
         ) -> crate::tool::BoxFuture<'a, Result<String, crate::tool::ToolError>> {
             struct Dropped(Arc<AtomicBool>);
             impl Drop for Dropped {
@@ -959,7 +966,11 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
                 }
             })
         }
-        fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(
+            &'a self,
+            _: String,
+            _context: &'a crate::tool::ToolCallEnvelope,
+        ) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok("done".into())

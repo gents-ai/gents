@@ -176,7 +176,11 @@ impl ToolDyn for Echo {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a crate::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async { Ok("ECHOED".into()) })
     }
 }
@@ -294,6 +298,7 @@ fn config(
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: crate::tool::ToolCallEnvelope::ambient(),
     }
 }
 

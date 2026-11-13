@@ -11,6 +11,7 @@ use super::executor::PluginExecutor;
 use crate::call::lifecycle::delivery::PluginToolWrites;
 use gents_documents::{PluginToolRef, WriteToolField};
 use gents_loop::live_output::DeferredToolWrites;
+use gents_loop::tool::ToolCallEnvelope;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError};
 use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 use gents_pack::plugin::store::InstalledPlugin;
@@ -145,11 +146,19 @@ impl ToolDyn for PluginTool {
         Box::pin(async { self.definition.clone() })
     }
 
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move { self.call_with_receipt(args).await.result })
+    fn call<'a>(
+        &'a self,
+        args: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { self.call_with_receipt(args, context).await.result })
     }
 
-    fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
+    fn call_with_receipt<'a>(
+        &'a self,
+        args: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
             let input: serde_json::Value = match gents_loop::tool::parse_tool_args(&args) {
                 Ok(input) => input,
@@ -161,7 +170,7 @@ impl ToolDyn for PluginTool {
                     };
                 }
             };
-            let invoked = self.invoke(input).await;
+            let invoked = self.invoke(input, context).await;
             ToolDispatchResult {
                 result: invoked.result.and_then(|(output, _)| {
                     serde_json::to_string(&output).map_err(ToolError::JsonError)
@@ -182,7 +191,7 @@ struct Invoked {
 }
 
 impl PluginTool {
-    async fn invoke(&self, mut input: serde_json::Value) -> Invoked {
+    async fn invoke(&self, mut input: serde_json::Value, context: &ToolCallEnvelope) -> Invoked {
         if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
             return Invoked {
                 result: Err(tool_error(format!("{error:#}"))),
@@ -195,8 +204,11 @@ impl PluginTool {
             .call_data_bound_with_receipt_as(
                 &self.record,
                 input,
-                self.root.as_deref(),
-                self.tool_calls,
+                super::executor::ToolInvocation {
+                    tool_root: self.root.as_deref(),
+                    tool_calls: self.tool_calls,
+                    context,
+                },
                 self.data_caller.clone(),
                 self.model_actor.clone(),
             )
@@ -252,8 +264,9 @@ impl PluginTool {
     pub(crate) async fn run_once(
         &self,
         input: serde_json::Value,
+        context: &ToolCallEnvelope,
     ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
-        let invoked = self.invoke(input).await;
+        let invoked = self.invoke(input, context).await;
         let (output, binding_note) = invoked.result.map_err(|error| match error {
             ToolError::ToolCallError(error) => anyhow::anyhow!("{error}"),
             other => anyhow::anyhow!("{other}"),
