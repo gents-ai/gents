@@ -41,6 +41,12 @@ pub fn rewrite_manifest_node_dids(root: &Path, node_did: &str) -> Result<()> {
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
     config["node"]["node_did"] = Value::String(node_did.to_string());
+    if let Some(selection) = config
+        .get_mut("default_agent_selection")
+        .and_then(Value::as_object_mut)
+    {
+        selection.insert("node_did".into(), Value::String(node_did.to_string()));
+    }
     if let Some(object) = config.as_object_mut() {
         for value in object.values_mut() {
             let Some(rows) = value.as_array_mut() else {
@@ -64,6 +70,16 @@ pub fn assert_manifest_node_dids(root: &Path, expected_node_did: &str) -> Result
         principal.get("node_did").and_then(Value::as_str),
         Some(expected_node_did)
     );
+    if let Some(selection) = config
+        .get("default_agent_selection")
+        .filter(|selection| selection.is_object())
+    {
+        assert_eq!(
+            selection.get("node_did").and_then(Value::as_str),
+            Some(expected_node_did),
+            "wrong node_did in default_agent_selection"
+        );
+    }
 
     if let Some(collections) = config.as_object() {
         for (collection, value) in collections {
