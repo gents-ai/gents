@@ -65,6 +65,7 @@ case "${suite}" in
       gents-claude-login
       gents-login-ui
       gents-shell
+      gents-workspace-hack
     )
     ;;
   *)

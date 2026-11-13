@@ -1,0 +1,17 @@
+hakari-package = "gents-workspace-hack"
+dep-format-version = "4"
+resolver = "2"
+unify-target-host = "replicate-target-on-host"
+platforms = [
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+]
+
+[final-excludes]
+third-party = [
+    { name = "tauri" },
+    { name = "tauri-build" },
+    { name = "tauri-macros" },
+    { name = "tauri-utils" },
+    { name = "objc2-app-kit" },
+]
