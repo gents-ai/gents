@@ -1130,7 +1130,6 @@ pub struct LeanContractSnapshot {
     pub file_inventory_fork_cases: Vec<serde_json::Value>,
     pub file_inventory_reader_cases: Vec<serde_json::Value>,
     pub file_inventory_source_projection_cases: Vec<serde_json::Value>,
-    pub file_review_subscription_cases: Vec<LeanFileReviewSubscriptionCase>,
     pub count_carrier_cases: serde_json::Value,
     pub schema_argument_repair_cases: Vec<LeanSchemaArgumentRepairCase>,
     pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
@@ -1401,13 +1400,6 @@ pub struct LeanFeatureSurfaceRequirement {
     pub feature: String,
     pub required: Vec<LeanSurface>,
     pub deferred: Vec<LeanFeatureSurfaceDeferral>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFileReviewSubscriptionCase {
-    pub collection: String,
-    pub replicated: bool,
 }
 
 #[derive(Debug, Deserialize)]

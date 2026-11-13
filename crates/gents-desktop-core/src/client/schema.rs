@@ -58,27 +58,21 @@ mod tests {
 
     #[test]
     fn generated_file_review_rules_exclude_whole_collection_delivery() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().file_review_subscription_cases;
-        assert!(!cases.is_empty());
+        use gents_lean_vocab::families::file_review_route_contracts_subscription as subscription;
         let subscriptions = subscribed_collection_names();
-        for case in cases {
-            let name = case.collection.as_str();
-            assert_eq!(
-                gents_protocol::schemas::is_replicated_protocol_collection(name),
-                case.replicated,
-                "{name}"
-            );
-            assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&name));
-            assert_eq!(
-                subscriptions.contains(&name),
-                gents_protocol::schemas::is_replicated_protocol_collection(name),
-                "{name}"
-            );
-            assert_eq!(
-                gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&name),
-                gents_protocol::schemas::is_replicated_protocol_collection(name),
-                "{name}"
-            );
-        }
+        gents_lean_vocab::families::file_review_route_contracts_subscription::replay(
+            |input: &subscription::SubscriptionInput| {
+                let name = input.collection.as_str();
+                let replicated = gents_protocol::schemas::is_replicated_protocol_collection(name);
+                assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&name));
+                assert_eq!(subscriptions.contains(&name), replicated, "{name}");
+                assert_eq!(
+                    gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&name),
+                    replicated,
+                    "{name}"
+                );
+                subscription::SubscriptionOutput { replicated }
+            },
+        );
     }
 }

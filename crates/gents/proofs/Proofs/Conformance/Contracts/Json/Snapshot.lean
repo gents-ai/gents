@@ -548,8 +548,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
     ++ "\"file_inventory_reader_cases\":"
       ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
-    ++ "\"file_review_subscription_cases\":"
-      ++ Conformance.FileReviewRouteContracts.subscriptionCasesJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""

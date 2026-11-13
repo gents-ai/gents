@@ -1932,8 +1932,8 @@ def caseCoverage : List CoverageEntry :=
       "client_agent_journal_local_signer")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "file_review_subscription_cases"
-      "FileReviewSubscriptionCases")
+      "family"
+      "file_review_route_contracts_subscription")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
