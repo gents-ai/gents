@@ -18,7 +18,17 @@ import { useApp } from "@/app/AppContext";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useHomeDid, useNodeReach } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
-import { InferenceSummary, OnlineStatus, StateDot, counted } from "../NodeFacts";
+import { joinedPeerId } from "@/lib/nodes";
+import {
+  InferenceSummary,
+  OnlineStatus,
+  StateDot,
+  counted,
+  useNodeConnection,
+} from "../NodeFacts";
+import { leaseLeft } from "../../../hooks/nodeAccess";
+import { cn } from "@gents/ui/lib/utils";
+import { CONNECTION_GROUP } from "./ConnectionGroup";
 import { AgentMark } from "../parts";
 import { span, useMinute } from "../time";
 import { lastRunFailed } from "./automation";
@@ -92,10 +102,13 @@ export function Summary({
   label,
   to,
   children,
+  detail,
 }: {
   label: string;
   to?: Route;
   children: ReactNode;
+
+  detail?: ReactNode;
 }) {
   const content = (
     <>
@@ -103,6 +116,7 @@ export function Summary({
       <span className="flex min-w-0 items-center gap-2 truncate text-sm underline-offset-2 group-hover/summary:underline group-focus-visible/summary:underline">
         {children}
       </span>
+      {detail}
     </>
   );
   const look = "group/summary grid min-w-0 gap-1 rounded-xl bg-raised/50 px-3 py-2.5";
@@ -306,6 +320,7 @@ export function AgentCard({
     nodeDid: deployment.nodeDid,
     section,
   });
+  const peerId = joinedPeerId(deployment, homeDid);
   const facts = [
     reach.ceiling,
     reach.root && shortPath(reach.root, { home: reach.local ? home : null, max: 40 }),
@@ -347,12 +362,12 @@ export function AgentCard({
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
             {facts.join(" · ")}
-            {/* the host's id in full only on hover; its end tells hosts apart */}
-            {deployment.peerId && (
+
+            {peerId && (
               <>
                 {facts.length ? " · " : ""}
-                <span title={deployment.peerId} className="font-mono">
-                  {deployment.peerId.slice(-8)}
+                <span title={peerId} className="font-mono">
+                  {peerId.slice(-8)}
                 </span>
               </>
             )}
@@ -413,8 +428,67 @@ export function AgentCard({
         <Summary label="Packs" to={section("packs")}>
           <PacksValue packs={packs} />
         </Summary>
+        <ConnectionSummary
+          deployment={deployment}
+          local={isLocalNode(deployment, homeDid)}
+        />
       </div>
     </div>
+  );
+}
+
+const CONNECTION_PROBLEMS = new Set(["disconnected", "refused", "no_endpoint"]);
+
+function ConnectionSummary({
+  deployment,
+  local,
+}: {
+  deployment: NodeView;
+  local: boolean;
+}) {
+  const connection = useNodeConnection(deployment);
+  const now = useMinute();
+  const problem =
+    connection.stopped || CONNECTION_PROBLEMS.has(connection.status.reason);
+  const lease = local ? null : leaseLeft(deployment.leaseExpiresAt, now);
+  const line = "truncate text-xs text-muted-foreground";
+  const detail = problem ? (
+    <span className={line} title={deployment.lastError ?? connection.detail}>
+      {deployment.lastError ?? connection.detail}
+    </span>
+  ) : lease ? (
+    <span
+      className={cn(
+        "truncate text-xs",
+        lease.soon ? "text-warning" : "text-muted-foreground",
+      )}
+      title={
+        deployment.leaseExpiresAt
+          ? new Date(deployment.leaseExpiresAt).toLocaleString()
+          : undefined
+      }
+    >
+      {lease.text}
+    </span>
+  ) : deployment.addr ? (
+    <span className={cn(line, "font-mono")} title={deployment.addr}>
+      {deployment.addr}
+    </span>
+  ) : null;
+  return (
+    <Summary
+      label="Connection"
+      to={{
+        name: "agent",
+        nodeDid: deployment.nodeDid,
+        section: "agent",
+        item: CONNECTION_GROUP,
+      }}
+      detail={detail}
+    >
+      <StateDot tone={connection.tone} />
+      <span className="truncate">{connection.label}</span>
+    </Summary>
   );
 }
 

@@ -22,6 +22,31 @@ export function connectionLine(name: string, status: OperationalStatus) {
   }
 }
 
+export type ConnectionLink = "connected" | "connecting" | "refused" | "idle";
+
+export function nodeConnectionState(
+  node: Pick<NodeView, "runtimeConnection">,
+  stopped: boolean,
+): { status: OperationalStatus; label: string; detail: string; link: ConnectionLink } {
+  const status = projectRuntimeConnectionStatus(node.runtimeConnection);
+  if (stopped)
+    return {
+      status,
+      label: "Stopped",
+      detail: "The local node isn’t running.",
+      link: "idle",
+    };
+  const link: ConnectionLink =
+    status.reason === "connected"
+      ? "connected"
+      : status.reason === "connecting" || status.reason === "disconnected"
+        ? "connecting"
+        : status.reason === "refused"
+          ? "refused"
+          : "idle";
+  return { status, label: status.shortLabel, detail: status.detail, link };
+}
+
 export type PageConnection = {
   kind: "loading" | "unavailable" | "stale";
   name: string;
