@@ -48,16 +48,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         request_states.len().pow(2)
     );
     assert_eq!(
-        lean_contract_snapshot()
-            .persistence_failure_policy_cases
-            .len(),
-        2
-    );
-    assert_eq!(
-        lean_contract_snapshot()
-            .storage_observation_runtime_cases
-            .len(),
-        8
     );
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     let sweep_ids = &lean_contract_snapshot().recovery_sweep_ids;

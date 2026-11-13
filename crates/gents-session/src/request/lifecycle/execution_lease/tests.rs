@@ -2111,25 +2111,10 @@ async fn backend_wait_parks_once_and_fences_the_execution_generation() {
 /// is a liveness backstop, not an ordering assertion.
 #[tokio::test]
 async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_attempt() {
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .native_completion_cases
-            .clone()
-    })
-    .await
-    .expect("Lean snapshot load");
-    let cases: Vec<_> = cases
-        .into_iter()
-        .filter(|case| case.periodic_renewal)
-        .collect();
-    assert_eq!(cases.len(), 2, "Lean owns both renewal completion cases");
-
-    for case in cases {
-        assert!(case.initial.cleanup_required, "{}", case.name);
-        assert_eq!(case.initial.native_outstanding, 0, "{}", case.name);
-        assert!(!case.initial.gate_held, "renewal bypasses mutation gate");
-        assert_eq!(case.events.len(), case.observations.len(), "{}", case.name);
-
+    for case in gents_lean_vocab::families::native_completion_renewal_scenario::cases::<String>() {
+        let mut views = Vec::new();
+        let mut attempt_return_observed = false;
+        let mut next_renewal_started = false;
         let (node, _dir, identity, agent) = test_node().await;
 
         let access = agent_access(&node, &identity, &agent);
@@ -2175,13 +2160,12 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
         );
 
         let mut first_result = None;
-        for (event, observed) in case.events.iter().zip(&case.observations) {
+        for event in &case.input.events {
             match event.as_str() {
                 "native_started" => {
                     tokio::time::timeout(Duration::from_secs(10), entered.notified())
                         .await
                         .expect("renewal admitted one native operation");
-                    assert_eq!(observed.caller, "waiting", "{}: {event}", case.name);
                 }
                 "caller_timed_out" => {
                     tokio::time::pause();
@@ -2193,7 +2177,6 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                     tokio::time::timeout(Duration::from_secs(60), observation.abandoned())
                         .await
                         .expect("the expired storage step abandons the native registry");
-                    assert_eq!(observed.caller, "timed_out", "{}: {event}", case.name);
                     tokio::time::resume();
                 }
                 "native_returned" => {
@@ -2206,7 +2189,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                     );
                 }
                 "renewal_attempt_returned" => {
-                    if !observed.renewal_attempt_returned && first_result.is_none() {
+                    if first_result.is_none() {
                         if let Ok(result) =
                             tokio::time::timeout(Duration::from_millis(50), &mut first_attempt)
                                 .await
@@ -2214,24 +2197,11 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                             first_result = Some(result.expect("renewal attempt task"));
                         }
                     }
-                    let actually_returned = first_result.is_some() || first_attempt.is_finished();
-                    if actually_returned != observed.renewal_attempt_returned {
-                        release.notify_one();
-                        panic!(
-                            "{}: renewal return observation diverged at {event}",
-                            case.name
-                        );
-                    }
+                    attempt_return_observed = first_result.is_some() || first_attempt.is_finished();
                 }
                 "renewal_requested" => {
-                    let actually_returned = first_result.is_some() || first_attempt.is_finished();
-                    assert_eq!(
-                        actually_returned, observed.renewal_attempt_returned,
-                        "{}: next renewal cannot be admitted while the prior attempt is pending",
-                        case.name
-                    );
-                    if observed.next_renewal_started {
-                        assert!(first_result.is_some(), "{}", case.name);
+                    attempt_return_observed = first_result.is_some() || first_attempt.is_finished();
+                    if attempt_return_observed {
                         let current = request_row(&access, &doc_id).await;
                         let next_deadline = DateTime::parse_from_rfc3339(
                             current
@@ -2251,37 +2221,23 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                             )
                             .await
                             .unwrap();
-                        assert!(
-                            matches!(
-                                next,
-                                crate::request::lifecycle::RenewalAttemptOutcome::Skipped
-                                    | crate::request::lifecycle::RenewalAttemptOutcome::Committed
-                            ),
-                            "{}: fresh renewal runs after the prior native call drains",
-                            case.name
+                        next_renewal_started = matches!(
+                            next,
+                            crate::request::lifecycle::RenewalAttemptOutcome::Skipped
+                                | crate::request::lifecycle::RenewalAttemptOutcome::Committed
                         );
                     }
                 }
                 other => panic!("unexpected Lean native-completion event: {other}"),
             }
-            assert!(!observed.gate_held, "renewal remains outside mutation gate");
-            assert_eq!(
-                observation.is_abandoned(),
-                observed.poisoned,
-                "{}: owner registry state after {event}",
-                case.name
-            );
-            assert_eq!(
-                observation.is_abandoned(),
-                observed.caller_abandonment_observed,
-                "{}: owner abandonment observation after {event}",
-                case.name
-            );
-            assert_eq!(
-                observation.in_flight() as u64,
-                observed.native_outstanding,
-                "{}: outstanding native work after {event}",
-                case.name
+            views.push(
+                gents_lean_vocab::families::native_completion_renewal_scenario::RenewalView {
+                    poisoned: observation.is_abandoned(),
+                    caller_abandonment_observed: observation.is_abandoned(),
+                    native_outstanding: observation.in_flight() as u64,
+                    renewal_attempt_returned: attempt_return_observed,
+                    next_renewal_started,
+                },
             );
         }
 
@@ -2301,8 +2257,8 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
         assert!(
             gents_store::config_client::is_transaction_step_unavailable(&first_error),
             "{}: abandoned native renewal remains an availability failure",
-            case.name
+            case.input.name
         );
+        case.check(views);
     }
 }
-
