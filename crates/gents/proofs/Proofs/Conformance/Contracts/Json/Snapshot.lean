@@ -276,6 +276,7 @@ import Proofs.Conformance.GoalRequestAssignment
 import Proofs.Conformance.GoalDeliveryInput
 import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
+import Proofs.Conformance.SchemaArgumentRepairFamily
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientDelivery

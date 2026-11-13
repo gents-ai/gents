@@ -136,6 +136,22 @@ fn repair_with_decoder(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_lean_vocab::families::schema_argument_repair_arguments as family;
+    use gents_lean_vocab::family::Json;
+
+    #[test]
+    fn schema_argument_repair_family_replays_against_repair_arguments() {
+        let cases = family::cases();
+        assert_eq!(cases.len(), 8);
+        for case in &cases {
+            let mut arguments = case.input.arguments.0.clone();
+            let paths = repair_arguments(&case.input.schema.0, &mut arguments);
+            case.check(family::Repaired {
+                arguments: Json(arguments),
+                paths,
+            });
+        }
+    }
 
     fn object(value: &std::collections::BTreeMap<String, Value>) -> Value {
         Value::Object(

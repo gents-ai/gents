@@ -16,6 +16,7 @@ inductive Schema where
   | nat
   | int
   | string
+  | json
   | option (item : Schema)
   | list (item : Schema)
   | enum (name : String) (values : List (String × String))
@@ -48,6 +49,7 @@ partial def Schema.wire : Schema → Json
   | .nat => "nat"
   | .int => "int"
   | .string => "string"
+  | .json => "json"
   | .option item => Json.mkObj [("option", item.wire)]
   | .list item => Json.mkObj [("list", item.wire)]
   | .enum name values =>
@@ -56,12 +58,40 @@ partial def Schema.wire : Schema → Json
       Json.mkObj [("struct", name), ("fields", Json.arr (fields.map fun (field, schema) =>
         Json.arr #[Json.str (wireName field), schema.wire]).toArray)]
 
+/-- A number in a `json` field crosses the wire as itself when it is an
+integer within `i64` or `u64`, and otherwise as `{"$number": token}`. Lean
+prints a `JsonNumber` normalised (`1.0` as `1`), while families that carry raw
+wire values must tell `1` from `1.0`; native decoders also read these
+integers exactly but other numbers only as `f64`. The token is the exact
+decimal: the integer part, then exactly `exponent` fraction digits (`⟨10, 1⟩`
+is `1.0`). Two numbers are therefore equal when both are such integers of
+equal value, and otherwise only when their tokens are equal, so `1` and `1.0`
+differ. An object whose only key is `$number` is reserved for this encoding. -/
+def jsonNumberWire (number : JsonNumber) : Json :=
+  let integer := number.exponent == 0 &&
+    decide (-(2 ^ 63 : Int) ≤ number.mantissa) && decide (number.mantissa < (2 ^ 64 : Int))
+  if integer then .num number else
+    let scale := 10 ^ number.exponent
+    let magnitude := number.mantissa.natAbs
+    let fraction := toString (magnitude % scale)
+    let fraction := if number.exponent == 0 then "" else
+      "." ++ String.mk (List.replicate (number.exponent - fraction.length) '0') ++ fraction
+    let sign := if number.mantissa < 0 then "-" else ""
+    Json.mkObj [("$number", .str (sign ++ toString (magnitude / scale) ++ fraction))]
+
+partial def jsonWire : Json → Json
+  | .num number => jsonNumberWire number
+  | .arr items => .arr (items.map jsonWire)
+  | .obj fields => Json.mkObj (fields.toArray.toList.map fun entry => (entry.1, jsonWire entry.2))
+  | other => other
+
 /-- Rewrites derived `ToJson` output to wire names. Derived `ToJson` omits an
 absent optional field; here it is an explicit `null`, so a decoder can require
 every field. -/
 partial def Schema.encode : Schema → Json → Json
   | .option item, value => if value.isNull then value else item.encode value
   | .list item, .arr values => Json.arr (values.map item.encode)
+  | .json, value => jsonWire value
   | .enum _ values, .str value => Json.str ((values.lookup value).getD value)
   | .struct _ fields, value =>
       Json.mkObj (fields.map fun (field, schema) =>
@@ -113,6 +143,7 @@ private partial def schemaTerm (type : Expr) : MetaM (TSyntax `term) := do
   | .const ``Nat _ => `(Schema.nat)
   | .const ``Int _ => `(Schema.int)
   | .const ``String _ => `(Schema.string)
+  | .const ``Json _ => `(Schema.json)
   | .app (.const ``Option _) item => do `(Schema.option $(← schemaTerm item))
   | .app (.const ``List _) item => do `(Schema.list $(← schemaTerm item))
   | .const name _ =>
