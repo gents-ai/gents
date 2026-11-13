@@ -80,12 +80,14 @@ def directionalScopeFilters (template : Template) (direction : RouteDirection)
           { collection := filter.collection
           , clauses := [{ field := filter.field, operator := filter.operator, value := filter.value }] })
 
+/-- A route's fixed collections are always protocol collections; application
+collections are never built into a route. -/
 theorem builtin_routes_are_protocol_only (template : Template)
     (member : template ∈ builtinCatalog) (collection : String)
     (selected : collection ∈ template.collections) :
     collection ∈ Identity.replicatedProtocolCollections := by
   simp only [builtinCatalog, List.mem_cons, List.not_mem_nil, or_false] at member
-  rcases member with rfl | rfl
+  rcases member with rfl | rfl | rfl
   · have same : collection = "NodeDirectoryEntry" := by
       simpa [machineTemplate, machineCollections] using selected
     subst collection
@@ -94,6 +96,35 @@ theorem builtin_routes_are_protocol_only (template : Template)
       simpa [clientTemplate, clientCollections] using selected
     subst collection
     decide
+  · simp [appCollectionsTemplate] at selected
+
+theorem appCollections_resolve :
+    resolveTemplate builtinCatalog "app-collections" = some appCollectionsTemplate := by
+  decide
+
+theorem appCollections_carry_no_fixed_filter (peerDid localDid : Did) (collections : List String) :
+    scopeFilter appCollectionsTemplate.scope collections peerDid localDid = [] := rfl
+
+theorem managed_collection_is_refused (facts : AppCollectionFacts) (managed : facts.managed = true) :
+    decideAppCollection facts = some .managed := by
+  simp [decideAppCollection, managed]
+
+theorem view_is_refused (facts : AppCollectionFacts) (unmanaged : facts.managed = false)
+    (view : facts.isView = true) :
+    decideAppCollection facts = some .view := by
+  simp [decideAppCollection, unmanaged, view]
+
+theorem policy_collection_is_refused (facts : AppCollectionFacts) (unmanaged : facts.managed = false)
+    (table : facts.isView = false) (guarded : facts.hasPolicy = true) :
+    decideAppCollection facts = some .policyProtected := by
+  simp [decideAppCollection, unmanaged, table, guarded]
+
+theorem admitted_iff_unmanaged_unprotected_table (facts : AppCollectionFacts) :
+    decideAppCollection facts = none ↔
+      facts.managed = false ∧ facts.hasPolicy = false ∧ facts.isView = false := by
+  cases facts with
+  | mk managed hasPolicy isView =>
+    cases managed <;> cases hasPolicy <;> cases isView <;> decide
 
 theorem client_route_carries_only_registry (direction : RouteDirection) :
     clientRouteCollections direction = ["PeerRegistry"] := by

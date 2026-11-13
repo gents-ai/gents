@@ -1,6 +1,6 @@
 # Runtime-authored, credential-free readiness projection for paired clients;
 # one atomic JSON snapshot prevents partial reads across registers.
-type NodeReadiness @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "operations") {
+type NodeReadiness @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "operations") {
     node_did: String @index(unique: true) @immutable
     node_doc_id: String @immutable
     parent_linked: Boolean

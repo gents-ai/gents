@@ -135,13 +135,27 @@ source consistency checks, not a separate runtime compatibility version.
   longer varies with its session's document IDs. Existing captures stay
   readable; the first capture after upgrading stores its leading block and
   manifests once more (#3605).
-- Breaking: P2P carries only discovery and enrollment, so the agent-facing
-  application-collection pairing and sync surface is removed. The `p2p` tool
-  drops `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`,
-  `pairings_revoke` and `sync_documents`; enrollment approval now suggests
-  `enrollment_history`. `Tools.built_ins.p2p_collections` is removed and now
-  rejected, and `gents pack wire` no longer writes it: delete it from stored
-  Tools documents before upgrading. `gents p2p admin collections` and
+- P2P application-collection pairing returns as an explicit, per-node opt-in. The
+  `p2p` tool's `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`
+  and `pairings_revoke` replicate application collections with no document policy
+  from this node to one enrolled peer; enrollment alone starts no sync. Protocol,
+  runtime and credential collections, views and policy-bearing collections are
+  refused. A pairing is bound to the enrollment it was applied under: a lease
+  renewal keeps it, a revocation or expiry ends it, and a later approval of the
+  same peer or a re-created network restores only discovery. It contributes
+  only while its author is an enabled Agent holding the P2P mutation grant and
+  only its author has written it. `gents p2p pairings applications` lists
+  pairings with their status and `gents p2p pairings remove <PEER_ID>` lets the
+  node's User delete any of them. `DataPlanePairingDesired` gains
+  `enrollment_member_did`, `enrollment_sequence` and `enrollment_network_id` and
+  moves to its own `application_pairings` policy resource, where only the
+  authoring Agent may update a pairing and Node administration may delete it;
+  the Household policy ID changes, so a store needs a fresh init.
+- Breaking: the agent-facing `sync_documents` action and
+  `Tools.built_ins.p2p_collections` grant are removed; a Tools document that
+  still sets the field is rejected, and `gents pack wire` no longer writes it:
+  delete it from stored Tools documents before upgrading. Enrollment approval
+  now suggests `enrollment_history`. `gents p2p admin collections` and
   `gents p2p admin documents` are removed, `--profile` accepts only
   `discovery`, and `gents p2p templates list` no longer reports `replicate`
   delivery or peer-DID and unscoped scopes. Pairing reconciliation installs

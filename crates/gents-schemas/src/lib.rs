@@ -32,7 +32,7 @@ pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.gra
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
 pub const AGENT_OWNERSHIP_POLICY_ID: &str =
-    "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91";
+    "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c";
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
@@ -382,7 +382,9 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PACK_INSTALLATION_NAME,
 ];
 
-/// Only discovery and enrollment protocol documents may cross a runtime boundary.
+/// The discovery and enrollment documents Gents' own routes carry across a
+/// runtime boundary. Application data crosses only on a node's explicit pairing,
+/// never on these routes.
 pub const REPLICATED_PROTOCOL_COLLECTION_NAMES: &[&str] = &[
     PEER_REGISTRY_NAME,
     NODE_DIRECTORY_ENTRY_NAME,

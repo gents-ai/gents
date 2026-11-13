@@ -98,27 +98,11 @@ impl ToolPermissionProjection {
     }
 
     fn prefix(&self) -> String {
-        let mut prefix = String::from("gents-tool-v1:");
-        for byte in Sha256::digest(self.node.as_str().as_bytes()) {
-            write!(&mut prefix, "{byte:02x}").expect("writing to a string cannot fail");
-        }
-        prefix.push(':');
-        prefix
+        source_prefix(self.node.as_str())
     }
 
-    /// The source namespace relies on SHA-256 collision resistance to keep
-    /// independent Node, document, Agent, and purpose paths distinct.
     fn source(&self, tools: &str, context: &str, agent: &str, purpose: &str) -> String {
-        let mut digest = Sha256::new();
-        for part in [tools, context, agent, purpose] {
-            digest.update((part.len() as u64).to_be_bytes());
-            digest.update(part.as_bytes());
-        }
-        let mut source = self.prefix();
-        for byte in digest.finalize() {
-            write!(&mut source, "{byte:02x}").expect("writing to a string cannot fail");
-        }
-        source
+        tool_source(self.node.as_str(), tools, context, agent, purpose)
     }
 
     pub(super) async fn reconcile_installed(
@@ -614,4 +598,28 @@ fn decode_source(object_id: &str) -> Option<String> {
 
 fn external(error: impl std::fmt::Display) -> Error {
     Error::Other(error.to_string())
+}
+
+fn source_prefix(node: &str) -> String {
+    let mut prefix = String::from("gents-tool-v1:");
+    for byte in Sha256::digest(node.as_bytes()) {
+        write!(&mut prefix, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    prefix.push(':');
+    prefix
+}
+
+/// The source namespace relies on SHA-256 collision resistance to keep
+/// independent Node, document, Agent, and purpose paths distinct.
+pub fn tool_source(node: &str, tools: &str, context: &str, agent: &str, purpose: &str) -> String {
+    let mut digest = Sha256::new();
+    for part in [tools, context, agent, purpose] {
+        digest.update((part.len() as u64).to_be_bytes());
+        digest.update(part.as_bytes());
+    }
+    let mut source = source_prefix(node);
+    for byte in digest.finalize() {
+        write!(&mut source, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    source
 }

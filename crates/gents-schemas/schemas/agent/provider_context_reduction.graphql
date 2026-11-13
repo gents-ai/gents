@@ -2,7 +2,7 @@
 # separate from CompactionEntry: a sticky provider projection inside one
 # AgentRequest, never part of cumulative session-prefix dropping. Payload
 # fields contain prompt material and share the session's access boundary.
-type ProviderContextReduction @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "children") {
+type ProviderContextReduction @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "children") {
     # SHA-256 of [node_did, session_id, request_doc_id, turn_index,
     # reduction_index]. Ordinary indexed, not unique: the runtime
     # create-and-compare owner fails closed if more than one fact binds this key.

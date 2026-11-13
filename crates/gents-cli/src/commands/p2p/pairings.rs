@@ -3,12 +3,12 @@ use std::io::{self, Write};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use gents_protocol::enrollment::AuthorizationLeaseState;
-use gents_protocol::operations::p2p::{Pairing, PairingLease};
+use gents_protocol::operations::p2p::{ApplicationPairingStatus, Pairing, PairingLease};
 use serde_json::json;
 
 use crate::cli::args::{
-    P2pAccessArgs, P2pPairingsListArgs, P2pPairingsReaderArgs, PairingObservationArg,
-    PairingReadReasonArg,
+    P2pAccessArgs, P2pPairingsListArgs, P2pPairingsReaderArgs, P2pPairingsRemoveArgs,
+    PairingObservationArg, PairingReadReasonArg,
 };
 use crate::cli::output_format::OutputFormat;
 use crate::{print_json, resolve_config_access};
@@ -18,6 +18,53 @@ use gents_host::p2p_status::fetch_connected_peer_ids;
 pub(super) async fn pairing_reader_targets(args: P2pAccessArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     print_json(&gents_p2p::operations::pairing::pairing_reader_targets(&access).await?)
+}
+
+pub(super) async fn application_pairings(args: P2pPairingsListArgs) -> Result<()> {
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let pairings = gents_p2p::operations::pairing::list_application_pairings(&access)
+        .await
+        .context("loading DataPlanePairingDesired rows")?;
+    match args.output {
+        OutputFormat::Json | OutputFormat::Ndjson => print_json(&json!({"pairings": pairings})),
+        OutputFormat::Text | OutputFormat::Table | OutputFormat::Tree => {
+            let mut out = io::stdout().lock();
+            if pairings.is_empty() {
+                writeln!(out, "no application pairings")?;
+            }
+            for pairing in &pairings {
+                writeln!(
+                    out,
+                    "{}\t{}{}\tauthor={}\tcollections={}\tenrollment_sequence={}",
+                    pairing.peer_id,
+                    match pairing.status {
+                        ApplicationPairingStatus::Active => "active",
+                        ApplicationPairingStatus::Inactive => "inactive",
+                    },
+                    pairing
+                        .inactive_reason
+                        .as_deref()
+                        .map(|reason| format!(" ({reason})"))
+                        .unwrap_or_default(),
+                    pairing.actor_did.as_deref().unwrap_or("-"),
+                    pairing.collections.join(","),
+                    pairing
+                        .enrollment_sequence
+                        .map_or_else(|| "-".to_owned(), |sequence| sequence.to_string()),
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+pub(super) async fn remove_application_pairing(args: P2pPairingsRemoveArgs) -> Result<()> {
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let removed =
+        gents_p2p::operations::pairing::remove_application_pairing(&access, &args.peer_id)
+            .await
+            .context("removing the application pairing")?;
+    print_json(&removed)
 }
 
 pub(super) async fn pairing_reader(args: P2pPairingsReaderArgs, grant: bool) -> Result<()> {

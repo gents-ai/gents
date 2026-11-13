@@ -16,6 +16,7 @@ use gents_store::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
 use super::super::graphql_helpers::graphql_nullable_string_literal;
+use super::super::templates::APP_COLLECTIONS_TEMPLATE;
 use super::super::PairingDesired;
 use super::desired::{data_plane_desired_from_pairing_row, merge_layered_desired};
 use super::enrollment::{
@@ -158,8 +159,24 @@ impl GraphqlPairingStateStore {
         &self,
         peer_id: &str,
     ) -> Result<Option<(MaterializedDataPlaneEntry, EnrollmentRouteGeneration)>> {
+        Ok(self
+            .data_plane_authorization(peer_id)
+            .await?
+            .map(|(entry, generation, _)| (entry, generation)))
+    }
+
+    async fn data_plane_authorization(
+        &self,
+        peer_id: &str,
+    ) -> Result<
+        Option<(
+            MaterializedDataPlaneEntry,
+            EnrollmentRouteGeneration,
+            Option<String>,
+        )>,
+    > {
         let now = Utc::now();
-        let (entry, generation) = if let Some(enrollment) = self.enrollment.as_ref() {
+        let (entry, generation, network_id) = if let Some(enrollment) = self.enrollment.as_ref() {
             let fence = match enrollment.fresh_peer_authorization(peer_id).await {
                 Ok(Some(fence)) => fence,
                 Ok(None) => return Ok(None),
@@ -173,6 +190,7 @@ impl GraphqlPairingStateStore {
                 }
             };
             let generation = EnrollmentRouteGeneration::from(&fence);
+            let network_id = Some(fence.network_id.clone());
             let entry = EnrollmentEndpointEntry {
                 desired_id: fence.member_peer.clone(),
                 peer_id: fence.member_peer,
@@ -182,7 +200,7 @@ impl GraphqlPairingStateStore {
                 authorization_sequence: fence.authorization_sequence,
                 authorization_expires_at: fence.authorization_expires_at,
             };
-            (entry, generation)
+            (entry, generation, network_id)
         } else if let Some(exact) = self.exact_enrollment.as_ref() {
             let generation = EnrollmentRouteGeneration {
                 member_did: exact.node_did.clone(),
@@ -192,7 +210,7 @@ impl GraphqlPairingStateStore {
                 authorization_sequence: exact.authorization_sequence,
                 authorization_expires_at: exact.authorization_expires_at.clone(),
             };
-            (exact.clone(), generation)
+            (exact.clone(), generation, None)
         } else {
             return Ok(None);
         };
@@ -201,8 +219,77 @@ impl GraphqlPairingStateStore {
         }
         Ok(
             materialized_enrollment_entry(&[entry], peer_id, self.identity.did())
-                .map(|entry| (entry, generation)),
+                .map(|entry| (entry, generation, network_id)),
         )
+    }
+
+    async fn admitted_overlay(
+        &self,
+        peer_id: &str,
+        overlays: Vec<serde_json::Value>,
+        entry: &MaterializedDataPlaneEntry,
+        network_id: Option<&str>,
+    ) -> Option<PairingStateRow> {
+        let [row] = overlays.as_slice() else {
+            if overlays.len() > 1 {
+                tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                    peer_id,
+                    count = overlays.len(),
+                    "several application overlays name this peer; none contributes"
+                );
+            }
+            return None;
+        };
+        let decision = match (
+            super::super::overlay_binding::OverlayRecord::from_row(row),
+            network_id,
+        ) {
+            (Some(record), Some(network_id)) => {
+                let current = super::super::overlay_binding::CurrentAuthorization {
+                    network_id: network_id.to_owned(),
+                    member_did: entry.endpoint.node_did.clone(),
+                    sequence: entry.endpoint.authorization_sequence,
+                };
+                match self.runtime_access() {
+                    Ok(reader) => {
+                        super::super::overlay_binding::evaluate_overlay(
+                            &reader,
+                            self.identity.did(),
+                            Some(self.identity.as_ref()),
+                            &record,
+                            Some(&current),
+                        )
+                        .await
+                    }
+                    Err(error) => Err(
+                        super::super::overlay_binding::OverlayInactive::Unverifiable(format!(
+                            "{error:#}"
+                        )),
+                    ),
+                }
+            }
+            (None, _) => Err(
+                super::super::overlay_binding::OverlayInactive::Unverifiable(
+                    "malformed overlay".into(),
+                ),
+            ),
+            (_, None) => Err(super::super::overlay_binding::OverlayInactive::EnrollmentNotFresh),
+        };
+        if let Err(reason) = decision {
+            tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                peer_id,
+                reason = reason.code(),
+                %reason,
+                "application overlay contributes nothing (enrollment route unaffected)"
+            );
+            return None;
+        }
+        serde_json::from_value::<PairingStateRow>(row.clone())
+            .map_err(|error| {
+                tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                    peer_id, %error, "application overlay row is malformed");
+            })
+            .ok()
     }
 
     /// A merge that brings in a second row for an existing `peer_id` keeps only
@@ -302,7 +389,10 @@ impl PairingStateStore for GraphqlPairingStateStore {
                             .field(fields::data_plane_pairing_desired::COLLECTIONS)
                             .field(fields::data_plane_pairing_desired::REPLICATOR_ADDRESSES)
                             .field(fields::data_plane_pairing_desired::TEMPLATE)
-                            .field(fields::data_plane_pairing_desired::SOURCE),
+                            .field(fields::data_plane_pairing_desired::SOURCE)
+                            .field(fields::data_plane_pairing_desired::ENROLLMENT_MEMBER_DID)
+                            .field(fields::data_plane_pairing_desired::ENROLLMENT_SEQUENCE)
+                            .field(fields::data_plane_pairing_desired::ENROLLMENT_NETWORK_ID),
                     )
                     .filter(Filter::eq(
                         fields::data_plane_pairing_desired::PEER_ID,
@@ -312,7 +402,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 .render()
         };
         let runtime = identity::Did::new(self.identity.did())?;
-        let response =
+        let (response, overlays) =
             self.runtime_access()?
                 .transact_readonly("p2p.query_pairing_desired", |txn| {
                     let query = &query;
@@ -341,52 +431,56 @@ impl PairingStateStore for GraphqlPairingStateStore {
                                 "desired pairing has another native owner"
                             );
                         }
-                        let overlays =
-                            rows::<serde_json::Value>(&response, "DataPlanePairingDesired")?;
-                        let mut overlay_ids = Vec::new();
-                        let mut overlay_actors = Vec::new();
-                        for row in overlays {
-                            let doc = row["_docID"]
+                        let mut candidates = Vec::new();
+                        for row in
+                            rows::<serde_json::Value>(&response, "DataPlanePairingDesired")?
+                        {
+                            let doc = row["_docID"].as_str().map(str::to_owned);
+                            let actor = row["actor_did"]
                                 .as_str()
-                                .context("pairing overlay has no document ID")?
-                                .to_owned();
-                            let actor = identity::Did::new(
-                                row["actor_did"]
-                                    .as_str()
-                                    .context("pairing overlay has no author")?,
-                            )?;
-                            anyhow::ensure!(
-                                &actor != runtime,
-                                "pairing overlay uses runtime authority"
-                            );
-                            overlay_ids.push(doc);
-                            overlay_actors.push(actor);
+                                .and_then(|actor| identity::Did::new(actor).ok());
+                            match (doc, actor) {
+                                (Some(doc), Some(actor)) if &actor != runtime => {
+                                    candidates.push((doc, actor, row));
+                                }
+                                (doc, _) => tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                                    doc_id = ?doc,
+                                    "pairing overlay has no document ID or Agent author; skipped"
+                                ),
+                            }
                         }
-                        if !overlay_ids.is_empty() {
-                            let owners = txn
-                                .document_owners("DataPlanePairingDesired", &overlay_ids)
-                                .await?;
-                            anyhow::ensure!(
-                                owners.len() == overlay_ids.len()
-                                    && overlay_ids.iter().zip(&overlay_actors).all(
-                                        |(id, actor)| owners
-                                            .iter()
-                                            .any(|owner| owner.doc_id == *id
-                                                && owner.visible
-                                                && owner.owner.as_ref() == Some(actor))
-                                    ),
-                                "pairing overlay has another native owner"
-                            );
+                        let mut overlays = Vec::new();
+                        if !candidates.is_empty() {
+                            let ids = candidates
+                                .iter()
+                                .map(|(doc, _, _)| doc.clone())
+                                .collect::<Vec<_>>();
+                            let owners =
+                                txn.document_owners("DataPlanePairingDesired", &ids).await?;
+                            for (doc, actor, row) in candidates {
+                                if owners.iter().any(|owner| {
+                                    owner.doc_id == doc
+                                        && owner.visible
+                                        && owner.owner.as_ref() == Some(&actor)
+                                }) {
+                                    overlays.push(row);
+                                } else {
+                                    tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                                        doc_id = %doc,
+                                        "pairing overlay has another native owner; skipped"
+                                    );
+                                }
+                            }
                         }
-                        Ok::<_, anyhow::Error>(response)
+                        Ok::<_, anyhow::Error>((response, overlays))
                     })
                 })
                 .await?;
         let materialized_entry = self
-            .data_plane_materialized_entry(&raw_peer_id)
+            .data_plane_authorization(&raw_peer_id)
             .await
             .with_context(|| format!("checking enrollment authority for {raw_peer_id}"))?;
-        let Some((entry, generation)) = materialized_entry else {
+        let Some((entry, generation, network_id)) = materialized_entry else {
             return Ok(LoadedPairingDesired::default());
         };
         let base = first_row::<PairingStateRow>(&response, "PeerPairingDesired")?
@@ -395,12 +489,20 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 data_plane_desired_from_pairing_row(row, &entry.endpoint, self.identity.did())
             })
             .transpose()?;
-        let data_plane = first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?
+        let data_plane = self
+            .admitted_overlay(&raw_peer_id, overlays, &entry, network_id.as_deref())
+            .await
             .and_then(|row| local_data_plane_row(row, &entry, self.identity.did()))
-            .map(|row| {
+            .and_then(|row| {
                 data_plane_desired_from_pairing_row(row, &entry.endpoint, self.identity.did())
+                    .map_err(|error| {
+                        tracing::warn!(target: "gents::runtime::agent::p2p_reconcile::engine",
+                            peer_id = %raw_peer_id, %error,
+                            "application overlay could not be converted; skipped");
+                    })
+                    .ok()
             })
-            .transpose()?;
+            .filter(|overlay| overlay.template_ids.contains(APP_COLLECTIONS_TEMPLATE));
         Ok(LoadedPairingDesired {
             state: merge_layered_desired(
                 self.identity.did(),
@@ -410,6 +512,10 @@ impl PairingStateStore for GraphqlPairingStateStore {
             ),
             enrollment_generation: Some(generation),
         })
+    }
+
+    async fn peer_enrollment_closed(&self, peer_id: &str) -> Result<bool> {
+        Ok(self.data_plane_materialized_entry(peer_id).await?.is_none())
     }
 
     async fn enrollment_generation_is_current(

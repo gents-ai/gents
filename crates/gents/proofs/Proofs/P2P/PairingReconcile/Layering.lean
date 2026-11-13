@@ -4,10 +4,11 @@ namespace PairingReconcile.Layering
 
 /-- A pairing layer replicates; no surviving scope template subscribes.
 
-Decision (supported topology, 2026-11-07): P2P carries only discovery and
-enrollment, so a layer carries no collection subscriptions and the former
-app-collections exception is gone; conversation data is read through native
-ACP and GraphQL instead of template replication. -/
+Decision (supported topology, 2026-11-07): enrollment materializes only the
+discovery base route, and conversation data is read through native ACP and
+GraphQL. Decision (2026-11-09): application collections travel only on the data-plane
+overlay layer a node's Agent writes for one enrolled peer, so the absence of that
+layer means no application route exists. -/
 structure Layer where
   replicatorCollections : Finset String
   filters : ReplicatorFilter := ∅
@@ -75,5 +76,29 @@ theorem overridden_base_filter_is_removed
   simp [mergeMaterialized] at hm
   subst hm
   exact ⟨hremoved, hpreserved⟩
+
+/-- Enrollment alone adds no collection beyond its base route. -/
+theorem no_overlay_adds_no_collections
+    (localDid peerDid : String) (base merged : Layer)
+    (hm : mergeLayered localDid peerDid (some base) none = some merged) :
+    merged.replicatorCollections = base.replicatorCollections := by
+  simp only [mergeLayered, Option.bind_some, materializeBase] at hm
+  split at hm
+  · simp [mergeMaterialized] at hm
+  · simp [mergeMaterialized] at hm
+    rw [hm]
+
+/-- Revoking the overlay leaves exactly the base route. This is a statement about
+future pushes only: documents the overlay already delivered remain on the peer
+(`ScopeTemplates.appCollectionsTemplate`). -/
+theorem removing_overlay_restores_base (base overlay merged : Layer) (localDid peerDid : String)
+    (distinct : peerDid ≠ localDid)
+    (hm : mergeLayered localDid peerDid (some base) (some overlay) = some merged) :
+    mergeLayered localDid peerDid (some base) none = some base
+      ∧ base.replicatorCollections ⊆ merged.replicatorCollections := by
+  constructor
+  · simp [mergeLayered, materializeBase, distinct, mergeMaterialized]
+  · simp only [mergeLayered, Option.bind_some, materializeBase, if_neg distinct] at hm
+    exact base_preserved base (some overlay) merged hm
 
 end PairingReconcile.Layering

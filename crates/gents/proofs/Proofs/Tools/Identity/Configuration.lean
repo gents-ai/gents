@@ -97,7 +97,20 @@ the Goals it created, for example once one completes. Node permissions are
 node-wide, so document ACP decides which documents that reaches: the native
 owner, which is the creating Agent, holds delete on its own Goal rows
 (`goal_creator_deletes_its_goal`), while another session Agent does not. The
-goal-create source is the only grant, so disabling goal creation withdraws it. -/
+goal-create source is the only grant, so disabling goal creation withdraws it.
+P2P pairing mutations likewise carry `delete-document` (maintainer decision,
+2026-11-09): revoking a pairing deletes the Agent-owned overlay, and document
+ACP limits that to the overlay's native owner, so another Agent's overlay is
+unreachable (`pairing_overlay_delete_is_owner_scoped`). It is the only
+permission that source adds (`p2p_pairing_grants_only_delete_document`). There
+is no per-collection pairing grant, so an Agent holding P2P mutation may pair
+any collection `ScopeTemplates.decideAppCollection` admits. Withdrawing the
+grant does not delete an overlay the Agent already wrote, but the overlay then
+contributes nothing (`PairingReconcile.OverlayBinding.withdrawn_grant_contributes_nothing`)
+and the Node's administration can delete it. `delete-document` is node-wide in
+name and bounded by each document's ACP: the theorems below pin which
+permission name the source adds, not which documents it reaches; document ACP
+decides that per document (`pairing_overlay_delete_is_owner_scoped`). -/
 def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : List (String × String) :=
   let emit (purpose : String) (enabled : Bool) (permissions : List String) : List (String × String) :=
     if enabled then permissions.map (fun permission => (purpose, permission)) else []
@@ -118,7 +131,8 @@ def toolOperationSources (surface : ToolPolicy.Surface) (packInstall : Bool) : L
       emit purpose (surface.selfConfig && selfConfigCategoryEnabled surface.selfConfigCategories category)
         ["delete-document"]) ++
   emit "pack-install" (surface.selfConfig && selfConfigScopeEnabled surface.selfConfigCategories && packInstall)
-    ["delete-dac-relation", "delete-document"]
+    ["delete-dac-relation", "delete-document"] ++
+  emit "p2p-pairing" (surface.p2pRead && surface.p2pMutate) ["delete-document"]
 
 /-- Plugin roots are installed only by the trusted host from its reviewed,
   digest-bound local plugin declaration, in the same transaction as the
@@ -233,6 +247,28 @@ theorem goal_retirement_requires_goal_creation (surface : ToolPolicy.Surface)
     (noCreate : surface.goalCreate = false) :
     ("goal-create", "delete-document") ∉ toolOperationSources surface false := by
   simp [toolOperationSources, noCreate]
+
+/-- The P2P pairing source exists only while the surface permits P2P mutation,
+which needs both the read and the mutation grant. -/
+theorem p2p_pairing_requires_mutation (surface : ToolPolicy.Surface) (packInstall : Bool)
+    (permission : String) (denied : (surface.p2pRead && surface.p2pMutate) = false) :
+    ("p2p-pairing", permission) ∉ toolOperationSources surface packInstall := by
+  simp [toolOperationSources, denied]
+
+/-- The P2P pairing source grants `delete-document` and nothing else: revoke
+deletes the Agent's own overlay, while create, read and update stay in the
+Agent baseline and the parent relation is `add-dac-relation`, also baseline. -/
+theorem p2p_pairing_grants_only_delete_document (surface : ToolPolicy.Surface)
+    (packInstall : Bool) (permission : String)
+    (granted : ("p2p-pairing", permission) ∈ toolOperationSources surface packInstall) :
+    permission = "delete-document" := by
+  simp [toolOperationSources] at granted
+  exact granted.2
+
+theorem p2p_pairing_grants_delete_document (surface : ToolPolicy.Surface) (packInstall : Bool)
+    (permitted : (surface.p2pRead && surface.p2pMutate) = true) :
+    ("p2p-pairing", "delete-document") ∈ toolOperationSources surface packInstall := by
+  simp [toolOperationSources, permitted]
 
 /-- For a request without native DAC bypass, a session tool's node-operation
 grant does not expand document visibility. HTTP may resolve bypass for a NAC
@@ -464,17 +500,40 @@ def clientSignedUpdateSupported (collection : String) : Bool :=
 
 /-- A client signs deletes only for bundled configuration schemas or the
 pack installation, Goal and GoalCreationClaim records. Native delete permission
-remains required; session deletion has a separate product owner. -/
+remains required; session deletion has a separate product owner. Pack evidence
+(create, update, delete) and pack relationship edits share this list. -/
 def clientSignedDeleteCollection (collection : String) : Bool :=
   (clientSignedCreateCollection collection && collection != "InferenceBackend") ||
     ["PackInstallation", "InferenceBackendMetadata", "InferenceBackendObservation",
       "BackendCredential", "Goal", "GoalCreationClaim"].contains collection
+
+/-- The operator stop (security review, 2026-11-10): the Node's user owner
+deletes any Agent's application pairing overlay through the signed client path,
+and document ACP admits it through the Node parent
+(`pairing_overlay_delete_is_owner_scoped`). This permission is delete-only and
+separate from `clientSignedDeleteCollection`, so pack plans cannot create,
+update, delete or relate an overlay. -/
+def clientSignedOperatorDelete (collection : String) : Bool :=
+  collection == "DataPlanePairingDesired"
 
 theorem client_delete_includes_goal : clientSignedDeleteCollection "Goal" = true := by decide
 
 theorem client_delete_includes_goal_claim : clientSignedDeleteCollection "GoalCreationClaim" = true := by decide
 
 theorem client_delete_excludes_session : clientSignedDeleteCollection "AgentSession" = false := by decide
+
+theorem operator_delete_includes_pairing_overlay :
+    clientSignedOperatorDelete "DataPlanePairingDesired" = true := by decide
+
+theorem pairing_overlay_not_in_shared_delete :
+    clientSignedDeleteCollection "DataPlanePairingDesired" = false ∧
+      clientSignedCreateCollection "DataPlanePairingDesired" = false ∧
+      clientSignedUpdateSupported "DataPlanePairingDesired" = false := by decide
+
+/-- The operator delete adds exactly one collection. -/
+theorem operator_delete_is_only_the_overlay (collection : String)
+    (h : clientSignedOperatorDelete collection = true) : collection = "DataPlanePairingDesired" := by
+  simpa [clientSignedOperatorDelete] using h
 
 /-- The legacy inline-secret collection is never selected by the new deletion owner. -/
 theorem client_delete_excludes_legacy_backend : clientSignedDeleteCollection "InferenceBackend" = false := by decide
@@ -1495,28 +1554,43 @@ theorem projection_binding_revoked_parent_loses_inherited_control :
      Household.allowed 5 revoked "creator" "configuration" "binding" "update"] =
     [false, false, true] := by native_decide
 
-/-- An Agent-authored data-plane pairing overlay remains owned by that Agent.
-The user administers it through the Node parent, and the runtime reads it via
-the Node's explicit runtime-reader grant. An Agent's sibling has no access. -/
+/-- An Agent-authored data-plane pairing overlay remains owned by that Agent on
+its own `application_pairings` resource. The user administers it through the
+Node parent, and the runtime reads it via the Node's explicit runtime-reader
+grant. An Agent's sibling has no access. -/
 def agentPairingFixture : State :=
-  { objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "overlay", "agent"⟩],
+  { objects := [⟨"nodes", "node", "user"⟩, ⟨"application_pairings", "overlay", "agent"⟩],
     relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
-      ⟨"configuration", "overlay", "parent", .object "nodes" "node"⟩], enrolled := [] }
+      ⟨"application_pairings", "overlay", "parent", .object "nodes" "node"⟩], enrolled := [] }
 
+/-- Only the authoring Agent updates its overlay; the Node's user owner neither
+re-binds nor widens it (`Identity.ApplicationPairingAccess.only_the_author_updates`). -/
 theorem agent_pairing_overlay_preserves_creator_isolation :
-    [Household.allowed 5 agentPairingFixture "agent" "configuration" "overlay" "update",
-     Household.allowed 5 agentPairingFixture "user" "configuration" "overlay" "update",
-     Household.allowed 5 agentPairingFixture "runtime" "configuration" "overlay" "read",
-     Household.allowed 5 agentPairingFixture "runtime" "configuration" "overlay" "update",
-     Household.allowed 5 agentPairingFixture "sibling" "configuration" "overlay" "read"] =
-    [true, true, true, false, false] := by native_decide
+    [Household.allowed 5 agentPairingFixture "agent" "application_pairings" "overlay" "update",
+     Household.allowed 5 agentPairingFixture "user" "application_pairings" "overlay" "update",
+     Household.allowed 5 agentPairingFixture "runtime" "application_pairings" "overlay" "read",
+     Household.allowed 5 agentPairingFixture "runtime" "application_pairings" "overlay" "update",
+     Household.allowed 5 agentPairingFixture "sibling" "application_pairings" "overlay" "read"] =
+    [true, false, true, false, false] := by native_decide
+
+/-- `delete-document` is node-wide, so document ACP is what confines a pairing
+revoke to the overlay's native owner: a sibling Agent holding the same P2P
+mutation grant can neither update nor delete the overlay, the runtime only reads
+it, and the Node's user owner keeps inherited control. -/
+theorem pairing_overlay_delete_is_owner_scoped :
+    [Household.allowed 5 agentPairingFixture "agent" "application_pairings" "overlay" "delete",
+     Household.allowed 5 agentPairingFixture "sibling" "application_pairings" "overlay" "update",
+     Household.allowed 5 agentPairingFixture "sibling" "application_pairings" "overlay" "delete",
+     Household.allowed 5 agentPairingFixture "runtime" "application_pairings" "overlay" "delete",
+     Household.allowed 5 agentPairingFixture "user" "application_pairings" "overlay" "delete"] =
+    [true, false, false, false, true] := by native_decide
 
 theorem revoked_pairing_parent_is_not_implicit :
     let state := apply agentPairingFixture
-      (.revoke ⟨"configuration", "overlay", "parent", .object "nodes" "node"⟩)
-    [Household.allowed 5 state "agent" "configuration" "overlay" "read",
-     Household.allowed 5 state "user" "configuration" "overlay" "read",
-     Household.allowed 5 state "runtime" "configuration" "overlay" "read"] =
+      (.revoke ⟨"application_pairings", "overlay", "parent", .object "nodes" "node"⟩)
+    [Household.allowed 5 state "agent" "application_pairings" "overlay" "read",
+     Household.allowed 5 state "user" "application_pairings" "overlay" "read",
+     Household.allowed 5 state "runtime" "application_pairings" "overlay" "read"] =
     [true, false, false] := by native_decide
 
 /-- An Engineer that creates an Agent and its configuration remains each

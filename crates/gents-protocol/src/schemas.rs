@@ -97,7 +97,7 @@ pub const IDENTITY_POLICY_BINDINGS: &[(&str, &str)] = &[
     (PROJECTION_ACP_BINDING_NAME, "configuration"),
     (AGENT_TARGET_NAME, "configuration"),
     (TASK_NAME, "configuration"),
-    (DATA_PLANE_PAIRING_DESIRED_NAME, "configuration"),
+    (DATA_PLANE_PAIRING_DESIRED_NAME, "application_pairings"),
     (TOOLS_NAME, "configuration"),
     (DATASTORE_TOOL_SURFACE_NAME, "configuration"),
     (PAGE_NAME, "configuration"),

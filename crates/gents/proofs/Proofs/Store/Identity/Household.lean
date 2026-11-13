@@ -77,7 +77,22 @@ name no relation. Its read is its parent Node's `update`, Node administration
 do not read it, because a record names sessions, requests and actors across
 every Agent of the Node. No relation grants it to an Agent, a session or a
 plugin, and no resource names it as a parent or a relation type, so holding it
-reaches nothing else (`Identity.OwedDeliveryAccess`). -/
+reaches nothing else (`Identity.OwedDeliveryAccess`).
+
+`application_pairings` holds an Agent's opt-in to replicate named application
+collections toward one enrolled peer (`DataPlanePairingDesired`,
+`PairingReconcile.OverlayBinding`). Decision (maintainer, 2026-11-12): the
+overlay is the authoring Agent's own document, parented by its Node. Creation is
+the native create gate, so its creator, the authoring Agent, is its owner; only
+the owner adds the `parent` relation, which has no manager. Its update names no
+relation, so only the author rewrites it: a Node administrator cannot re-bind or
+widen an Agent's pairing. Its read is the Node's read, so the Node owner, its
+administrators and the runtime reader the reconciler acts as see every pairing.
+Its delete is the Node's delete, so whoever administers the Node, and so can
+grant or withdraw an Agent's P2P mutation, can also stop any pairing. No
+resource names it as a relation type or a parent, so holding any permission on
+it reaches no other document, and the overlay grants no access to the
+collections it names (`Identity.ApplicationPairingAccess`). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
@@ -98,6 +113,10 @@ def policy : List ResourceDefinition :=
       relations := [⟨"parent", ["nodes"], []⟩]
       permissions := [permission "read" [] [("parent", "update")],
         permission "update" [] [], permission "delete" [] []] }
+  , { name := "application_pairings"
+      relations := [⟨"parent", ["nodes"], []⟩]
+      permissions := [permission "read" [] [("parent", "read")],
+        permission "update" [] [], permission "delete" [] [("parent", "delete")]] }
   , { name := "pairing_observations"
       relations := [⟨"parent", ["nodes"], []⟩, ⟨"route_reader", ["actor"], []⟩,
         ⟨"tool_reader", ["actor"], []⟩,

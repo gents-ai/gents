@@ -217,3 +217,52 @@ pub struct PairingReaderTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_did: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationPairingStatus {
+    Active,
+    Inactive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplicationPairing {
+    #[serde(rename = "_docID")]
+    pub doc_id: String,
+    pub peer_id: String,
+    #[serde(default)]
+    pub node_did: Option<String>,
+    #[serde(default)]
+    pub actor_did: Option<String>,
+    #[serde(default)]
+    pub collections: Vec<String>,
+    #[serde(default)]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub enrollment_member_did: Option<String>,
+    #[serde(default)]
+    pub enrollment_sequence: Option<i64>,
+    #[serde(default)]
+    pub enrollment_network_id: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    pub status: ApplicationPairingStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactive_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactive_detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApplicationPairingRemoved {
+    pub peer_id: String,
+    pub removed: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ApplicationPairingError {
+    #[error("an application pairing status is malformed")]
+    Malformed(#[source] serde_json::Error),
+    #[error(transparent)]
+    Passthrough(Box<dyn Error + Send + Sync>),
+}

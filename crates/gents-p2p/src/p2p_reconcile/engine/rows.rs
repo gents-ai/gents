@@ -16,6 +16,8 @@ pub(super) struct PairingStateRow {
     pub(super) node_did: Option<String>,
     pub(super) replicator_addresses: Option<Vec<String>>,
     #[serde(default)]
+    pub(super) collections: Option<Vec<String>>,
+    #[serde(default)]
     pub(super) template: Option<String>,
     #[serde(default)]
     pub(super) source: Option<String>,
