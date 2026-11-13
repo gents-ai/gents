@@ -193,18 +193,18 @@ describe("the search palette", () => {
 
   it("opens short, and lists a group's rest from its Show more row", () => {
     open();
-    /* six actions: three, then a row for the other three */
+    /* seven actions: three, then a row for the other four */
     expect(options("Actions")).toEqual([
       "New session",
       "Go to sessions",
-      "Go to mailbox",
-      "Show 3 more",
+      "Go to packs",
+      "Show 4 more",
     ]);
     const input = screen.getByRole("combobox", { name: "Search" });
     const rows = screen.getAllByRole("option");
     for (let i = 0; i < rows.length - 1; i++)
       fireEvent.keyDown(input, { key: "ArrowDown" });
-    expect(screen.getByRole("option", { name: "Show 3 more" })).toHaveAttribute(
+    expect(screen.getByRole("option", { name: "Show 4 more" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
@@ -212,13 +212,14 @@ describe("the search palette", () => {
     expect(options("Actions")).toEqual([
       "New session",
       "Go to sessions",
+      "Go to packs",
       "Go to mailbox",
       "Go to nodes",
       "Open settings",
       "Switch node…",
     ]);
     /* the palette stays open, on the first row it revealed */
-    expect(screen.getByRole("option", { name: "Go to nodes" })).toHaveAttribute(
+    expect(screen.getByRole("option", { name: "Go to mailbox" })).toHaveAttribute(
       "aria-selected",
       "true",
     );

@@ -37,7 +37,7 @@ import {
 } from "../src/ui/screens/packs/model";
 import { resetDefaultPacks } from "../src/ui/screens/packs/useDefaultPacks";
 import { bareOriginCount, packSettings } from "../src/ui/screens/agent/packContents";
-import { renderIn, testApp, withFlags } from "./app-fixture";
+import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 const windows = vi.hoisted(() => ({ can: false, opened: [] as string[] }));
@@ -97,7 +97,6 @@ afterEach(() => {
 });
 
 function show(item?: string, api: Record<string, unknown> = {}) {
-  withFlags({ packs: true });
   rememberPacksView("installed");
   rememberPacksQuery("");
   rememberPacksAuthor(null);
@@ -375,7 +374,6 @@ describe("the Packs page", () => {
       target: { value: "doc" },
     });
     cleanup();
-    withFlags({ packs: true });
     renderIn(app, <PacksScreen />);
     expect(screen.getByRole("tab", { name: "Registry" })).toHaveAttribute(
       "aria-selected",
@@ -495,7 +493,6 @@ describe("the Packs page", () => {
   });
 
   it("only browses on a node whose packs are installed on that machine", async () => {
-    withFlags({ packs: true });
     const listInstalledPacks = vi.fn(async () => ({ packs: [research] }));
     const app = testApp({
       api: {
@@ -531,7 +528,7 @@ describe("where Packs is reached", () => {
     }
   });
 
-  it("offers Go to packs and the node's packs in search only while the feature is on", async () => {
+  it("offers Go to packs and the node's packs in search", async () => {
     const app = testApp({
       api: { listInstalledPacks: async () => ({ packs: [research] }) },
       snapshot: { bootstrap, client: { deployments: [node] } },
@@ -539,9 +536,6 @@ describe("where Packs is reached", () => {
     renderIn(app, <SearchPalette />);
     act(() => openSearch());
     const input = screen.getByRole("combobox", { name: "Search" });
-    fireEvent.change(input, { target: { value: "packs" } });
-    expect(screen.queryByRole("option", { name: /Go to packs/ })).toBeNull();
-    act(() => withFlags({ packs: true }));
     fireEvent.change(input, { target: { value: "go to packs" } });
     expect(
       await screen.findByRole("option", { name: /Go to packs/ }),

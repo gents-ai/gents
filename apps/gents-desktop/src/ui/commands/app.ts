@@ -45,7 +45,6 @@ registerCommand({
   title: "Go to packs",
   group: "Pages",
   icon: Package,
-  when: () => flag("packs"),
   run: () => navigate({ name: "packs" }),
 });
 registerCommand({

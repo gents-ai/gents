@@ -63,10 +63,11 @@ describe("arranging the nav", () => {
     expect(ids({ order: [], shown: {} })).toEqual([
       "new-session",
       "mailbox",
+      "packs",
       "sessions",
     ]);
     expect(ids({ order: [], shown: { "config:tasks": true, mailbox: false } })).toEqual(
-      ["new-session", "sessions", "config:tasks"],
+      ["new-session", "packs", "sessions", "config:tasks"],
     );
   });
 
@@ -75,6 +76,7 @@ describe("arranging the nav", () => {
       "sessions",
       "new-session",
       "mailbox",
+      "packs",
     ]);
   });
 
@@ -194,9 +196,11 @@ describe("customizing the nav", () => {
     (await screen.findByRole("menuitem", { name: "Configuration" })).focus();
     await userEvent.setup({ pointerEventsCheck: 0 }).keyboard("{ArrowRight}");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Tasks" }));
-    fireEvent.keyDown(sheet.getByRole("button", { name: "Move Sessions" }), {
-      key: "ArrowUp",
-    });
+    /* past Packs, which this node doesn't draw, then past New session */
+    for (const _ of [1, 2])
+      fireEvent.keyDown(sheet.getByRole("button", { name: "Move Sessions" }), {
+        key: "ArrowUp",
+      });
     expect(labels()).toEqual(["Sessions", "New session", "Tasks"]);
     expect(sheet.queryByRole("button", { name: "Move Mailbox" })).toBeNull();
 

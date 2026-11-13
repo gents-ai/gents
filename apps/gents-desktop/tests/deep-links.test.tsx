@@ -118,18 +118,7 @@ describe("following a gents link", () => {
         .result.current;
     afterEach(() => resetPreferences());
 
-    it("opens nothing while Packs is off", () => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const nav = mountNav();
-      let opened = true;
-      act(() => void (opened = openLink(`gents://pack/acme/game?digest=${digest}`)));
-      expect(opened).toBe(false);
-      expect(nav().route).toEqual({ name: "sessions" });
-      warn.mockRestore();
-    });
-
     it("opens the pack's page on what it would add, installing nothing", () => {
-      resetPreferences({ packs: "on" });
       const nav = mountNav();
       act(() => void openLink(`gents://pack/acme/game?version=1.2.0&digest=${digest}`));
       expect(nav().route).toMatchObject({ name: "packs", review: expect.any(String) });
@@ -141,7 +130,6 @@ describe("following a gents link", () => {
     });
 
     it("opens the same page for the same link", () => {
-      resetPreferences({ packs: "on" });
       const nav = mountNav();
       act(() => void openLink("gents://pack/acme/game"));
       const first = nav().route;

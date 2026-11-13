@@ -164,7 +164,6 @@ function useEntries(): SearchEntry[] {
   const automationsOn = useFlag("automations");
   const hidden = useHidden();
   const { actions } = useApp();
-  const packsOn = useFlag("packs");
   const installed = useInstalledPacks().packs;
   const fleet = useFleet(
     useShallow((s) => ({
@@ -176,8 +175,7 @@ function useEntries(): SearchEntry[] {
     })),
   );
   const selectedNode = fleet.nodes[selected ?? fleet.nodeKeys[0] ?? ""];
-  const packsHere =
-    packsOn && selectedNode !== undefined && isLocalNode(selectedNode, homeDid);
+  const packsHere = selectedNode !== undefined && isLocalNode(selectedNode, homeDid);
   useEffect(() => {
     if (packsHere && installed === null) void readInstalledPacks(actions);
   }, [packsHere, installed, actions]);

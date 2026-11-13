@@ -9,7 +9,7 @@ import { PacksScreen } from "../src/ui/screens/PacksScreen";
 import { StarterPacksCard } from "../src/ui/screens/packs/DefaultPacksReview";
 import { rememberPacksView, resetInstalledPacks } from "../src/ui/screens/packs/model";
 import { resetDefaultPacks } from "../src/ui/screens/packs/useDefaultPacks";
-import { renderIn, testApp, withFlags } from "./app-fixture";
+import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 vi.mock("sonner", () => ({
@@ -279,7 +279,6 @@ describe("the starter packs card", () => {
 
 describe("starter packs on the Packs page", () => {
   function page(api: object) {
-    withFlags({ packs: true });
     rememberPacksView("installed");
     return renderIn(local(api), <PacksScreen />);
   }

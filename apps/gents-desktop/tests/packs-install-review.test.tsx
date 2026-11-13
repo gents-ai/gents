@@ -24,7 +24,7 @@ import {
   resetPackPreviews,
   resetSetAsideReview,
 } from "../src/ui/screens/packs/preview";
-import { renderRouted, testApp, withFlags } from "./app-fixture";
+import { renderRouted, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 
 const shell = vi.hoisted(() => ({
@@ -113,7 +113,6 @@ function show(
   on: DeploymentView = node,
   api: Record<string, unknown> = {},
 ) {
-  withFlags({ packs: true });
   rememberPacksView("installed");
   rememberPacksQuery("");
   rememberPacksAuthor(null);
@@ -825,7 +824,6 @@ describe("sharing a pack", () => {
       configurable: true,
     });
     const installPack = bridge();
-    withFlags({ packs: true });
     const app = testApp({
       api: {
         listInstalledPacks: async () => ({ packs: [{ ...research, digest: DIGEST }] }),
