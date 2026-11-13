@@ -315,10 +315,7 @@
       "SessionQueue.Action.claimFolding",
       "SessionQueue.Action.consumeFolded"
     ],
-    "generated_groups": [
-      "fold_turn_input_cases",
-      "retry_selection_cases"
-    ],
+    "generated_groups": [],
     "fixture_status": "concrete_inputs",
     "native_owner_paths": [
       "crates/gents-session/src/request/lifecycle/claim.rs",

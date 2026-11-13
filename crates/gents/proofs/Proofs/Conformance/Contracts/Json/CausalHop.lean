@@ -87,24 +87,17 @@ def callHops : CausalHop.Pair → List CausalHop.Event → List Nat
   | _, [] => []
   | p, e :: rest => e.hop p :: callHops (e.apply p) rest
 
-def eventString : CausalHop.Event → String
-  | .aSendsB => "a_sends_b"
-  | .bSendsA => "b_sends_a"
-  | .returnToA => "return_to_a"
-  | .returnToB => "return_to_b"
+deriving instance Lean.ToJson for CausalHop.Event
+
+structure CallInput where
+  name : String
+  maxRequestHop : Option Nat
+  events : List CausalHop.Event
+  deriving Lean.ToJson
 
 def optionalNatJson : Option Nat → String
   | none => "null"
   | some value => toString value
-
-def callCaseJson (c : CallCase) : String :=
-  let hops := callHops ⟨0, 0⟩ c.events
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
-    ++ ",\"events\":" ++ jsonArray (c.events.map (jsonString ∘ eventString))
-    ++ ",\"expected_hops\":" ++ jsonArray (hops.map toString)
-    ++ ",\"expected_admitted\":"
-      ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
 
 def chainHops : Nat → List CausalHop.Step → List Nat
   | _, [] => []
@@ -112,19 +105,52 @@ def chainHops : Nat → List CausalHop.Step → List Nat
       let hop := step.apply start
       hop :: chainHops hop rest
 
-def stepJson : CausalHop.Step → String
-  | .cross own => "{\"kind\":\"cross_session\",\"own_predecessor_hop\":" ++ toString own ++ "}"
-  | .cont => "{\"kind\":\"continuation\",\"own_predecessor_hop\":null}"
+inductive ChainStepKind where
+  | crossSession
+  | continuation
+  deriving Lean.ToJson
 
-def chainCaseJson (c : ChainCase) : String :=
-  let hops := chainHops 0 c.steps
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
-    ++ ",\"steps\":" ++ jsonArray (c.steps.map stepJson)
-    ++ ",\"expected_hops\":" ++ jsonArray (hops.map toString)
-    ++ ",\"expected_admitted\":"
-      ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
+structure ChainStepWire where
+  kind : ChainStepKind
+  ownPredecessorHop : Option Nat
+  deriving Lean.ToJson
 
+def ChainStepWire.ofModel : CausalHop.Step → ChainStepWire
+  | .cross own => { kind := .crossSession, ownPredecessorHop := some own }
+  | .cont => { kind := .continuation, ownPredecessorHop := none }
+
+def ChainStepWire.toModel (step : ChainStepWire) : CausalHop.Step :=
+  match step.kind with
+  | .crossSession => .cross (step.ownPredecessorHop.getD 0)
+  | .continuation => .cont
+
+structure ChainInput where
+  name : String
+  maxRequestHop : Option Nat
+  steps : List ChainStepWire
+  deriving Lean.ToJson
+
+structure HopTrace where
+  hops : List Nat
+  admitted : List Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def chain : Family ChainInput HopTrace where
+  inputs := chainCases.map fun c =>
+    { name := c.name, maxRequestHop := c.maxRequestHop, steps := c.steps.map ChainStepWire.ofModel }
+  model := fun i =>
+    let hops := chainHops 0 (i.steps.map ChainStepWire.toModel)
+    { hops, admitted := hops.map (CausalHop.admitHop i.maxRequestHop) }
+
+
+@[conformance_family]
+def call : Family CallInput HopTrace where
+  inputs := callCases.map fun c =>
+    { name := c.name, maxRequestHop := c.maxRequestHop, events := c.events }
+  model := fun i =>
+    let hops := callHops ⟨0, 0⟩ i.events
+    { hops, admitted := hops.map (CausalHop.admitHop i.maxRequestHop) }
 
 structure CreationCase where
   name : String
@@ -195,16 +221,45 @@ def writeCases : List WriteCase :=
   , ⟨"busy_session_queue_keeps_its_higher_hop", .queued, 0, 1⟩
   , ⟨"busy_session_is_steered_past_its_caller", .steering, 3, 1⟩ ]
 
-def writeCaseJson (c : WriteCase) : String :=
-  let write := DurableLineage.sessionMessageWrite c.delivery c.callerHop c.ownHop
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"delivery\":" ++ jsonString (match c.delivery with
-        | .request => "request" | .queued => "queue" | .steering => "steer")
-    ++ ",\"caller_hop\":" ++ toString c.callerHop
-    ++ ",\"own_hop\":" ++ toString c.ownHop
-    ++ ",\"expected_hop\":" ++ toString write.lineage.requestHop
-    ++ ",\"names_caller_tool_call\":" ++ toString write.lineage.hasParentToolCallDocId
-    ++ ",\"queued_after_active\":" ++ toString write.queuedAfterActive ++ "}"
+inductive WriteDelivery where
+  | request
+  | queue
+  | steer
+  deriving Lean.ToJson
+
+def WriteDelivery.ofModel : DurableLineage.Delivery → WriteDelivery
+  | .request => .request
+  | .queued => .queue
+  | .steering => .steer
+
+def WriteDelivery.toModel : WriteDelivery → DurableLineage.Delivery
+  | .request => .request
+  | .queue => .queued
+  | .steer => .steering
+
+structure WriteInput where
+  name : String
+  delivery : WriteDelivery
+  callerHop : Nat
+  ownHop : Nat
+  deriving Lean.ToJson
+
+structure WriteOutput where
+  hop : Nat
+  namesCallerToolCall : Bool
+  queuedAfterActive : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def write : Family WriteInput WriteOutput where
+  inputs := writeCases.map fun c =>
+    { name := c.name, delivery := WriteDelivery.ofModel c.delivery, callerHop := c.callerHop,
+      ownHop := c.ownHop }
+  model := fun i =>
+    let write := DurableLineage.sessionMessageWrite i.delivery.toModel i.callerHop i.ownHop
+    { hop := write.lineage.requestHop
+      namesCallerToolCall := write.lineage.hasParentToolCallDocId
+      queuedAfterActive := write.queuedAfterActive }
 
 structure SessionTargetCase where
   sameRequester : Bool
@@ -243,30 +298,26 @@ def capObservationCases : List CapObservationCase :=
   , ⟨"at_bound", some (some 1), 1⟩
   , ⟨"over_bound", some (some 1), 2⟩ ]
 
-def capObservationCaseJson (c : CapObservationCase) : String :=
-  let visible := c.observation.isSome
-  let cap := c.observation.getD none
-  let expected := CausalHop.admitObservedHop c.observation c.hop
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"visible\":" ++ toString visible
-    ++ ",\"cap\":" ++ optionalNatJson cap
-    ++ ",\"hop\":" ++ toString c.hop
-    ++ ",\"expected_bound\":" ++ optionalNatJson (CausalHop.observedHopBound c.observation)
-    ++ ",\"expected\":" ++ (match expected with
-      | none => "null"
-      | some value => toString value) ++ "}"
+structure CapObservationInput where
+  name : String
+  visible : Bool
+  cap : Option Nat
+  hop : Nat
+  deriving Lean.ToJson
 
-def capObservationCasesJson : String :=
-  jsonArray (capObservationCases.map capObservationCaseJson)
+structure CapObservationOutput where
+  expected : Option Bool
+  bound : Option Nat
+  deriving Lean.ToJson
 
-def chainCasesJson : String :=
-  jsonArray (chainCases.map chainCaseJson)
-
-def callCasesJson : String :=
-  jsonArray (callCases.map callCaseJson)
-
-def writeCasesJson : String :=
-  jsonArray (writeCases.map writeCaseJson)
+@[conformance_family]
+def capObservation : Family CapObservationInput CapObservationOutput where
+  inputs := capObservationCases.map fun c =>
+    { name := c.name, visible := c.observation.isSome, cap := c.observation.getD none, hop := c.hop }
+  model := fun i =>
+    let observation := if i.visible then some i.cap else none
+    { expected := CausalHop.admitObservedHop observation i.hop
+      bound := CausalHop.observedHopBound observation }
 
 structure StepInput where
   name : String

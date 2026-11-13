@@ -1044,16 +1044,16 @@ def caseCoverage : List CoverageEntry :=
       "contracts_pack_installation_store_record_retention")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "snapshot_demotion_cases"
-      "SnapshotDemotionCases")
+      "family"
+      "contracts_snapshot_demotion")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "startup_readiness_cases"
-      "StartupReadinessCases")
+      "family"
+      "contracts_startup_readiness")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "readiness_publication_cases"
-      "ReadinessPublicationCases"
+      "family"
+      "contracts_readiness_publication"
       "Pending the node readiness publisher rename (L3). The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage
@@ -1595,18 +1595,18 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: a native grant is a field of the create that carries it, so a grant on a document the result does not create has no production form; the model finds every such case invalid.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_supersede_cases"
-      "LifecycleHookSupersedeCases"
+      "family"
+      "hook_decisions_supersede"
       "Production Selector::stale classifies and renders every case from row facts. The facts' extraction from AgentRequest rows (receipt verification, the parent read by document) and the retirement through the pending-supersede path are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_goal_halt_cases"
-      "LifecycleHookGoalHaltCases"
+      "family"
+      "hook_decisions_goal_halt"
       "Production halt_verdict, with its RFC 3339 parsing, decides every case. The Goal write and outcome settlement PauseOnHalt stages for a pause verdict are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_history_cases"
-      "LifecycleHookHistoryCases"
+      "family"
+      "hook_decisions_history"
       "Production history_permitted decides every case. The DefraDB host's refusal of an out-of-bound revision read before answering it is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1660,12 +1660,12 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the served writer fixture has no unsafe provider-stream boundary and the owned loop has no durable queue; fold_queue_contracts_publication_unsafe_boundary replays the refused intake through run_loop_stream.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "retry_selection_cases"
-      "RetrySelectionCases")
+      "family"
+      "fold_queue_contracts_retry_selection")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "fold_turn_input_cases"
-      "FoldTurnInputCases")
+      "family"
+      "fold_queue_contracts_turn_input")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "family"

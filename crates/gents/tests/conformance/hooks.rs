@@ -1,6 +1,3 @@
-#[path = "hooks/decisions.rs"]
-mod decisions;
-
 use gents_lean_vocab::{lean_lifecycle_hook_rerun_cases, LeanLifecycleHookCarrier};
 use gents_session::request::hooks::stage::HookError;
 use gents_session::session::message::CommitError;

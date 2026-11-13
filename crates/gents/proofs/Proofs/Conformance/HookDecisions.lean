@@ -2,14 +2,10 @@ import Proofs.Session.Hooks.Supersede
 import Proofs.Session.Hooks.History
 import Proofs.Automation.Hooks.GoalHalt
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.HookDecisions
 open Hooks
-open Conformance.Contracts (jsonString jsonArray jsonStringArray)
-
-private def boolJson (value : Bool) : String := if value then "true" else "false"
-
-private def optionJson (value : Option String) : String := (value.map jsonString).getD "null"
 
 /-! `request.pending.supersede`: membership and the retirement reason of each
 retired continuation (`Hooks.Selector.stale`). -/
@@ -76,54 +72,115 @@ def supersedeCases : List SupersedeCase :=
     , rows := [continuation "absent" "p-missing", continuation "ordinary" "p-ordinary"]
     , parents := [parentRow "p-ordinary"] } ]
 
-private def referenceJson : Option (String × Option String) → String
-  | none => "null"
-  | some (goal, root) => "{\"goal\":" ++ jsonString goal ++ ",\"root\":" ++ optionJson root ++ "}"
+structure ReferenceWire where
+  goal : String
+  root : Option String
+  deriving Lean.ToJson
 
-private def linkJson : BrokenLink → String
-  | .unsigned => "unsigned"
-  | .otherGoal => "other_goal"
-  | .noParent => "no_parent"
-  | .parentAbsent => "parent_absent"
-  | .parentOutsideSession => "parent_outside_session"
-  | .parentUnsigned => "parent_unsigned"
-  | .diverges => "diverges"
+def ReferenceWire.ofModel : Option (String × Option String) → Option ReferenceWire
+  | none => none
+  | some (goal, root) => some { goal, root }
 
-private def ancestryJson : Ancestry → String
-  | .ordinary => "{\"kind\":\"ordinary\"}"
-  | .broken link => "{\"kind\":\"broken\",\"link\":" ++ jsonString (linkJson link) ++ "}"
+def ReferenceWire.toModel : Option ReferenceWire → Option (String × Option String)
+  | none => none
+  | some reference => some (reference.goal, reference.root)
 
-private def pendingRowJson (row : PendingRow) : String :=
-  "{\"doc\":" ++ jsonString row.doc ++ ",\"request\":" ++ jsonString row.request ++
-    ",\"pending\":" ++ boolJson row.pending ++
-    ",\"goal_continuation\":" ++ boolJson row.goalContinuation ++
-    ",\"trigger\":" ++ optionJson row.trigger ++ ",\"reference\":" ++ referenceJson row.reference ++
-    ",\"signed\":" ++ boolJson row.signed ++ ",\"parent\":" ++ optionJson row.parent ++ "}"
+structure PendingRowWire where
+  doc : String
+  request : String
+  pending : Bool
+  goalContinuation : Bool
+  trigger : Option String
+  reference : Option ReferenceWire
+  signed : Bool
+  parent : Option String
+  deriving Lean.ToJson
 
-private def parentRowJson (row : ParentRow) : String :=
-  "{\"doc\":" ++ jsonString row.doc ++ ",\"in_session\":" ++ boolJson row.inSession ++
-    ",\"signed\":" ++ boolJson row.signed ++ ",\"goal\":" ++ optionJson row.goal ++
-    ",\"reference\":" ++ referenceJson row.reference ++ "}"
+structure ParentRowWire where
+  doc : String
+  inSession : Bool
+  signed : Bool
+  goal : Option String
+  reference : Option ReferenceWire
+  deriving Lean.ToJson
 
-private def selectorJson (selector : Selector) : String :=
-  "{\"goal\":" ++ jsonString selector.goal ++ ",\"root\":" ++ jsonString selector.root ++
-    ",\"successor\":" ++ jsonString selector.successor ++
-    ",\"successor_doc\":" ++ jsonString selector.successorDoc ++
-    ",\"reason\":" ++ jsonString selector.reason ++ ",\"next\":" ++ optionJson selector.next ++ "}"
+structure SelectorWire where
+  goal : String
+  root : String
+  successor : String
+  successorDoc : String
+  reason : String
+  next : Option String
+  deriving Lean.ToJson
 
-private def staleJson (stale : StaleRequest) : String :=
-  "{\"doc\":" ++ jsonString stale.doc ++ ",\"request\":" ++ jsonString stale.request ++
-    ",\"successor\":" ++ jsonString stale.successor ++
-    ",\"successor_doc\":" ++ jsonString stale.successorDoc ++
-    ",\"reason\":" ++ jsonString stale.reason ++ ",\"ancestry\":" ++ ancestryJson stale.ancestry ++ "}"
+structure SupersedeInput where
+  name : String
+  selector : SelectorWire
+  rows : List PendingRowWire
+  parents : List ParentRowWire
+  deriving Lean.ToJson
 
-private def supersedeCaseJson (c : SupersedeCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"selector\":" ++ selectorJson c.selector ++
-    ",\"rows\":" ++ jsonArray (c.rows.map pendingRowJson) ++
-    ",\"parents\":" ++ jsonArray (c.parents.map parentRowJson) ++
-    ",\"stale\":" ++ jsonArray ((c.selector.stale c.rows c.parents).map staleJson) ++ "}"
+deriving instance Lean.ToJson for BrokenLink
 
-def supersedeCasesJson : String := jsonArray (supersedeCases.map supersedeCaseJson)
+inductive AncestryKind where
+  | ordinary
+  | broken
+  deriving Lean.ToJson
+
+structure AncestryWire where
+  kind : AncestryKind
+  link : Option BrokenLink
+  deriving Lean.ToJson
+
+structure StaleWire where
+  doc : String
+  request : String
+  successor : String
+  successorDoc : String
+  reason : String
+  ancestry : AncestryWire
+  deriving Lean.ToJson
+
+structure SupersedeOutput where
+  stale : List StaleWire
+  deriving Lean.ToJson
+
+def StaleWire.ofModel (stale : StaleRequest) : StaleWire :=
+  { doc := stale.doc, request := stale.request, successor := stale.successor
+    successorDoc := stale.successorDoc, reason := stale.reason
+    ancestry := match stale.ancestry with
+      | .ordinary => { kind := .ordinary, link := none }
+      | .broken link => { kind := .broken, link := some link } }
+
+@[conformance_family]
+def supersede : Family SupersedeInput SupersedeOutput where
+  inputs := supersedeCases.map fun c =>
+    { name := c.name
+      selector := { goal := c.selector.goal, root := c.selector.root
+                    successor := c.selector.successor, successorDoc := c.selector.successorDoc
+                    reason := c.selector.reason, next := c.selector.next }
+      rows := c.rows.map fun row =>
+        { doc := row.doc, request := row.request, pending := row.pending
+          goalContinuation := row.goalContinuation, trigger := row.trigger
+          reference := ReferenceWire.ofModel row.reference, signed := row.signed
+          parent := row.parent }
+      parents := c.parents.map fun row =>
+        { doc := row.doc, inSession := row.inSession, signed := row.signed, goal := row.goal
+          reference := ReferenceWire.ofModel row.reference } }
+  model := fun i =>
+    let selector : Selector :=
+      { goal := i.selector.goal, root := i.selector.root, successor := i.selector.successor
+        successorDoc := i.selector.successorDoc, reason := i.selector.reason
+        next := i.selector.next }
+    let rows : List PendingRow := i.rows.map fun row =>
+      { doc := row.doc, request := row.request, pending := row.pending
+        goalContinuation := row.goalContinuation, trigger := row.trigger
+        reference := ReferenceWire.toModel row.reference, signed := row.signed
+        parent := row.parent }
+    let parents : List ParentRow := i.parents.map fun row =>
+      { doc := row.doc, inSession := row.inSession, signed := row.signed, goal := row.goal
+        reference := ReferenceWire.toModel row.reference }
+    { stale := (selector.stale rows parents).map StaleWire.ofModel }
 
 /-! `control.session.halt`, the Goals listener (`Hooks.GoalHalt.verdict`). A
 time is its RFC 3339 text with the instant (nanoseconds since the epoch) the
@@ -178,30 +235,58 @@ def goalHaltCases : List GoalHaltCase :=
   , { name := "a_blocked_goal_is_left_alone", status := some .blocked, updated := none
     , halt := nine } ]
 
-def GoalHaltCase.goal (c : GoalHaltCase) : Option GoalHalt.Goal :=
-  c.status.map fun status =>
-    ⟨⟨status, 0, false, false⟩, c.updated.bind (·.instant)⟩
+structure StampWire where
+  text : String
+  instant : Option Int
+  deriving Lean.ToJson
 
-def GoalHaltCase.verdict (c : GoalHaltCase) : GoalHalt.Verdict :=
-  GoalHalt.verdict c.goal c.halt.instant
+def StampWire.ofStamp (stamp : Stamp) : StampWire := { text := stamp.text, instant := stamp.instant }
 
-private def stampJson (stamp : Stamp) : String :=
-  "{\"text\":" ++ jsonString stamp.text ++ ",\"instant\":" ++
-    ((stamp.instant.map toString).getD "null") ++ "}"
+structure GoalHaltInput where
+  name : String
+  status : Option String
+  updated : Option StampWire
+  halt : StampWire
+  deriving Lean.ToJson
 
-private def verdictJson : GoalHalt.Verdict → String
-  | .inactive => "{\"kind\":\"inactive\"}"
-  | .changedAfter => "{\"kind\":\"changed_after\"}"
-  | .unreadableHalt => "{\"kind\":\"unreadable_halt\"}"
-  | .pause paused => "{\"kind\":\"pause\",\"status\":" ++ jsonString paused.status.toDefraDB ++ "}"
+inductive HaltVerdictKind where
+  | inactive
+  | changedAfter
+  | unreadableHalt
+  | pause
+  deriving Lean.ToJson
 
-private def goalHaltCaseJson (c : GoalHaltCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"status\":" ++ optionJson (c.status.map Goals.Status.toDefraDB) ++
-    ",\"updated\":" ++ ((c.updated.map stampJson).getD "null") ++
-    ",\"halt\":" ++ stampJson c.halt ++ ",\"verdict\":" ++ verdictJson c.verdict ++ "}"
+structure PausedGoalWire where
+  status : String
+  blockedAudits : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  deriving Lean.ToJson
 
-def goalHaltCasesJson : String := jsonArray (goalHaltCases.map goalHaltCaseJson)
+structure GoalHaltOutput where
+  kind : HaltVerdictKind
+  paused : Option PausedGoalWire
+  deriving Lean.ToJson
+
+def GoalHaltOutput.ofVerdict : GoalHalt.Verdict → GoalHaltOutput
+  | .inactive => { kind := .inactive, paused := none }
+  | .changedAfter => { kind := .changedAfter, paused := none }
+  | .unreadableHalt => { kind := .unreadableHalt, paused := none }
+  | .pause paused =>
+      { kind := .pause
+        paused := some { status := paused.status.toDefraDB, blockedAudits := paused.blockedAudits
+                         wrapupRequested := paused.wrapupRequested
+                         wrapupCompleted := paused.wrapupCompleted } }
+
+@[conformance_family]
+def goalHalt : Family GoalHaltInput GoalHaltOutput where
+  inputs := goalHaltCases.map fun c =>
+    { name := c.name, status := c.status.map Goals.Status.toDefraDB
+      updated := c.updated.map StampWire.ofStamp, halt := StampWire.ofStamp c.halt }
+  model := fun i =>
+    let goal := (i.status.bind Goals.Status.fromDefraDB?).map fun status =>
+      (⟨⟨status, 0, false, false⟩, i.updated.bind (·.instant)⟩ : GoalHalt.Goal)
+    GoalHaltOutput.ofVerdict (GoalHalt.verdict goal i.halt.instant)
 
 /-! The bound on a declared history read (`Hooks.historyPermitted`). -/
 
@@ -235,16 +320,37 @@ def historyCases : List HistoryCase :=
     , history := ["AgentSession"], named := [⟨"AgentRequest", "request-1"⟩]
     , read := ⟨"AgentSession", some "request-1"⟩ } ]
 
-private def historyCaseJson (c : HistoryCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"owns\":" ++ jsonStringArray c.owns ++
-    ",\"history\":" ++ jsonStringArray c.history ++
-    ",\"named\":" ++ jsonArray (c.named.map fun ref =>
-      "{\"collection\":" ++ jsonString ref.collection ++ ",\"doc\":" ++ jsonString ref.doc ++ "}") ++
-    ",\"read\":{\"collection\":" ++ jsonString c.read.collection ++
-      ",\"doc\":" ++ optionJson c.read.doc ++ "}" ++
-    ",\"permitted\":" ++ boolJson (historyPermitted ⟨"plugin", c.owns, 0⟩ c.history c.named c.read) ++
-    "}"
+structure HistoryRefWire where
+  collection : String
+  doc : String
+  deriving Lean.ToJson
 
-def historyCasesJson : String := jsonArray (historyCases.map historyCaseJson)
+structure HistoryReadWire where
+  collection : String
+  doc : Option String
+  deriving Lean.ToJson
+
+structure HistoryInput where
+  name : String
+  owns : List String
+  history : List String
+  named : List HistoryRefWire
+  read : HistoryReadWire
+  deriving Lean.ToJson
+
+structure HistoryOutput where
+  permitted : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def history : Family HistoryInput HistoryOutput where
+  inputs := historyCases.map fun c =>
+    { name := c.name, owns := c.owns, history := c.history
+      named := c.named.map fun ref => { collection := ref.collection, doc := ref.doc }
+      read := { collection := c.read.collection, doc := c.read.doc } }
+  model := fun i =>
+    { permitted := historyPermitted ⟨"plugin", i.owns, 0⟩ i.history
+        (i.named.map fun ref => (⟨ref.collection, ref.doc⟩ : Ref String))
+        (⟨i.read.collection, i.read.doc⟩ : HistoryRead String) }
 
 end Conformance.HookDecisions

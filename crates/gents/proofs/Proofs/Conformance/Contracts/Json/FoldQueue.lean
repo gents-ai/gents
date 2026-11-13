@@ -28,30 +28,74 @@ def eventJson : Event → String
   | .consume => "{\"kind\":\"consume\"}"
   | .finish => "{\"kind\":\"finish\"}"
 
-def authoredKeyJson : AuthoredKey → String
-  | .context => "{\"kind\":\"context\"}"
-  | .prompt => "{\"kind\":\"prompt\"}"
-  | .folded id => "{\"kind\":\"folded\",\"request_id\":" ++ toString id ++ "}"
+inductive AuthoredKeyKind where
+  | context
+  | prompt
+  | folded
+  deriving Lean.ToJson
 
-def turnInputCaseJson (entry : String × TurnInput String) : String :=
-  let input := entry.2
-  "{\"name\":" ++ jsonString entry.1 ++
-  ",\"context\":" ++ (match input.context with | none => "null" | some c => jsonString c) ++
-  ",\"head\":" ++ jsonString input.head ++
-  ",\"folded\":" ++ jsonArray (input.folded.map fun (id, content) =>
-    "{\"request_id\":" ++ toString id ++ ",\"content\":" ++ jsonString content ++ "}") ++
-  ",\"authored\":" ++ jsonArray (input.authored.map fun (key, content) =>
-    "{\"key\":" ++ authoredKeyJson key ++ ",\"content\":" ++ jsonString content ++ "}") ++
-  ",\"provider_input\":" ++ jsonArray (input.providerInput.map jsonString) ++ "}"
+structure AuthoredKeyWire where
+  kind : AuthoredKeyKind
+  requestId : Option Nat
+  deriving Lean.ToJson
 
-def turnInputCasesJson : String := jsonArray (turnInputCases.map turnInputCaseJson)
+def AuthoredKeyWire.ofModel : AuthoredKey → AuthoredKeyWire
+  | .context => { kind := .context, requestId := none }
+  | .prompt => { kind := .prompt, requestId := none }
+  | .folded id => { kind := .folded, requestId := some id }
 
-def retrySelectionCasesJson : String := jsonArray (retrySelectionCases.map fun value =>
-  "{\"name\":" ++ jsonString value.name ++
-  ",\"parent_published\":" ++ jsonOptionalBool (some value.parentPublished) ++
-  ",\"selected\":" ++ jsonArray (value.selected.map toString) ++
-  ",\"resume\":" ++ jsonOptionalBool (some value.resume) ++
-  ",\"answered\":" ++ jsonArray (value.answered.map toString) ++ "}")
+structure FoldedWire where
+  requestId : Nat
+  content : String
+  deriving Lean.ToJson
+
+structure AuthoredWire where
+  key : AuthoredKeyWire
+  content : String
+  deriving Lean.ToJson
+
+structure TurnInputCase where
+  name : String
+  context : Option String
+  head : String
+  folded : List FoldedWire
+  deriving Lean.ToJson
+
+structure TurnInputObservation where
+  authored : List AuthoredWire
+  providerInput : List String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def turnInput : Family TurnInputCase TurnInputObservation where
+  inputs := turnInputCases.map fun (name, input) =>
+    { name, context := input.context, head := input.head
+      folded := input.folded.map fun (requestId, content) => { requestId, content } }
+  model := fun i =>
+    let input : TurnInput String :=
+      ⟨i.context, i.head, i.folded.map fun folded => (folded.requestId, folded.content)⟩
+    { authored := input.authored.map fun (key, content) =>
+        { key := AuthoredKeyWire.ofModel key, content }
+      providerInput := input.providerInput }
+
+structure RetrySelectionInput where
+  name : String
+  parentPublished : Bool
+  selected : List Nat
+  deriving Lean.ToJson
+
+structure RetrySelectionOutput where
+  resume : Bool
+  answered : List Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def retrySelection : Family RetrySelectionInput RetrySelectionOutput where
+  inputs := retrySelectionCases.map fun c =>
+    { name := c.name, parentPublished := c.parentPublished, selected := c.selected }
+  model := fun i =>
+    let value : RetrySelectionCase := ⟨i.name, i.parentPublished, i.selected⟩
+    { resume := value.resume, answered := value.answered }
 
 def managementStateJson (state : SessionQueueState) : String :=
   "{\"active\":" ++ jsonOptionalNat state.active ++

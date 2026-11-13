@@ -28,7 +28,7 @@ use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     lean_contract_snapshot, lean_queue_deadline_cases, lean_r6_backgrounding_case,
     lean_r6_backgrounding_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
-    lean_startup_readiness_cases, LeanLifecycleTransitionCase,
+    LeanLifecycleTransitionCase,
 };
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
