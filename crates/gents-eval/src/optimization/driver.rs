@@ -28,8 +28,8 @@ use crate::optimization::subject::{
     MaterializedPack,
 };
 use crate::optimization::target::{
-    baseline_equivalence, capture_closure, closure_digests, current_text, BaselineMismatch,
-    Closure, JobTarget, Target,
+    baseline_equivalence, capture_closure, closure_digests, current_text, BaselineError, Closure,
+    JobTarget, Target,
 };
 use crate::report::load_run_rows;
 use crate::runner::freeze;
@@ -898,14 +898,13 @@ async fn freeze_job(
     .context(
         "the optimization baseline must already be installed with its recorded agent bindings",
     )?;
-    if let Err(error) = baseline_equivalence(
+    match baseline_equivalence(
         &gents_documents::DesiredStateApplyPlan::from_pack_config(&installed.config)?,
         &closure,
     ) {
-        return Err(match error.downcast::<BaselineMismatch>() {
-            Ok(mismatch) => refused(mismatch.to_string()),
-            Err(error) => error,
-        });
+        Err(BaselineError::Mismatch(mismatch)) => return Err(refused(mismatch.to_string())),
+        Err(BaselineError::Other(error)) => return Err(error),
+        Ok(()) => {}
     }
 
     let baseline_path = baseline_dir(&request.jobs_dir, &request.job_id);
