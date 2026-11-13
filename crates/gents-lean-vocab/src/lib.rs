@@ -168,14 +168,6 @@ pub fn lean_state_machine_contract(domain: &str) -> &'static LeanStateMachineCon
         .unwrap_or_else(|| panic!("Lean state-machine contract {domain:?} was not emitted"))
 }
 
-pub fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileCase {
-    lean_contract_snapshot()
-        .runtime_reconcile_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
-}
-
 pub fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
     lean_contract_snapshot()
         .frontend_client_shell_cases

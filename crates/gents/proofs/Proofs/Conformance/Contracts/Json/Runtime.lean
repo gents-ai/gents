@@ -26,34 +26,150 @@ def readinessPublication : Family ReadinessPublicationInput ReadinessPublication
   inputs := [ { states := [0, 0, 0, 1, 1, 2] }, { states := [0, 1, 0, 0, 2] } ]
   model := fun i => { publishes := readinessPublicationTrace none i.states }
 
-def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
-  "{"
-    ++ "\"requested_agent\":" ++ jsonOptionalNat witness.requestedAgent ++ ","
-    ++ "\"pre_default_agent\":" ++ toString witness.preDefaultAgent ++ ","
-    ++ "\"pre_session_agent\":" ++ jsonOptionalNat witness.preSessionAgent ++ ","
-    ++ "\"pre_runnable\":" ++ jsonArray (witness.preRunnable.map toString) ++ ","
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal ++ ","
-    ++ "\"pre_phase\":" ++ jsonString witness.prePhase ++ ","
-    ++ "\"post_phase\":" ++ jsonString witness.postPhase ++ ","
-    ++ "\"pre_active_generation\":" ++ toString witness.preActiveGeneration ++ ","
-    ++ "\"post_active_generation\":" ++ toString witness.postActiveGeneration ++ ","
-    ++ "\"pre_router_generation\":" ++ toString witness.preRouterGeneration ++ ","
-    ++ "\"post_router_generation\":" ++ toString witness.postRouterGeneration ++ ","
-    ++ "\"pre_ready_generation_count\":" ++ toString witness.preReadyGenerationCount ++ ","
-    ++ "\"post_ready_generation_count\":" ++ toString witness.postReadyGenerationCount ++ ","
-    ++ "\"pre_live_generation_count\":" ++ toString witness.preLiveGenerationCount ++ ","
-    ++ "\"post_live_generation_count\":" ++ toString witness.postLiveGenerationCount ++ ","
-    ++ "\"pre_in_flight_count\":" ++ toString witness.preInFlightCount ++ ","
-    ++ "\"post_in_flight_count\":" ++ toString witness.postInFlightCount ++ ","
-    ++ "\"tracked_request_id\":" ++ toString witness.trackedRequestId ++ ","
-    ++ "\"tracked_session_id\":" ++ toString witness.trackedSessionId ++ ","
-    ++ "\"tracked_request_generation\":" ++ toString witness.trackedRequestGeneration ++ ","
-    ++ "\"tracked_request_session\":" ++ toString witness.trackedRequestSession ++ ","
-    ++ "\"tracked_request_agent\":" ++ toString witness.trackedRequestAgent ++ ","
-    ++ "\"tracked_session_agent\":" ++ toString witness.trackedSessionAgent
-    ++ "}"
+structure ReconcileInput where
+  name : String
+  action : String
+  requestedAgent : Option Nat
+  preDefaultAgent : Nat
+  preSessionAgent : Option Nat
+  preRunnable : List Nat
+  prePhase : String
+  preActiveGeneration : Nat
+  preRouterGeneration : Nat
+  preReadyGenerationCount : Nat
+  preLiveGenerationCount : Nat
+  preInFlightCount : Nat
+  trackedRequestId : Nat
+  trackedSessionId : Nat
+  deriving Lean.ToJson
+
+structure ReconcileOutput where
+  legal : Bool
+  postPhase : String
+  postActiveGeneration : Nat
+  postRouterGeneration : Nat
+  postReadyGenerationCount : Nat
+  postLiveGenerationCount : Nat
+  postInFlightCount : Nat
+  trackedRequestGeneration : Nat
+  trackedRequestSession : Nat
+  trackedRequestAgent : Nat
+  trackedSessionAgent : Nat
+  deriving Lean.ToJson
+
+structure ReconcileSelectionOutput where
+  legal : Bool
+  deriving Lean.ToJson
+
+structure ReconcileStatusOutput where
+  postPhase : String
+  postActiveGeneration : Nat
+  postRouterGeneration : Nat
+  deriving Lean.ToJson
+
+structure ReconcileRouterOutput where
+  legal : Bool
+  postRouterGeneration : Nat
+  deriving Lean.ToJson
+
+structure ReconcileSupervisorOutput where
+  postPhase : String
+  postActiveGeneration : Nat
+  deriving Lean.ToJson
+
+private def reconcileCase (name : String) : RuntimeReconcileCase :=
+  (runtimeReconcileCases.find? fun c => c.name == name).getD
+    (runtimeCaseFromStep "" "applyFailed" runtimeBoot .applyFailed)
+
+private def reconcileInput (c : RuntimeReconcileCase) : ReconcileInput :=
+  { name := c.name, action := c.action, requestedAgent := c.requestedAgent
+    preDefaultAgent := c.preDefaultAgent, preSessionAgent := c.preSessionAgent
+    preRunnable := c.preRunnable, prePhase := c.prePhase
+    preActiveGeneration := c.preActiveGeneration, preRouterGeneration := c.preRouterGeneration
+    preReadyGenerationCount := c.preReadyGenerationCount
+    preLiveGenerationCount := c.preLiveGenerationCount, preInFlightCount := c.preInFlightCount
+    trackedRequestId := c.trackedRequestId, trackedSessionId := c.trackedSessionId }
+
+private def reconcileInputs (names : List String) : List ReconcileInput :=
+  (runtimeReconcileCases.filter fun c => c.name ∈ names).map reconcileInput
+
+/-- Agent resolution reads the session's bound Agent and the requested Agent;
+the private-session fixture binds a session to one of two readable Agents, so
+it builds the explicit selections between two runnable Agents on a ready
+runtime. -/
+def selectionNames : List String :=
+  ["default-A-explicit-B-binds-B", "existing-A-requested-B-rejected",
+    "existing-A-requested-A-accepted"]
+
+@[conformance_family]
+def runtimeReconcileSelection : Family ReconcileInput ReconcileSelectionOutput where
+  inputs := reconcileInputs selectionNames
+  model := fun i => { legal := (reconcileCase i.name).legal }
+
+/-- The runtime status handle persists a published generation and a router
+observation, so it builds the publish and router-observe steps. -/
+def statusNames : List String :=
+  ["publish_changed_snapshot", "router_observe_published_generation"]
+
+@[conformance_family]
+def runtimeReconcileStatus : Family ReconcileInput ReconcileStatusOutput where
+  inputs := reconcileInputs statusNames
+  model := fun i =>
+    let c := reconcileCase i.name
+    { postPhase := c.postPhase, postActiveGeneration := c.postActiveGeneration
+      postRouterGeneration := c.postRouterGeneration }
+
+/-- The router observes the active snapshot's generation and holds a request
+until that generation is the one it routes with, so it builds the router
+observation and the accept after it. -/
+def routerNames : List String :=
+  ["router_observe_published_generation", "accept_request_after_router_observe"]
+
+@[conformance_family]
+def runtimeReconcileRouter : Family ReconcileInput ReconcileRouterOutput where
+  inputs := reconcileInputs routerNames
+  model := fun i =>
+    let c := reconcileCase i.name
+    { legal := c.legal, postRouterGeneration := c.postRouterGeneration }
+
+/-- The generation supervisor applies a proposed snapshot or keeps the
+previous generation when the proposal fails to apply. -/
+def supervisorNames : List String :=
+  ["publish_changed_snapshot", "apply_failed_clears_pending"]
+
+@[conformance_family]
+def runtimeReconcileSupervisor : Family ReconcileInput ReconcileSupervisorOutput where
+  inputs := reconcileInputs supervisorNames
+  model := fun i =>
+    let c := reconcileCase i.name
+    { postPhase := c.postPhase, postActiveGeneration := c.postActiveGeneration }
+
+example : (reconcileCase "publish_changed_snapshot").legal = true ∧
+    (reconcileCase "apply_failed_clears_pending").legal = true := by native_decide
+
+/-- model-production-gap: no production scenario drives a request finish
+releasing its generation, a replayed accept, retiring an unobserved
+generation, a resolve over a snapshot with a missing dependency, an unknown or
+demoted explicit selection, or an explicit request before the router observes
+the published generation; the served runtime fixtures cannot seed these
+pre-states. -/
+@[conformance_family]
+def runtimeReconcileUnreached : Family ReconcileInput ReconcileOutput where
+  inputs := (runtimeReconcileCases.filter fun c =>
+    !(selectionNames ++ statusNames ++ routerNames ++ supervisorNames).contains c.name).map
+      reconcileInput
+  model := fun i =>
+    let c := reconcileCase i.name
+    { legal := c.legal, postPhase := c.postPhase
+      postActiveGeneration := c.postActiveGeneration
+      postRouterGeneration := c.postRouterGeneration
+      postReadyGenerationCount := c.postReadyGenerationCount
+      postLiveGenerationCount := c.postLiveGenerationCount
+      postInFlightCount := c.postInFlightCount
+      trackedRequestGeneration := c.trackedRequestGeneration
+      trackedRequestSession := c.trackedRequestSession
+      trackedRequestAgent := c.trackedRequestAgent
+      trackedSessionAgent := c.trackedSessionAgent }
 
 def queueDeadlineConformanceCaseJson
     (witness : QueueDeadlineConformanceCase) : String :=

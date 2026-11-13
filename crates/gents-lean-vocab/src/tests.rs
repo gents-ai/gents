@@ -253,7 +253,6 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_lean_transition_is_legal("InferenceCall", "queued", "running");
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");
     assert_lean_transition_is_legal("InferenceCall", "running", "failed");
-    assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert_eq!(
         lean_contract_snapshot().request_transition_cases.len(),
         lean_vocabulary_values("RequestState").len().pow(2)

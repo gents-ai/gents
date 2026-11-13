@@ -12,7 +12,7 @@ use crate::runtime::status::RuntimeStatusHandle;
 use gents_inference::admission::BackendAdmissionConfig;
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::ResolvedAgent;
-use gents_lean_vocab::lean_runtime_reconcile_case;
+use gents_lean_vocab::families::contracts_runtime_reconcile_supervisor::ReconcileInput;
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
@@ -1453,11 +1453,7 @@ async fn await_settled_runtime_status(
     .expect("supervisor publishes its terminal status after the active snapshot")
 }
 
-#[tokio::test]
-async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
-    let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
-    assert!(publish.legal);
-
+async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, String) {
     let db = test_node().await;
     let node = db.node.clone();
     let node_did = node
@@ -1527,10 +1523,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     .await
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
-    assert_eq!(
-        active_snapshot.generation,
-        publish.pre_active_generation as u64
-    );
+    assert_eq!(active_snapshot.generation, input.pre_active_generation);
     assert!(active_snapshot.dispatchers.contains_key(&agent_did));
     let (active_tx, mut active_rx) = watch::channel(active_snapshot);
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
@@ -1562,10 +1555,6 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         .unwrap();
     let updated_active = active_rx.borrow().clone();
     assert_eq!(
-        updated_active.generation,
-        publish.post_active_generation as u64
-    );
-    assert_eq!(
         updated_active
             .agents
             .get(&agent_did)
@@ -1574,7 +1563,6 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         "updated prompt"
     );
     let status = await_settled_runtime_status(&node, node_did).await;
-    assert_eq!(status.reconcile_phase, publish.post_phase.as_str());
     assert_eq!(status.last_reconcile_result, "applied");
     assert!(status.last_reconcile_error.is_empty());
 
@@ -1602,13 +1590,10 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         .expect("supervisor should stop on shutdown")
         .unwrap()
         .unwrap();
+    (updated_active.generation, status.reconcile_phase)
 }
 
-#[tokio::test]
-async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
-    let apply_failed = lean_runtime_reconcile_case("apply_failed_clears_pending");
-    assert!(apply_failed.legal);
-
+async fn keep_previous_generation_after_failed_apply(input: &ReconcileInput) -> (u64, String) {
     let db = test_node().await;
     let node = db.node.clone();
     let node_did = node
@@ -1686,6 +1671,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     .await
     .unwrap();
     let initial_active = supervisor.current_snapshot();
+    assert_eq!(initial_active.generation, input.pre_active_generation);
     let (active_tx, mut active_rx) = watch::channel(initial_active.clone());
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
 
@@ -1694,15 +1680,8 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     proposal_tx.send(invalid_snapshot).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!active_rx.has_changed().unwrap());
-    assert_eq!(
-        active_rx.borrow().generation,
-        apply_failed.post_active_generation as u64
-    );
+    let failed_generation = active_rx.borrow().generation;
     let failed_status = await_settled_runtime_status(&node, node_did).await;
-    assert_eq!(
-        failed_status.reconcile_phase,
-        apply_failed.post_phase.as_str()
-    );
     assert_eq!(failed_status.last_reconcile_result, "error");
     assert!(!failed_status.last_reconcile_error.is_empty());
 
@@ -1723,6 +1702,24 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         .expect("supervisor should stop on shutdown")
         .unwrap()
         .unwrap();
+    (failed_generation, failed_status.reconcile_phase)
+}
+
+#[tokio::test]
+async fn generation_supervisor_steps_match_lean_runtime_reconcile_cases() {
+    for case in gents_lean_vocab::families::contracts_runtime_reconcile_supervisor::cases() {
+        let (post_active_generation, post_phase) = match case.input.action.as_str() {
+            "publish" => rotate_dispatcher_on_agent_change(&case.input).await,
+            "applyFailed" => keep_previous_generation_after_failed_apply(&case.input).await,
+            other => panic!("the supervisor fixture cannot drive {other}"),
+        };
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_reconcile_supervisor::ReconcileSupervisorOutput {
+                post_phase,
+                post_active_generation,
+            },
+        );
+    }
 }
 
 struct FailGenerationSourceWriter {

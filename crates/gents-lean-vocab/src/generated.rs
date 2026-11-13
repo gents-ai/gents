@@ -129,10 +129,6 @@ pub fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase]
     &lean_contract_snapshot().request_transition_cases
 }
 
-pub fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
-    &lean_contract_snapshot().runtime_reconcile_cases
-}
-
 pub fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
     &lean_contract_snapshot().session_input_edit_cases
 }
@@ -1160,7 +1156,6 @@ pub struct LeanContractSnapshot {
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub client_session_turn_cases: Vec<LeanSessionTurnCase>,
-    pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
     pub native_filesystem_boundary_cases: Vec<LeanNativeFilesystemBoundaryCase>,
@@ -3375,35 +3370,6 @@ pub enum LeanRequestPurpose {
     TitleAudit,
     #[serde(rename = "access-review")]
     AccessReview,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanRuntimeReconcileCase {
-    pub requested_agent: Option<usize>,
-    pub pre_default_agent: usize,
-    pub pre_session_agent: Option<usize>,
-    pub pre_runnable: Vec<usize>,
-    pub name: String,
-    pub action: String,
-    pub legal: bool,
-    pub pre_phase: String,
-    pub post_phase: String,
-    pub pre_active_generation: usize,
-    pub post_active_generation: usize,
-    pub pre_router_generation: usize,
-    pub post_router_generation: usize,
-    pub pre_ready_generation_count: usize,
-    pub post_ready_generation_count: usize,
-    pub pre_live_generation_count: usize,
-    pub post_live_generation_count: usize,
-    pub pre_in_flight_count: usize,
-    pub post_in_flight_count: usize,
-    pub tracked_request_id: usize,
-    pub tracked_session_id: usize,
-    pub tracked_request_generation: usize,
-    pub tracked_request_session: usize,
-    pub tracked_request_agent: usize,
-    pub tracked_session_agent: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

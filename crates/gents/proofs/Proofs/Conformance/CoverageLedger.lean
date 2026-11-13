@@ -1017,10 +1017,22 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_goal_decision")
       "durable-goals" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "runtime_reconcile_cases"
-      "RuntimeReconcileCases"
-      "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_status")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_router")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_supervisor")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_runtime_reconcile_unreached"
+      "model-production-gap: no production scenario drives a request finish releasing its generation, a replayed accept, retiring an unobserved generation, a resolve over a snapshot with a missing dependency, an unknown or demoted explicit selection, or an explicit request before the router observes the published generation; the served runtime fixtures cannot seed these pre-states.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -3150,8 +3162,7 @@ def caseCoverage : List CoverageEntry :=
       "contracts_callback_denial")
       "isolated-workspaces" [Surface.runtimeInternal]
 
-  , tagged (consumerWithFollowUp "runtime_reconcile_cases" "RuntimeReconcileCases"
-      "Pending the L3 test rename. Exercises explicit request/session agent binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
+  , tagged (consumerCoverage "family" "contracts_runtime_reconcile_selection")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
       "Canonical input serde only. Signed canonical_input_fields/bytes, context whitelist, title materialization and verified goal receipt checks need the migrated admission/signing owners.")

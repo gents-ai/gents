@@ -7,9 +7,7 @@ use tokio::sync::mpsc;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use super::*;
-use gents_lean_vocab::{
-    lean_process_transition_cases, lean_runtime_reconcile_case, LeanLifecycleTransitionCase,
-};
+use gents_lean_vocab::{lean_process_transition_cases, LeanLifecycleTransitionCase};
 
 #[derive(Debug, Deserialize)]
 struct NodeRuntimeRow {
@@ -843,101 +841,83 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     assert_eq!(readiness.router_generation, 2);
 }
 
+fn reconcile_snapshot(generation: u64) -> ActiveRuntimeSnapshot {
+    ActiveRuntimeSnapshot {
+        generation,
+        node: None,
+        local_did: String::new(),
+        default_agent_did: "general".to_string(),
+        tool_configs: Default::default(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: unavailable_general(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
+    }
+}
+
+async fn published_readiness(
+    node: &Arc<defra_node::Node>,
+) -> gents_protocol::node_readiness::NodeReadinessSnapshot {
+    serde_json::from_str(
+        &fetch_node_readiness_row(node, node.node_identity_did().unwrap())
+            .await
+            .snapshot_json,
+    )
+    .expect("decode published runtime contract readiness")
+}
+
 #[tokio::test]
 async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() {
-    let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
-    let router = lean_runtime_reconcile_case("router_observe_published_generation");
-    assert!(publish.legal);
-    assert!(router.legal);
-
-    let db = test_node().await;
-    let node = db.node.clone();
-
-    let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
-    let startup = ActiveRuntimeSnapshot {
-        generation: publish.pre_active_generation as u64,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: "general".to_string(),
-        tool_configs: Default::default(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: unavailable_general(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: RapidHashSet::new(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: RapidHashSet::new(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    };
-    let applied = ActiveRuntimeSnapshot {
-        generation: publish.post_active_generation as u64,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: "general".to_string(),
-        tool_configs: Default::default(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: unavailable_general(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: RapidHashSet::new(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: RapidHashSet::new(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    };
-
-    status.publish_startup_snapshot(&startup).await.unwrap();
-    status
-        .publish_router_generation(publish.pre_router_generation as u64)
-        .await
-        .unwrap();
-    status.set_reconcile_phase(ReconcilePhase::Applying).await;
-    status.publish_applied(&applied).await;
-    let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
-    assert_eq!(row.reconcile_phase, publish.post_phase.as_str());
-    assert_eq!(row.last_reconcile_result, "applied");
-    let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(&node, node.node_identity_did().unwrap())
+    for case in gents_lean_vocab::families::contracts_runtime_reconcile_status::cases() {
+        let input = &case.input;
+        let db = test_node().await;
+        let node = db.node.clone();
+        let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
+        status
+            .publish_startup_snapshot(&reconcile_snapshot(input.pre_active_generation))
             .await
-            .snapshot_json,
-    )
-    .expect("decode published runtime contract readiness");
-    assert_eq!(
-        readiness.active_generation,
-        publish.post_active_generation as u64
-    );
-    assert_eq!(
-        readiness.router_generation,
-        publish.post_router_generation as u64
-    );
-
-    status
-        .publish_router_generation(router.post_router_generation as u64)
-        .await
-        .unwrap();
-    let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
-    assert_eq!(row.reconcile_phase, router.post_phase.as_str());
-    let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(&node, node.node_identity_did().unwrap())
+            .unwrap();
+        status
+            .publish_router_generation(input.pre_router_generation)
             .await
-            .snapshot_json,
-    )
-    .expect("decode router-observed readiness");
-    assert_eq!(
-        readiness.active_generation,
-        router.post_active_generation as u64
-    );
-    assert_eq!(
-        readiness.router_generation,
-        router.post_router_generation as u64
-    );
+            .unwrap();
+        let phase: ReconcilePhase =
+            serde_json::from_value(serde_json::Value::String(input.pre_phase.clone())).unwrap();
+        status.set_reconcile_phase(phase).await;
+        match input.action.as_str() {
+            "publish" => {
+                status
+                    .publish_applied(&reconcile_snapshot(
+                        crate::runtime::agent::next_generation(input.pre_active_generation),
+                    ))
+                    .await;
+                let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
+                assert_eq!(row.last_reconcile_result, "applied", "{}", input.name);
+            }
+            "routerObserve" => {
+                let observed = published_readiness(&node).await.active_generation;
+                status.publish_router_generation(observed).await.unwrap();
+            }
+            other => panic!("the status fixture cannot drive {other}"),
+        }
+        let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
+        let readiness = published_readiness(&node).await;
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_reconcile_status::ReconcileStatusOutput {
+                post_phase: row.reconcile_phase.clone(),
+                post_active_generation: readiness.active_generation,
+                post_router_generation: readiness.router_generation,
+            },
+        );
+    }
 }
 
 #[tokio::test]
