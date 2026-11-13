@@ -13,6 +13,14 @@ pub(crate) struct ExecutionGeneration(String);
 #[error("execution lease expired or ownership was revoked")]
 pub struct ExecutionOwnershipLost;
 
+impl ExecutionOwnershipLost {
+    /// Whether the lost lease is the root or a context of an erased
+    /// execution failure.
+    pub fn occurs_in(error: &anyhow::Error) -> bool {
+        error.is::<Self>()
+    }
+}
+
 impl Drop for RequestLifecycle {
     fn drop(&mut self) {
         self.renewal_task.take();

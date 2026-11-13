@@ -2051,10 +2051,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
     // MissingReference in ConfigCommandTool::validate_saved
     ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
-    // ExecutionOwnershipLost in drive_inference_stream
-    ("crates/gents/src/runtime/agent/daemon/inference/drive.rs", 1),
-    // ExecutionOwnershipLost in lost_execution_ownership
-    ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
     // StaleCompactionGeneration in is_stale_compaction_generation
     ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
     // ReplayEvidenceViolation in replay_resolution_error
@@ -2087,6 +2083,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-protocol/src/output/recovery.rs", &["RecoveryPlanError::in_chain"]),
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
+    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", &["ExecutionOwnershipLost::occurs_in"]),
     ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),
     ("crates/gents-session/src/session/output.rs", &["CanonicalOutputReadError::in_error"]),
     ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
