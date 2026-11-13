@@ -1995,8 +1995,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-client-host/src/editor_store.rs", 1),
     // Error in Listener::bind
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
-    // TryLockError in reserve_client_listener
-    ("crates/gents-desktop-bridge/src/tauri_commands/lifecycle/single_flight.rs", 1),
     // RemoteP2pAdminError in ClientRouteManager::reconcile_route
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
     // ModelDiscoveryHttpError in classify_discovery_failure
