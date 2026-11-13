@@ -1,6 +1,7 @@
 use gents_protocol::request_lifecycle::SessionMessageTarget;
 use gents_protocol::tool_call::AwaitMode;
 use gents_session::session::message::plan::PlannedWrite;
+use gents_session::session::message::MessageContent;
 use gents_session::session::message::*;
 use gents_store::graphql::escape_graphql_string;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
@@ -64,7 +65,10 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
             &NoSessionMessageGoals,
             &cause,
             &target,
-            (body, None),
+            MessageContent {
+                rendered: body,
+                title: None,
+            },
             if input.delivery == "steer" {
                 AgentMessageDelivery::Steer
             } else {

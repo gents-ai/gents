@@ -1,4 +1,5 @@
 use gents_protocol::request_lifecycle::SessionMessageTarget;
+use gents_session::session::message::MessageContent;
 use gents_session::session::message::*;
 use gents_toolcalls::call::lifecycle::admission_fixture::{owner, set_state, started};
 
@@ -108,13 +109,13 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
             &NoSessionMessageGoals,
             &cause,
             &target,
-            (
-                RenderedBody {
+            MessageContent {
+                rendered: RenderedBody {
                     content: "change course".to_owned(),
                     goal: None,
                 },
-                None,
-            ),
+                title: None,
+            },
             AgentMessageDelivery::Steer,
             &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
         )
@@ -147,13 +148,13 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        (
-            RenderedBody {
+        MessageContent {
+            rendered: RenderedBody {
                 content: "queued turn".to_owned(),
                 goal: None,
             },
-            None,
-        ),
+            title: None,
+        },
         AgentMessageDelivery::Queue,
         &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
