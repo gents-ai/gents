@@ -355,6 +355,34 @@ describe("the Packs page", () => {
     );
   });
 
+  it("describes each installed pack from the list itself, asking the registry for none", async () => {
+    const packInfo = vi.fn(async () => ({ description: "From its own page" }));
+    show(undefined, {
+      listInstalledPacks: async () => ({
+        packs: [
+          {
+            ...research,
+            description: "Searches the web and writes a cited summary.",
+            owner: "me",
+          },
+          { ...research, pack: "acme/notes", outdated: false, owner: "acme" },
+        ],
+      }),
+      readPackAccount: async () => ({ account: { username: "me" } }),
+      packInfo,
+    });
+    const installed = await screen.findByRole("list", { name: "Installed packs" });
+    const rows = within(installed).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(
+      within(rows[0]!).getByText("Searches the web and writes a cited summary."),
+    ).toBeInTheDocument();
+    expect(await within(rows[0]!).findByText("Yours")).toBeInTheDocument();
+    expect(within(rows[1]!).queryByText("Yours")).toBeNull();
+    await act(async () => {});
+    expect(packInfo).not.toHaveBeenCalled();
+  });
+
   it("updates every pack that has an update, one after another", async () => {
     const updated: string[] = [];
     let running = 0;

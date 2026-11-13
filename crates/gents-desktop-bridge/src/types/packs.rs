@@ -20,6 +20,14 @@ pub struct InstalledPackView {
     pub latest: Option<String>,
     pub outdated: Option<bool>,
     pub error: Option<String>,
+    /// What the registry says the pack is, read with its latest version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    /// The registry account that published it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -418,4 +426,37 @@ pub struct DynamicWorkflowView {
     pub view: gents_protocol::job::JobView,
     pub script: String,
     pub promoted_as: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* the installed report names the registry's words on a pack when it
+    read them, and stands without them when the registry had none */
+    #[test]
+    fn an_installed_pack_carries_what_the_registry_said_of_it() {
+        let report: InstalledPacksView = serde_json::from_value(serde_json::json!({ "packs": [
+            { "pack": "demo/research", "installed": "1.0.0", "digest": "sha256:0",
+              "latest": "1.1.0", "outdated": true, "error": null,
+              "description": "Searches the web", "owner": "demo" },
+            { "pack": "demo/offline", "installed": "0.2.0", "latest": null,
+              "outdated": null, "error": "offline", "description": null, "owner": null },
+            { "pack": "demo/older", "installed": "0.1.0", "latest": null,
+              "outdated": null, "error": null },
+        ] }))
+        .unwrap();
+        assert_eq!(
+            report.packs[0].description.as_deref(),
+            Some("Searches the web")
+        );
+        assert_eq!(report.packs[0].owner.as_deref(), Some("demo"));
+        for unread in &report.packs[1..] {
+            assert_eq!(unread.description, None);
+            assert_eq!(unread.owner, None);
+        }
+        let sent = serde_json::to_value(&report.packs[2]).unwrap();
+        assert!(sent.get("description").is_none());
+        assert!(sent.get("owner").is_none());
+    }
 }

@@ -37,7 +37,17 @@ pub(crate) async fn outdated_packs_on(
     let mut report = Vec::new();
     for pack in installed {
         let (namespace, name) = super::split_namespace(&pack.coordinate);
-        let (latest, outdated, error) = match client.package(namespace, name).await {
+        let page = client.package(namespace, name).await;
+        // The registry's page was read for the latest version; what it says
+        // of the pack goes with it, so a list of packs asks once for each.
+        let said = |field: &str| {
+            page.as_ref()
+                .ok()
+                .and_then(|package| package[field].as_str())
+                .map(str::to_owned)
+        };
+        let (description, owner) = (said("description"), said("owner"));
+        let (latest, outdated, error) = match page {
             Err(error) => (None, None, Some(format!("{error:#}"))),
             Ok(package) => match package["latest"].as_str() {
                 None => (
@@ -65,6 +75,8 @@ pub(crate) async fn outdated_packs_on(
             "latest": latest,
             "outdated": outdated,
             "error": error,
+            "description": description,
+            "owner": owner,
         }));
     }
     Ok(report)
