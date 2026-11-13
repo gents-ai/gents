@@ -2200,8 +2200,8 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
                     attempt_return_observed = first_result.is_some() || first_attempt.is_finished();
                 }
                 "renewal_requested" => {
-                    let actually_returned = first_result.is_some() || first_attempt.is_finished();
-                    if attempt_return_observed && actually_returned {
+                    attempt_return_observed = first_result.is_some() || first_attempt.is_finished();
+                    if attempt_return_observed {
                         let current = request_row(&access, &doc_id).await;
                         let next_deadline = DateTime::parse_from_rfc3339(
                             current
