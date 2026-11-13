@@ -291,7 +291,7 @@ Next: give it tools (["help","tools"]) and test it in a fresh session.
   "admitted": true,
   "operation": "create",
   "agent_did": "<CREATED_8>",
-  "host_root_access": {"answer":"Saved, but <CREATED_8> cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot <ROOT>. Until then the runtime cannot load its tools and reports the agent unavailable.","how_to_proceed":"Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.","published_root":"<ROOT>","state":"waiting_for_user","user_command":"gents config workspace-root grant-reader --graphql GRAPHQL_URL --path <ROOT> --agent-did <CREATED_8>"},
+  "host_root_access": {"answer":"Saved, but <CREATED_8> cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot <ROOT>. Until then the runtime cannot load its tools and reports the agent unavailable.","how_to_proceed":"Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.","published_root":"<ROOT>","state":"waiting_for_user","user_command":"gents config workspace-root grant-reader --path <ROOT> --agent-did <CREATED_8>"},
   "agent": {"agent_did":"<CREATED_8>","creation_nonce":"<NONCE_8>","node_did":"<NODE>","display_name":"Scout","context_id":"<CREATED_8>:context","inference_profile_id":"<SELF>:inference"},
   "make_default": false,
   "config_execution": {"version":1,"mutation_entered":true}

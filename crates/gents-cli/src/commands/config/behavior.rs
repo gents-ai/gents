@@ -167,11 +167,32 @@ async fn create_agent(
     Ok(serde_json::to_value(receipt)?)
 }
 
-async fn submit_create(graphql: &str, owner: &str, input: AgentCreateInput) -> Result<()> {
-    let endpoint = gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)?;
+async fn submit_create(
+    home: Option<&std::path::Path>,
+    graphql: Option<&str>,
+    owner: &str,
+    input: AgentCreateInput,
+) -> Result<()> {
+    let endpoint = gents_service::home_state::resolve_graphql_endpoint(graphql, home)?;
     let identity_binding = gents_desktop_core::agent_identity::provision(&endpoint, owner).await?;
     let access = ConfigAccess::Graphql(endpoint);
-    print_json(&create_agent(&access, owner, identity_binding, &input).await?)
+    let mut receipt = create_agent(&access, owner, identity_binding, &input).await?;
+    if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {
+        *command = with_target(command, home, graphql);
+    }
+    print_json(&receipt)
+}
+
+/// `command` addressed to the runtime this invocation selected.
+fn with_target(command: &str, home: Option<&std::path::Path>, graphql: Option<&str>) -> String {
+    let mut command = command.to_owned();
+    if let Some(home) = home {
+        command.push_str(&format!(" --home {}", home.display()));
+    }
+    if let Some(graphql) = graphql.map(str::trim).filter(|graphql| !graphql.is_empty()) {
+        command.push_str(&format!(" --graphql {graphql}"));
+    }
+    command
 }
 
 fn optional_update(value: Option<String>) -> StringUpdate {
@@ -255,7 +276,8 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
         AgentCreateOperation::Create
     };
     submit_create(
-        &args.graphql,
+        args.home.as_deref(),
+        Some(&args.graphql),
         &args.node_did,
         AgentCreateInput {
             operation,
@@ -275,7 +297,8 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
 pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
     submit_create(
-        &args.graphql,
+        args.home.as_deref(),
+        Some(&args.graphql),
         &owner,
         AgentCreateInput {
             operation: AgentCreateOperation::Clone,
@@ -736,7 +759,7 @@ mod tests {
     "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     "published_root": "<ROOT>",
     "state": "waiting_for_user",
-    "user_command": "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path <ROOT> --agent-did <CREATED>"
+    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CREATED>"
   },
   "make_default": false,
   "operation": "create"
@@ -759,7 +782,7 @@ mod tests {
     "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     "published_root": "<ROOT>",
     "state": "waiting_for_user",
-    "user_command": "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path <ROOT> --agent-did <CLONED>"
+    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CLONED>"
   },
   "make_default": false,
   "operation": "clone"

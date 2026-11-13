@@ -411,7 +411,9 @@ pub(crate) struct WorkspaceRootUpsertArgs {
 #[derive(clap::Args)]
 pub(crate) struct WorkspaceRootReaderArgs {
     #[arg(long)]
-    pub(crate) graphql: String,
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) path: PathBuf,
     #[arg(long)]
