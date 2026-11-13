@@ -1,12 +1,13 @@
 use rapidhash::{HashSetExt, RapidHashSet};
 
 use gents_protocol::message::ReasoningContent;
-use rig::completion::CompletionError;
-use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 use serde_json::Value;
 
 use super::{MessagesParseError, ThinkingParseCause};
 use crate::clients::claude_subscription::ClaudeStreamResponse;
+use crate::llm::rig_compat::completion::{
+    CompletionError, RawStreamingChoice, RawStreamingToolCall, Usage,
+};
 use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
 
 /// Incremental SSE parser for one Messages response.
@@ -23,7 +24,7 @@ pub struct MessagesSseState {
     pending: Option<PendingBlock>,
     last_reasoning_index: Option<u64>,
     seen_ids: RapidHashSet<String>,
-    usage: Option<rig::completion::Usage>,
+    usage: Option<Usage>,
     usage_fields: serde_json::Map<String, Value>,
     data: String,
     finished: bool,
@@ -162,7 +163,7 @@ impl MessagesSseState {
             }
         }
         let usage = messages_token_usage(&self.usage_fields, false)?;
-        self.usage = Some(rig::completion::Usage {
+        self.usage = Some(Usage {
             input_tokens: usage.input_tokens.unwrap_or_default(),
             output_tokens: usage.output_tokens.unwrap_or_default(),
             total_tokens: usage.input_tokens.unwrap_or_default()
