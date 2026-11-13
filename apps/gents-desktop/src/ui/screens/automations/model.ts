@@ -5,6 +5,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { agentReadiness } from "@/lib/agent-readiness";
+import { requestPhase } from "../workers";
 import {
   actionInWords,
   lastRunFailed,
@@ -166,6 +167,19 @@ export const matches = (a: Automation, query: string) => {
   const q = query.trim().toLowerCase();
   return !q || [a.name, a.does, a.when].some((s) => s.toLowerCase().includes(q));
 };
+
+const PHASE_WORDS = {
+  waiting: "Waiting",
+  working: "Running",
+  done: "Done",
+  failed: "Failed",
+  stopped: "Stopped",
+} as const;
+
+export const runInWords = (run: TaskRunSummaryView) =>
+  `${run.causedByTriggerKind ? `By its ${run.causedByTriggerKind}` : "By hand"} · ${
+    run.lifecycleState ? PHASE_WORDS[requestPhase(run.lifecycleState)] : "Unknown"
+  }`;
 
 /** an automation's recent runs, newest first: a trigger's own, or every run
     of a hand-run task */
