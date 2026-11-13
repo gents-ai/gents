@@ -332,3 +332,128 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
         case.check(verified);
     }
 }
+
+/// The runtime command owner answers a client's idle resume by publishing the
+/// continuation as the selected Agent; each modeled reader then reads that
+/// request on the served node as the session model says.
+#[tokio::test]
+async fn generated_resume_continuation_is_read_through_the_session() {
+    let modeled =
+        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>()
+            .into_iter()
+            .find(|case| case.input.name == "paused_authorized_idle_current_resume")
+            .expect("modeled idle client resume");
+    let node = FixtureNode::start().await;
+    let fixture = node
+        .fixture_with_parent_state(
+            &serde_json::to_value(&modeled.input.before.execution).unwrap(),
+            true,
+        )
+        .await;
+    let access = fixture.user_access();
+    let session = access
+        .transact_readonly("test.goal_session", |txn| {
+            Box::pin(async {
+                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    fixture.identity.did(),
+                    &fixture.session,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let revision = fixture.goal_commit(&fixture.goal.doc_id).await.cid;
+    let now = Utc::now();
+    let mut command = SessionGoalControl {
+        version: SESSION_GOAL_CONTROL_VERSION,
+        command_id: uuid::Uuid::new_v4().to_string(),
+        requester_did: fixture.user.did().into(),
+        requester_peer_id: None,
+        node_did: fixture.identity.did().into(),
+        agent_did: session.session.agent_did.clone(),
+        agent_doc_id: fixture.agent_doc_id.clone(),
+        session_id: fixture.session.clone(),
+        session_doc_id: Some(session.doc_id),
+        issued_at: now.to_rfc3339(),
+        expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
+        expected: Some(GoalRevision {
+            document: fixture.goal.doc_id.clone(),
+            composite: revision,
+        }),
+        operation: GoalOperation::Resume {},
+        initial_request: None,
+        native_evidence: None,
+        signature: Vec::new(),
+    };
+    command.signature = fixture
+        .user
+        .sign(&command.signing_payload().unwrap())
+        .await
+        .unwrap();
+    let doc_id = persist_command(&access, &command).await;
+    let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
+    process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
+        .await
+        .unwrap();
+    let GoalControlOutcome::Applied {
+        request_id: Some(continuation),
+        ..
+    } = receipt(&access, &doc_id).await.unwrap().outcome
+    else {
+        panic!("idle client resume did not publish a continuation");
+    };
+    let outsider = Arc::new(
+        tokio::task::spawn_blocking(|| {
+            gents_store::test_support::test_identity("goal-resume-outsider")
+        })
+        .await
+        .unwrap(),
+    );
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        fixture.node.clone(),
+        ::identity::Did::new(fixture.identity.did()).unwrap(),
+    );
+    admin
+        .grant_node_permission(
+            &::identity::Did::new(outsider.did()).unwrap(),
+            gents_store::config_client::NodePermission::DocumentRead,
+        )
+        .await
+        .unwrap();
+    let endpoint = match &access {
+        gents_store::config_client::ConfigAccess::Graphql(endpoint) => endpoint.url(),
+        gents_store::config_client::ConfigAccess::Local(_) => {
+            panic!("fixture requires served client access")
+        }
+    };
+    let outsider_access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, outsider.did())
+            .with_client_signing_capability(outsider.client_signing_capability().unwrap())
+            .unwrap(),
+    );
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(&continuation)
+    );
+    for case in gents_lean_vocab::families::goal_client_control_contracts_resume_readers::cases() {
+        let reader = match case.input.reader.as_str() {
+            "requester" => access.clone(),
+            "agent" => fixture.agent_access(),
+            "outsider" => outsider_access.clone(),
+            other => panic!("unmapped modeled reader {other}"),
+        };
+        let rows = reader.execute(&query).await.unwrap();
+        let readable = rows["data"]["AgentRequest"]
+            .as_array()
+            .is_some_and(|rows| rows.len() == 1);
+        case.check(
+            gents_lean_vocab::families::goal_client_control_contracts_resume_readers::ResumeReaderOutput {
+                readable,
+            },
+        );
+    }
+    node.shutdown().await;
+}
