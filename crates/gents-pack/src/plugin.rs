@@ -123,6 +123,18 @@ pub struct GuestTrap {
     message: String,
 }
 
+impl GuestTrap {
+    /// Whether a guest trap is the source of `error` or of any of its causes.
+    pub fn in_chain(error: &anyhow::Error) -> bool {
+        error.chain().any(|cause| cause.is::<Self>())
+    }
+
+    /// Whether `error` was raised as a guest trap, possibly under context.
+    pub fn raised_by(error: &anyhow::Error) -> bool {
+        error.is::<Self>()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginOutcome {
     pub verdict: PluginVerdict,
