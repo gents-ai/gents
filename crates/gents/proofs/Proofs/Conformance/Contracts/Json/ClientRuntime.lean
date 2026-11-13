@@ -149,19 +149,6 @@ def steeringBoundaryPublication : Family SteeringBoundary.Input SteeringBoundary
       pending := (i.inputs.filter fun e => some e.id != selected).map (·.id)
       superseded := selected.toList }
 
-def liveOverlayCaseJson (witness : LiveOverlayCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"liveOutputAvailable\":" ++ boolString witness.liveOutputAvailable ++ ","
-    ++ "\"hasDurableOwner\":" ++ boolString witness.hasDurableOwner ++ ","
-    ++ "\"precedingToolCalls\":" ++ toString witness.precedingToolCalls ++ ","
-    ++ "\"turnTerminal\":" ++ boolString witness.turnTerminal ++ ","
-    ++ "\"turnLabel\":" ++ jsonString witness.turnLabel ++ ","
-    ++ "\"hasContent\":" ++ boolString witness.hasContent ++ ","
-    ++ "\"hasReasoning\":" ++ boolString witness.hasReasoning ++ ","
-    ++ "\"expectOverlay\":" ++ boolString witness.expectOverlay
-    ++ "}"
-
 def requestProgressCaseJson (witness : RequestProgressCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

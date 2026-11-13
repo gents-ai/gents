@@ -186,8 +186,17 @@ def freshStartupPreservesAuthority : Bool :=
   decide (after.acceptedRequests = before.acceptedRequests ∧
     after.decisions = before.decisions ∧ after.authorizations = before.authorizations)
 
-def startupCasesJson : String :=
-  "[{\"name\":\"fresh_startup\",\"expected_authority_unchanged\":" ++
-    boolJson freshStartupPreservesAuthority ++ "}]"
+structure StartupInput where
+  name : String
+  deriving Lean.ToJson
+
+structure StartupOutput where
+  authorityUnchanged : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def startup : Family StartupInput StartupOutput where
+  inputs := [{ name := "fresh_startup" }]
+  model := fun _ => { authorityUnchanged := freshStartupPreservesAuthority }
 
 end Conformance.EnrollmentPendingRequests

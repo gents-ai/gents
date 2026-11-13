@@ -1432,16 +1432,16 @@ def caseCoverage : List CoverageEntry :=
       "FrontendClientShellCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "desktop_client_shell_cases"
-      "DesktopClientShellCases")
+      "family"
+      "client_shell_contracts_desktop")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_session_turn_cases"
       "ClientSessionTurnCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_session_queue_order_cases"
-      "ClientSessionQueueOrderCases")
+      "family"
+      "session_queue_order_arrival")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "family"
@@ -1449,16 +1449,16 @@ def caseCoverage : List CoverageEntry :=
       "Pending: L2 renames the consumer test and L3 the production projector it drives.")
       "runtime-reconcile" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "live_overlay_cases"
-      "LiveOverlayCases")
+      "family"
+      "contract_cases_live_overlay")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_live_delta_cases"
-      "ClientLiveDeltaCases")
+      "family"
+      "client_live_delta_contracts_cursor")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "request_lifecycle_operator_ui_cases"
-      "RequestLifecycleOperatorUiCases")
+      "family"
+      "client_shell_contracts_desktop")
       "request-lifecycle" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"

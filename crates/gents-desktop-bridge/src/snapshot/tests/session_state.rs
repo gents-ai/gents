@@ -2,10 +2,7 @@ use super::*;
 use crate::types::ReconstructionState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use gents_lean_vocab::{
-    lean_client_session_queue_order_cases, lean_desktop_client_shell_cases,
-    lean_live_overlay_cases, lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
-};
+use gents_lean_vocab::lean_transcript_cases;
 
 fn session(requester_did: Option<&str>) -> AgentSession {
     AgentSession {
@@ -190,23 +187,23 @@ fn contract_session(
     }
 }
 
-fn client_shell_contract_store(case: &gents_lean_vocab::LeanClientShellCase) -> ClientStore {
-    let session_id = contract_session_id(
-        case.desktop_selected_session_id
-            .expect("desktop contract case should select a session"),
-    );
-    let requests = if case.desktop_rows.is_empty() {
-        case.desktop_observed_request_id
+fn client_shell_contract_store(
+    input: &gents_lean_vocab::families::client_shell_contracts_desktop::DesktopInput<String>,
+) -> ClientStore {
+    let session_id = contract_session_id(input.desktop_selected_session_id as usize);
+    let requests = if input.desktop_rows.is_empty() {
+        input
+            .desktop_observed_request_id
             .map(|id| AgentRequestRow {
                 purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-                doc_id: Some(contract_request_id(id)),
-                request_id: contract_request_id(id),
+                doc_id: Some(contract_request_id(id as usize)),
+                request_id: contract_request_id(id as usize),
                 node_did: Some(CONTRACT_NODE.into()),
                 agent_did: Some("contract-agent".into()),
                 session_id: Some(session_id.clone()),
                 content: Some("contract prompt".into()),
                 lifecycle_state: Some(request_state_for_turn(
-                    case.desktop_observed_turn_state.as_deref(),
+                    input.desktop_observed_turn_state.as_deref(),
                 )),
                 execution_origin: Some("interactive".into()),
                 created_at: Some("2026-04-21T12:00:00Z".into()),
@@ -215,15 +212,23 @@ fn client_shell_contract_store(case: &gents_lean_vocab::LeanClientShellCase) -> 
             .into_iter()
             .collect()
     } else {
-        lean_session_rows(&session_id, &case.desktop_rows)
+        let modeled: Vec<gents_lean_vocab::LeanSessionTurnRow> =
+            gents_lean_vocab::family::recode(&input.desktop_rows);
+        lean_session_rows(&session_id, &modeled)
     };
     let mut rows = ClientStoreRows::default();
-    if case.desktop_snapshot_present {
+    if !requests.is_empty() {
         rows.sessions
             .push(contract_session(&session_id, None, requests.last()));
     }
     rows.requests = requests;
     ClientStore::from_rows(rows)
+}
+
+fn contract_number(prefix: &str, id: &str) -> u64 {
+    id.strip_prefix(prefix)
+        .and_then(|number| number.parse().ok())
+        .unwrap_or_else(|| panic!("{id:?} is not a contract {prefix} id"))
 }
 
 fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String> {
@@ -461,9 +466,9 @@ fn session_snapshot_binds_generated_session_turn_cases() {
 
 #[test]
 fn session_queue_order_matches_native_arrival_model_after_claim() {
-    for case in lean_client_session_queue_order_cases() {
+    gents_lean_vocab::families::session_queue_order_arrival::replay::<String>(|i| {
         let modeled: Vec<gents_lean_vocab::LeanSessionTurnRow> =
-            serde_json::from_value(case["rows"].clone()).unwrap();
+            gents_lean_vocab::family::recode(&i.rows);
         let rows = lean_session_rows("session-1", &modeled);
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![contract_session(
@@ -475,26 +480,23 @@ fn session_queue_order_matches_native_arrival_model_after_claim() {
             ..Default::default()
         });
         let mut snapshot = build_session_snapshot_from_store(&store, "session-1", None).unwrap();
-        let docs = |field: &str| {
-            case[field]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|id| format!("doc-{}", id.as_u64().unwrap()))
-                .collect::<Vec<_>>()
-        };
-        super::super::session::order_queued_turns(&mut snapshot, &docs("arrivals"));
-        assert_eq!(
-            snapshot
-                .queued_turns
-                .iter()
-                .filter_map(|turn| turn.request_doc_id.clone())
-                .collect::<Vec<_>>(),
-            docs("expected"),
-            "{}",
-            case["name"]
-        );
-    }
+        let arrivals = i
+            .arrivals
+            .iter()
+            .map(|id| format!("doc-{id}"))
+            .collect::<Vec<_>>();
+        super::super::session::order_queued_turns(&mut snapshot, &arrivals);
+        snapshot
+            .queued_turns
+            .iter()
+            .filter_map(|turn| turn.request_doc_id.as_deref())
+            .map(|doc| {
+                doc.strip_prefix("doc-")
+                    .and_then(|id| id.parse().ok())
+                    .unwrap_or_else(|| panic!("queued turn {doc:?} is not a contract row"))
+            })
+            .collect()
+    });
 }
 
 /// Only the Agent's verified observation shows a Goal (Lean
@@ -654,143 +656,94 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
 
 #[test]
 fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
-    let cases = lean_desktop_client_shell_cases();
-    assert_eq!(cases.len(), 28);
-    assert!(cases
-        .iter()
-        .any(|case| !case.desktop_queued_request_ids.is_empty()));
-    assert!(cases
-        .iter()
-        .any(|case| !case.desktop_folded_request_ids.is_empty()));
-    for case in cases {
-        let session_id = contract_session_id(
-            case.desktop_selected_session_id
-                .expect("desktop case selects a session"),
-        );
-        let preferred = case.desktop_preferred_request_id.map(contract_request_id);
-        let snapshot = build_session_snapshot_from_store(
-            &client_shell_contract_store(case),
-            &session_id,
-            preferred.as_deref(),
-        );
-        assert_eq!(
-            snapshot.is_some(),
-            case.desktop_snapshot_present,
-            "{}",
-            case.name
-        );
-        if let Some(snapshot) = snapshot {
-            assert_eq!(
-                snapshot.latest_request_id.as_deref(),
-                case.desktop_expected_latest_request_id
-                    .map(contract_request_id)
-                    .as_deref(),
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                snapshot.turn_state.as_deref(),
-                case.desktop_expected_turn_state.as_deref(),
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                snapshot
-                    .queued_turns
-                    .iter()
-                    .map(|turn| turn.request_id.clone())
-                    .collect::<Vec<_>>(),
-                case.desktop_queued_request_ids
-                    .iter()
-                    .copied()
-                    .map(contract_request_id)
-                    .collect::<Vec<_>>(),
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                snapshot
-                    .folded_inputs
-                    .iter()
-                    .map(|input| input.request_id.clone())
-                    .collect::<Vec<_>>(),
-                case.desktop_folded_request_ids
-                    .iter()
-                    .copied()
-                    .map(contract_request_id)
-                    .collect::<Vec<_>>(),
-                "{}",
-                case.name
-            );
-            if let Some(expected_pending) = case.desktop_expect_pending_turn {
-                assert_eq!(
-                    snapshot.pending_turn.is_some(),
-                    expected_pending,
-                    "{}",
-                    case.name
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
-    let cases = lean_request_lifecycle_operator_ui_cases();
-    let mut saw_active = false;
-    let mut saw_terminal = false;
-    for case in cases {
-        let session_id = contract_session_id(
-            case.desktop_selected_session_id
-                .expect("operator UI case selects a session"),
-        );
-        let expected = case
-            .desktop_observed_turn_state
-            .as_deref()
-            .expect("operator UI case observes a turn");
-        saw_active |= matches!(expected, "waitingForClaim" | "running");
-        saw_terminal |= !matches!(expected, "waitingForClaim" | "running");
-        let preferred = case.desktop_preferred_request_id.map(contract_request_id);
-        let snapshot = build_session_snapshot_from_store(
-            &client_shell_contract_store(case),
-            &session_id,
-            preferred.as_deref(),
-        )
-        .expect("snapshot");
-        assert_eq!(
-            snapshot.turn_state.as_deref(),
-            Some(expected),
-            "{}",
-            case.name
-        );
-        if let Some(pending) = snapshot.pending_turn.as_ref() {
+    for case in gents_lean_vocab::families::client_shell_contracts_desktop::cases::<String>() {
+        let input = &case.input;
+        let store = client_shell_contract_store(input);
+        let session_id = contract_session_id(input.desktop_selected_session_id as usize);
+        let preferred = input
+            .desktop_preferred_request_id
+            .map(|id| contract_request_id(id as usize));
+        let snapshot = build_session_snapshot_from_store(&store, &session_id, preferred.as_deref());
+        let latest = snapshot.as_ref().and_then(|snapshot| {
+            store
+                .requests
+                .iter()
+                .find(|row| Some(&row.request_id) == snapshot.latest_request_id.as_ref())
+        });
+        if let Some(pending) = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.pending_turn.as_ref())
+        {
             assert_eq!(
                 pending.lifecycle_state,
-                Some(request_state_for_turn(Some(expected))),
+                Some(request_state_for_turn(
+                    input.desktop_observed_turn_state.as_deref()
+                )),
                 "{}",
-                case.name
+                input.name
             );
         }
+        case.check(
+            gents_lean_vocab::families::client_shell_contracts_desktop::DesktopOutput {
+                desktop_snapshot_present: snapshot.is_some(),
+                desktop_expected_latest_request_id: snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.latest_request_id.as_deref())
+                    .map(|id| contract_number("req-", id)),
+                desktop_expected_turn_state: snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.turn_state.clone()),
+                desktop_queued_request_ids: snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        snapshot
+                            .queued_turns
+                            .iter()
+                            .map(|turn| contract_number("req-", &turn.request_id))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                desktop_folded_request_ids: snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        snapshot
+                            .folded_inputs
+                            .iter()
+                            .map(|folded| contract_number("req-", &folded.request_id))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                desktop_expect_pending_turn: latest
+                    .filter(|row| {
+                        row.lifecycle_state
+                            .is_some_and(|state| !state.is_terminal())
+                    })
+                    .map(|_| {
+                        snapshot
+                            .as_ref()
+                            .is_some_and(|snapshot| snapshot.pending_turn.is_some())
+                    }),
+            },
+        );
     }
-    assert!(saw_active && saw_terminal);
 }
 
 #[test]
 fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
-    let cases = lean_live_overlay_cases();
-    for case in cases {
-        let lifecycle = if case.turn_terminal {
+    for case in gents_lean_vocab::families::contract_cases_live_overlay::cases() {
+        let input = &case.input;
+        let lifecycle = if input.turn_terminal {
             RequestLifecycleState::Completed
         } else {
             RequestLifecycleState::Processing
         };
         let mut request = request("req-2", lifecycle);
         request.doc_id = Some("req-2".into());
-        request.execution_generation = case
+        request.execution_generation = input
             .live_output_available
             .then(|| "generation-1".to_string());
-        request.execution_lease_secs = case.live_output_available.then_some(300);
-        request.execution_lease_expires_at = case
+        request.execution_lease_secs = input.live_output_available.then_some(300);
+        request.execution_lease_expires_at = input
             .live_output_available
             .then(|| "2026-04-21T12:05:00Z".to_string());
         let mut rows = ClientStoreRows {
@@ -798,10 +751,10 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
             requests: vec![request],
             ..ClientStoreRows::default()
         };
-        if case.has_durable_owner {
+        if input.has_durable_owner {
             push_canonical_text_message(
                 &mut rows,
-                &format!("{}-owner", case.name),
+                &format!("{}-owner", input.name),
                 "session-1",
                 Some("req-2"),
                 1,
@@ -809,10 +762,10 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
                 "materialized answer",
             );
         }
-        if case.live_output_available && !case.has_durable_owner {
+        if input.live_output_available && !input.has_durable_owner {
             let mut runs = Vec::new();
             let mut payload = String::new();
-            if case.has_content {
+            if input.has_content {
                 payload.push('C');
                 runs.push(SegmentRun {
                     stream: 0,
@@ -824,20 +777,20 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
                     }),
                 });
             }
-            if case.has_reasoning {
+            if input.has_reasoning {
                 payload.push('R');
                 runs.push(SegmentRun {
-                    stream: u32::from(case.has_content),
+                    stream: u32::from(input.has_content),
                     bytes: 1,
                     declaration: Some(StreamDeclaration {
                         block_index: 0,
-                        part_index: u32::from(case.has_content),
+                        part_index: u32::from(input.has_content),
                         payload: StreamPayload::Reasoning,
                     }),
                 });
             }
             rows.output_segments.push(OutputSegmentRow {
-                doc_id: format!("{}-open", case.name),
+                doc_id: format!("{}-open", input.name),
                 segment: OutputSegment {
                     node_did: "did:test:amy".into(),
                     requester_did: None,
@@ -867,15 +820,14 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
             "session-1",
             Some("req-2"),
         )
-        .unwrap_or_else(|| panic!("case {} should produce a snapshot", case.name));
-        assert_eq!(
-            snapshot
-                .timeline_items
-                .iter()
-                .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })),
-            case.expect_overlay,
-            "{}",
-            case.name
+        .unwrap_or_else(|| panic!("case {} should produce a snapshot", input.name));
+        case.check(
+            gents_lean_vocab::families::contract_cases_live_overlay::LiveOverlayOutput {
+                expect_overlay: snapshot
+                    .timeline_items
+                    .iter()
+                    .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })),
+            },
         );
     }
 }
