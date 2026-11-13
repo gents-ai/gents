@@ -134,7 +134,7 @@ import Proofs.Conformance.InferenceObservation
 import Proofs.Store.Identity.PublicationConformance
 import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
-import Proofs.Store.Identity.AutomationConformance
+import Proofs.Conformance.Identity.CallbackParent
 import Proofs.Store.Identity.OperationsConformance
 import Proofs.Store.Identity.EvalRecords
 import Proofs.Store.Identity.OptimizationPromotion
@@ -158,7 +158,7 @@ import Proofs.Store.Identity.MailboxAccess
 import Proofs.Store.Identity.WorkspaceAndFileRequests
 import Proofs.Store.Identity.PackPlacementReaders
 import Proofs.Store.Identity.AgentTargetAccess
-import Proofs.Automation.Triggers.NativeRoute
+import Proofs.Conformance.NativeRoute
 import Proofs.Session.Identity.SessionInputEdit
 import Proofs.Automation.EventDelivery.WatcherConformance
 import Proofs.Conformance.ClientInstallation
@@ -473,20 +473,12 @@ def snapshotGoalCasesJson : String :=
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
-    ++ "\"goal_delivery_input_cases\":"
-      ++ Conformance.GoalDeliveryInput.json ++ ","
     ++ "\"goal_input_binding_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.inputCasesJson ++ ","
     ++ "\"goal_fresh_session_input_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.freshSessionCasesJson ++ ","
     ++ "\"goal_wake_receipt_cases\":"
       ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
-    ++ "\"goal_wake_coalescing_cases\":"
-      ++ Conformance.GoalWakeCoalescingContracts.casesJson ++ ","
-    ++ "\"goal_wake_ancestry_cases\":"
-      ++ Conformance.GoalWakeAncestryContracts.casesJson ++ ","
-    ++ "\"goal_tool_context_cases\":"
-      ++ Conformance.GoalToolContextContracts.casesJson ++ ","
     ++ "\"client_process_claim_cases\":"
       ++ Conformance.NativeRefinement.clientProcessClaimCasesJson ++ ","
     ++ "\"client_process_receipt_cases\":"
@@ -506,8 +498,6 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
-    ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
-    ++ "\"goal_session_observation_cases\":" ++ Conformance.GoalSessionObservationContracts.casesJson ++ ","
     ++ "\"goal_session_fold_cases\":" ++ Conformance.GoalSessionObservationContracts.foldCasesJson ++ ","
     ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
     ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
@@ -517,16 +507,12 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"workspace_command_grant_answers\":" ++ Conformance.WorkspaceCommandGrants.answersJson.compress ++ ","
     ++ "\"workspace_command_grant_lookups\":" ++ Conformance.WorkspaceCommandGrants.lookupsJson.compress ++ ","
     ++ "\"workspace_command_grant_revocations\":" ++ Conformance.WorkspaceCommandGrants.revocationsJson.compress ++ ","
-    ++ "\"goal_objective_whitespace_codepoints\":"
-      ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
     ++ "\"goal_claimed_publication_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
     ++ "\"goal_operator_resume_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
     ++ "\"goal_operator_resume_on_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
-    ++ "\"goal_reset_resume_cases\":"
-      ++ Conformance.GoalResetResumeContracts.casesJson ++ ","
 
 def snapshotRequestCasesJson : String :=
   ""
@@ -581,8 +567,6 @@ def snapshotRequestCasesJson : String :=
     ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
     ++ "\"lifecycle_hook_rerun_cases\":"
       ++ Conformance.HooksContracts.rerunCasesJson ++ ","
-    ++ "\"lifecycle_hook_goal_resume_cases\":"
-      ++ Conformance.HooksContracts.goalResumeCasesJson ++ ","
     ++ "\"lifecycle_hook_supersede_cases\":"
       ++ Conformance.HookDecisions.supersedeCasesJson ++ ","
     ++ "\"lifecycle_hook_goal_halt_cases\":"
@@ -673,12 +657,10 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.AgentBlockSigning.casesJson ++ ","
     ++ "\"mailbox_runtime_notice_case\":" ++ Identity.MailboxAccess.runtimeNoticeCasesJson ++ ","
     ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
-    ++ "\"workspace_agent_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAgentSelectionCasesJson ++ ","
     ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
     ++ "\"workspace_child_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildCasesJson ++ ","
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
-    ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
     ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
     ++ "\"workspace_child_revocation_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildRevocationCasesJson ++ ","
@@ -738,8 +720,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OperationsConformance.settledCasesJson ++ ","
     ++ "\"identity_startup_readiness_cases\":"
       ++ Identity.StartupReadiness.casesJson ++ ","
-    ++ "\"identity_callback_parent_actor_cases\":"
-      ++ Identity.AutomationConformance.callbackParentCasesJson ++ ","
 
 def snapshotClientCasesJson : String :=
   ""

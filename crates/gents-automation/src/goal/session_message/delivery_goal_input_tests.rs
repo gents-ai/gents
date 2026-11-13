@@ -186,14 +186,36 @@ async fn deliver(
 
 #[tokio::test]
 async fn generated_deliveries_capture_destination_goal_in_the_admission_transaction() {
-    let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contracts["goal_delivery_input_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 14);
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
         "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
+    for modeled in gents_lean_vocab::families::goal_delivery_input_delivery::cases() {
+        let case = &serde_json::to_value(&modeled.input).unwrap();
+        let name = modeled.input.name.as_str();
+        let destination = if modeled.input.plugin {
+            Some(job_session_id(name, "worker", 1))
+        } else {
+            crate::triggers::engine::durable::resolve_session_id(
+                &FireIdentity {
+                    owner_did: "1".into(),
+                    trigger_id: "delivery".into(),
+                    source_collection: "Task".into(),
+                    source_doc_id: name.into(),
+                },
+                modeled.input.existing.then_some("10"),
+                modeled.input.owned,
+                false,
+            )
+        };
+        if destination.is_none() {
+            modeled.check(
+                gents_lean_vocab::families::goal_delivery_input_delivery::DeliveryOutput {
+                    session: None,
+                    expected: None,
+                },
+            );
+            continue;
+        }
         let f = Fixture::new(&before).await;
         let identity = FireIdentity {
             owner_did: f.identity.did().into(),
@@ -204,21 +226,10 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
         let session = if case["plugin"] == true {
             job_session_id(name, "worker", 1)
         } else if case["existing"] == true {
-            format!("existing-{name}")
+            "10".to_owned()
         } else {
             identity.session_id()
         };
-        if case["expected"].is_null() {
-            assert!(crate::triggers::engine::durable::resolve_session_id(
-                &identity,
-                Some(&session),
-                false,
-                false
-            )
-            .is_none());
-            f.node.shutdown().await.unwrap();
-            continue;
-        }
         // A job child's session is requested by the job's own Agent, which
         // signs the delivered request, as a staged spawn records it.
         let requester = f.agent.did();
@@ -377,13 +388,10 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             "{name}"
         );
         assert_eq!(row.input, initial_row.input, "{name}");
-        assert_eq!(
-            row.input
-                .as_ref()
-                .and_then(|input| input.goal_assignment.clone()),
-            reference(&case["expected"]["reference"], name, &roots),
-            "{name}"
-        );
+        let recorded = row
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.clone());
         assert_ne!(
             row.input
                 .as_ref()
@@ -391,6 +399,30 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
                 .map(|goal| goal.goal_id.as_str()),
             Some("caller-goal"),
             "{name}: destination must not inherit caller goal",
+        );
+        let recorded = recorded.map(|goal| {
+            gents_lean_vocab::families::goal_delivery_input_delivery::Reference {
+                goal: goal
+                    .goal_id
+                    .strip_prefix(&format!("{name}-goal-"))
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+                root: goal.root_request_doc_id.map(|root| {
+                    100 * (1 + roots.iter().position(|doc| *doc == root).unwrap() as u64)
+                }),
+            }
+        });
+        modeled.check(
+            gents_lean_vocab::families::goal_delivery_input_delivery::DeliveryOutput {
+                session: destination,
+                expected: Some(
+                    gents_lean_vocab::families::goal_delivery_input_delivery::PreparedWire {
+                        kind: "prepared".into(),
+                        reference: recorded,
+                    },
+                ),
+            },
         );
         f.node.shutdown().await.unwrap();
     }

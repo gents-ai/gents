@@ -632,11 +632,7 @@ impl TriggerEngine {
             created_at: now.to_owned(),
         };
         anyhow::ensure!(
-            !fire.emit_outcome
-                || fire
-                    .source_handoff_id
-                    .as_ref()
-                    .is_some_and(|s| !s.is_empty()),
+            outcome_fire_admitted(fire.emit_outcome, intent.doc_vars.as_ref()),
             "emit_outcome requires a source handoff_id"
         );
         Ok(fire)
@@ -798,4 +794,16 @@ impl TriggerEngine {
 
         Ok(())
     }
+}
+
+pub(crate) fn outcome_fire_admitted(
+    emit_outcome: bool,
+    observed: Option<&serde_json::Value>,
+) -> bool {
+    !emit_outcome
+        || observed.is_some_and(|fields| {
+            gents_protocol::trigger_delivery::HandoffRoute::from_fields(fields)
+                .handoff_id
+                .is_some()
+        })
 }

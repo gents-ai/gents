@@ -158,24 +158,4 @@ def cases : List Case :=
   , ⟨"blank-handoff-refuses-outcome", ⟨some " ", some "lead", some 1⟩, true⟩
   , ⟨"no-route-ordinary-fire", {}, false⟩ ]
 
-def optionJson {α : Type} [Lean.ToJson α] : Option α → Lean.Json
-  | some value => Lean.toJson value
-  | none => Lean.Json.null
-
-def fieldsJson (fields : Fields) : Lean.Json :=
-  Lean.Json.mkObj [("handoff_id", optionJson fields.handoffId),
-    ("reply_session_id", optionJson fields.replySessionId),
-    ("attempt", optionJson fields.attempt)]
-
-/-- Each case serializes the producer's invocation input, the fields it stamps
-on the native document, and the route delivery derives from that document. -/
-def casesJson : String :=
-  (Lean.toJson (cases.map fun c =>
-    let stamped := stamp (projectRoute c.input)
-    Lean.Json.mkObj [("name", Lean.toJson c.name), ("input", fieldsJson c.input),
-      ("emit_outcome", Lean.toJson c.emitOutcome),
-      ("stamped", fieldsJson stamped),
-      ("admitted", Lean.toJson (outcomeFireAdmitted c.emitOutcome stamped)),
-      ("delivered", fieldsJson (stamp (deliveredRoute stamped)))])).compress
-
 end Triggers.NativeRoute

@@ -131,7 +131,32 @@ def edit : Family EditInput (Option Edited) where
     (applyPreference? i.observed i.current i.storedAutoResume i.fields i.autoResume i.origin).map
       fun (assignment, autoResume) => { assignment, autoResume }
 
-def whitespaceCodepointsJson : String :=
-  jsonArray (TextNormalization.objectiveWhitespaceCodepoints.map toString)
+/-- The last Unicode scalar value. -/
+def lastCodepoint : Nat := 0x10FFFF
+
+structure WhitespaceRun where
+  first : Nat
+  last : Nat
+  deriving ToJson
+
+/-- The code space split into each whitespace scalar value on its own and the
+content runs between them. -/
+def whitespaceRuns : List WhitespaceRun :=
+  let (runs, next) := TextNormalization.objectiveWhitespaceCodepoints.foldl
+    (fun (runs, next) codepoint =>
+      (runs ++ (if next < codepoint then [⟨next, codepoint - 1⟩] else []) ++
+        [⟨codepoint, codepoint⟩], codepoint + 1))
+    ([], 0)
+  runs ++ (if next ≤ lastCodepoint then [⟨next, lastCodepoint⟩] else [])
+
+@[conformance_family]
+def objectiveWhitespaceRuns : Family WhitespaceRun Bool where
+  inputs := whitespaceRuns
+  model := fun run => TextNormalization.objectiveWhitespace (Char.ofNat run.first)
+
+example : (whitespaceRuns.flatMap fun run =>
+    if TextNormalization.objectiveWhitespace (Char.ofNat run.first) then
+      (List.range (run.last - run.first + 1)).map (run.first + ·) else []) =
+    TextNormalization.objectiveWhitespaceCodepoints := by native_decide
 
 end Conformance.GoalEditContracts

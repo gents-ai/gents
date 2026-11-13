@@ -532,7 +532,7 @@ def caseCoverage : List CoverageEntry :=
       "Callback repair assumes trusted authored Agent metadata; forged or missing authenticated creator traces need an ownership-bound native consumer.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "identity_callback_parent_actor_cases" "CallbackParentActor")
+      "family" "callback_parent_actor")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases")
       "durable-goals" [Surface.operatorUi]
@@ -1330,8 +1330,8 @@ def caseCoverage : List CoverageEntry :=
       "Production TransactionFailure::rerun_requested classifies a ConfigClientError::rerun carried through production wrappers (anyhow context, HookError::Operation, CommitError::Other re-erased as on the plugin-job path, text rendering). The transaction owner's rerun loop itself is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_goal_resume_cases"
-      "LifecycleHookGoalResumeCases"
+      "family"
+      "hooks_contracts_goal_resume"
       "Production RestageOnResume and BindResumedRoot decide every case on rows built from it; the Goal row is advanced by applying their writes. Core's request.create operation and the DefraDB host are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1476,8 +1476,8 @@ def caseCoverage : List CoverageEntry :=
       "Checks native filtered absence before exclusive release; complete workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_agent_selection_cases"
-      "WorkspaceAgentSelectionCases"
+      "family"
+      "workspace_and_file_requests_agent_selection"
       "Checks explicit workflow selection and action-plan replay; native workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1502,8 +1502,8 @@ def caseCoverage : List CoverageEntry :=
       "agent_target_access_access")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
-      "native_route_cases"
-      "NativeRouteCases")
+      "family"
+      "native_route_delivery")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_datastore_write_cases"
@@ -1917,9 +1917,13 @@ def caseCoverage : List CoverageEntry :=
       "goal_request_assignment_contracts_message_input")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_delivery_input_cases"
-      "GoalDeliveryInputCases")
+      "family"
+      "goal_delivery_input_delivery")
       "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_delivery_input_manual_task_run")
+      "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
       "goal_input_binding_cases"
       "GoalInputBindingCases")
@@ -1941,16 +1945,20 @@ def caseCoverage : List CoverageEntry :=
       "GoalWakeReceiptCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_wake_coalescing_cases"
-      "GoalWakeCoalescingCases")
+      "family"
+      "goal_wake_coalescing_contracts_assignment_wakes")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_wake_ancestry_cases"
-      "GoalWakeAncestryCases")
+      "family"
+      "goal_wake_ancestry_contracts_ancestry")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_tool_context_cases"
-      "GoalToolContextCases")
+      "family"
+      "goal_wake_ancestry_contracts_continuation_opening")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_tool_context_contracts_context")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2029,24 +2037,20 @@ def caseCoverage : List CoverageEntry :=
       "GoalClientReceiptCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_observation_cases"
-      "GoalObservationCases")
+      "family"
+      "goal_observation_contracts_acceptance")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_observation_cases"
-      "GoalObservationCases")
+      "family"
+      "goal_observation_contracts_recovery")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_session_observation_cases"
-      "GoalSessionObservationCases")
+      "family"
+      "goal_session_observation_contracts_classification")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_session_observation_cases"
-      "GoalSessionObservationCases")
-      "durable-goals" [Surface.operatorUi]
-  , tagged (consumerCoverage
-      "goal_session_observation_cases"
-      "GoalSessionObservationCases")
+      "family"
+      "goal_session_observation_contracts_presentation")
       "durable-goals" [Surface.operatorUi]
   , tagged (followUpCoverage
       "goal_session_fold_cases"
@@ -2058,8 +2062,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginApprovalCases")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_objective_whitespace_codepoints"
-      "GoalObjectiveWhitespace")
+      "family"
+      "goal_edit_contracts_objective_whitespace_runs")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_operator_resume_cases"
@@ -2099,8 +2103,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_operator_resume_contracts_config")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_reset_resume_cases"
-      "GoalResetResumeCases")
+      "family"
+      "goal_reset_resume_contracts_reset")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

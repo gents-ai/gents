@@ -1,39 +1,11 @@
 use super::support::*;
 use super::*;
 use crate::goal::continuation::goal_continuation_identity;
-use gents_lean_vocab::{LeanGoalResetResumeCaseBefore, LeanGoalResetResumeCaseExpected};
+use gents_lean_vocab::families::goal_reset_resume_contracts_reset as wire;
 use gents_loop::provider_limit::{
     classify_provider_limit, persisted_failure_reason, ProviderLimit, ProviderLimitHeaders,
 };
 use serde_json::{json, Value};
-
-fn before_value(before: &LeanGoalResetResumeCaseBefore) -> Value {
-    json!({
-        "status": before.status,
-        "blocked_audits": before.blocked_audits,
-        "wrapup_requested": before.wrapup_requested,
-        "wrapup_completed": before.wrapup_completed,
-        "sequence": before.sequence,
-        "last_continued_from": before.last_continued_from,
-        "latest_request": before.latest_request,
-        "children": before.children.iter().map(|child| json!({
-            "child": child.child,
-            "correlation": child.correlation,
-            "goal": child.goal,
-            "owner": child.owner,
-            "predecessor": child.predecessor,
-            "predecessor_doc": child.predecessor_doc,
-            "semantic_fingerprint": child.semantic_fingerprint,
-            "sequence": child.sequence,
-            "session": child.session,
-            "source_document": child.source_document,
-            "trigger_context": child.trigger_context,
-            "workspace_fingerprint": child.workspace_fingerprint,
-        })).collect::<Vec<_>>(),
-        "tokens_used": before.tokens_used,
-        "token_budget": before.token_budget,
-    })
-}
 
 pub(super) fn at(seconds: i64) -> DateTime<Utc> {
     "2030-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap() + chrono::Duration::seconds(seconds)
@@ -138,13 +110,10 @@ pub(super) fn usage_limit(reset_at: Option<i64>) -> String {
 
 #[tokio::test]
 async fn generated_goal_reset_resume_cases_drive_real_transactions() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_reset_resume_cases;
-    assert_eq!(cases.len(), 11);
-    let mut seen = std::collections::BTreeSet::new();
-    for case in cases {
-        assert!(seen.insert(case.name.clone()), "duplicate generated case");
-        assert!(case.commit, "{}: every reset case commits", case.name);
-        let f = Fixture::new(&before_value(&case.before)).await;
+    for modeled in gents_lean_vocab::families::goal_reset_resume_contracts_reset::cases::<String, String>() {
+        let case = &modeled.input;
+        let before = serde_json::to_value(&case.before).unwrap();
+        let f = Fixture::new(&before).await;
         if !case.before.children.is_empty() {
             f.seed_child(false).await;
         }
@@ -167,6 +136,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             | "repeat_limit_resumes_at_its_new_reset" => {}
             name => panic!("unmapped generated reset case {name}"),
         }
+        assert!(case.commit, "{}: a reset resume commits", case.name);
         let accounts = f.claude_accounts().await;
         connect_accounts_at(&f, -1).await;
         let facts = &case.facts;
@@ -224,9 +194,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         if !facts.backend_enabled {
             disable_backend(&f, &accounts.a).await;
         }
-        let initial: LeanGoalResetResumeCaseBefore =
-            serde_json::from_value(f.observe().await).unwrap();
-        assert_eq!(initial, case.before, "{} initial", case.name);
+        assert_eq!(f.observe().await, before, "{} initial", case.name);
 
         let goal = f.current_goal().await;
         let result = resume_at_reset(
@@ -238,28 +206,27 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
         )
         .await
         .unwrap();
-        match case.outcome.as_str() {
-            "created" => {
-                let receipt = result.unwrap_or_else(|| panic!("{}: no resume", case.name));
-                assert!(receipt.created, "{}", case.name);
+        let outcome = match result {
+            ResetResume::Resumed(receipt) => {
                 assert_eq!(receipt.goal_status, GoalStatus::Active);
-                let sequence = case.expected.sequence as i64;
+                let sequence = f.current_goal().await.continuation_sequence();
                 let expected =
                     goal_continuation_identity(&goal.goal_id, stopped, sequence).unwrap();
                 assert_eq!(receipt.request_id, expected.request_id);
+                if receipt.created { "created" } else { "recovered" }
             }
-            "deferred" | "illegal" => assert!(result.is_none(), "{}: {result:?}", case.name),
-            outcome => panic!("unmapped outcome {outcome}"),
-        }
-        if repeat {
-            let observed: LeanGoalResetResumeCaseExpected =
-                serde_json::from_value(observe_repeat(&f, &first_child).await).unwrap();
-            assert_eq!(observed, case.expected, "{} durable result", case.name);
+            ResetResume::Deferred => "deferred",
+            ResetResume::NotUsageLimited => "illegal",
+        };
+        let observed = if repeat {
+            observe_repeat(&f, &first_child).await
         } else {
-            let observed: LeanGoalResetResumeCaseExpected =
-                serde_json::from_value(f.observe().await).unwrap();
-            assert_eq!(observed, case.expected, "{} durable result", case.name);
-        }
+            f.observe().await
+        };
+        modeled.check(wire::ResetOutput {
+            expected: serde_json::from_value(observed).unwrap(),
+            outcome: outcome.to_owned(),
+        });
         f.node.shutdown().await.expect("node shutdown");
     }
 }

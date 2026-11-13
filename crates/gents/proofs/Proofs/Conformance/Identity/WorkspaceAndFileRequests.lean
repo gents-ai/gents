@@ -5,6 +5,30 @@ namespace Conformance.WorkspaceAndFileRequests
 
 open Lean Identity Identity.WorkspaceAndFileRequests
 
+deriving instance ToJson for Identity.WorkspaceAndFileRequests.WorkspaceAgentSelection
+
+structure AgentSelectionInput where
+  name : String
+  configured : Option WorkspaceAgentSelection
+  deriving ToJson
+
+structure AgentSelectionOutput where
+  accepted : Bool
+  writer : Option String
+  integrator : Option String
+  deriving ToJson
+
+@[conformance_family]
+def agentSelection : Family AgentSelectionInput AgentSelectionOutput where
+  inputs := [("missing", none), ("separate", some ⟨"writer", "integrator"⟩),
+    ("same", some ⟨"writer", "writer"⟩), ("node", some ⟨"node", "integrator"⟩),
+    ("blank", some ⟨"", "integrator"⟩)].map fun (name, configured) => { name, configured }
+  model := fun i =>
+    let selected := freezeWorkspaceAgents "node" i.configured
+    { accepted := selected.isSome
+      writer := selected.map WorkspaceAgentSelection.writer
+      integrator := selected.map WorkspaceAgentSelection.integrator }
+
 structure CompletionActorInput where
   actor : String
   held : String

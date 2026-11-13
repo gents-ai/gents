@@ -349,17 +349,6 @@ def workspaceLivenessCasesJson : String :=
     Lean.Json.mkObj [("visible", Lean.toJson visible), ("terminal", Lean.toJson terminal),
       ("may_release", Lean.toJson (mayReleaseExclusive visible terminal))])).compress
 
-def workspaceAgentSelectionCasesJson : String :=
-  let cases : List (String × Option WorkspaceAgentSelection) :=
-    [("missing", none), ("separate", some ⟨"writer", "integrator"⟩),
-    ("same", some ⟨"writer", "writer"⟩), ("node", some ⟨"node", "integrator"⟩),
-    ("blank", some ⟨"", "integrator"⟩)]
-  (Lean.toJson (cases.map fun (name, configured) =>
-      let selected := freezeWorkspaceAgents "node" configured
-      Lean.Json.mkObj [("name", Lean.toJson name), ("accepted", Lean.toJson selected.isSome),
-        ("writer", Lean.toJson (selected.map WorkspaceAgentSelection.writer)),
-        ("integrator", Lean.toJson (selected.map WorkspaceAgentSelection.integrator))] )).compress
-
 /-- Workspace effects are Agent-authored, while their logical parent grants
 the user access. Host-only placement and operator root configuration must not
 be inferred from that child relationship. -/

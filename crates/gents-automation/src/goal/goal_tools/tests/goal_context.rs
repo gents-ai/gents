@@ -67,9 +67,13 @@ async fn versions(access: &ConfigAccess) -> Value {
 
 #[tokio::test]
 async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_tool_context_cases;
-    assert_eq!(cases.len(), 11);
-    for case in cases {
+    use gents_lean_vocab::families::goal_tool_context_contracts_context as wire;
+    for modeled in gents_lean_vocab::families::goal_tool_context_contracts_context::cases::<String>() {
+        let case = &modeled.input;
+        let mut observation = None;
+        let mut read_only = None;
+        let mut can_create = None;
+        let mut can_update = None;
         for tool in [
             gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
             gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
@@ -120,7 +124,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     root_goals.entry(root).or_insert(version.assignment.goal);
                 }
             }
-            if let Some(root) = entry.reference.as_ref().map(|reference| reference.root) {
+            if let Some(root) = entry.reference.as_ref().and_then(|reference| reference.root) {
                 root_goals
                     .entry(root)
                     .or_insert(entry.reference.as_ref().unwrap().goal);
@@ -148,7 +152,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     .as_ref()
                     .map(|reference| GoalAssignmentInput {
                         goal_id: goal_id(identity.did(), &session, reference.goal),
-                        root_request_doc_id: Some(roots[&reference.root].clone()),
+                        root_request_doc_id: reference.root.map(|root| roots[&root].clone()),
                     });
                 request(
                     &access,
@@ -242,7 +246,64 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             };
             accept_hook_tool_call(&hook, "goal-context-call", tool, args, None).await;
             let before = versions(&access).await;
-            if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME && case.read_only {
+            if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME {
+                let context = crate::goal::load_goal_tool_context(
+                    &access,
+                    identity.did(),
+                    &session,
+                    &request_id,
+                    Some(&caller),
+                )
+                .await
+                .map(|context| context.assignment)
+                .unwrap_or(crate::goal::RequestAssignmentObservation::Unknown);
+                let number = |doc: &str, map: &BTreeMap<u64, String>| {
+                    *map.iter().find(|(_, held)| held.as_str() == doc).unwrap().0
+                };
+                observation = Some(match &context {
+                    crate::goal::RequestAssignmentObservation::None => wire::ObservationWire {
+                        kind: "unassigned".into(),
+                        identity: None,
+                    },
+                    crate::goal::RequestAssignmentObservation::Unknown => wire::ObservationWire {
+                        kind: "unknown".into(),
+                        identity: None,
+                    },
+                    crate::goal::RequestAssignmentObservation::Assigned(goal) => {
+                        wire::ObservationWire {
+                            kind: "assigned".into(),
+                            identity: Some(wire::Identity {
+                                document: number(&goal.doc_id, &documents),
+                                goal: case
+                                    .versions
+                                    .iter()
+                                    .map(|version| version.assignment.goal)
+                                    .find(|id| goal_id(identity.did(), &session, *id) == goal.goal_id)
+                                    .unwrap(),
+                                root: number(
+                                    goal.assignment_root_request_doc_id.as_deref().unwrap(),
+                                    &roots,
+                                ),
+                            }),
+                        }
+                    }
+                });
+            }
+            let action = hook
+                .on_tool_call(tool, None, "goal-context-call", args)
+                .await;
+            let terminated = matches!(&action, ToolCallHookAction::Terminate { .. });
+            let reason = match action {
+                ToolCallHookAction::Skip { reason } | ToolCallHookAction::Terminate { reason } => {
+                    reason
+                }
+                action => panic!("{name}/{tool}: control escaped its accepted hook: {action:?}"),
+            };
+            let result: Value = serde_json::from_str(&reason).unwrap();
+            let observed = observation.as_ref().unwrap();
+            if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME
+                && result["read_only"].as_bool().unwrap_or(false)
+            {
                 let context = crate::goal::load_goal_tool_context(
                     &access,
                     identity.did(),
@@ -311,18 +372,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     "{name}: retired owner mutation changed Goal history"
                 );
             }
-            let action = hook
-                .on_tool_call(tool, None, "goal-context-call", args)
-                .await;
-            let terminated = matches!(&action, ToolCallHookAction::Terminate { .. });
-            let reason = match action {
-                ToolCallHookAction::Skip { reason } | ToolCallHookAction::Terminate { reason } => {
-                    reason
-                }
-                action => panic!("{name}/{tool}: control escaped its accepted hook: {action:?}"),
-            };
-            let result: Value = serde_json::from_str(&reason).unwrap();
-            if case.observation.kind == "unknown" {
+            if observed.kind == "unknown" {
                 assert!(
                     terminated,
                     "unavailable attribution must stop the current provider loop"
@@ -335,7 +385,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 assert_eq!(rows[0]["tool_failure_class"], "serviceUnavailable");
             }
             if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME {
-                match case.observation.kind.as_str() {
+                match observed.kind.as_str() {
                     "unknown" => {
                         assert!(result["error"].is_string(), "{name}/{tool}: {result}");
                     }
@@ -344,18 +394,13 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         assert!(!result["error"].is_string(), "{name}/{tool}: {result}");
                     }
                     _ => {
-                        let expected = case.observation.identity.as_ref().unwrap().goal;
+                        let observed_goal = observed.identity.as_ref().unwrap().goal;
                         assert_eq!(
                             result["goal_id"],
-                            goal_id(identity.did(), &session, expected),
+                            goal_id(identity.did(), &session, observed_goal),
                             "{name}/{tool}: {result}"
                         );
-                        assert_eq!(
-                            result["read_only"].as_bool().unwrap_or(false),
-                            case.read_only,
-                            "{name}/{tool}: {result}"
-                        );
-                        if case.read_only {
+                        if result["read_only"].as_bool().unwrap_or(false) {
                             assert!(
                                 result["assignment_context"].is_string(),
                                 "{name}/{tool}: {result}"
@@ -371,7 +416,8 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         }
                     }
                 }
-                if !case.can_update {
+                read_only = Some(result["read_only"].as_bool().unwrap_or(false));
+                if read_only == Some(true) || observed.kind != "assigned" {
                     assert_eq!(
                         versions(&access).await,
                         before,
@@ -379,16 +425,12 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     );
                 }
             } else {
-                let allowed = if tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
-                    case.can_create
+                let allowed = result["accepted"].as_bool().unwrap_or(false);
+                if tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
+                    can_create = Some(allowed);
                 } else {
-                    case.can_update
-                };
-                assert_eq!(
-                    result["accepted"].as_bool().unwrap_or(false),
-                    allowed,
-                    "{name}/{tool}: {result}"
-                );
+                    can_update = Some(allowed);
+                }
                 if !allowed {
                     assert_eq!(
                         versions(&access).await,
@@ -401,8 +443,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         .await
                         .unwrap()
                         .unwrap();
-                    let expected_root = case
-                        .observation
+                    let expected_root = observed
                         .identity
                         .as_ref()
                         .map(|identity| identity.root)
@@ -421,5 +462,11 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 .remove(&hook_execution_fixture_key(&hook, &request_id));
             node.shutdown().await.expect("shut down test node");
         }
+        modeled.check(wire::ContextOutput {
+            observation: observation.unwrap(),
+            read_only: read_only.unwrap(),
+            can_create: can_create.unwrap(),
+            can_update: can_update.unwrap(),
+        });
     }
 }
