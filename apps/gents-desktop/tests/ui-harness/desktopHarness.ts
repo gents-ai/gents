@@ -10,7 +10,7 @@ import type {
   FileImage,
   RequestAttachment,
 } from "@source-inc/gents-desktop-client";
-import type { BackendHealth } from "@source-inc/gents-desktop-client";
+import type { BackendHealth, DefaultPack } from "@source-inc/gents-desktop-client";
 import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
   AllowedFolder,
@@ -560,6 +560,7 @@ export type DesktopUiHarnessScenario =
   | "background"
   | "notices"
   | "startup-port-in-use"
+  | "starter-packs"
   | SharingScenario;
 
 export type DesktopUiHarnessOptions = {
@@ -569,6 +570,8 @@ export type DesktopUiHarnessOptions = {
   compactionAt?: number;
   /* list that compaction in the meter but draw no marker for it */
   compactionUnmarked?: boolean;
+  /* offer the starter packs in a scenario that has none of its own */
+  starterPacks?: boolean;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -722,6 +725,8 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
+  let starterPacks: DefaultPack[] =
+    scenario === "starter-packs" || options.starterPacks ? STARTER_PACKS : [];
   const sessionIndexCount =
     options.sessionIndexCount ?? MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
   if (
@@ -2121,10 +2126,14 @@ export function createDesktopUiHarness(
       return { plugins: [], target_packs: [] };
     },
     async listDefaultPacks() {
-      return { packs: [] };
+      return { packs: starterPacks };
     },
-    async approveDefaultPacks() {
-      return { packs: [], failed: [] };
+    async approveDefaultPacks(asked: { pack: string }[]) {
+      const approved = new Set(asked.map((one) => one.pack));
+      starterPacks = starterPacks.map((pack) =>
+        approved.has(pack.pack) ? { ...pack, state: "installed" as const } : pack,
+      );
+      return { packs: starterPacks, failed: [] };
     },
     async listDynamicWorkflows() {
       return { workflows: [], installed: [] };
@@ -4697,6 +4706,70 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+const limits = (memory: number, seconds: number, output: number) =>
+  `up to ${memory} MiB memory, ${seconds}s wall clock, ${output} MiB output`;
+const starterPack = (
+  name: string,
+  purpose: string,
+  without: string,
+  requested: { plugin: string; asks: string }[],
+  turns_on: string[] = [],
+): DefaultPack => ({
+  pack: `gents/${name}`,
+  purpose,
+  without,
+  state: "needs_approval",
+  version: "1.0.0",
+  digest: `sha256:${name}`,
+  requested,
+  turns_on,
+  reason: null,
+});
+const STARTER_PACKS: DefaultPack[] = [
+  starterPack(
+    "web",
+    "searching and reading the web",
+    "Without it the Engineer cannot search or read the web.",
+    [
+      { plugin: "web_search", asks: `HTTP to any host; ${limits(512, 120, 4)}` },
+      { plugin: "web_fetch", asks: `HTTP to any host; ${limits(512, 120, 4)}` },
+      { plugin: "web_crawl", asks: `HTTP to any host; ${limits(512, 120, 4)}` },
+      {
+        plugin: "browser_exec",
+        asks: `HTTP to http://127.0.0.1:18765; subprocesses; reads one directory its caller binds, per call; ${limits(256, 600, 2)}`,
+      },
+    ],
+  ),
+  starterPack(
+    "dynamic_workflows",
+    "workflows that put several agents on one job",
+    "Without it the Engineer cannot run workflows.",
+    [{ plugin: "workflow", asks: limits(256, 60, 4) }],
+    [
+      "Lets the agents it ships use their file and shell tools in the Engineer's folder.",
+      "Lets workflow scripts the model writes start agents on this node.",
+    ],
+  ),
+  starterPack(
+    "charts",
+    "charts on the pages it builds",
+    "Without it the Engineer's pages have no charts.",
+    [
+      {
+        plugin: "charts",
+        asks: `reads and writes one directory its caller binds, per call; ${limits(1024, 300, 4)}`,
+      },
+    ],
+  ),
+  starterPack(
+    "script",
+    "short scripts over its own tools: waiting, trying logic, bulk changes",
+    "Without it the Engineer makes every tool call one at a time.",
+    [{ plugin: "script", asks: limits(128, 300, 1) }],
+    ["Lets a script it runs call the Engineer's own tools."],
+  ),
+];
+
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
     case "active-nodes":
@@ -4717,6 +4790,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "sync-offline":
     case "storage-recovery":
     case "startup-port-in-use":
+    case "starter-packs":
     case "days":
     case "automated-inputs":
     case "background":

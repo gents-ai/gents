@@ -105,7 +105,19 @@ describe("the starter packs card", () => {
     expect(
       rows.map((row) => within(row).getAllByText(/^doing /)[0]!.textContent),
     ).toEqual(["doing web", "doing dynamic_workflows", "doing notes", "doing ocr"]);
-    expect(within(rows[0]!).getByText("web_search")).toBeInTheDocument();
+    const asks = within(rows[0]!).getByRole("button", {
+      name: "What gents/web asks for",
+    });
+    expect(within(rows[0]!).queryByText("web_search")).not.toBeInTheDocument();
+    expect(
+      within(rows[0]!).queryByText("network access to search providers"),
+    ).not.toBeInTheDocument();
+    await click(asks);
+    await click(
+      within(rows[1]!).getByRole("button", {
+        name: "What gents/dynamic_workflows asks for",
+      }),
+    );
     expect(
       within(rows[0]!).getByText("network access to search providers"),
     ).toBeInTheDocument();
