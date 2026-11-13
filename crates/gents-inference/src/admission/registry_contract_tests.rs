@@ -12,7 +12,6 @@ use gents_lean_vocab::families::inference_registry_admission as family;
 
 struct Desired {
     connection: u64,
-    generation: u64,
     capacity: usize,
     queue_depth: usize,
     available: bool,
@@ -225,7 +224,6 @@ async fn run_case(
                     .map(|d| {
                         let desired = Desired {
                             connection: d.config.connection,
-                            generation: d.config.generation,
                             capacity: usize::try_from(d.config.capacity)?,
                             queue_depth: usize::try_from(d.config.queue_depth)?,
                             available: d.config.available,
@@ -292,12 +290,11 @@ async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     let node = db.node.clone();
     let registry = AdmissionRegistry::new(node.clone());
     let backend_id = "registry-rollback-epoch";
-    let config = |generation, capacity| {
+    let config = |capacity| {
         config_from_case(
             backend_id,
             &Desired {
                 connection: 7,
-                generation,
                 capacity,
                 queue_depth: 0,
                 available: true,
@@ -319,17 +316,17 @@ async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     };
     registry.reconcile(
         1,
-        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(1, 1))]),
+        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(1))]),
     );
     let old = registry.active_for_test(backend_id).unwrap();
     let mut first = acquire("rollback-old-owner").await.unwrap();
     registry.reconcile(
         2,
-        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(2, 2))]),
+        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(2))]),
     );
     registry.reconcile(
         1,
-        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(1, 1))]),
+        &rapidhash::RapidHashMap::from_iter([(backend_id.to_owned(), config(1))]),
     );
     let restored = registry.active_for_test(backend_id).unwrap();
     assert!(!Arc::ptr_eq(&old, &restored));
