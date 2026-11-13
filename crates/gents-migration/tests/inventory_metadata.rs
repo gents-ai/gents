@@ -158,7 +158,7 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
 
 /// A retired collection leaves the baseline without a wipe or conversion; its
 /// stored lineage and rows stay exactly as they were.
-const RETIRED_IMAGE_DEMAND: &str = r#"type FileImageHydrationRequest @policy(id: "ac7d6625bfe087880ab77635e5da9c48fe1ee5f9152748018a63c0d9a75ceb70", resource: "configuration") {
+const RETIRED_IMAGE_DEMAND: &str = r#"type FileImageHydrationRequest @policy(id: "POLICY", resource: "configuration") {
     request_key: String @index(unique: true) @immutable
     peer_id: String @immutable
     requester_did: String @index @immutable
@@ -178,7 +178,11 @@ const RETIRED_IMAGE_DEMAND: &str = r#"type FileImageHydrationRequest @policy(id:
 #[tokio::test]
 async fn retired_image_demand_rows_survive_migration() {
     let node = common::fresh_node().await;
-    node.add_collection(RETIRED_IMAGE_DEMAND).await.unwrap();
+    node.add_collection(
+        &RETIRED_IMAGE_DEMAND.replace("POLICY", gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID),
+    )
+    .await
+    .unwrap();
     let before = node
         .get_collection("FileImageHydrationRequest")
         .unwrap()
