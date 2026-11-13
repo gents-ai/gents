@@ -504,6 +504,7 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
         ServiceCommand::UpdateCheck { home } => {
             return gents_service::service_update::check(home).await
         }
+        ServiceCommand::Repoint { home } => return commands::start::repoint(home).await,
         command => command,
     };
     use gents_service::lifecycle::ServiceLifecycleReceipt;

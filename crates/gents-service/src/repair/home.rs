@@ -110,6 +110,22 @@ pub fn unless_being_set_up(
         }),
     }
 }
+/// Whether a process other than the service's own job (`service_job`, when the
+/// service runs this home) holds the home's store: a node started by hand, or
+/// a setup in progress.
+pub fn held_by_another(home: &Path, service_job: Option<Option<u32>>) -> bool {
+    if !default_data_dir(home).is_dir() {
+        return false;
+    }
+    match lock_home_store(home) {
+        Err(HomeError::LockHeld(held)) => match (held.holder_pid, service_job) {
+            (_, None) => true,
+            (Some(holder), Some(Some(job))) => holder != job,
+            (_, Some(_)) => false,
+        },
+        _ => false,
+    }
+}
 fn beside(home: &Path) -> PathBuf {
     home.components().collect()
 }

@@ -105,8 +105,9 @@ async fn change_reader(args: WorkspaceRootReaderArgs, change: ReaderChange) -> R
         ReaderChange::Grant => WorkspaceRootVerb::GrantReader,
         ReaderChange::Revoke => WorkspaceRootVerb::RevokeReader,
     };
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let receipt = gents_tools::surface::change_workspace_root_reader(
-        &operator_access(&args.graphql)?,
+        &access,
         &WorkspaceRootReaderInput {
             root_path: path_text(&args.path)?.to_owned(),
             agent_did: args.agent_did,

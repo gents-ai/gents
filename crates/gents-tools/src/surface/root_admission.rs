@@ -398,7 +398,7 @@ pub(crate) fn reader_grant_step(
         "published_root": published_root,
         "answer": answer,
         "user_command": format!(
-            "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path {path} --agent-did {agent_did}"
+            "gents config workspace-root grant-reader --path {path} --agent-did {agent_did}"
         ),
         "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     })

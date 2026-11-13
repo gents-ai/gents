@@ -70,9 +70,7 @@ pub fn publish_root_command(node_did: &str, root: &str, agent: &str) -> String {
 
 /// The User command that grants `agent` reader on the published `root`.
 pub fn grant_reader_command(root: &str, agent: &str) -> String {
-    format!(
-        "gents config workspace-root grant-reader --graphql <url> --path {root} --agent-did {agent}"
-    )
+    format!("gents config workspace-root grant-reader --path {root} --agent-did {agent}")
 }
 
 /// One agent of an installed pack that runs host tools under a published

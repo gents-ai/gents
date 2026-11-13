@@ -38,7 +38,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
     )?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let status = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
+    let status = load_live_http_p2p_status(Some(&home_dir), &graphql).await;
     let registration = RegistryRegistration {
         peer_id: status
             .get("p2p_peer_id")
@@ -96,7 +96,7 @@ pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
     )?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let status = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
+    let status = load_live_http_p2p_status(Some(&home_dir), &graphql).await;
     let removed = gents_p2p::operations::registry::deregister_self(
         &access,
         status.get("p2p_peer_id").and_then(Value::as_str),

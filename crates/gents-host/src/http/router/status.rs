@@ -28,7 +28,10 @@ pub(super) async fn status_handler(
 ) -> Response {
     let mut p2p = match tokio::time::timeout(
         P2P_METRICS_FETCH_BUDGET,
-        crate::p2p_status::load_live_http_p2p_status(None, reader),
+        crate::p2p_status::load_live_http_p2p_status(
+            state.home.as_deref().map(std::path::Path::new),
+            reader,
+        ),
     )
     .await
     {

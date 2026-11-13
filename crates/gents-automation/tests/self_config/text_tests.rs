@@ -1661,7 +1661,12 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
         root_help.contains("Only a User (the Node owner or an administrator)"),
         "{root_help}"
     );
-    assert!(root_help.contains("gents config workspace-root grant-reader --graphql GRAPHQL_URL --path PUBLISHED_ROOT --agent-did AGENT_DID"), "{root_help}");
+    assert!(
+        root_help.contains(
+            "gents config workspace-root grant-reader --path PUBLISHED_ROOT --agent-did AGENT_DID"
+        ),
+        "{root_help}"
+    );
     // An Agent never manages WorkspaceRoot readers, so help must not steer it to policy.
     assert!(
         !root_help.contains("policy grant --collection WorkspaceRoot"),

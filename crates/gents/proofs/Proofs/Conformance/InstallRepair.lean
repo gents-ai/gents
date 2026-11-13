@@ -19,21 +19,32 @@ def classification : Conformance.Family HomeObservation HomeState where
     ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4, bit n 5, bit n 6, bit n 7, bit n 8⟩
   model := classifyHome
 
+private def servedHomes : List (Bool × Operation) :=
+  [(true, .run), (false, .repoint), (true, .repoint)]
+
 @[conformance_family]
 def plans : Conformance.Family Observation Plan where
   inputs := homes.flatMap fun home => versions.flatMap fun version =>
-    (List.range 2048).map fun n =>
+    ((List.range 2048).map fun n =>
       ⟨home, version, bit n 0, bit n 1, bit n 2, bit n 3, bit n 4,
-       bit n 5, bit n 6, bit n 7, bit n 8, bit n 9, bit n 10⟩
+       bit n 5, bit n 6, bit n 7, bit n 8, bit n 9, bit n 10, false, .run⟩) ++
+    servedHomes.flatMap fun (present, operation) => (List.range 512).map fun n =>
+      ⟨home, version, bit n 0, bit n 1, bit n 2, bit n 3, bit n 4,
+       true, bit n 5, bit n 6, false, bit n 7, bit n 8, present, operation⟩
   model := plan
 
 @[conformance_family]
 def servicePlans : Conformance.Family ServiceObservation (List ServiceStep) where
   inputs := versions.flatMap fun version =>
     [ServedNode.none, .same, .different].flatMap fun serving =>
-      (List.range 4096).map fun n =>
+      ((List.range 4096).map fun n =>
         ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4, bit n 5,
-         bit n 6, bit n 7, bit n 8, bit n 9, version, bit n 10, bit n 11, serving⟩
+         bit n 6, bit n 7, bit n 8, bit n 9, version, bit n 10, bit n 11, serving,
+         false, .run⟩) ++
+      servedHomes.flatMap fun (present, operation) => (List.range 1024).map fun n =>
+        ⟨true, false, bit n 0, bit n 1, bit n 2, bit n 3,
+         bit n 4, bit n 5, bit n 6, bit n 7, version, bit n 8, bit n 9, serving,
+         present, operation⟩
   model := servicePlan
 
 @[conformance_family]

@@ -167,11 +167,32 @@ async fn create_agent(
     Ok(serde_json::to_value(receipt)?)
 }
 
-async fn submit_create(graphql: &str, owner: &str, input: AgentCreateInput) -> Result<()> {
-    let endpoint = gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)?;
+async fn submit_create(
+    home: Option<&std::path::Path>,
+    graphql: Option<&str>,
+    owner: &str,
+    input: AgentCreateInput,
+) -> Result<()> {
+    let endpoint = gents_service::home_state::resolve_graphql_endpoint(graphql, home)?;
     let identity_binding = gents_desktop_core::agent_identity::provision(&endpoint, owner).await?;
     let access = ConfigAccess::Graphql(endpoint);
-    print_json(&create_agent(&access, owner, identity_binding, &input).await?)
+    let mut receipt = create_agent(&access, owner, identity_binding, &input).await?;
+    if let Some(Value::String(command)) = receipt.pointer_mut("/host_root_access/user_command") {
+        *command = with_target(command, home, graphql);
+    }
+    print_json(&receipt)
+}
+
+/// `command` addressed to the runtime this invocation selected.
+fn with_target(command: &str, home: Option<&std::path::Path>, graphql: Option<&str>) -> String {
+    let mut command = command.to_owned();
+    if let Some(home) = home {
+        command.push_str(&format!(" --home {}", home.display()));
+    }
+    if let Some(graphql) = graphql.map(str::trim).filter(|graphql| !graphql.is_empty()) {
+        command.push_str(&format!(" --graphql {graphql}"));
+    }
+    command
 }
 
 fn optional_update(value: Option<String>) -> StringUpdate {
@@ -254,9 +275,14 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
     } else {
         AgentCreateOperation::Create
     };
+    let owner = gents_service::home_state::resolve_node_did(
+        args.home.as_deref(),
+        args.node_did.as_deref(),
+    )?;
     submit_create(
-        &args.graphql,
-        &args.node_did,
+        args.home.as_deref(),
+        args.graphql.as_deref(),
+        &owner,
         AgentCreateInput {
             operation,
             clone_from: args.clone_from,
@@ -275,7 +301,8 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
 pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
     submit_create(
-        &args.graphql,
+        args.home.as_deref(),
+        args.graphql.as_deref(),
         &owner,
         AgentCreateInput {
             operation: AgentCreateOperation::Clone,
@@ -341,12 +368,14 @@ where
     Ok(value)
 }
 
-async fn classify_preset<R>(access: &R, value: &Value) -> Result<Option<&'static str>>
+async fn classify_preset<R>(
+    access: &R,
+    tools: &gents_documents::Tools,
+) -> Result<Option<&'static str>>
 where
     R: gents_store::config_client::ConfigRead + ?Sized,
 {
-    use gents_documents::{merge_datastore_tool_surfaces, Tools};
-    let tools: Tools = serde_json::from_value(value.clone())?;
+    use gents_documents::merge_datastore_tool_surfaces;
     tools.validate()?;
     let ids = tools
         .datastore
@@ -367,8 +396,8 @@ where
                 .with_context(|| format!("missing selected datastore surface {id:?}"))
         })
         .collect::<Result<Vec<_>>>()?;
-    let merged = merge_datastore_tool_surfaces(&tools, &surfaces)?;
-    presets::classify_tools(&tools, &merged)
+    let merged = merge_datastore_tool_surfaces(tools, &surfaces)?;
+    presets::classify_tools(tools, &merged)
 }
 
 pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
@@ -418,13 +447,18 @@ pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
                 scoped_row(txn.read_view(&ProfileList::new(owner).profile_id(&agent.inference_profile_id)).await?,
                     Collection::InferenceProfile, owner, &agent.inference_profile_id)?.map(|row| row.profile)
             };
-            let tools = tools.as_ref().map(|tools| document_value(tools, fields::tools::FIELD_NAMES)).transpose()?;
             let preset_name = match tools.as_ref() {
                 Some(tools) => Some(classify_preset(txn, tools).await?.unwrap_or("custom")),
                 None => None,
             };
-            let root = tools.as_ref().and_then(|tools| tools.pointer("/host/root")).cloned()
-                .unwrap_or(Value::Null);
+            let root = tools.as_ref().and_then(|tools| tools.host.as_ref()?.root.clone());
+            let tools = tools.as_ref().map(|tools| {
+                let mut value = document_value(tools, fields::tools::FIELD_NAMES)?;
+                if let Some(object) = value.as_object_mut() {
+                    object.remove(fields::tools::UPDATED_AT.name());
+                }
+                Ok::<_, anyhow::Error>(value)
+            }).transpose()?;
             let mut row = document_value(&agent, fields::agent::FIELD_NAMES)?;
             let object = row.as_object_mut().context("agent document must be an object")?;
             object.remove(fields::agent::UPDATED_AT.name());
@@ -635,7 +669,7 @@ mod tests {
             .read_view(&AgentList::new(owner).agent_did(agent_did))
             .await?
             .is_empty());
-        let preset = classify_preset(&access, &tools_row).await?;
+        let preset = classify_preset(&access, &tools).await?;
         assert_eq!(preset, Some("write"));
         let source_tools = read_canonical(&node, "Tools", "tools_id", owner, &tools_id, "host")
             .await?
@@ -729,7 +763,7 @@ mod tests {
     "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     "published_root": "<ROOT>",
     "state": "waiting_for_user",
-    "user_command": "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path <ROOT> --agent-did <CREATED>"
+    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CREATED>"
   },
   "make_default": false,
   "operation": "create"
@@ -752,7 +786,7 @@ mod tests {
     "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     "published_root": "<ROOT>",
     "state": "waiting_for_user",
-    "user_command": "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path <ROOT> --agent-did <CLONED>"
+    "user_command": "gents config workspace-root grant-reader --path <ROOT> --agent-did <CLONED>"
   },
   "make_default": false,
   "operation": "clone"

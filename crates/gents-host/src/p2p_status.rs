@@ -11,7 +11,6 @@ use gents_service::state::StoredRuntimeState;
 
 use crate::http_client::{http_get_json, normalize_optional_string};
 use gents_service::home_state::read_runtime_state;
-use gents_service::home_state::resolve_home_dir;
 
 fn p2p_collection_names(
     collection_ids: &[String],
@@ -96,15 +95,24 @@ pub fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: &Value)
     }
 }
 
+/// `home` is the selected home whose `runtime.json` records this endpoint's
+/// runtime; `None` consults no home, never the default one, because a server
+/// serving one home must not read another's state.
+fn recorded_runtime_state(
+    home: Option<&Path>,
+    graphql: &GraphqlEndpoint,
+) -> Result<Option<StoredRuntimeState>> {
+    let Some(home) = home else {
+        return Ok(None);
+    };
+    Ok(read_runtime_state(home)?.filter(|state| state.graphql == graphql.url()))
+}
+
 pub async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &GraphqlEndpoint) -> Value {
-    let home_dir = resolve_home_dir(home);
-    let runtime_state = read_runtime_state(&home_dir)
-        .ok()
-        .flatten()
-        .filter(|state| state.graphql == graphql.url());
     match fetch_live_http_p2p_status(home, graphql).await {
         Ok(status) => status,
         Err(error) => {
+            let runtime_state = recorded_runtime_state(home, graphql).ok().flatten();
             let mut status = persisted_p2p_status(runtime_state.as_ref());
             if let Some(map) = status.as_object_mut() {
                 map.insert("p2p_error".to_string(), Value::String(error.to_string()));
@@ -126,9 +134,7 @@ pub async fn fetch_live_http_p2p_status(
     graphql: &GraphqlEndpoint,
 ) -> Result<Value> {
     use crate::http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
-    let home_dir = resolve_home_dir(home);
-    let runtime_state =
-        read_runtime_state(&home_dir)?.filter(|state| state.graphql == graphql.url());
+    let runtime_state = recorded_runtime_state(home, graphql)?;
     let api_base = gents_store::config_client::graphql_api_base(graphql.url())?;
     let identity =
         get_authorized_json::<NodeIdentityResponse>(graphql, &format!("{api_base}/node/identity"))
@@ -284,4 +290,59 @@ pub struct P2pReplicatorOutputRow {
     pub addresses: Vec<String>,
     pub collection_ids: Vec<String>,
     pub collection_names: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_live_http_p2p_status;
+    use gents_service::home_state::{resolve_home_dir, write_runtime_state};
+    use gents_service::state::StoredRuntimeState;
+    use gents_store::config_client::GraphqlEndpoint;
+
+    fn recorded(home: &std::path::Path, graphql: &str, peer_id: &str) -> StoredRuntimeState {
+        StoredRuntimeState {
+            home: home.display().to_string(),
+            graphql: graphql.to_string(),
+            node_name: "node".to_string(),
+            node_did: "did:key:node".to_string(),
+            default_agent_did: "did:key:agent".to_string(),
+            p2p_transport: "iroh".to_string(),
+            p2p_peer_id: Some(peer_id.to_string()),
+            p2p_listen_addresses: Vec::new(),
+            p2p_admission: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn p2p_status_reads_only_the_selected_homes_runtime_state() {
+        let unreachable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let graphql = format!(
+            "http://{}/api/v0/graphql",
+            unreachable.local_addr().unwrap()
+        );
+        drop(unreachable);
+        let endpoint = GraphqlEndpoint::anonymous(graphql.clone());
+
+        let default_home = resolve_home_dir(None);
+        std::fs::create_dir_all(&default_home).unwrap();
+        write_runtime_state(
+            &default_home,
+            &recorded(&default_home, &graphql, "default-home-peer"),
+        )
+        .unwrap();
+        let selected = tempfile::tempdir().unwrap();
+        write_runtime_state(
+            selected.path(),
+            &recorded(selected.path(), &graphql, "selected-home-peer"),
+        )
+        .unwrap();
+
+        let from_selected = load_live_http_p2p_status(Some(selected.path()), &endpoint).await;
+        let without_home = load_live_http_p2p_status(None, &endpoint).await;
+        std::fs::remove_file(default_home.join("runtime.json")).unwrap();
+
+        assert_eq!(from_selected["p2p_peer_id"], "selected-home-peer");
+        assert!(without_home["p2p_peer_id"].is_null(), "{without_home}");
+        assert!(!without_home["p2p_error"].is_null(), "{without_home}");
+    }
 }
