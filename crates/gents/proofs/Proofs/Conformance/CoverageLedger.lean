@@ -1219,8 +1219,24 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the stamped mailbox write takes the question's request, session and owner from the filing request, so production cannot file a mismatched question, and no scenario replays the reply-side mismatches through the signed reply claim after a linked handoff.")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "count_carrier_cases"
-      "CountCarrierCases")
+      "family"
+      "count_carrier_value")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_admission")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_storage")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_obligation_field")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_event_source_field")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -3306,6 +3322,8 @@ def externalPremiseCoverage : List CoverageEntry :=
       "The WASM guest supplies its step function, output schema and resume bookkeeping; core proofs do not establish guest determinism.") "tool-call" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.plugin-job.single-step-driver"
       "One active runtime per node is an operating premise. Host-local job control and in-memory step coalescing do not enforce that premise across processes.") "tool-call" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.count-carrier.non-null-id"
+      "DefraDB refuses a non-null ID field declaration (NonNull variant for type ID is not supported), so no count carrier of that schema is ever stored.") "completion-retry" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.plugin-data.transaction"
       "DefraDB provides transaction serializability and its unique index as a backstop for read-then-insert plugin data writes.") "tool-policy" [Surface.runtimeInternal]
   ]

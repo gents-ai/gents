@@ -525,7 +525,6 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"composed_invariant_witnesses\":"
       ++ jsonArray
         (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
-    ++ "\"count_carrier_cases\":" ++ Conformance.CountCarrier.casesJson ++ ","
     ++ "\"schema_argument_repair_cases\":"
       ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
 
