@@ -55,7 +55,7 @@ pub struct PackUxPlugin {
     pub data: Vec<UxDataSurface>,
 }
 
-pub use gents_documents::{is_valid_ux_data_tool_name, UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN};
+use gents_documents::UxDataSurface;
 
 /// What a UX plugin declares it contributes: the gate the desktop's
 /// plugin context enforces on every `register` call.

@@ -78,14 +78,15 @@ pub use installation::{
     InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstallerRootAgent,
     PackAgentRoot, PackChangeError, PackIdentity, PackRemovalError, PackRootRecord, PackSource,
     PackSourceHistory, PluginPinConflict, PluginSelection, PluginStoreChangeError,
-    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
+    PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,
     record_staged_plugin_store_change_as_with_node_binding, sdl_paths, PluginStageContext,
 };
 pub use installation::{
-    stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError,
+    stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
+    HostedPackStageError,
 };
 pub use loader::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config,
