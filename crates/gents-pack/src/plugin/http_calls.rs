@@ -298,7 +298,7 @@ impl Lookup for SystemLookup {
 pub(crate) struct InternalAddress(String);
 
 impl InternalAddress {
-    pub(crate) fn in_chain(error: &(dyn std::error::Error + 'static)) -> Option<&Self> {
+    pub(crate) fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
         gents_protocol::error_chain::find_source::<Self>(error)
     }
 }
