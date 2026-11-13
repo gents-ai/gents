@@ -349,6 +349,7 @@ import Proofs.Conformance.WorkspacePermissions
 
 import Proofs.Conformance.InstallRepair
 import Proofs.Conformance.RepairBackups
+import Proofs.Conformance.DesktopConnect
 
 namespace Conformance.Contracts
 
