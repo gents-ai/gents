@@ -44,6 +44,11 @@ async fn observe_submitted_request(
     receipt
 }
 
+fn acknowledge_submitted_request(store: &ObservedStore, receipt: &SubmittedRequest) {
+    store.set_focused_request_id(Some(receipt.request_id.clone()));
+    store.request_resync();
+}
+
 async fn observe_committed_write(
     node_did: &str,
     action: &str,

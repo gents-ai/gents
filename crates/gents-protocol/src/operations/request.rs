@@ -58,6 +58,43 @@ pub struct MessageSendInput {
     pub mailbox_item_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct MessageSendRoute {
+    pub node_did: String,
+    pub session_id: Option<String>,
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MessageSendBody {
+    pub agent_did: Option<String>,
+    pub content: String,
+    pub input: RequestInput,
+    pub delivery: DeliveryChoice,
+    pub valid_until: Option<DateTime<Utc>>,
+    pub mailbox_item_id: Option<String>,
+}
+
+impl MessageSendInput {
+    pub fn into_parts(self) -> (MessageSendRoute, MessageSendBody) {
+        (
+            MessageSendRoute {
+                node_did: self.node_did,
+                session_id: self.session_id,
+                request_id: self.request_id,
+            },
+            MessageSendBody {
+                agent_did: self.agent_did,
+                content: self.content,
+                input: self.input,
+                delivery: self.delivery,
+                valid_until: self.valid_until,
+                mailbox_item_id: self.mailbox_item_id,
+            },
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RequestReceipt {
     pub request_id: String,

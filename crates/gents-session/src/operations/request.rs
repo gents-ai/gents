@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use chrono::Utc;
 use gents_protocol::operations::request::{
-    MessageSendInput, ReissueDecision, ReissueKind, ReissueParent, ReissueReceipt,
-    RequestInterruptInput, RequestInterruptReceipt, RequestLookup, RequestMatches,
-    RequestOperationError, RequestReceipt, RequestRef, RequestReissueInput, RequestWaitInput,
+    MessageSendBody, MessageSendInput, MessageSendRoute, ReissueDecision, ReissueKind,
+    ReissueParent, ReissueReceipt, RequestInterruptInput, RequestInterruptReceipt, RequestLookup,
+    RequestMatches, RequestOperationError, RequestReceipt, RequestRef, RequestReissueInput,
+    RequestWaitInput,
 };
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -105,21 +106,26 @@ pub async fn send(
     signer: &dyn NodeIdentity,
     input: MessageSendInput,
 ) -> Result<RequestReceipt, RequestOperationError> {
-    let MessageSendInput {
+    let (route, body) = input.into_parts();
+    send_with(access, signer, route, |_, _| std::future::ready(Ok(body))).await
+}
+
+pub async fn send_with<P, F>(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    route: MessageSendRoute,
+    prepare: P,
+) -> Result<RequestReceipt, RequestOperationError>
+where
+    P: FnOnce(String, String) -> F,
+    F: Future<Output = Result<MessageSendBody, RequestOperationError>>,
+{
+    let MessageSendRoute {
         node_did,
         session_id,
-        agent_did,
         request_id,
-        content,
-        input: request_input,
-        delivery,
-        valid_until,
-        mailbox_item_id,
-    } = input;
+    } = route;
     let node_did = target::required("node_did", &node_did)?.to_owned();
-    if !request_input.has_authored_input(&content) {
-        return Err(RequestOperationError::ContentRequired);
-    }
     let actor = target::client_actor(access, signer)?;
     let session_id = target::nonblank(session_id).unwrap_or_else(fresh_id);
     let supplied_request_id = target::nonblank(request_id);
@@ -150,6 +156,17 @@ pub async fn send(
             )
             .await;
         }
+    }
+    let MessageSendBody {
+        agent_did,
+        content,
+        input: request_input,
+        delivery,
+        valid_until,
+        mailbox_item_id,
+    } = prepare(node_did.clone(), session_id.clone()).await?;
+    if !request_input.has_authored_input(&content) {
+        return Err(RequestOperationError::ContentRequired);
     }
     let (content, request_input) =
         gents_documents::skills::content_and_input_with_prompt_selected_skill_ids(
