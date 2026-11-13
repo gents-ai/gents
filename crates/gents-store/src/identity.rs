@@ -276,7 +276,7 @@ pub fn register_ed25519_signing_identity(
             remote_signer: None,
             signing_authorization: None,
         },
-    );
+    )?;
     Ok(())
 }
 

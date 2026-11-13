@@ -96,7 +96,8 @@ async fn registered_identity_uses_defradb_local_signing_config() {
             remote_signer: None,
             signing_authorization: None,
         },
-    );
+    )
+    .expect("the signing identity registers");
 
     let identity = RegisteredIdentity::from_registered_did(&did, None).unwrap();
     let payload = b"gents registered local signing";
@@ -122,7 +123,8 @@ async fn registered_identity_delegates_to_defradb_remote_signer() {
             remote_signer: Some(Arc::new(TestRemoteSigner { private_key_bytes })),
             signing_authorization: None,
         },
-    );
+    )
+    .expect("the signing identity registers");
 
     let identity = RegisteredIdentity::from_registered_did(&did, None).unwrap();
     let payload = b"gents registered remote signing";
