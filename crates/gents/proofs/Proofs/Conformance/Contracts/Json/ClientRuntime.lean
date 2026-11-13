@@ -885,16 +885,6 @@ def outputViewJson : StreamingResponse.View → String
       (",\"message\":" ++ canonicalMessageJson message ++
        ",\"native\":" ++ reconstructedMessageJson native)
 
-def outputProjectionCaseJson
-    (witness : StreamingResponse.OutputProjectionCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"input\":" ++ outputObservationJson witness.input ++ ","
-    ++ "\"expected\":" ++ outputViewJson witness.expected ++ ","
-    ++ "\"rendered_kinds\":" ++ jsonArray
-      ((StreamingResponse.renderedKinds witness.expected).map jsonString)
-    ++ "}"
-
 def auxiliaryOutputCaseJson
     (witness : CanonicalOutput.Execution.AuxiliaryCases.Case) : String :=
   let kind := witness.kind

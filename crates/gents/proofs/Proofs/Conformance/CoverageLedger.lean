@@ -2706,13 +2706,18 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: production admits a fresh provider request inside gents-loop request assembly over the serialized request, where projection and estimation are the provider's own calls; no production function takes a supplied projection outcome and estimate. This does not model the repair transformation.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "canonical_output_projection_cases"
-      "CanonicalOutputProjectionCases"
+      "family"
+      "canonical_output_projection_view"
+      "project_live replays every projection observation and its whole view (published envelope and reconstructed native message, preview streams, or the loading, denied, conflicted, invalid, retracted and absent verdicts) is compared with the model's project. This binds the projection owner, not ACP or genesis validation.")
+      "canonical-output" [Surface.agentFacing, Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "family"
+      "canonical_output_projection_presentation"
       "The two published mixed/all-opaque reasoning cases bind present_message to renderedKinds. This binds stateless reasoning presentation, not projection selection, ACP or genesis validation.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "canonical_output_projection_cases"
-      "CanonicalOutputProjectionCases"
+      "family"
+      "canonical_output_projection_preview"
       "The two published mixed/all-opaque reasoning cases bind render_reasoning_text to renderedKinds. This binds the stateless per-event rendering function, not stream-event delivery or reconnect behavior.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (consumerWithFollowUp

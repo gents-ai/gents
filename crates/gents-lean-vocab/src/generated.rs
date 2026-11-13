@@ -17,10 +17,6 @@ pub fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecution
     &lean_contract_snapshot().canonical_execution_gate_cases
 }
 
-pub fn lean_canonical_output_projection_cases() -> &'static [LeanCanonicalOutputProjectionCase] {
-    &lean_contract_snapshot().canonical_output_projection_cases
-}
-
 pub fn lean_canonical_payload_presentation_cases() -> &'static [LeanPayloadPresentationCase] {
     &lean_contract_snapshot().canonical_payload_presentation_cases
 }
@@ -533,15 +529,6 @@ pub struct LeanCanonicalOutputObservation {
     pub target: LeanOutputTarget,
     pub request_terminal: bool,
     pub terminal_selection: Option<LeanTerminalSelection>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalOutputProjectionCase {
-    pub name: String,
-    pub input: LeanCanonicalOutputObservation,
-    pub expected: LeanCanonicalOutputView,
-    pub rendered_kinds: Vec<LeanRenderedKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1133,7 +1120,6 @@ pub struct LeanContractSnapshot {
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
-    pub canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
@@ -3725,17 +3711,6 @@ pub struct LeanRecoverySweepCase {
     pub recovery_cause: Option<String>,
     pub notification_reason: Option<String>,
     pub deadline_audit_ref: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanRenderedKind {
-    Text,
-    Reasoning,
-    Summary,
-    Arguments,
-    ToolOutput,
-    Media,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

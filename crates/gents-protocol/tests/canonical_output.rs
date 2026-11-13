@@ -1,5 +1,5 @@
 use gents_lean_vocab::canonical_wire::{
-    self as wire, AuditResult, Observation, PayloadSpec, Presentation, Segment,
+    self as wire, AuditResult, Observation, PayloadSpec, Presentation, Reconstructed, Segment,
 };
 use gents_lean_vocab::family::Json;
 use gents_protocol::output::live::{reconstruct_dense_prefix, DensePrefixError};
@@ -8,6 +8,7 @@ use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputWriter,
     ReasoningPart, ReconstructionError, TranscriptMessage,
 };
+use gents_protocol::transcript::present_message;
 
 fn observed(records: &[(String, OutputSegment)]) -> Vec<ObservedSegment<'_>> {
     records
@@ -94,5 +95,29 @@ fn reasoning_audit_prefix_follows_the_lean_model() {
             Err(DensePrefixError::Conflicted { .. }) => AuditResult::Conflicted,
             Err(DensePrefixError::Invalid { .. }) => AuditResult::Invalid,
         }))
+    });
+}
+
+#[test]
+fn canonical_output_projection_follows_the_lean_model() {
+    gents_lean_vocab::families::canonical_output_projection_view::replay(|input| {
+        let observation: Observation = wire::decode(&input.input.0);
+        Json(wire::encode(&wire::view_wire(
+            &wire::project(&observation),
+            &observation,
+        )))
+    });
+}
+
+#[test]
+fn persisted_reasoning_presentation_follows_the_lean_model() {
+    gents_lean_vocab::families::canonical_output_projection_presentation::replay(|input| {
+        let native: Reconstructed = wire::decode(&input.native.0);
+        let presentation = present_message(&wire::native_assistant(&native));
+        assert_eq!(presentation.body_markdown, "", "{}", input.name);
+        presentation
+            .reasoning_markdown
+            .map(|text| text.split('\n').map(str::to_owned).collect())
+            .unwrap_or_default()
     });
 }

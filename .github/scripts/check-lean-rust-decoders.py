@@ -11,7 +11,6 @@ GROUPS = {
     "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_dispatch_observation_cases": "LeanDispatchObservationCase",
     "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
-    "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",
     "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
 }
 INT_RANGES = {

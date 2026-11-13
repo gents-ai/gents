@@ -1,10 +1,19 @@
-use gents_protocol::output::reconstruction::ReconstructedStream;
+use gents_protocol::message::{
+    AssistantContent, Message as NativeMessage, Reasoning, ReasoningContent, Text,
+    ToolResultContent, UserContent,
+};
+use gents_protocol::output::live::{
+    project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
+};
+use gents_protocol::output::reconstruction::{
+    DependencyDenial as OutputDependencyDenial, ObservedSegment, ReconstructedStream,
+};
 use gents_protocol::output::{
     MediaBlock, MediaData, MediaKind as OutputMediaKind, MessageBlock, MessagePublication,
     MessageRole, OutputOutcome, OutputSegment, OutputSource, OutputWriter, PayloadPresentation,
     PayloadRef as OutputPayloadRef, PresentationPart as OutputPresentationPart, PresentedPayload,
     ReasoningPart as OutputReasoningPart, SegmentRun, SourceClose, StreamDeclaration,
-    StreamPayload, ToolResultPart, TranscriptMessage,
+    StreamPayload, TerminalOutput, ToolResultPart, TranscriptMessage,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use serde::{Deserialize, Serialize};
@@ -802,4 +811,301 @@ pub fn stream_wire(stream: &ReconstructedStream) -> Stream {
         declaration: declaration_wire(&stream.declaration),
         bytes: stream.text.as_bytes().to_vec(),
     }
+}
+
+pub fn live_stream_wire(stream: &gents_protocol::output::LiveStream) -> Stream {
+    Stream {
+        declaration: declaration_wire(&stream.declaration),
+        bytes: stream.text.as_bytes().to_vec(),
+    }
+}
+
+fn utf8(bytes: &[u8]) -> String {
+    String::from_utf8(bytes.to_vec()).expect("modeled native payload is UTF-8")
+}
+
+fn native_reasoning(id: &Option<String>, parts: &[ReasoningPart<Vec<u8>>]) -> Reasoning {
+    Reasoning {
+        id: id.clone(),
+        content: parts
+            .iter()
+            .map(|part| match part {
+                ReasoningPart::Text { payload, signature } => ReasoningContent::Text {
+                    text: utf8(payload),
+                    signature: signature.clone(),
+                },
+                ReasoningPart::Encrypted { payload } => ReasoningContent::Encrypted(utf8(payload)),
+                ReasoningPart::Redacted { payload } => ReasoningContent::Redacted {
+                    data: utf8(payload),
+                },
+                ReasoningPart::Summary { payload } => ReasoningContent::Summary(utf8(payload)),
+            })
+            .collect(),
+    }
+}
+
+/// The native assistant message a modeled reconstruction stands for. Only
+/// text and reasoning blocks have a native assistant form without the
+/// transcript header that carries tool identities.
+pub fn native_assistant(native: &Reconstructed) -> NativeMessage {
+    assert_eq!(
+        native.role,
+        Role::Assistant,
+        "modeled message is assistant-authored"
+    );
+    NativeMessage::Assistant {
+        id: native.native_id.clone(),
+        request_id: native.native_request_id.clone(),
+        content: native
+            .blocks
+            .iter()
+            .map(|block| match block {
+                Block::Text { payload } => AssistantContent::Text(Text {
+                    text: utf8(payload),
+                }),
+                Block::Reasoning { id, parts } => {
+                    AssistantContent::Reasoning(native_reasoning(id, parts))
+                }
+                other => panic!("modeled assistant block {other:?} has no header-free native form"),
+            })
+            .collect(),
+    }
+}
+
+fn doc_id(id: &str) -> u64 {
+    id.strip_prefix("nat-")
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| panic!("translated document id {id} is not a modeled nat"))
+}
+
+fn reasoning_wire(reasoning: &Reasoning) -> Block<Vec<u8>> {
+    Block::Reasoning {
+        id: reasoning.id.clone(),
+        parts: reasoning
+            .content
+            .iter()
+            .map(|part| match part {
+                ReasoningContent::Text { text, signature } => ReasoningPart::Text {
+                    payload: text.as_bytes().to_vec(),
+                    signature: signature.clone(),
+                },
+                ReasoningContent::Encrypted(data) => ReasoningPart::Encrypted {
+                    payload: data.as_bytes().to_vec(),
+                },
+                ReasoningContent::Redacted { data } => ReasoningPart::Redacted {
+                    payload: data.as_bytes().to_vec(),
+                },
+                ReasoningContent::Summary(text) => ReasoningPart::Summary {
+                    payload: text.as_bytes().to_vec(),
+                },
+            })
+            .collect(),
+    }
+}
+
+/// The modeled reconstruction of a native message production rebuilt from
+/// `header`; tool documents come from the header's blocks at the same position.
+pub fn reconstructed_wire(native: &NativeMessage, header: &TranscriptMessage) -> Reconstructed {
+    let tool_doc = |index: usize| match header.blocks.get(index) {
+        Some(MessageBlock::ToolCall {
+            tool_call_doc_id, ..
+        })
+        | Some(MessageBlock::ToolResult {
+            tool_call_doc_id, ..
+        }) => doc_id(tool_call_doc_id),
+        other => panic!("native tool block {index} has header block {other:?}"),
+    };
+    match native {
+        NativeMessage::Assistant {
+            id,
+            request_id,
+            content,
+        } => Reconstructed {
+            role: Role::Assistant,
+            native_id: id.clone(),
+            native_request_id: request_id.clone(),
+            blocks: content
+                .iter()
+                .enumerate()
+                .map(|(index, block)| match block {
+                    AssistantContent::Text(text) => Block::Text {
+                        payload: text.text.as_bytes().to_vec(),
+                    },
+                    AssistantContent::Reasoning(reasoning) => reasoning_wire(reasoning),
+                    AssistantContent::ToolCall(call) => Block::ToolCall {
+                        doc_id: tool_doc(index),
+                        id: call.id.clone(),
+                        call_id: call.call_id.clone(),
+                        name: call.function.name.clone(),
+                        arguments: call
+                            .raw_arguments
+                            .clone()
+                            .unwrap_or_else(|| call.function.arguments.to_string())
+                            .into_bytes(),
+                        signature: call.signature.clone(),
+                        additional_params: call
+                            .additional_params
+                            .as_ref()
+                            .map(serde_json::Value::to_string),
+                    },
+                    AssistantContent::Image(image) => {
+                        panic!("native assistant image {image:?} has no modeled projection case")
+                    }
+                })
+                .collect(),
+        },
+        NativeMessage::User { content } => Reconstructed {
+            role: Role::User,
+            native_id: header.native_id.clone(),
+            native_request_id: header.native_request_id.clone(),
+            blocks: content
+                .iter()
+                .enumerate()
+                .map(|(index, block)| match block {
+                    UserContent::Text(text) => Block::Text {
+                        payload: text.text.as_bytes().to_vec(),
+                    },
+                    UserContent::ToolResult(result) => Block::ToolResult {
+                        doc_id: tool_doc(index),
+                        id: result.id.clone(),
+                        call_id: result.call_id.clone(),
+                        parts: result
+                            .content
+                            .iter()
+                            .map(|part| match part {
+                                ToolResultContent::Text(text) => ResultPart::Text {
+                                    payload: text.text.as_bytes().to_vec(),
+                                },
+                                ToolResultContent::Image(image) => panic!(
+                                    "native tool-result image {image:?} has no modeled projection case"
+                                ),
+                            })
+                            .collect(),
+                    },
+                    other => panic!("native user block {other:?} has no modeled projection case"),
+                })
+                .collect(),
+        },
+        NativeMessage::System { content } => Reconstructed {
+            role: Role::System,
+            native_id: header.native_id.clone(),
+            native_request_id: header.native_request_id.clone(),
+            blocks: vec![Block::Text {
+                payload: content.as_bytes().to_vec(),
+            }],
+        },
+    }
+}
+
+/// The modeled view production's projection stands for; a published header is
+/// the observed envelope whose translation production selected.
+pub fn view_wire(view: &LiveView, observation: &Observation) -> View {
+    let streams = |streams: &[gents_protocol::output::LiveStream]| {
+        streams.iter().map(live_stream_wire).collect()
+    };
+    match view {
+        LiveView::Absent => View::Absent,
+        LiveView::Live { streams: live } => View::Live {
+            streams: streams(live),
+        },
+        LiveView::Settling { streams: live } => View::Settling {
+            streams: streams(live),
+        },
+        LiveView::Loading => View::Loading,
+        LiveView::Denied => View::Denied,
+        LiveView::Conflicted => View::Conflicted,
+        LiveView::Invalid => View::Invalid,
+        LiveView::Retracted => View::Retracted,
+        LiveView::RetainedPartial { streams: live } => View::RetainedPartial {
+            streams: streams(live),
+        },
+        LiveView::Published {
+            message: published,
+            native,
+        } => {
+            let selected = observation
+                .messages
+                .iter()
+                .find(|candidate| message(candidate) == **published)
+                .unwrap_or_else(|| {
+                    panic!("published header {published:?} is no observed envelope")
+                });
+            View::Published {
+                message: selected.clone(),
+                native: Box::new(reconstructed_wire(native, published)),
+            }
+        }
+    }
+}
+
+/// Production's projection of an observation.
+pub fn project(observation: &Observation) -> LiveView {
+    let records = segments(&observation.records, observation.session);
+    let observed: Vec<ObservedSegment<'_>> = records
+        .iter()
+        .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
+        .collect();
+    let messages: Vec<(String, TranscriptMessage)> = observation
+        .messages
+        .iter()
+        .map(|candidate| (nat(candidate.header.id), message(candidate)))
+        .collect();
+    let message_refs: Vec<(&str, &TranscriptMessage)> = messages
+        .iter()
+        .map(|(id, candidate)| (id.as_str(), candidate))
+        .collect();
+    let ids = |ids: &[u64]| ids.iter().map(|id| nat(*id)).collect::<Vec<_>>();
+    let denied_headers = ids(&observation.denied_headers);
+    let denied_segments = ids(&observation.denied_segments);
+    let dependency_denials: Vec<OutputDependencyDenial> = observation
+        .dependency_denials
+        .iter()
+        .map(|denial| OutputDependencyDenial {
+            root_close_id: nat(denial.root_close_id),
+            denied_doc_id: nat(denial.denied_doc_id),
+        })
+        .collect();
+    let current_request = observation
+        .owner
+        .current_request
+        .map(|(request, generation)| (nat(request), nat(generation)));
+    let live_tools = ids(&observation.owner.live_tools);
+    let request_doc_id = nat(observation.request);
+    let session_id = nat(observation.session);
+    let target_request = nat(observation.target.coordinate.request);
+    let target_source = source(&observation.target.coordinate.source);
+    let target_writer = writer(&observation.target.writer);
+    let target_message = observation.target.message_id.map(nat);
+    project_live(&LiveObservation {
+        request_doc_id: &request_doc_id,
+        session_id: &session_id,
+        target: LiveTarget {
+            request_doc_id: &target_request,
+            source: &target_source,
+            writer: &target_writer,
+            message_id: target_message.as_deref(),
+        },
+        messages: &message_refs,
+        node_did: NODE_DID,
+        requester_did: None,
+        records: &observed,
+        denied_headers: &denied_headers,
+        denied_segments: &denied_segments,
+        dependency_denials: &dependency_denials,
+        owner: OwnerLiveness {
+            current_request: current_request
+                .as_ref()
+                .map(|(request, generation)| (request.as_str(), generation.as_str())),
+            live_tools: live_tools.iter().map(String::as_str).collect(),
+        },
+        request_terminal: observation.request_terminal,
+        terminal_selection: observation.terminal_selection.as_ref().map(
+            |selection| match selection {
+                TerminalSelection::Message { id } => TerminalOutput::Message {
+                    message_doc_id: nat(*id),
+                },
+                TerminalSelection::NoMessage => TerminalOutput::NoMessage,
+            },
+        ),
+    })
 }

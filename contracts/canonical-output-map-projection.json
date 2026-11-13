@@ -9,7 +9,7 @@
         { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.outputProjectionCases" },
         { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.renderedKinds" }
       ],
-      "generated_groups": ["canonical_output_projection_cases"],
+      "generated_groups": ["families"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": [
         "crates/gents-protocol/src/output.rs",
@@ -21,7 +21,7 @@
       "consumer_paths": [
         "crates/gents-protocol/src/transcript.rs",
         "crates/gents-loop/src/stream_processor.rs",
-        "crates/gents-lean-contract/tests/support/rendered_reasoning.rs",
+        "crates/gents-protocol/tests/canonical_output.rs",
         "crates/gents-toolcalls/src/call/hook/tests/transcript_native.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs",
         "crates/gents-toolcalls/src/background/status.rs",
@@ -187,7 +187,7 @@
         "Interleave header arrival, closure arrival, extent segments, exact replay, foreign-source facts, denial evidence, and owner-liveness changes in distinct traces.",
         "Keep missing ordinal observations loading or settling until reconstructable; never infer liveness solely from the absence of a closure.",
         "Demonstrate that conflicting twins and malformed consumed runs fail closed and are excluded from the benign-extension premise.",
-        "Drive desktop reordered-query and observer-patch behavior from the same trace expectations; canonical_output_projection_cases currently exports isolated observations only."
+        "Drive desktop reordered-query and observer-patch behavior from the same trace expectations; the family canonical_output_projection_view currently exports isolated observations only."
       ],
       "retired_bindings": [
         "StreamingResponse",
@@ -354,7 +354,7 @@
         "Preserve retry-tip ambiguity rejection and supersession selection without response-status precedence or a response fallback.",
         "Handle reordered header/segment arrival and exact duplicate observations without UI-local sync or loading heuristics.",
         "Render only presentation-visible content while retaining native encrypted or redacted reasoning for reconstruction and provider input.",
-        "Export AttemptView plus canonical observation input and exact Client.projectOutput expectation; canonical_output_projection_cases currently covers only the output half of this join.",
+        "Export AttemptView plus canonical observation input and exact Client.projectOutput expectation; the family canonical_output_projection_view currently covers only the output half of this join.",
         "Drive desktop and CLI observation owners from the resulting joined fixtures rather than the stale AgentResponse readers."
       ],
       "retired_bindings": [
