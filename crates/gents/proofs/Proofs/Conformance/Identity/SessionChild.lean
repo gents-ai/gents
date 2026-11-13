@@ -134,4 +134,44 @@ def clientRequestRecoveryUnreached : Family ClientRequestInput ClientRequestOutp
   inputs := (clientRequestCases.filter fun c => c.name ∉ servedClientRequestNames).map .ofCase
   model := recoveredClientRequest
 
+deriving instance ToJson for Identity.SessionChild.ClientRequestPublication
+
+structure AtomicRequestInput where
+  name : String
+  before : ClientRequestPublication
+  fresh : Bool
+  commit : Bool
+  deriving ToJson
+
+def atomicRequestCases : List AtomicRequestInput :=
+  [ { name := "aborted", before := ⟨false, false, false⟩, fresh := true, commit := false }
+  , { name := "created", before := ⟨false, false, false⟩, fresh := true, commit := true }
+  , { name := "duplicate-after-revocation", before := ⟨true, false, false⟩, fresh := false,
+      commit := true } ]
+
+/-- One signed client request on one served node: a publication aborted after
+its relationships were staged, the committed publication, then a duplicate
+after the working Agent grant was revoked, in that order. -/
+@[conformance_family]
+def atomicClientRequest : Family AtomicRequestInput ClientRequestPublication where
+  inputs := atomicRequestCases
+  model := fun i => commitFreshClientRequest i.before i.fresh i.commit
+
+/-- A lost commit receipt leaves a committed fresh publication. The receipt-loss
+fixture submits one fresh request and loses only its receipt, so only the
+committed fresh case can be built there. -/
+@[conformance_family]
+def atomicClientRequestUnconfirmed : Family AtomicRequestInput ClientRequestPublication where
+  inputs := atomicRequestCases.filter (·.name == "created")
+  model := fun i => commitFreshClientRequest i.before i.fresh i.commit
+
+/-- A client-requested Task delivery publishes the same signed client request
+through the Task delivery owner, whose staging step is private to it: the
+scenario delivers the request, then delivers it again after the working Agent
+grant was revoked, and cannot abort between staging and commit. -/
+@[conformance_family]
+def atomicClientTaskRequest : Family AtomicRequestInput ClientRequestPublication where
+  inputs := atomicRequestCases.filter (·.commit)
+  model := fun i => commitFreshClientRequest i.before i.fresh i.commit
+
 end Conformance.SessionChild

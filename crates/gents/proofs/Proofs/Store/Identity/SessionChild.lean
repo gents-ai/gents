@@ -342,15 +342,6 @@ theorem client_request_duplicate_preserves_revocation
     (state : ClientRequestPublication) (committed : Bool) :
     commitFreshClientRequest state false committed = state := by rfl
 
-def atomicClientRequestCasesJson : String :=
-  let cases := [("aborted", ⟨false, false, false⟩, true, false),
-    ("created", ⟨false, false, false⟩, true, true),
-    ("duplicate-after-revocation", ⟨true, false, false⟩, false, true)]
-  (Lean.toJson (cases.map fun (name, before, fresh, committed) =>
-    let result := commitFreshClientRequest before fresh committed
-    Lean.Json.mkObj [("name", Lean.toJson name), ("committed", Lean.toJson result.committed),
-      ("pending", Lean.toJson result.pending), ("grants", Lean.toJson result.grants)])).compress
-
 def recoverClientRequest (state : ClientRequestPublication)
     (matchingSignature sameSigner grantsOk markOk : Bool) : ClientRequestPublication :=
   if state.committed && state.pending && matchingSignature && sameSigner then

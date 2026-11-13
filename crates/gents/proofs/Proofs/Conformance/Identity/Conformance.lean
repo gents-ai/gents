@@ -16,19 +16,6 @@ import Proofs.Tools.SelfConfig.Auth
 namespace Identity.Conformance
 open Lean
 
-def taskSessionPublicationCasesJson : String :=
-  let empty : Automation.TaskSessionPublication := ⟨false, false, false, false⟩
-  let revoked : Automation.TaskSessionPublication := ⟨true, true, true, false⟩
-  let cases := [("aborted", empty, true, true, false),
-    ("created", empty, true, true, true),
-    ("duplicate-after-revocation", revoked, false, false, true)]
-  (toJson (cases.map fun (name, before, fresh, newSession, committed) =>
-    let result := Automation.publishTaskSession before fresh newSession committed
-    Json.mkObj [("name", toJson name), ("fresh", toJson fresh),
-      ("new_session", toJson newSession), ("committed", toJson committed),
-      ("request", toJson result.request), ("session", toJson result.session),
-      ("parent", toJson result.parent), ("working_agent", toJson result.workingAgent)])).compress
-
 def userDid : String := "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
 def runtimeDid : String := "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR"
 def otherRuntimeDid : String := "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
@@ -38,19 +25,6 @@ def otherAgentDid : String := "did:key:z6Mkef1w29eU7SP9XmbDzTwbiisHZ3uTS5JpNEuu1
 def readerDid : String := "did:key:z6MkeiwEAT7UhjgNfrqjRmGX1be3oD7f78zdveaZ4o9QuZ5D"
 def strangerDid : String := "did:key:z6MkenrXJkaVJ2ybox6Es4bSJUQp3NKrnCgTV4FD8BC1etPv"
 
-def clientSessionReservationCasesJson : String :=
-  let empty : Household.State := ⟨[], [], []⟩
-  let parent : Household.Relation := ⟨"sessions", "session", "parent", .object "agents" "agent"⟩
-  let worker : Household.Relation := ⟨"sessions", "session", "working_agent", .actor agentDid⟩
-  let revoked : Household.State := ⟨[⟨"sessions", "session", userDid⟩], [parent], []⟩
-  let cases := [("aborted", empty, true, false), ("created", empty, true, true),
-    ("duplicate-after-revocation", revoked, false, true)]
-  (toJson (cases.map fun (name, before, fresh, commit) =>
-    let result := Household.reserveUserSession before "session" userDid agentDid "agent" fresh commit
-    Json.mkObj [("name", toJson name), ("fresh", toJson fresh), ("commit", toJson commit),
-      ("session", toJson (result.objects.any (fun o => o.resource == "sessions" && o.id == "session"))),
-      ("parent", toJson (result.relations.contains parent)),
-      ("working_agent", toJson (result.relations.contains worker))])).compress
 def creationA : String := String.mk (List.replicate 64 'a')
 def creationB : String := String.mk (List.replicate 64 'b')
 

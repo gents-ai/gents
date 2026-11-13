@@ -156,6 +156,7 @@ import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
 import Proofs.Conformance.Identity.AgentIdentity
+import Proofs.Conformance.Identity.SessionPublication
 import Proofs.Conformance.Identity.DelegatedFinality
 import Proofs.Store.Identity.OperationsConformance
 import Proofs.Conformance.Identity.EvalRecords
@@ -377,12 +378,6 @@ def snapshotCoverageTailJson : String :=
       ++ featureMatrixJson
     ++ ",\"identity_household_cases\":"
       ++ Identity.Conformance.householdCasesJson
-    ++ ",\"identity_task_session_publication_cases\":"
-      ++ Identity.Conformance.taskSessionPublicationCasesJson
-    ++ ",\"identity_client_session_reservation_cases\":"
-      ++ Identity.Conformance.clientSessionReservationCasesJson
-    ++ ",\"identity_atomic_client_request_cases\":"
-      ++ Identity.SessionChild.atomicClientRequestCasesJson
     ++ "}"
 
 def snapshotJsonTail : String :=

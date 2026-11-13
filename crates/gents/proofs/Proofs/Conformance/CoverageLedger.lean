@@ -2612,6 +2612,16 @@ def caseCoverage : List CoverageEntry :=
       "identity_household_cases"
       "IdentityHouseholdCases")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "session_publication_task")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "session_publication_client_reservation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "session_child_atomic_client_request")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "session_child_atomic_client_request_unconfirmed")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "session_child_atomic_client_task_request")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "agent_identity_derivation")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "agent_identity_collection_locality")

@@ -1191,9 +1191,6 @@ pub struct LeanContractSnapshot {
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
     pub feature_matrix: LeanFeatureMatrix,
     pub identity_household_cases: Vec<LeanIdentityHouseholdCase>,
-    pub identity_task_session_publication_cases: Vec<serde_json::Value>,
-    pub identity_client_session_reservation_cases: Vec<serde_json::Value>,
-    pub identity_atomic_client_request_cases: Vec<serde_json::Value>,
     pub pack_operator_wire_cases: Vec<LeanPackOperatorWireCase>,
     pub recovery_sweep_ids: Vec<String>,
 }
