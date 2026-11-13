@@ -203,7 +203,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     let fixture = gents_automation::test_support::self_config_fixture("agent-create").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let root = fixture.admitted_workspace_root().await;
     let node = fixture.db.node.clone();
     let node_did = fixture.node_did().to_owned();
@@ -432,7 +432,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         gents_automation::test_support::self_config_fixture("descendant-root-self-config").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
     let owner = fixture.node_did().to_owned();

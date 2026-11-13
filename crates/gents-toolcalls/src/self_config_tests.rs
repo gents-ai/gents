@@ -2065,7 +2065,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
     fixture.grant_selected_configuration().await;
     fixture.grant_engineer_tool_sources().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     fixture.grant_agent_relation_delete().await;
     let working_did = fixture.install_sibling("working").await;
     fixture.grant_sibling_configuration(&working_did).await;
@@ -2427,7 +2427,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     fixture.grant_selected_configuration().await;
     let root = fixture.admitted_workspace_root().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     fixture.grant_agent_delete().await;
     fixture.grant_agent_relation_delete().await;
     let mut tool_config = config(&["node", "tools", "profile", "backend"]);
@@ -2666,7 +2666,7 @@ async fn agent_clone_accepts_sibling_agent_did() {
     let fixture = SelfConfigFixture::new("agent-clone").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let node = &fixture.db.node;
     let node_did = fixture.node_did();
     let qualified_sibling_id = fixture.install_sibling("sibling-agent").await;
@@ -2704,6 +2704,67 @@ async fn agent_clone_accepts_sibling_agent_did() {
     assert_ne!(source.context_id, cloned.context_id);
 }
 
+#[tokio::test]
+async fn the_engineer_clones_an_agent_and_an_agent_without_node_administration_is_refused() {
+    let fixture = SelfConfigFixture::new("catalog-holder").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_node_reader().await;
+    let sibling = fixture.install_sibling("sibling-agent").await;
+    fixture.grant_sibling_configuration(&sibling).await;
+    let args = json!({"argv": [
+        "agent", "clone",
+        "--display-name", "Cloned Agent",
+        "--from", sibling,
+        "--profile", format!("{sibling}:inference")
+    ]})
+    .to_string();
+    let attempt = |tool: Box<dyn ToolDyn>, args: String| async move {
+        match tool.call(args).await {
+            Ok(answer) => answer,
+            Err(error) => format!("{error:#}"),
+        }
+    };
+    let refused = attempt(take_agent_tool(fixture.tools(&["node"])), args.clone()).await;
+    assert!(
+        refused.contains("adds this actor as administrator on the Node"),
+        "{refused}"
+    );
+    let agent = ::identity::Did::new(fixture.agent_did()).unwrap();
+    let direct = fixture
+        .user_access
+        .add_actor_relationship(
+            "Node",
+            &fixture.node_binding.doc_id,
+            "agent_manager",
+            &agent,
+        )
+        .await;
+    assert!(
+        direct.is_err(),
+        "the Node's owner cannot add an actor as agent_manager"
+    );
+    let still_refused = attempt(take_agent_tool(fixture.tools(&["node"])), args.clone()).await;
+    assert!(
+        still_refused.contains("adds this actor as administrator on the Node"),
+        "{still_refused}"
+    );
+    let owner = fixture.db.node_identity.did().to_owned();
+    fixture
+        .user_access
+        .transact_write("test.catalog_holder.provision", |txn| {
+            let owner = &owner;
+            let agent = &agent;
+            Box::pin(async move {
+                gents_documents::provision_engineer(txn, owner, agent.as_str()).await
+            })
+        })
+        .await
+        .unwrap();
+    let cloned = attempt(take_agent_tool(fixture.tools(&["node"])), args).await;
+    let cloned: Value = serde_json::from_str(&cloned).unwrap_or_else(|_| panic!("{cloned}"));
+    assert_eq!(cloned["committed"], true, "{cloned}");
+}
+
 /// Lean `SelfConfig.clone_inherits_no_self_config`: a clone never carries its
 /// source's self-config group, so a source's operator grant (pack
 /// installation) is never copied, whether or not the invoker holds it.
@@ -2713,7 +2774,7 @@ async fn agent_clone_never_copies_the_source_self_config_grants() {
     let fixture = SelfConfigFixture::new("agent-clone-grants").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let granted = fixture.install_sibling("granted").await;
     fixture.grant_pack_install_to(&granted).await;
     // Reusing the sibling's profile selects it, which native document ACP
@@ -2773,7 +2834,7 @@ async fn agent_clone_by_holder_copies_granted_source() {
     let fixture = SelfConfigFixture::new("agent-clone-holder").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let node = &fixture.db.node;
     let node_did = fixture.node_did();
     let granted = fixture.install_sibling("granted").await;
@@ -2837,7 +2898,7 @@ async fn clone_does_not_inherit_self_config_from_its_source() {
     let fixture = SelfConfigFixture::new("clone-self-config").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
+    fixture.grant_node_administration().await;
     let node_did = fixture.node_did().to_owned();
     let source = fixture.install_sibling("self-config-source").await;
     fixture.grant_pack_install_to(&source).await;
