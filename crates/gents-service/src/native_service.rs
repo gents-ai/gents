@@ -643,7 +643,7 @@ where
                     let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
                     let loaded =
                         self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
-                    ensure_launchd_print_result(&loaded)?;
+                    ensure_launchd_result(&loaded, LaunchdOperation::Inspect)?;
                     if loaded.success {
                         self.stop(false)?;
                     }
@@ -683,7 +683,7 @@ where
                 let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
                 let print =
                     self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
-                ensure_launchd_print_result(&print)?;
+                ensure_launchd_result(&print, LaunchdOperation::Inspect)?;
                 Ok(print.success.then(|| launchd_pid(&print.stdout)).flatten())
             }
             NativeServicePlatform::Linux => {
@@ -876,13 +876,13 @@ where
                 let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
                 let loaded =
                     self.run_allow_failure("launchctl", &["print".into(), target.clone().into()])?;
-                ensure_launchd_print_result(&loaded)?;
+                ensure_launchd_result(&loaded, LaunchdOperation::Inspect)?;
                 if loaded.success {
                     let booted_out = self.run_allow_failure(
                         "launchctl",
                         &["bootout".into(), target.clone().into()],
                     )?;
-                    ensure_bootout_result(&booted_out)?;
+                    ensure_launchd_result(&booted_out, LaunchdOperation::Stop)?;
                     self.wait_unloaded_or_inactive()?;
                 }
             }
@@ -946,7 +946,7 @@ where
                 let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
                 let print =
                     self.run_allow_failure("launchctl", &["print".into(), target.clone().into()])?;
-                ensure_launchd_print_result(&print)?;
+                ensure_launchd_result(&print, LaunchdOperation::Inspect)?;
                 let disabled = self.run_allow_failure(
                     "launchctl",
                     &[
@@ -1040,7 +1040,7 @@ where
                 let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
                 let print =
                     self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
-                ensure_launchd_print_result(&print)?;
+                ensure_launchd_result(&print, LaunchdOperation::Inspect)?;
                 Ok(print
                     .success
                     .then(|| launchd_exit_failure(&print.stdout))
@@ -1198,7 +1198,7 @@ where
                 let target = target.context("launchd probe without a resolved job target")?;
                 let output =
                     self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
-                ensure_launchd_print_result(&output)?;
+                ensure_launchd_result(&output, LaunchdOperation::Inspect)?;
                 Ok(!output.success)
             }
             NativeServicePlatform::Linux => {
@@ -1869,34 +1869,26 @@ fn launchd_is_disabled(output: &str) -> Result<bool> {
     Ok(false)
 }
 
-/// launchd answers `Boot-out failed: 36: Operation now in progress` when a
-/// removal of this job is already under way: 36 is POSIX `EINPROGRESS`, so the
-/// stop was accepted and only the wait can decide its outcome. Every other
-/// refusal stays an error.
-fn ensure_bootout_result(output: &CommandOutput) -> Result<()> {
-    if output.success
-        || output.stderr.contains("36: Operation now in progress")
-        || output.stdout.contains("36: Operation now in progress")
-    {
-        Ok(())
-    } else {
-        bail!("launchctl failed: {}", output_detail(output))
-    }
+enum LaunchdOperation {
+    Stop,
+    Inspect,
 }
 
-/// External premise: `launchctl print` reports an unloaded service only as
-/// `Could not find service` on its output, with a status shared by other
-/// failures.
-fn ensure_launchd_print_result(output: &CommandOutput) -> Result<()> {
-    if output.success
-        || output.stderr.contains("Could not find service")
-        || output.stdout.contains("Could not find service")
-    {
+/// External premise: launchctl reports an accepted, pending boot-out with
+/// EINPROGRESS text and an absent service with `Could not find service` text;
+/// their exit statuses are also used for failures, so the output distinguishes
+/// these two successful outcomes from a refusal.
+fn ensure_launchd_result(output: &CommandOutput, operation: LaunchdOperation) -> Result<()> {
+    let (accepted, failure) = match operation {
+        LaunchdOperation::Stop => ("36: Operation now in progress", "launchctl failed"),
+        LaunchdOperation::Inspect => (
+            "Could not find service",
+            "launchctl could not inspect Gents",
+        ),
+    };
+    if output.success || output.stderr.contains(accepted) || output.stdout.contains(accepted) {
         Ok(())
     } else {
-        bail!(
-            "launchctl could not inspect Gents: {}",
-            output_detail(output)
-        )
+        bail!("{failure}: {}", output_detail(output))
     }
 }
