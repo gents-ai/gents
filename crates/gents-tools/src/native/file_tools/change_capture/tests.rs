@@ -69,6 +69,7 @@ async fn incomplete_images_retain_the_original_without_claiming_a_finished_mutat
     std::fs::write(&path, "original bytes").unwrap();
     gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         None,
         Some(writer),
@@ -109,6 +110,7 @@ async fn previews_and_rejected_edits_do_not_publish_file_images() {
     std::fs::write(&path, b"original\r\nbytes\r\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root_path.clone(), false).unwrap());
     gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
         None,
         tokio_util::sync::CancellationToken::new(),
         None,

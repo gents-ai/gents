@@ -1694,22 +1694,36 @@ fn where_clause_fence_counts_inline_bounds_only() {
 /// the list only shrinks.
 #[rustfmt::skip]
 const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("crates/gents-cli/src/request_helpers.rs", 1, "captures an embedded command's printed report; carries no request identity"),
     ("crates/gents-loop/src/provider_input/routing_affinity.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
     ("crates/gents-loop/src/rendered_request/scope.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
-    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 2, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-inference/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
-    ("crates/gents-store/src/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
     ("crates/gents-session/src/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-tools/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-tools/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-tools/src/runtime_context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
 ];
 
+/// Task-local statics that hold no request context, by file and name. The
+/// rule is about what a request carries, so these are not counted, provided
+/// the static's own docstring says what it holds instead.
+const AMBIENT_NOT_REQUEST_CONTEXT: &[(&str, &str)] = &[
+    ("crates/gents-cli/src/request_helpers.rs", "CAPTURED_REPORT"),
+    (
+        "crates/gents-store/src/config_client/txn/native.rs",
+        "ACTIVE_EMBEDDED_TRANSACTION",
+    ),
+];
+
+struct AmbientStatic {
+    name: String,
+    documented: bool,
+}
+
 #[derive(Default)]
 struct AmbientContextVisitor {
-    sites: usize,
+    statics: Vec<AmbientStatic>,
 }
 
 impl<'ast> Visit<'ast> for AmbientContextVisitor {
@@ -1727,26 +1741,53 @@ impl<'ast> Visit<'ast> for AmbientContextVisitor {
             .is_some_and(|segment| segment.ident == "thread_local" || segment.ident == "task_local")
         {
             let tokens = invocation.tokens.clone().into_iter().collect::<Vec<_>>();
-            self.sites += tokens
-                .iter()
-                .enumerate()
-                .filter(|(index, token)| {
-                    let lifetime = index.checked_sub(1).is_some_and(|previous| {
-                        matches!(&tokens[previous], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '\'')
-                    });
-                    !lifetime
-                        && matches!(token, proc_macro2::TokenTree::Ident(ident) if ident == "static")
-                })
-                .count();
+            let mut documented = false;
+            for (index, token) in tokens.iter().enumerate() {
+                match token {
+                    proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ';' => {
+                        documented = false;
+                    }
+                    proc_macro2::TokenTree::Group(group) => {
+                        documented |= matches!(
+                            group.stream().into_iter().next(),
+                            Some(proc_macro2::TokenTree::Ident(ident)) if ident == "doc"
+                        );
+                    }
+                    proc_macro2::TokenTree::Ident(ident) if ident == "static" => {
+                        let lifetime = index.checked_sub(1).is_some_and(|previous| {
+                            matches!(&tokens[previous], proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '\'')
+                        });
+                        if !lifetime {
+                            self.statics.push(AmbientStatic {
+                                name: tokens
+                                    .get(index + 1)
+                                    .map(ToString::to_string)
+                                    .unwrap_or_default(),
+                                documented,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
         visit::visit_macro(self, invocation);
     }
 }
 
-fn ambient_context_sites(syntax: &syn::File) -> usize {
+fn ambient_context_sites(relative: &str, syntax: &syn::File) -> usize {
     let mut visitor = AmbientContextVisitor::default();
     visitor.visit_file(syntax);
-    visitor.sites
+    visitor
+        .statics
+        .iter()
+        .filter(|found| {
+            !(found.documented
+                && AMBIENT_NOT_REQUEST_CONTEXT
+                    .iter()
+                    .any(|(path, name)| *path == relative && *name == found.name))
+        })
+        .count()
 }
 
 #[test]
@@ -1754,7 +1795,10 @@ fn ambient_request_context_only_shrinks() {
     let root = repo_root();
     let actual = parse_production(&root, production_sources(&root))
         .into_iter()
-        .map(|(relative, syntax)| (relative, ambient_context_sites(&syntax)))
+        .map(|(relative, syntax)| {
+            let sites = ambient_context_sites(&relative, &syntax);
+            (relative, sites)
+        })
         .filter(|(_, sites)| *sites > 0)
         .collect::<BTreeMap<_, _>>();
     let allowed = AMBIENT_CONTEXT_ALLOWLIST
@@ -1802,7 +1846,30 @@ fn ambient_context_counts_statics_outside_test_items() {
         "#,
     )
     .expect("parse snippet");
-    assert_eq!(ambient_context_sites(&syntax), 3);
+    assert_eq!(ambient_context_sites("src/lib.rs", &syntax), 3);
+}
+
+#[test]
+fn ambient_context_skips_only_named_documented_statics() {
+    let (path, name) = AMBIENT_NOT_REQUEST_CONTEXT[0];
+    for (statics, listed, elsewhere) in [
+        (format!("/// Why.\n static {name}: u8;"), 0, 1),
+        (format!("static {name}: u8;"), 1, 1),
+        (
+            format!("/// Why.\n static {name}: u8; static OTHER: u8;"),
+            1,
+            2,
+        ),
+    ] {
+        let source = format!("tokio::task_local! {{ {statics} }}");
+        let syntax = syn::parse_file(&source).expect("parse snippet");
+        assert_eq!(ambient_context_sites(path, &syntax), listed, "{source}");
+        assert_eq!(
+            ambient_context_sites("src/lib.rs", &syntax),
+            elsewhere,
+            "{source}"
+        );
+    }
 }
 
 /// Owner and library interfaces: the seams where callers decide behavior by

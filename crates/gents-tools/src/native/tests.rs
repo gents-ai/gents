@@ -787,6 +787,7 @@ async fn read_only_workspace_authority_denies_file_writes() {
     let writer = WriteFileTool::new(ToolContext::new(root.clone(), true).unwrap());
     let error = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
@@ -840,6 +841,7 @@ async fn command_definition_uses_the_current_workspace_policy() {
     assert!(describe().await.description.contains("unrestricted policy"));
     let description = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
@@ -884,6 +886,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
         policy.clone(),
     );
     let result = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
@@ -2276,6 +2279,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
         let operation = async move {
             crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
                 None,
+                None,
                 tokio_util::sync::CancellationToken::new(),
                 crate::runtime_context::ToolWorkspaceScope {
                     runtime_home: None,
@@ -2364,6 +2368,7 @@ with socket.socket() as connection:
 "#;
     let root = fx.grant.source_root().to_path_buf();
     let result = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
@@ -2498,6 +2503,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     let mut outputs = Vec::new();
     for subcommand in ["check", "test"] {
         let result = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+            None,
             None,
             tokio_util::sync::CancellationToken::new(),
             crate::runtime_context::ToolWorkspaceScope {

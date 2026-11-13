@@ -83,6 +83,7 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
     let started = std::time::Instant::now();
     let outcome =
         gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+            None,
             Some(chrono::Utc::now() + chrono::Duration::seconds(2)),
             tokio_util::sync::CancellationToken::new(),
             None,
@@ -146,6 +147,7 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
         let outcome = ToolOutcome::from_dispatch(
             "sh",
             gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+                None,
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 None,

@@ -311,13 +311,9 @@ impl DefraSessionHook {
             async move {
                 let execution = AssertUnwindSafe(gents_session::exec::ownership::scope_process_recorder(
                 process_recorder,
-                gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
-                    requester_did,
-                    request_node_did,
-                    request_agent_did,
-                    Some(execution_request_id.clone()),
-                    async {
+                async {
                         gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+                            Some(gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(requester_did, request_node_did, request_agent_did, Some(execution_request_id.clone()))),
                             Some(background_deadline_at),
                             cancellation_token.clone(),
                             workspace,
@@ -345,7 +341,6 @@ impl DefraSessionHook {
                         )
                         .await
                     },
-                ),
             ))
             .catch_unwind()
             .await;

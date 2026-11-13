@@ -192,17 +192,34 @@ pub struct CurrentToolRuntimeContext {
     pub request_id: Option<String>,
 }
 
+/// The request a tool execution scope runs for. A scope entered without one
+/// keeps the identity of the scope enclosing it.
 #[derive(Clone, Default)]
-struct ToolRequestIdentityScope {
+pub struct ToolRequestIdentity {
     requester_did: Option<String>,
     node_did: Option<String>,
     agent_did: Option<String>,
     request_id: Option<String>,
 }
 
+impl ToolRequestIdentity {
+    pub fn new(
+        requester_did: Option<String>,
+        node_did: Option<String>,
+        agent_did: Option<String>,
+        request_id: Option<String>,
+    ) -> Self {
+        Self {
+            requester_did: normalized_identity(requester_did),
+            node_did: normalized_identity(node_did),
+            agent_did: normalized_identity(agent_did),
+            request_id: normalized_identity(request_id),
+        }
+    }
+}
+
 tokio::task_local! {
     static TOOL_RUNTIME_SCOPE: ToolRuntimeScope;
-    static TOOL_REQUEST_IDENTITY: ToolRequestIdentityScope;
 }
 
 fn normalized_identity(value: Option<String>) -> Option<String> {
@@ -212,44 +229,15 @@ fn normalized_identity(value: Option<String>) -> Option<String> {
     })
 }
 
-fn current_request_identity() -> ToolRequestIdentityScope {
-    TOOL_REQUEST_IDENTITY
-        .try_with(Clone::clone)
-        .ok()
-        .or_else(|| {
-            TOOL_RUNTIME_SCOPE
-                .try_with(|scope| ToolRequestIdentityScope {
-                    requester_did: scope.requester_did.clone(),
-                    node_did: scope.node_did.clone(),
-                    agent_did: scope.agent_did.clone(),
-                    request_id: scope.request_id.clone(),
-                })
-                .ok()
+fn enclosing_request_identity() -> ToolRequestIdentity {
+    TOOL_RUNTIME_SCOPE
+        .try_with(|scope| ToolRequestIdentity {
+            requester_did: scope.requester_did.clone(),
+            node_did: scope.node_did.clone(),
+            agent_did: scope.agent_did.clone(),
+            request_id: scope.request_id.clone(),
         })
         .unwrap_or_default()
-}
-
-pub async fn scope_tool_request_identity<F, T>(
-    requester_did: Option<String>,
-    node_did: Option<String>,
-    agent_did: Option<String>,
-    request_id: Option<String>,
-    future: F,
-) -> T
-where
-    F: Future<Output = T>,
-{
-    TOOL_REQUEST_IDENTITY
-        .scope(
-            ToolRequestIdentityScope {
-                requester_did: normalized_identity(requester_did),
-                node_did: normalized_identity(node_did),
-                agent_did: normalized_identity(agent_did),
-                request_id: normalized_identity(request_id),
-            },
-            future,
-        )
-        .await
 }
 
 #[cfg(test)]
@@ -282,6 +270,7 @@ where
     F: Future<Output = T>,
 {
     scope_request_tool_execution_with_session(
+        None,
         deadline_at,
         cancellation_token,
         workspace_cwd,
@@ -293,6 +282,7 @@ where
 }
 
 pub async fn scope_request_tool_execution_with_session<F, T>(
+    identity: Option<ToolRequestIdentity>,
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
@@ -304,7 +294,7 @@ where
     F: Future<Output = T>,
 {
     let inherited = current_tool_runtime_context();
-    let identity = current_request_identity();
+    let identity = identity.unwrap_or_else(enclosing_request_identity);
     TOOL_RUNTIME_SCOPE
         .scope(
             ToolRuntimeScope {
@@ -332,6 +322,7 @@ where
 
 #[allow(clippy::too_many_arguments)]
 pub async fn scope_request_tool_execution_with_trigger_context<F, T>(
+    identity: Option<ToolRequestIdentity>,
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
@@ -351,7 +342,7 @@ where
             .ok()
             .flatten()
     });
-    let identity = current_request_identity();
+    let identity = identity.unwrap_or_else(enclosing_request_identity);
     TOOL_RUNTIME_SCOPE
         .scope(
             ToolRuntimeScope {
@@ -386,6 +377,7 @@ where
 {
     let inherited = current_tool_runtime_context();
     scope_request_tool_execution_with_trigger_context(
+        None,
         deadline_at,
         cancellation_token,
         workspace_cwd,

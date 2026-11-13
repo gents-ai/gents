@@ -392,7 +392,8 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use crate::tool_call_lifecycle::runtime::{
-        current_tool_runtime_context, scope_request_tool_execution, scope_tool_request_identity,
+        current_tool_runtime_context, scope_request_tool_execution_with_session,
+        ToolRequestIdentity,
     };
 
     struct PendingTool {
@@ -444,12 +445,19 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
         dropped: dropped.clone(),
         observed: observed.clone(),
     })]);
-    scope_tool_request_identity(
-        Some("requester".into()),
-        Some("node".into()),
-        Some("agent".into()),
-        Some("request".into()),
-        scope_request_tool_execution(None, Default::default(), async {
+    scope_request_tool_execution_with_session(
+        Some(ToolRequestIdentity::new(
+            Some("requester".into()),
+            Some("node".into()),
+            Some("agent".into()),
+            Some("request".into()),
+        )),
+        None,
+        Default::default(),
+        None,
+        None,
+        None,
+        async {
             let mut completion = Box::pin(run_loop_to_text(
                 model,
                 Message::user("echo"),
@@ -459,7 +467,7 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
             ));
             assert!(futures::poll!(&mut completion).is_pending());
             drop(completion);
-        }),
+        },
     )
     .await;
     assert_eq!(*observed.lock().unwrap(), Some("request".into()));
@@ -633,7 +641,7 @@ fn steering_loop_config() -> LoopConfig {
 #[tokio::test]
 async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
     use crate::tool_call_lifecycle::runtime::{
-        scope_request_tool_execution, scope_tool_request_identity,
+        scope_request_tool_execution_with_session, ToolRequestIdentity,
     };
     use futures::StreamExt;
 
@@ -650,44 +658,45 @@ async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
         calls: Arc::default(),
         policy_allows: true,
     })]);
-    scope_tool_request_identity(
-        Some("requester".into()),
-        Some("node".into()),
-        Some("agent".into()),
-        Some("request".into()),
-        scope_request_tool_execution(
-            None,
-            Default::default(),
-            with_steering_capture_scope(async {
-                let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
-                    model,
-                    Some(hook),
-                    TaggedMessage::unassociated(Message::user("echo")),
-                    Vec::new(),
-                    tools,
-                    steering_loop_config(),
-                ));
-                loop {
-                    match stream.next().await.unwrap().unwrap() {
-                        crate::loop_stream::LoopStreamItem::AuthoredInputReady {
-                            reply, ..
-                        }
-                        | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
-                            reply.send(Ok(Vec::new())).unwrap();
-                        }
-                        crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
-                        _ => {}
+    scope_request_tool_execution_with_session(
+        Some(ToolRequestIdentity::new(
+            Some("requester".into()),
+            Some("node".into()),
+            Some("agent".into()),
+            Some("request".into()),
+        )),
+        None,
+        Default::default(),
+        None,
+        None,
+        None,
+        with_steering_capture_scope(async {
+            let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
+                model,
+                Some(hook),
+                TaggedMessage::unassociated(Message::user("echo")),
+                Vec::new(),
+                tools,
+                steering_loop_config(),
+            ));
+            loop {
+                match stream.next().await.unwrap().unwrap() {
+                    crate::loop_stream::LoopStreamItem::AuthoredInputReady { reply, .. }
+                    | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                        reply.send(Ok(Vec::new())).unwrap();
                     }
+                    crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
+                    _ => {}
                 }
-                let mut next = Box::pin(stream.next());
-                tokio::select! {
-                    () = gate.entered.notified() => {},
-                    item = &mut next => panic!("settlement did not remain pending: {item:?}"),
-                }
-                drop(next);
-                drop(stream);
-            }),
-        ),
+            }
+            let mut next = Box::pin(stream.next());
+            tokio::select! {
+                () = gate.entered.notified() => {},
+                item = &mut next => panic!("settlement did not remain pending: {item:?}"),
+            }
+            drop(next);
+            drop(stream);
+        }),
     )
     .await;
     assert_eq!(*gate.request_id.lock().unwrap(), Some("request".into()));

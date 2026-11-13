@@ -762,19 +762,19 @@ mod tests {
     }
 
     async fn call_as(tool: &ContextBudgetTool, agent_did: &str, session_id: &str) -> String {
-        crate::runtime_context::scope_tool_request_identity(
+        crate::runtime_context::scope_request_tool_execution_with_session(
+            Some(crate::runtime_context::ToolRequestIdentity::new(
+                None,
+                Some("did:key:z-context".into()),
+                Some(agent_did.into()),
+                Some("caller-request".into()),
+            )),
             None,
-            Some("did:key:z-context".into()),
-            Some(agent_did.into()),
-            Some("caller-request".into()),
-            crate::runtime_context::scope_request_tool_execution_with_session(
-                None,
-                tokio_util::sync::CancellationToken::new(),
-                None,
-                None,
-                Some(session_id.into()),
-                async { Tool::call(tool, ContextBudgetParams {}).await.unwrap() },
-            ),
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            Some(session_id.into()),
+            async { Tool::call(tool, ContextBudgetParams {}).await.unwrap() },
         )
         .await
     }

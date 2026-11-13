@@ -422,6 +422,7 @@ mod tests {
     #[tokio::test]
     async fn plugin_bound_inputs_follow_generated_write_input_admission() {
         gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            None,
             None,tokio_util::sync::CancellationToken::new(),None,None,None,
             Some("book-run".into()),[("book_path".into(),"/books/one".into())].into(),false,async {
                 for case in gents_lean_vocab::families::contracts_write_input_plugin_fill::cases::<String>() {

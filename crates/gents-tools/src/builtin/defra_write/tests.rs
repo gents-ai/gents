@@ -386,6 +386,7 @@ async fn bounded_writes_follow_the_datastore_write_model() {
             .collect();
         let result = crate::runtime_context::scope_request_tool_execution_with_trigger_context(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             None,
             None,
