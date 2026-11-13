@@ -294,15 +294,41 @@ export function StarterPacksCard() {
 }
 
 /** The same review as a section of the Packs page, shown while any starter
-    pack is not installed or the list could not be read. */
+    pack is not installed or the list could not be read. Hiding it puts the
+    packs off as Not now on the card does, leaving one line to show them
+    again; showing them again also lets the card offer them once more. */
 export function StarterPacksSection() {
   const review = useDefaultPacks();
-  const waiting = review.packs.some((pack) => pack.state !== "installed");
-  if (!waiting && !review.error) return null;
+  const { nodeDid } = review;
+  const hidden = useStarterPacksDismissed(nodeDid);
+  const waiting = review.packs.filter((pack) => pack.state !== "installed");
+  if (waiting.length === 0 && !review.error) return null;
+  const toggle =
+    nodeDid === null ? null : (
+      <Button
+        size="sm"
+        variant="ghost"
+        className="text-xs text-muted-foreground hover:text-foreground"
+        aria-expanded={!hidden}
+        onClick={() => preferences.dismissStarterPacks(nodeDid, !hidden)}
+      >
+        {hidden ? "Show" : "Hide"}
+      </Button>
+    );
   return (
-    <Section title={TITLE}>
-      <p className="text-sm text-muted-foreground">{INTRO}</p>
-      <DefaultPacksReview review={review} />
+    <Section title={TITLE} action={toggle}>
+      {hidden ? (
+        <p className="text-sm text-muted-foreground">
+          {waiting.length === 1
+            ? "1 starter pack isn’t installed."
+            : `${waiting.length} starter packs aren’t installed.`}
+        </p>
+      ) : (
+        <>
+          <p className="text-sm text-muted-foreground">{INTRO}</p>
+          <DefaultPacksReview review={review} />
+        </>
+      )}
     </Section>
   );
 }

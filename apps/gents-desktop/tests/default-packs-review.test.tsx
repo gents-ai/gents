@@ -337,6 +337,27 @@ describe("starter packs on the Packs page", () => {
     expect(listDefaultPacks).toHaveBeenCalledTimes(2);
   });
 
+  it("hides to one line, put off as the card's Not now is, and shows again", async () => {
+    const { api } = harness([web, notes, git]);
+    page(api);
+    const section = await screen.findByRole("region", { name: "Starter packs" });
+    await click(within(section).getByRole("button", { name: "Hide" }));
+    expect(within(section).queryByRole("button", { name: "Approve all" })).toBeNull();
+    expect(
+      within(section).getByText("2 starter packs aren’t installed."),
+    ).toBeVisible();
+    expect(
+      JSON.parse(localStorage.getItem("gents-preferences")!).state
+        .starterPacksDismissed,
+    ).toEqual([deployment.nodeDid]);
+    await click(within(section).getByRole("button", { name: "Show" }));
+    expect(within(section).getByRole("button", { name: "Approve all" })).toBeVisible();
+    expect(
+      JSON.parse(localStorage.getItem("gents-preferences")!).state
+        .starterPacksDismissed,
+    ).toEqual([]);
+  });
+
   it("shows nothing when every starter pack is installed", async () => {
     const { api, listDefaultPacks } = harness([git]);
     page(api);
