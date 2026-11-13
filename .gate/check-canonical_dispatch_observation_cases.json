@@ -5,6 +5,7 @@
   "canonical_dispatch_observation_cases": []
  },
  "notes": [
+  "canonical_dispatch_observation_cases: declared dropped fields (justified): {'observation': 'E5 model-only: production refuses a lost receipt and a replay identically (idempotent retry then no longer pending), so hook_receipt carries the coarser hook_action class projected by hookActionClass'}",
   "canonical_dispatch_observation_cases: subset_fields (carried only for the named scenario families' cases): {'expected': ['dispatch_observation_contracts_hook_receipt'], 'completion_probe_outcome': ['dispatch_observation_contracts_hook_receipt'], 'completion_probe_accepted': ['dispatch_observation_contracts_hook_receipt'], 'parent_outcome': ['dispatch_observation_contracts_hook_receipt'], 'expected_after_parent_failure': ['dispatch_observation_contracts_hook_receipt'], 'expected_after_parent_recovery': ['dispatch_observation_contracts_hook_receipt'], 'expected_after_policy_settlement': ['dispatch_observation_contracts_owned_policy_settlement']}",
   "dispatch_observation_contracts_hook_receipt: consumer crates/gents/src/toolcalls_tests/hook.rs",
   "dispatch_observation_contracts_owned_receipt: consumer crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs",

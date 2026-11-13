@@ -282,14 +282,26 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                         .unwrap();
                 }
                 let call = hook.on_tool_call("read", None, "receipt-call", "{}");
-                let (action, receipt_lost) = if attempt.acknowledged {
-                    (call.await, false)
+                let action = if attempt.acknowledged {
+                    call.await
                 } else {
-                    gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(call)
-                        .await
+                    let (action, fired) =
+                        gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(
+                            call,
+                        )
+                        .await;
+                    assert!(fired, "{}: receipt fault must fire", input.name);
+                    action
                 };
                 let row = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;
                 let before_probe = access.execute(&request_query).await.unwrap();
+                assert_eq!(
+                    before_probe["data"]["AgentRequest"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
                 let completion = {
                     let mut fixtures = hook_execution_fixtures().lock().await;
                     let fixture = fixtures.get_mut(&fixture_key).unwrap();
@@ -313,14 +325,18 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                     );
                 }
                 completion_probe_accepted = Some(completion.is_ok());
-                let observation = match &action {
-                    ToolCallHookAction::Continue => "fresh",
-                    ToolCallHookAction::Terminate { .. } if receipt_lost => "unacknowledged",
-                    ToolCallHookAction::Terminate { .. } => "replay",
+                let hook_action = match &action {
+                    ToolCallHookAction::Continue => "invoke",
+                    ToolCallHookAction::Terminate { reason }
+                        if reason.contains("no longer pending") =>
+                    {
+                        "refused_not_pending"
+                    }
+                    ToolCallHookAction::Terminate { .. } => "refused",
                     other => panic!("{}: unexpected hook action {other:?}", input.name),
                 };
                 expected.push(gents_lean_vocab::families::dispatch_observation_contracts_hook_receipt::ResultWire {
-                    observation: observation.to_owned(),
+                    hook_action: hook_action.to_owned(),
                     may_invoke: matches!(action, ToolCallHookAction::Continue),
                     running: row["lifecycle_state"].as_str() == Some("running"),
                     in_flight,

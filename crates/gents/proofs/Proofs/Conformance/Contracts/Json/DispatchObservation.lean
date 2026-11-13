@@ -9,12 +9,6 @@ open Lean
 open CanonicalOutput.Execution.DispatchObservation
 open CanonicalOutput.Execution.DispatchObservation.Cases
 
-def observationName : Observation → String
-  | .rejected => "rejected"
-  | .unacknowledged => "unacknowledged"
-  | .replay => "replay"
-  | .fresh => "fresh"
-
 def cases : List (String × List Input) :=
   [("lost_receipt_then_replay", lostThenReplay),
    ("won_dispatch_then_replay", wonThenReplay),
@@ -30,15 +24,25 @@ def StepWire.ofModel (input : Input) : StepWire := ⟨input.acknowledged, input.
 
 def StepWire.toModel (step : StepWire) : Input := ⟨step.acknowledged, step.policyAllows⟩
 
+/-- The call hook's action projected from the model's observation. The hook reports a refusal
+only as a reason string, and a dispatch whose commit receipt is lost is retried idempotently and
+then refused as no longer pending, exactly like a replay, so production cannot tell the model's
+`unacknowledged` from `replay`; that finer distinction is model-only. -/
+def hookActionClass : Observation → String
+  | .fresh => "invoke"
+  | .unacknowledged => "refused_not_pending"
+  | .replay => "refused_not_pending"
+  | .rejected => "refused"
+
 structure ResultWire where
-  observation : String
+  hookAction : String
   mayInvoke : Bool
   running : Bool
   inFlight : Bool
   deriving ToJson
 
 def ResultWire.ofModel (result : Result) : ResultWire :=
-  ⟨observationName result.observation, result.mayInvoke, result.running, result.inFlight⟩
+  ⟨hookActionClass result.observation, result.mayInvoke, result.running, result.inFlight⟩
 
 structure TraceInput where
   name : String
