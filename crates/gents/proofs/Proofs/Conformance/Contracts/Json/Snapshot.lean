@@ -427,8 +427,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
-    ++ "\"process_transition_cases\":"
-      ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
     ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
 
@@ -521,14 +519,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
-    ++ "\"file_inventory_direct_reader_cases\":"
-      ++ Conformance.FileInventoryContracts.directReaderCasesJson ++ ","
-    ++ "\"file_inventory_fork_cases\":"
-      ++ Conformance.FileInventoryContracts.forkCasesJson ++ ","
-    ++ "\"file_inventory_source_projection_cases\":"
-      ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
-    ++ "\"file_inventory_reader_cases\":"
-      ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
     ++ "\"file_review_subscription_cases\":"
       ++ Conformance.FileReviewRouteContracts.subscriptionCasesJson ++ ","
 
