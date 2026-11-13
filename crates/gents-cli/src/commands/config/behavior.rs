@@ -341,12 +341,14 @@ where
     Ok(value)
 }
 
-async fn classify_preset<R>(access: &R, value: &Value) -> Result<Option<&'static str>>
+async fn classify_preset<R>(
+    access: &R,
+    tools: &gents_documents::Tools,
+) -> Result<Option<&'static str>>
 where
     R: gents_store::config_client::ConfigRead + ?Sized,
 {
-    use gents_documents::{merge_datastore_tool_surfaces, Tools};
-    let tools: Tools = serde_json::from_value(value.clone())?;
+    use gents_documents::merge_datastore_tool_surfaces;
     tools.validate()?;
     let ids = tools
         .datastore
@@ -367,8 +369,8 @@ where
                 .with_context(|| format!("missing selected datastore surface {id:?}"))
         })
         .collect::<Result<Vec<_>>>()?;
-    let merged = merge_datastore_tool_surfaces(&tools, &surfaces)?;
-    presets::classify_tools(&tools, &merged)
+    let merged = merge_datastore_tool_surfaces(tools, &surfaces)?;
+    presets::classify_tools(tools, &merged)
 }
 
 pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
@@ -418,13 +420,18 @@ pub(super) async fn agent_show(args: AgentShowArgs) -> Result<()> {
                 scoped_row(txn.read_view(&ProfileList::new(owner).profile_id(&agent.inference_profile_id)).await?,
                     Collection::InferenceProfile, owner, &agent.inference_profile_id)?.map(|row| row.profile)
             };
-            let tools = tools.as_ref().map(|tools| document_value(tools, fields::tools::FIELD_NAMES)).transpose()?;
             let preset_name = match tools.as_ref() {
                 Some(tools) => Some(classify_preset(txn, tools).await?.unwrap_or("custom")),
                 None => None,
             };
-            let root = tools.as_ref().and_then(|tools| tools.pointer("/host/root")).cloned()
-                .unwrap_or(Value::Null);
+            let root = tools.as_ref().and_then(|tools| tools.host.as_ref()?.root.clone());
+            let tools = tools.as_ref().map(|tools| {
+                let mut value = document_value(tools, fields::tools::FIELD_NAMES)?;
+                if let Some(object) = value.as_object_mut() {
+                    object.remove(fields::tools::UPDATED_AT.name());
+                }
+                Ok::<_, anyhow::Error>(value)
+            }).transpose()?;
             let mut row = document_value(&agent, fields::agent::FIELD_NAMES)?;
             let object = row.as_object_mut().context("agent document must be an object")?;
             object.remove(fields::agent::UPDATED_AT.name());
@@ -635,7 +642,7 @@ mod tests {
             .read_view(&AgentList::new(owner).agent_did(agent_did))
             .await?
             .is_empty());
-        let preset = classify_preset(&access, &tools_row).await?;
+        let preset = classify_preset(&access, &tools).await?;
         assert_eq!(preset, Some("write"));
         let source_tools = read_canonical(&node, "Tools", "tools_id", owner, &tools_id, "host")
             .await?
