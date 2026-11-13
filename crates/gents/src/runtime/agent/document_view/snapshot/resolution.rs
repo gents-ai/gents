@@ -1,6 +1,6 @@
 use super::{
     append_inference_selection, ensure_inference_available, resolve_inference,
-    DocumentResolveContext, DocumentRuntimeView,
+    DocumentResolveContext, DocumentRuntimeView, InferenceResolveError,
 };
 use anyhow::{anyhow, Result};
 use defra_node::Node as EmbeddedNode;
@@ -86,7 +86,7 @@ pub(super) fn agent_context_documents(
     let summary = compaction
         .as_ref()
         .and_then(|config| config.inference_profile_id.as_deref())
-        .map(|id| resolve_inference(view, id))
+        .map(|id| resolve_inference(view, id).map_err(InferenceResolveError::into_detail))
         .transpose()?;
     if let Some(summary) = &summary {
         ensure_inference_available(view, summary, backend_admission_configs, measured_health)
