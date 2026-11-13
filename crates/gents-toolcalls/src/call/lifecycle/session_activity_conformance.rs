@@ -46,8 +46,7 @@ fn modeled_observation(
     epoch: DateTime<Utc>,
 ) -> Observation {
     let latest = value.latest_request.as_ref().unwrap();
-    assert_eq!(latest.request_id, request_id);
-    gents_lean_vocab::families::contracts_tool_activity::ObservationWire {
+    let modeled = gents_lean_vocab::families::contracts_tool_activity::ObservationWire {
         activity: u64::try_from(
             (DateTime::parse_from_rfc3339(&value.last_activity_at)
                 .unwrap()
@@ -77,7 +76,13 @@ fn modeled_observation(
                     .to_owned(),
             },
         ),
-    }
+    };
+    assert_eq!(
+        observation(&modeled, case.event.doc_id, request_doc_id, request_id, epoch),
+        *value,
+        "the observation carries state its modeled wire form does not"
+    );
+    modeled
 }
 
 #[tokio::test]

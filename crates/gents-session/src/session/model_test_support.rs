@@ -91,7 +91,7 @@ pub(super) fn wire_session(session: &gents_protocol::session::AgentSession) -> s
     let fork = &provenance["fork"];
     let observation = &value["observation"];
     let latest = &observation["latest_request"];
-    json!({
+    let wire = json!({
         "scope": scope(&value["node_did"], &value["session_id"], &value["requester_did"]),
         "agent": id(&value["agent_did"]),
         "created_at": time(&value["created_at"]),
@@ -122,5 +122,11 @@ pub(super) fn wire_session(session: &gents_protocol::session::AgentSession) -> s
                 "state": latest["lifecycle_state"],
             })},
         })},
-    })
+    });
+    assert_eq!(
+        model_session(&wire),
+        *session,
+        "the session carries state its modeled wire form does not"
+    );
+    wire
 }
