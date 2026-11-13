@@ -1,9 +1,12 @@
 import Proofs.Automation.Triggers.Durable
 import Proofs.Automation.EventDelivery.Durable
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 import Proofs.Automation.Triggers.SessionKey
 import Proofs.Automation.Triggers.FireBudget
-import Proofs.Conformance.Family
+import Proofs.Conformance.GoalRequestAssignment
+
+deriving instance Lean.ToJson for Triggers.Durable.ClaimObservation
 
 namespace Conformance.TriggerDelivery
 
@@ -168,13 +171,6 @@ def fireAdmission : Family AdmissionInput AdmissionOutput where
     { sourceAllowed := allowed, committed := allowed && i.commit,
       post := .ofModel (admitTransaction i.pre.toModel f i.commit) }
 
-def claimObservationJson (row : ClaimObservation) : String := object [
-  ("document", jsonString row.document), ("owner", jsonString row.owner),
-  ("session", jsonString row.session), ("trigger", jsonString row.trigger),
-  ("serial", toString row.serial), ("receipt", toString row.receipt),
-  ("arrival", row.arrival.map toString |>.getD "null"),
-  ("running", toString row.running), ("terminal", toString row.terminal)]
-
 structure ClaimObservationWire where
   document : String
   owner : String
@@ -318,37 +314,6 @@ def outcomeRecovery : Family OutcomeInput OutcomeRecoveryOutput where
     let post := recoverOutcomes pre
     { post := .ofModel post, recovered := post.outcomes.length - pre.outcomes.length,
       recoveredAgain := (recoverOutcomes post).outcomes.length - post.outcomes.length }
-
-def retainedOutcomeCase (name : String) (request : Request)
-    (retained current : Option GoalBinding) (settled : Bool := false) : String :=
-  let reason := retainedOutcomeReason request retained current
-  object [("name", jsonString name), ("request", requestJson request),
-    ("retained", (retained.map goalBindingJson).getD "null"),
-    ("current", (current.map goalBindingJson).getD "null"),
-    ("settled", toString settled),
-    ("classification", jsonOptionalString (reason.map reasonString)),
-    ("recover_reason", jsonOptionalString (if settled then none else reason.map reasonString))]
-
-def retainedOutcomeCases : List String :=
-  let f := { fire "retained" with goalBacked := true }
-  let request : Request := { fire := f, terminal := true, goalAssignmentApplied := true }
-  let old : GoalBinding := { owner := request.fire.identity.owner, session := request.fire.session, assignment := request.fire.identity }
-  let next : GoalBinding := { old with assignment := identity "owner-a" "fresh" }
-  [retainedOutcomeCase "retained_stopped_after_new_goal" request (some { old with status := .stopped }) (some next),
-   retainedOutcomeCase "retained_complete_after_new_goal" request (some { old with status := .complete }) (some next),
-   retainedOutcomeCase "retained_blocked_after_new_goal" request (some { old with status := .blocked }) (some next),
-   retainedOutcomeCase "retained_budget_after_new_goal" request (some { old with status := .budgetLimited }) (some next),
-   retainedOutcomeCase "retained_active_superseded" request (some old) (some next),
-   retainedOutcomeCase "retained_paused_superseded" request (some { old with status := .paused }) (some next),
-   retainedOutcomeCase "retained_usage_limited_superseded" request (some { old with status := .usageLimited }) (some next),
-   retainedOutcomeCase "retained_active_without_current" request (some old) none,
-   retainedOutcomeCase "retained_stopped_without_current" request (some { old with status := .stopped }) none,
-   retainedOutcomeCase "missing_retained_cannot_borrow_current" request none (some next),
-   retainedOutcomeCase "foreign_retained_owner" request (some { old with owner := "owner-b" }) (some next),
-   retainedOutcomeCase "foreign_retained_session" request (some { old with session := "other-session" }) (some next),
-   retainedOutcomeCase "foreign_retained_root" request (some { old with assignment := next.assignment }) (some next),
-   retainedOutcomeCase "foreign_current_cannot_supersede" request (some old) (some { next with owner := "owner-b" }),
-   retainedOutcomeCase "settled_retained_complete_after_new_goal" request (some { old with status := .complete }) (some next) true]
 
 inductive OutcomeAction where
   | admitFire (fire : Fire)
@@ -779,70 +744,103 @@ def fireIdentity : Family FireIdentityInput FireIdentityKeys where
     { key := id.key, requestId := id.requestId, sessionId := id.sessionId,
       outcomeId := id.outcomeId }
 
-def sessionCases : List String :=
-  let id := identity "owner-a" "a"
-  [(none, true, false), (some "lead-one", true, false), (some "lead-two", true, false),
-   (some "", true, false), (some "foreign", false, false),
-   (some "game:a:red", false, true), (some "game:a:red", true, true),
-   (some "", false, true)].map fun (target, owned, create) => object [
-     ("identity", identityJson id), ("target", jsonOptionalString target),
-     ("owned", toString owned), ("create_missing", toString create),
-     ("resolved", jsonOptionalString (resolveSession id target owned create))]
+structure SessionConfigInput where
+  template : Option String
+  createSession : Bool
+  deriving Lean.ToJson
 
-def sessionConfigCases : List String :=
-  [(none, false), (none, true), (some "game:{{ doc.id }}", false),
-   (some "game:{{ doc.id }}", true)].map fun (template, create) => object [
-     ("template", jsonOptionalString template), ("create_session", toString create),
-     ("allowed", toString (Triggers.SessionKey.configValid template create))]
+structure SessionConfigOutput where
+  allowed : Bool
+  deriving Lean.ToJson
 
-structure BudgetScenario where
+@[conformance_family]
+def sessionConfig : Family SessionConfigInput SessionConfigOutput where
+  inputs := [
+    { template := none, createSession := false },
+    { template := none, createSession := true },
+    { template := some "game:{{ doc.id }}", createSession := false },
+    { template := some "game:{{ doc.id }}", createSession := true }]
+  model := fun i => { allowed := Triggers.SessionKey.configValid i.template i.createSession }
+
+structure FireBudgetInput where
   name : String
-  configured : Option Nat := none
-  priorAges : List Nat := []
-  replay : Bool := false
+  configured : Option Nat
+  priorAges : List Nat
+  replay : Bool
+  deriving Lean.ToJson
 
-def jsonOptionNat : Option Nat → String
-  | none => "null"
-  | some value => toString value
+structure FireBudgetOutput where
+  budget : Nat
+  admitted : Bool
+  exhausted : Bool
+  stopped : Bool
+  status : Option String
+  deriving Lean.ToJson
+
+structure FireBudgetConfigInput where
+  configured : Option Nat
+  receipted : Bool
+  deriving Lean.ToJson
+
+structure NoInput where
+  deriving Lean.ToJson
 
 /-- Ages are seconds before the fire; the window boundary is exercised in both
 directions so the receipt query's strictness is checked against the model. -/
-def budgetCase (scenario : BudgetScenario) : String :=
+def fireBudgetOutcome (scenario : FireBudgetInput) : FireBudgetOutput :=
   let now := 7200
   let times := scenario.priorAges.map (now - ·)
   let trigger : Triggers.FireBudget.Trigger := { admittedAt := times }
   let f := fire "budget-fire"
   let before : State := if scenario.replay then admit {} f else {}
-  let (after, stopped) := Triggers.FireBudget.admitBudgeted before trigger scenario.configured
+  let (after, afterTrigger) := Triggers.FireBudget.admitBudgeted before trigger scenario.configured
     "over budget" now f
-  object [
-    ("name", jsonString scenario.name), ("configured", jsonOptionNat scenario.configured),
-    ("prior_ages", jsonArray (scenario.priorAges.map toString)),
-    ("replay", toString scenario.replay),
-    ("budget", toString (Triggers.FireBudget.effective scenario.configured)),
-    ("window_count", toString (Triggers.FireBudget.windowCount times now)),
-    ("admitted", toString (decide (after.receipts.length > before.receipts.length))),
-    ("stopped", toString (!stopped.enabled)),
-    ("status", jsonOptionalString stopped.lastStatus)]
+  { budget := Triggers.FireBudget.effective scenario.configured
+    admitted := decide (after.receipts.length > before.receipts.length)
+    exhausted := !scenario.replay && decide (Triggers.FireBudget.decideFire
+      (Triggers.FireBudget.effective scenario.configured)
+      (Triggers.FireBudget.windowCount times now) = .exhausted)
+    stopped := !afterTrigger.enabled
+    status := afterTrigger.lastStatus }
 
-def budgetCases : List String := [
-  ({ name := "empty_window_admits", configured := some 2 } : BudgetScenario),
-  { name := "under_budget_admits", configured := some 2, priorAges := [10] },
-  { name := "at_budget_stops", configured := some 2, priorAges := [10, 20] },
-  { name := "boundary_receipt_is_outside_window", configured := some 2, priorAges := [10, 3600] },
-  { name := "inside_boundary_counts", configured := some 2, priorAges := [10, 3599] },
-  { name := "expired_receipts_do_not_count", configured := some 2, priorAges := [7200, 3601] },
-  { name := "default_budget_applies_without_configuration", priorAges := [10] },
-  { name := "replay_spends_no_budget", configured := some 1, priorAges := [10], replay := true }
-].map budgetCase
+@[conformance_family]
+def fireBudgetAdmission : Family FireBudgetInput FireBudgetOutput where
+  inputs := [
+    { name := "empty_window_admits", configured := some 2, priorAges := [], replay := false },
+    { name := "under_budget_admits", configured := some 2, priorAges := [10], replay := false },
+    { name := "at_budget_stops", configured := some 2, priorAges := [10, 20], replay := false },
+    { name := "boundary_receipt_is_outside_window", configured := some 2, priorAges := [10, 3600], replay := false },
+    { name := "inside_boundary_counts", configured := some 2, priorAges := [10, 3599], replay := false },
+    { name := "expired_receipts_do_not_count", configured := some 2, priorAges := [7200, 3601], replay := false },
+    { name := "default_budget_applies_without_configuration", configured := none, priorAges := [10], replay := false },
+    { name := "replay_spends_no_budget", configured := some 1, priorAges := [10], replay := true }]
+  model := fireBudgetOutcome
 
-def budgetConfigCases : List String :=
-  [(none, false), (none, true), (some 1, true), (some 1, false), (some 5000, true),
-   (some 0, true)].map fun (configured, receipted) =>
-    object [("configured", jsonOptionNat configured), ("receipted", toString receipted),
-      ("allowed", toString (Triggers.FireBudget.configValid configured receipted))]
+@[conformance_family]
+def fireBudgetConfig : Family FireBudgetConfigInput Bool where
+  inputs := [
+    { configured := none, receipted := false }, { configured := none, receipted := true },
+    { configured := some 1, receipted := true }, { configured := some 1, receipted := false },
+    { configured := some 5000, receipted := true }, { configured := some 0, receipted := true }]
+  model := fun i => Triggers.FireBudget.configValid i.configured i.receipted
 
-def observedClaimCases : List String :=
+@[conformance_family]
+def fireBudgetDefault : Family NoInput Nat where
+  inputs := [{}]
+  model := fun _ => Triggers.FireBudget.defaultMaxPerHour
+
+@[conformance_family]
+def fireBudgetStatus : Family NoInput String where
+  inputs := [{}]
+  model := fun _ => Triggers.FireBudget.exhaustedStatus
+
+structure ObservedClaimInput where
+  name : String
+  candidate : ClaimObservation
+  rows : List ClaimObservation
+  deriving Lean.ToJson
+
+def observedClaimCases : List ObservedClaimInput :=
   let old : ClaimObservation := { document := "old", owner := "owner", session := "session" }
   let next : ClaimObservation := { old with document := "new", arrival := some 1, receipt := true }
   let cases : List (String × ClaimObservation × List ClaimObservation) := [
@@ -857,10 +855,12 @@ def observedClaimCases : List String :=
     ("receipt_conflict_missing_position_rejected", old, [{ next with arrival := none }]),
     ("native_pending_fifo", { next with arrival := some 2 }, [{ next with document := "prior" }]),
     ("terminal_historical_does_not_block", next, [{ old with terminal := true }])]
-  cases.map fun (name, candidate, rows) => object [
-    ("name", jsonString name), ("candidate", claimObservationJson candidate),
-    ("rows", jsonArray (rows.map claimObservationJson)),
-    ("allowed", toString (observedClaimAllowed candidate rows))]
+  cases.map fun (name, candidate, rows) => ({ name, candidate, rows } : ObservedClaimInput)
+
+@[conformance_family]
+def observedClaim : Family ObservedClaimInput Bool where
+  inputs := observedClaimCases
+  model := fun i => observedClaimAllowed i.candidate i.rows
 
 structure AssignmentRootInput where
   assigned : Option String
@@ -874,26 +874,37 @@ def assignmentRoot : Family AssignmentRootInput Bool where
       { assigned, observed }
   model := fun i => Goals.assignmentAllows i.assigned i.observed
 
-def selfCases : List String :=
-  [("owner", "first", "owner", "first"),
-   ("owner", "first", "owner", "second"),
-   ("owner", "first", "foreign", "first")].map fun (co, cs, lo, ls) => object [
-    ("caller_owner", jsonString co), ("caller_session", jsonString cs),
-    ("listed_owner", jsonString lo), ("listed_session", jsonString ls),
-    ("current", toString (isCurrent co cs lo ls))]
+structure SelfSessionInput where
+  callerOwner : String
+  callerSession : String
+  listedOwner : String
+  listedSession : String
+  deriving Lean.ToJson
 
-def deliveryOptionCases : List String := do
-  let kind ← [.manual, .schedule, .event]
-  let emit ← [false, true]
-  let concurrency ← [.parallel, .serial, .queuedSerial, .latestOnly]
-  let target ← [false, true]
-  pure <| object [
-    ("kind", jsonString kind.toDefraDB), ("emit_outcome", toString emit),
-    ("concurrency", jsonString (match concurrency with
-      | .parallel => "parallel" | .serial => "serial"
-      | .queuedSerial => "queued_serial" | .latestOnly => "latest_only")),
-    ("target_existing", toString target),
-    ("allowed", toString (Triggers.deliveryOptionsAllowed kind emit concurrency target))]
+@[conformance_family]
+def selfSession : Family SelfSessionInput Bool where
+  inputs :=
+    [("owner", "first", "owner", "first"), ("owner", "first", "owner", "second"),
+     ("owner", "first", "foreign", "first")].map fun (callerOwner, callerSession, listedOwner, listedSession) =>
+      { callerOwner, callerSession, listedOwner, listedSession }
+  model := fun i => isCurrent i.callerOwner i.callerSession i.listedOwner i.listedSession
+
+deriving instance Lean.ToJson for TriggerKind, ConcurrencyMode
+
+structure DeliveryOptionInput where
+  kind : TriggerKind
+  emitOutcome : Bool
+  concurrency : ConcurrencyMode
+  targetExisting : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def deliveryOptions : Family DeliveryOptionInput Bool where
+  inputs := [TriggerKind.manual, .schedule, .event].flatMap fun kind =>
+    [false, true].flatMap fun emitOutcome =>
+    [ConcurrencyMode.parallel, .serial, .queuedSerial, .latestOnly].flatMap fun concurrency =>
+    [false, true].map fun targetExisting => { kind, emitOutcome, concurrency, targetExisting }
+  model := fun i => Triggers.deliveryOptionsAllowed i.kind i.emitOutcome i.concurrency i.targetExisting
 
 def latestAdmissionCases : List String :=
   let old := { fire "old" with emitOutcome := false, identity := { identity "owner-a" "old" with collection := "Schedule" } }
@@ -907,44 +918,124 @@ def latestAdmissionCases : List String :=
       ("fire", fireJson next), ("destination_allowed", toString allowed),
       ("post", stateJson (admitLatest before next allowed))]
 
-def triggerDeliveryObservedClaimCasesJson : String :=
-  jsonArray observedClaimCases
-
-def triggerDeliveryRetainedOutcomeCasesJson : String :=
-  jsonArray retainedOutcomeCases
 
 def triggerDeliveryCallbackVisibilityCasesJson : String :=
   jsonArray callbackVisibilityCases
 
-def triggerDeliverySessionCasesJson : String :=
-  jsonArray sessionCases
-
-def triggerDeliverySessionConfigCasesJson : String :=
-  jsonArray sessionConfigCases
-
-def triggerFireBudgetCasesJson : String :=
-  jsonArray budgetCases
-
-def triggerFireBudgetConfigCasesJson : String :=
-  jsonArray budgetConfigCases
-
-def triggerFireBudgetDefaultJson : String :=
-  toString Triggers.FireBudget.defaultMaxPerHour
-
-def triggerFireBudgetStatusJson : String :=
-  jsonString Triggers.FireBudget.exhaustedStatus
-
-def triggerDeliveryOptionCasesJson : String :=
-  jsonArray deliveryOptionCases
 
 def triggerDeliveryLatestAdmissionCasesJson : String :=
   jsonArray latestAdmissionCases
 
-def triggerDeliverySelfSessionCasesJson : String :=
-  jsonArray selfCases
-
 example : (admit (admit {} (fire "a")) (fire "a")).requests.length = 1 := by native_decide
 example : outcomeDue {} { fire := { fire "a" with goalBacked := true }, terminal := false } = false := by
   native_decide
+
+structure SessionIdentity where
+  ownerDid : String
+  triggerId : String
+  sourceCollection : String
+  sourceDocId : String
+  deriving Lean.ToJson
+
+def SessionIdentity.toModel (id : SessionIdentity) : Identity :=
+  { owner := id.ownerDid, trigger := id.triggerId,
+    collection := id.sourceCollection, document := id.sourceDocId }
+
+structure SessionInput where
+  identity : SessionIdentity
+  target : Option String
+  owned : Bool
+  createMissing : Bool
+  deriving Lean.ToJson
+
+def sessionOwnerA : SessionIdentity :=
+  { ownerDid := "owner-a", triggerId := "handoff", sourceCollection := "Work", sourceDocId := "a" }
+
+@[conformance_family]
+def sessionResolution : Family SessionInput (Option String) where
+  inputs :=
+    [ { identity := sessionOwnerA, target := none, owned := true, createMissing := false }
+    , { identity := sessionOwnerA, target := some "lead-one", owned := true, createMissing := false }
+    , { identity := sessionOwnerA, target := some "lead-two", owned := true, createMissing := false }
+    , { identity := sessionOwnerA, target := some "", owned := true, createMissing := false }
+    , { identity := sessionOwnerA, target := some "foreign", owned := false, createMissing := false }
+    , { identity := sessionOwnerA, target := some "game:a:red", owned := false, createMissing := true }
+    , { identity := sessionOwnerA, target := some "game:a:red", owned := true, createMissing := true }
+    , { identity := sessionOwnerA, target := some "", owned := false, createMissing := true } ]
+  model := fun i => resolveSession i.identity.toModel i.target i.owned i.createMissing
+
+structure RetainedInput where
+  name : String
+  request : RequestWire
+  retained : Option GoalBindingWire
+  current : Option GoalBindingWire
+  settled : Bool
+  reassignedInPlace : Bool
+  deriving Lean.ToJson
+
+structure RetainedClassification where
+  classification : Option String
+  deriving Lean.ToJson
+
+structure RetainedRecovery where
+  recovered : Nat
+  rowsChanged : Bool
+  recoverReason : Option String
+  requestMatches : Bool
+  deriving Lean.ToJson
+
+/-- The Goal row a retained outcome is read through: the retained binding, or the
+current one when the retained Goal is still running and was reassigned. -/
+def retainedClassification (i : RetainedInput) : RetainedClassification :=
+  { classification := (retainedOutcomeReason i.request.toModel
+      (i.retained.map GoalBindingWire.toModel) (i.current.map GoalBindingWire.toModel)).map reasonString }
+
+/-- A settled outcome was already published, so recovery publishes nothing. -/
+def retainedRecoverReason (i : RetainedInput) : Option OutcomeReason :=
+  if i.settled then none
+  else retainedOutcomeReason i.request.toModel
+    (i.retained.map GoalBindingWire.toModel) (i.current.map GoalBindingWire.toModel)
+
+def retainedRecovery (i : RetainedInput) : RetainedRecovery :=
+  let reason := retainedRecoverReason i
+  { recovered := if reason.isSome then 1 else 0, rowsChanged := reason.isSome,
+    recoverReason := reason.map reasonString, requestMatches := reason.isSome }
+
+def retainedInput (name : String) (request : Request) (retained current : Option GoalBinding)
+    (settled : Bool := false) (reassigned : Bool := false) : RetainedInput :=
+  { name := name, request := RequestWire.ofModel request,
+    retained := retained.map GoalBindingWire.ofModel, current := current.map GoalBindingWire.ofModel,
+    settled := settled, reassignedInPlace := reassigned }
+
+def retainedInputs : List RetainedInput :=
+  let f := { fire "retained" with goalBacked := true }
+  let request : Request := { fire := f, terminal := true, goalAssignmentApplied := true }
+  let old : GoalBinding := { owner := request.fire.identity.owner, session := request.fire.session, assignment := request.fire.identity }
+  let next : GoalBinding := { old with assignment := identity "owner-a" "fresh" }
+  [retainedInput "retained_stopped_after_new_goal" request (some { old with status := .stopped }) (some next),
+   retainedInput "retained_complete_after_new_goal" request (some { old with status := .complete }) (some next),
+   retainedInput "retained_blocked_after_new_goal" request (some { old with status := .blocked }) (some next),
+   retainedInput "retained_budget_after_new_goal" request (some { old with status := .budgetLimited }) (some next),
+   retainedInput "retained_active_superseded" request (some old) (some next) (reassigned := true),
+   retainedInput "retained_paused_superseded" request (some { old with status := .paused }) (some next) (reassigned := true),
+   retainedInput "retained_usage_limited_superseded" request (some { old with status := .usageLimited }) (some next) (reassigned := true),
+   retainedInput "retained_active_without_current" request (some old) none,
+   retainedInput "retained_stopped_without_current" request (some { old with status := .stopped }) none,
+   retainedInput "missing_retained_cannot_borrow_current" request none (some next),
+   retainedInput "foreign_retained_owner" request (some { old with owner := "owner-b" }) (some next),
+   retainedInput "foreign_retained_session" request (some { old with session := "other-session" }) (some next),
+   retainedInput "foreign_retained_root" request (some { old with assignment := next.assignment }) (some next),
+   retainedInput "foreign_current_cannot_supersede" request (some old) (some { next with owner := "owner-b" }),
+   retainedInput "settled_retained_complete_after_new_goal" request (some { old with status := .complete }) (some next) (settled := true)]
+
+@[conformance_family]
+def retainedOutcomeClassification : Family RetainedInput RetainedClassification where
+  inputs := retainedInputs
+  model := retainedClassification
+
+@[conformance_family]
+def retainedOutcomeRecovery : Family RetainedInput RetainedRecovery where
+  inputs := retainedInputs
+  model := retainedRecovery
 
 end Conformance.TriggerDelivery

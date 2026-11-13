@@ -112,13 +112,8 @@ async fn outcome_rows(access: &ConfigAccess) -> Vec<Value> {
 
 #[tokio::test]
 async fn retained_task_outcomes_follow_modeled_assignment_history() {
-    let contract = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
-    let cases = contract["trigger_delivery_retained_outcome_cases"]
-        .as_array()
-        .unwrap();
-    assert_eq!(cases.len(), 15);
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
+    for case in gents_lean_vocab::families::trigger_delivery_retained_outcome_recovery::cases() {
+        let name = case.input.name.as_str();
         let directory = tempfile::tempdir().unwrap();
         let other = KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
         let node_db = gents_inference::test_support::test_db_with_tool_policy(
@@ -176,10 +171,10 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
             .unwrap()
         };
         let access = agent_access(&node);
-        let session = case["request"]["fire"]["session"].as_str().unwrap();
+        let session = case.input.request.fire.session.as_str();
         task_session(&access, identity.did(), agent.did(), session).await;
         let mut fire_identity: FireIdentity =
-            serde_json::from_value(case["request"]["fire"]["identity"].clone()).unwrap();
+            gents_lean_vocab::family::recode(&case.input.request.fire.identity);
         fire_identity.owner_did = identity.did().into();
         let fire = TriggerFire {
             fire_key: fire_identity.fire_key(),
@@ -208,7 +203,7 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
             "task-goal",
         )
         .await;
-        let reused = case["classification"] == "superseded";
+        let reused = case.input.reassigned_in_place;
         let next_root = signed_request(
             &access,
             identity.did(),
@@ -225,27 +220,26 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
             })
             .await
             .unwrap();
-        let retained = &case["retained"];
-        let old_doc = if retained.is_object() {
+        let old_doc = if let Some(retained) = &case.input.retained {
             Some(goal_document(&access, json!({
                 "goal_id":"task-goal",
-                "node_did": if retained["owner"] == "owner-a" { identity.did() } else { other.did() },
-                "session_id": retained["session"],
+                "node_did": if retained.owner == "owner-a" { identity.did() } else { other.did() },
+                "session_id": retained.session,
                 "objective":"Original Task assignment",
-                "status":retained["status"],
-                "assignment_root_request_doc_id": if retained["assignment"]["source_doc_id"] == "retained" { &root } else { &next_root },
+                "status":retained.status,
+                "assignment_root_request_doc_id": if retained.assignment.source_doc_id == "retained" { &root } else { &next_root },
                 "tokens_used":317, "token_usage_baseline":100, "active_time_seconds":23
             })).await)
         } else {
             None
         };
-        let settled = case["settled"].as_bool().unwrap();
+        let settled = case.input.settled;
         if settled {
             let binding = GoalOutcomeBinding {
                 owner_did: identity.did().into(),
                 session_id: session.into(),
                 assignment_request_id: fire.request_id.clone(),
-                status: retained["status"].as_str().unwrap().into(),
+                status: case.input.retained.as_ref().unwrap().status.clone(),
             };
             access
                 .transact_write("test.retained_outcome_settled", |txn| {
@@ -271,7 +265,6 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
                 .unwrap();
         }
         let before = outcome_rows(&access).await;
-        let current = &case["current"];
         if reused {
             access.write("test.reuse_task_goal_assignment", &format!(
                 r#"mutation {{update_Goal(docID: "{}", input: {{assignment_root_request_doc_id: "{}", status: "active", objective: "New Task assignment"}}) {{_docID}}}}"#,
@@ -290,11 +283,11 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
                     .await
                     .unwrap();
             }
-            if current.is_object() {
+            if let Some(current) = &case.input.current {
                 goal_document(&access, json!({
                     "goal_id":"fresh-goal",
-                    "node_did":if current["owner"] == "owner-a" { identity.did() } else { other.did() },
-                    "session_id":current["session"], "objective":"Fresh assignment", "status":current["status"],
+                    "node_did":if current.owner == "owner-a" { identity.did() } else { other.did() },
+                    "session_id":current.session, "objective":"Fresh assignment", "status":current.status,
                     "assignment_root_request_doc_id":next_root,
                     "tokens_used":0, "token_usage_baseline":417, "active_time_seconds":0
                 })).await;
@@ -347,14 +340,9 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
         node_db.simulate_process_crash().await.unwrap();
         let node = node_db.node.clone();
         let access = agent_access(&node);
-        let due = case["recover_reason"].as_str();
-        assert_eq!(
-            recover_outcomes(&node, identity.did(), agent.as_ref())
-                .await
-                .unwrap(),
-            usize::from(due.is_some()),
-            "{name}: recovery"
-        );
+        let recovered = recover_outcomes(&node, identity.did(), agent.as_ref())
+            .await
+            .unwrap();
         assert_eq!(
             recover_outcomes(&node, identity.did(), agent.as_ref())
                 .await
@@ -363,17 +351,18 @@ async fn retained_task_outcomes_follow_modeled_assignment_history() {
             "{name}: replay"
         );
         let after = outcome_rows(&access).await;
-        assert_eq!(
-            after.len(),
-            before.len() + usize::from(due.is_some()),
-            "{name}"
+        assert_eq!(after.len(), before.len() + recovered, "{name}");
+        let recovered_row = (recovered > 0).then(|| &after[0]);
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_retained_outcome_recovery::RetainedRecovery {
+                recovered: recovered as u64,
+                rows_changed: after != before,
+                recover_reason: recovered_row
+                    .map(|row| row["terminal_state"].as_str().unwrap().to_owned()),
+                request_matches: recovered_row
+                    .is_some_and(|row| row["request_id"] == fire.request_id),
+            },
         );
-        if let Some(reason) = due {
-            assert_eq!(after[0]["terminal_state"], reason, "{name}");
-            assert_eq!(after[0]["request_id"], fire.request_id, "{name}");
-        } else {
-            assert_eq!(after, before, "{name}: settled outcome changed");
-        }
         node.shutdown().await.expect("node shutdown");
     }
 }

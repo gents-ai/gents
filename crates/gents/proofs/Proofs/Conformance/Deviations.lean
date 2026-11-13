@@ -1,4 +1,4 @@
-import Proofs.Conformance.Boundaries
+import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts
 

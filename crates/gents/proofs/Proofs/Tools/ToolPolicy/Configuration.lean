@@ -358,6 +358,17 @@ theorem plugin_writing_call_needs_read_write (hasWriteFields : Bool) :
     pluginCallAdmitted .readWrite (some .read) hasWriteFields true = false := by
   cases hasWriteFields <;> decide
 
+/-- A bound call needs a plugin that declares `bind_dir`: without one there is
+no directory to bind, so the call is refused at admission whatever the grant. -/
+def pluginBoundCallAdmitted (declaresBindDir : Bool) (declared : PluginAccess)
+    (granted : Option PluginAccess) (hasWriteFields setsWriteField : Bool) : Bool :=
+  declaresBindDir && pluginCallAdmitted declared granted hasWriteFields setsWriteField
+
+theorem call_bound_refuses_a_plugin_that_declares_no_bind_dir (declared : PluginAccess)
+    (granted : Option PluginAccess) (hasWriteFields setsWriteField : Bool) :
+    pluginBoundCallAdmitted false declared granted hasWriteFields setsWriteField = false := by
+  rfl
+
 /-- Who installed a pack: the operator, or an agent through self-configuration.
 Defined here so job authority reuses it without an import cycle. -/
 inductive InstallProvenance where
@@ -417,5 +428,46 @@ theorem scratch_dir_independent_of_handle (cwd : String) (cwdAllowed : String �
     (h : scratchAdmitted cwd cwdAllowed toolCallId name size count = some path) :
     path = scratchRunDir cwd toolCallId ++ name :=
   (scratch_within_run_dir cwd cwdAllowed toolCallId name size count path h).1
+
+/-- A file scratch writes left under a cwd: its path and the index of the
+write that wrote it last. -/
+structure ScratchFile where
+  path : String
+  write : Nat
+  deriving DecidableEq, Repr
+
+/-- One scratch write, the `index`th, over the files earlier writes left: its
+count is the distinct files of its run directory including its own name. An
+admitted write replaces the file at its path and keeps every other file; a
+refused write changes nothing. -/
+def scratchWrite (cwd : String) (cwdAllowed : String → Bool) (files : List ScratchFile)
+    (index : Nat) (toolCallId name : String) (size : Nat) : Option (List ScratchFile) :=
+  let dir := scratchRunDir cwd toolCallId
+  let count := ((files.map (·.path)).filter (·.startsWith dir) ++ [dir ++ name]).eraseDups.length
+  (scratchAdmitted cwd cwdAllowed toolCallId name size count).map fun path =>
+    files.filter (·.path != path) ++ [⟨path, index⟩]
+
+/-- Scratch writes in order from the `index`th: whether each was written, and
+the files left. -/
+def scratchWritesFrom (cwd : String) (cwdAllowed : String → Bool) :
+    Nat → List ScratchFile → List (String × String × Nat) → List Bool × List ScratchFile
+  | _, files, [] => ([], files)
+  | index, files, (toolCallId, name, size) :: rest =>
+    match scratchWrite cwd cwdAllowed files index toolCallId name size with
+    | some next =>
+      let after := scratchWritesFrom cwd cwdAllowed (index + 1) next rest
+      (true :: after.1, after.2)
+    | none =>
+      let after := scratchWritesFrom cwd cwdAllowed (index + 1) files rest
+      (false :: after.1, after.2)
+
+/-- A resumed row has its own `tool_call_id`, so it writes its own run
+directory and the files of the row it resumed stay. -/
+theorem resumed_row_writes_under_its_own_tool_call_id_and_earlier_paths_stay :
+    scratchWritesFrom "/w" (fun _ => true) 0 []
+        [("call-1", "notes.md", 5), ("call-2", "notes.md", 6)] =
+      ([true, true], [⟨"/w/.gents/workflows/runs/call-1/notes.md", 0⟩,
+        ⟨"/w/.gents/workflows/runs/call-2/notes.md", 1⟩]) := by
+  native_decide
 
 end ToolPolicy

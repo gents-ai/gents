@@ -103,26 +103,6 @@ fn request_mutation_as(receipt: &TriggerFire, agent_did: &str) -> String {
 
 #[test]
 fn durable_delivery_predicates_match_executable_lean_owners() {
-    let cases = contract();
-    for case in cases["trigger_delivery_option_cases"].as_array().unwrap() {
-        let kind = match case["kind"].as_str().unwrap() {
-            "schedule" => TriggerKind::Schedule,
-            "event" => TriggerKind::Event,
-            "manual" => TriggerKind::Manual,
-            other => panic!("unknown modeled trigger kind {other}"),
-        };
-        assert_eq!(
-            gents_documents::task_delivery::validate_task_delivery_options(
-                kind,
-                case["emit_outcome"].as_bool().unwrap(),
-                decode(&case["concurrency"]),
-                case["target_existing"].as_bool().unwrap(),
-            )
-            .is_ok(),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
     gents_lean_vocab::families::trigger_delivery_fire_identity::replay(|input| {
         let id: FireIdentity = gents_lean_vocab::family::recode(&input.identity);
         gents_lean_vocab::families::trigger_delivery_fire_identity::FireIdentityKeys {
@@ -132,18 +112,19 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             outcome_id: id.outcome_id(),
         }
     });
-    for case in cases["trigger_delivery_session_cases"].as_array().unwrap() {
-        let id: FireIdentity = decode(&case["identity"]);
-        assert_eq!(
-            durable::resolve_session_id(
-                &id,
-                case["target"].as_str(),
-                case["owned"].as_bool().unwrap(),
-                case["create_missing"].as_bool().unwrap()
-            ),
-            decode::<Option<String>>(&case["resolved"])
-        );
-    }
+    gents_lean_vocab::families::trigger_delivery_session_resolution::replay(|i| {
+        durable::resolve_session_id(
+            &FireIdentity {
+                owner_did: i.identity.owner_did.clone(),
+                trigger_id: i.identity.trigger_id.clone(),
+                source_collection: i.identity.source_collection.clone(),
+                source_doc_id: i.identity.source_doc_id.clone(),
+            },
+            i.target.as_deref(),
+            i.owned,
+            i.create_missing,
+        )
+    });
     gents_lean_vocab::families::trigger_delivery_outcome_reasons::replay(|input| {
         let state: State = gents_lean_vocab::family::recode(&input.pre);
         let request = &state.requests[0];
@@ -161,31 +142,33 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             reason,
         }
     });
-    for case in cases["trigger_delivery_retained_outcome_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let request: Request = decode(&case["request"]);
-        let mut fire = receipt(&request.fire, 0);
-        fire.goal_assignment_applied = request.goal_assignment_applied;
-        let retained: Option<GoalBinding> = decode(&case["retained"]);
-        let current: Option<GoalBinding> = decode(&case["current"]);
-        let retained = retained.as_ref().map(GoalBinding::observation);
-        let current = current.as_ref().map(GoalBinding::observation);
-        let binding =
-            durable::select_goal_outcome_binding(&fire, retained.as_ref(), current.as_ref());
-        assert_eq!(
-            durable::fire_outcome_reason(
-                &fire,
-                request.terminal,
-                durable::assignment_replaced(&fire, binding.as_ref()),
-                binding.as_ref()
-            ),
-            decode::<Option<String>>(&case["classification"]),
-            "{}",
-            case["name"]
-        );
-    }
+    gents_lean_vocab::families::trigger_delivery_retained_outcome_classification::replay(
+        |input| {
+            let request: Request = gents_lean_vocab::family::recode(&input.request);
+            let mut fire = receipt(&request.fire, 0);
+            fire.goal_assignment_applied = request.goal_assignment_applied;
+            let retained: Option<GoalBinding> = input
+                .retained
+                .as_ref()
+                .map(|goal| gents_lean_vocab::family::recode(goal));
+            let current: Option<GoalBinding> = input
+                .current
+                .as_ref()
+                .map(|goal| gents_lean_vocab::family::recode(goal));
+            let retained = retained.as_ref().map(GoalBinding::observation);
+            let current = current.as_ref().map(GoalBinding::observation);
+            let binding =
+                durable::select_goal_outcome_binding(&fire, retained.as_ref(), current.as_ref());
+            gents_lean_vocab::families::trigger_delivery_retained_outcome_classification::RetainedClassification {
+                classification: durable::fire_outcome_reason(
+                    &fire,
+                    request.terminal,
+                    durable::assignment_replaced(&fire, binding.as_ref()),
+                    binding.as_ref(),
+                ),
+            }
+        },
+    );
     gents_lean_vocab::families::trigger_delivery_queue_claims::replay(|input| {
         let identity: FireIdentity = gents_lean_vocab::family::recode(&input.identity);
         let rows: Vec<gents_session::request::lifecycle::arrival_order::ClaimObservation> =
@@ -200,20 +183,6 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             ),
         }
     });
-    for case in cases["trigger_delivery_self_session_cases"]
-        .as_array()
-        .unwrap()
-    {
-        assert_eq!(
-            gents_tools::native::session_history::is_current_session(
-                case["caller_owner"].as_str().unwrap(),
-                case["caller_session"].as_str().unwrap(),
-                case["listed_owner"].as_str().unwrap(),
-                case["listed_session"].as_str().unwrap()
-            ),
-            case["current"].as_bool().unwrap()
-        );
-    }
 }
 
 #[tokio::test]
@@ -1595,28 +1564,6 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
     }
 }
 
-#[test]
-fn observed_claim_cohorts_match_lean() {
-    let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    for case in contract["trigger_delivery_observed_claim_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let candidate: gents_session::request::lifecycle::arrival_order::ClaimObservation =
-            serde_json::from_value(case["candidate"].clone()).unwrap();
-        let rows: Vec<gents_session::request::lifecycle::arrival_order::ClaimObservation> =
-            serde_json::from_value(case["rows"].clone()).unwrap();
-        assert_eq!(
-            gents_session::request::lifecycle::arrival_order::observed_claim_allowed(
-                &candidate, &rows
-            ),
-            case["allowed"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
-}
-
 fn trigger_with_options(
     template: Option<&str>,
     create_session: Option<bool>,
@@ -1640,23 +1587,17 @@ fn trigger_with_options(
 
 #[test]
 fn generated_session_key_cases_match_admission_and_config() {
-    let cases = contract();
-    for case in cases["trigger_delivery_session_config_cases"]
-        .as_array()
-        .unwrap()
-    {
+    gents_lean_vocab::families::trigger_delivery_session_config::replay(|case| {
         let trigger = trigger_with_options(
-            case["template"].as_str(),
-            case["create_session"].as_bool(),
+            case.template.as_deref(),
+            Some(case.create_session),
             None,
             true,
         );
-        assert_eq!(
-            trigger.validate_options().is_ok(),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+        gents_lean_vocab::families::trigger_delivery_session_config::SessionConfigOutput {
+            allowed: trigger.validate_options().is_ok(),
+        }
+    });
 }
 
 /// A signed Node whose Agent admits fires of the User-owned Trigger `handoff`.
@@ -1735,44 +1676,14 @@ async fn seed_receipt(agent: &gents_store::config_client::ConfigAccess, fire: &T
 
 #[tokio::test]
 async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
-    let cases = contract();
-    assert_eq!(
-        cases["trigger_fire_budget_default"].as_u64(),
-        Some(gents_documents::DEFAULT_MAX_FIRES_PER_HOUR as u64)
-    );
-    assert_eq!(
-        cases["trigger_fire_budget_status"].as_str(),
-        Some(gents_documents::BUDGET_EXHAUSTED_STATUS)
-    );
-    for case in cases["trigger_fire_budget_config_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let trigger = trigger_with_options(
-            None,
-            None,
-            case["configured"].as_u64().map(|value| value as u32),
-            case["receipted"].as_bool().unwrap(),
-        );
-        assert_eq!(
-            trigger.validate_options().is_ok(),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
     let now = chrono::DateTime::parse_from_rfc3339(BUDGET_NOW).unwrap();
-    for case in cases["trigger_fire_budget_cases"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
+    for case in gents_lean_vocab::families::trigger_delivery_fire_budget_admission::cases() {
+        let input = &case.input;
+        let name = input.name.as_str();
         let (_db, client, agent, materializer, task, owner, trigger_doc) =
             budget_fixture(&format!("fire-budget-{name}")).await;
-        let budget = trigger_with_options(
-            None,
-            None,
-            case["configured"].as_u64().map(|v| v as u32),
-            true,
-        )
-        .effective_max_fires_per_hour();
-        assert_eq!(budget as u64, case["budget"].as_u64().unwrap(), "{case}");
+        let budget = trigger_with_options(None, None, input.configured.map(|v| v as u32), true)
+            .effective_max_fires_per_hour();
         let current = budget_fire(&owner, "budget-fire", BUDGET_NOW.to_owned());
         let prepared = durable::PreparedFire {
             receipt: current.clone(),
@@ -1798,11 +1709,11 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
                 None,
             )
         };
-        if case["replay"].as_bool().unwrap() {
+        if input.replay {
             materialize().await.unwrap();
         }
-        for (index, age) in case["prior_ages"].as_array().unwrap().iter().enumerate() {
-            let at = now - chrono::Duration::seconds(age.as_i64().unwrap());
+        for (index, age) in input.prior_ages.iter().enumerate() {
+            let at = now - chrono::Duration::seconds(*age as i64);
             let prior = budget_fire(
                 &owner,
                 &format!("prior-{index}"),
@@ -1821,18 +1732,6 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
             .await
             .unwrap();
         let row = &row["data"]["Trigger"][0];
-        assert_eq!(admitted, case["admitted"].as_bool().unwrap(), "{name}");
-        assert_eq!(exhausted, case["stopped"].as_bool().unwrap(), "{name}");
-        assert_eq!(
-            row["enabled"].as_bool() == Some(false),
-            case["stopped"].as_bool().unwrap(),
-            "{name}: {row}"
-        );
-        assert_eq!(
-            row["last_status"].as_str(),
-            case["status"].as_str(),
-            "{name}"
-        );
         if exhausted {
             assert!(
                 row["last_error"]
@@ -1841,5 +1740,14 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
                 "{name}: {row}"
             );
         }
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_fire_budget_admission::FireBudgetOutput {
+                budget: u64::from(budget),
+                admitted,
+                exhausted,
+                stopped: row["enabled"].as_bool() == Some(false),
+                status: row["last_status"].as_str().map(str::to_owned),
+            },
+        );
     }
 }
