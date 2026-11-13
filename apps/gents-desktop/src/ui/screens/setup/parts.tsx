@@ -4,16 +4,25 @@ import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/tooltip";
 import { preferences, useTheme } from "@/preferences";
 import { InfoTip } from "../InfoTip";
 
 export function Frame({
   children,
   embedded = false,
+  paired = false,
+  aside = false,
   onBack,
 }: {
   children: React.ReactNode;
   embedded?: boolean;
+  /** the column may gain an equal one to its right, so it is no wider
+      than half the window less the gap between the two */
+  paired?: boolean;
+  /** that second column is there, so this one moves over by half its own
+      width and the gap to centre the pair */
+  aside?: boolean;
   onBack?: () => void;
 }) {
   const theme = useTheme();
@@ -39,7 +48,13 @@ export function Frame({
       data-testid="setup-screen"
     >
       <div className="px-8">
-        <div className="mx-auto min-w-0 w-full max-w-xl pt-[10vh] pb-8">
+        <div
+          className={cn(
+            "mx-auto w-full max-w-xl min-w-0 pt-[10vh] pb-8 transition-transform duration-300 ease-out motion-reduce:transition-none",
+            paired && "min-[900px]:max-w-[min(36rem,calc((100vw-5rem)/2))]",
+            aside && "min-[900px]:-translate-x-[calc(50%+0.5rem)]",
+          )}
+        >
           {children}
           <div className="mt-6 flex justify-end">
             <Button
@@ -90,7 +105,7 @@ export function Option({
   return (
     <div
       className={cn(
-        "min-w-0 rounded-2xl border bg-raised",
+        "min-w-0 rounded-2xl border bg-raised transition-[border-color,box-shadow] duration-200 motion-reduce:transition-none",
         selected ? "border-brand ring-1 ring-brand" : "border-border/60",
       )}
     >
@@ -202,5 +217,38 @@ export function Field({
       <span className="text-xs text-muted-foreground">{label}</span>
       {children}
     </label>
+  );
+}
+
+/** a small action shown as its icon, named by its tooltip */
+export function IconAction({
+  label,
+  icon: Icon,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  icon: typeof Server;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            disabled={disabled}
+            onClick={onClick}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Icon />
+          </Button>
+        }
+      />
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }

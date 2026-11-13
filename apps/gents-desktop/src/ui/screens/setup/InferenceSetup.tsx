@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { KeyRound, Orbit, Server, Sparkles } from "lucide-react";
+import { ArrowLeft, KeyRound, Orbit, Server, Sparkles } from "lucide-react";
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 import { newestWins } from "../../../lib/reads";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
+import { cn } from "@gents/ui/lib/utils";
 import { ManagedServerWaitNotice } from "./StartupProgress";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import {
@@ -95,7 +96,19 @@ export function InferenceSetup({
     recommendation: selectedRecommendation,
     settings,
   } = form.model;
-  const provider: ProviderId = form.provider ?? catalog?.providers[0]?.id ?? "openai";
+  /* nothing is chosen for the reader; a provider with an account already
+     connected, or a sign-in still to be saved, is where they left off */
+  const resumed = catalog?.providers.find(
+    (option) => signedIn[option.id] || pendingSave[option.id],
+  )?.id;
+  /* the resumed provider stays the chosen one after its account is set
+     aside, until the reader picks another or setup turns to another node */
+  const [resumedPin, setResumedPin] = useState<ProviderId | null>(null);
+  useEffect(() => {
+    if (resumed && !resumedPin) setResumedPin(resumed);
+  }, [resumed, resumedPin]);
+  const chosen: ProviderId | null = form.provider ?? resumedPin ?? resumed ?? null;
+  const provider: ProviderId = chosen ?? catalog?.providers[0]?.id ?? "openai";
   const providerOption = catalog?.providers.find((option) => option.id === provider);
   const edited = form.connections[provider];
   const connection = useMemo(
@@ -111,6 +124,8 @@ export function InferenceSetup({
   const setupNodeDidRef = useRef(setupNodeDid);
   setupNodeDidRef.current = setupNodeDid;
   const discoveryRevision = useRef(0);
+  /* the connection whose models were last listed unasked */
+  const autoDiscovered = useRef("");
   const currentDiscoveryKey = useRef("");
   const setupDeployment = useFleet((s) => nodeOf(s, setupNodeDid));
   const requiresManagedRuntime = Boolean(
@@ -151,6 +166,7 @@ export function InferenceSetup({
   };
   useEffect(() => {
     dispatch({ type: "accountsCleared" });
+    setResumedPin(null);
     if (!setupNodeDid) {
       accountReads.supersede();
       return;
@@ -280,6 +296,7 @@ export function InferenceSetup({
   const invalidateDiscovery = () => {
     discoveryRevision.current += 1;
     currentDiscoveryKey.current = "";
+    autoDiscovered.current = "";
   };
 
   const updateConnection = (
@@ -447,10 +464,35 @@ export function InferenceSetup({
     }
   };
 
+  /* a connected account needs no further word from the reader to list its
+     models; a failed attempt is not repeated, the button retries it */
+  const connectedId =
+    connection && oauthProviderFor(connection.authMethod)
+      ? signedIn[provider]?.credentialId
+      : undefined;
+  const autoKey = connectedId
+    ? `${provider}:${connection?.authMethod}:${connectedId}`
+    : "";
+  const autoPending = Boolean(
+    autoKey && !discovery && autoDiscovered.current !== autoKey,
+  );
+  useEffect(() => {
+    if (!autoPending || busy) return;
+    autoDiscovered.current = autoKey;
+    void discoverModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPending, busy, autoKey]);
+
+  /* on a narrow window the list and the chosen provider's setup take turns;
+     this is the reader having gone back to the list */
+  const [browsing, setBrowsing] = useState(false);
+  /* setup has the page to itself; a backend added from settings does not */
+  const side = purpose === "onboarding" && !fixedProvider;
   const pickProvider = (id: ProviderId) => {
     if (busy) return;
-    if (id !== provider) invalidateDiscovery();
-    dispatch({ type: "providerPicked", provider: id, current: provider });
+    setBrowsing(false);
+    if (id !== form.provider) invalidateDiscovery();
+    dispatch({ type: "providerPicked", provider: id, current: form.provider });
   };
   useEffect(() => {
     if (
@@ -538,6 +580,7 @@ export function InferenceSetup({
         option={providerOption}
         purpose={purpose}
         canRetrySave={actions.canRetryProviderSave}
+        finding={form.op === "discover" || autoPending}
         ops={{
           updateConnection,
           signIn: () => void signIn(),
@@ -579,6 +622,8 @@ export function InferenceSetup({
   return (
     <Frame
       embedded={purpose === "add-backend"}
+      paired={side}
+      aside={side && chosen !== null}
       onBack={purpose === "add-backend" ? onCancel : undefined}
     >
       {fixedProvider ? (
@@ -593,7 +638,13 @@ export function InferenceSetup({
           </p>
         </header>
       ) : (
-        <Title note="Choose a provider, connect, then select a model and its defaults—all here.">
+        <Title
+          note={
+            purpose === "add-backend"
+              ? "Connect a provider, then pick a model."
+              : "Connect one provider to start. You can add more later in an agent’s Providers settings."
+          }
+        >
           {purpose === "add-backend"
             ? "Add an inference backend"
             : "Choose an inference provider"}
@@ -604,25 +655,72 @@ export function InferenceSetup({
           {providerDetails}
         </div>
       ) : catalog ? (
-        <div className="grid gap-3" role="radiogroup" aria-label="Inference provider">
-          {catalog.providers.map((option) => {
-            const visual = PROVIDER_VISUALS[option.id];
-            return (
-              <Option
-                key={option.id}
-                selected={provider === option.id}
+        /* The list keeps its place and width. Where there is room the
+           chosen provider's setup stands beside it, and the page shifts
+           over to centre the pair; elsewhere the two take turns. */
+        <div className="relative">
+          <div
+            className={cn(
+              "gap-2",
+              !chosen || browsing
+                ? "grid"
+                : side
+                  ? "hidden min-[900px]:grid"
+                  : "hidden",
+            )}
+            role="radiogroup"
+            aria-label="Inference provider"
+          >
+            {catalog.providers.map((option) => {
+              const visual = PROVIDER_VISUALS[option.id];
+              return (
+                <Option
+                  key={option.id}
+                  selected={chosen === option.id}
+                  disabled={busy}
+                  onSelect={() => pickProvider(option.id)}
+                  title={option.displayName}
+                  hint={option.description}
+                  icon={visual.icon}
+                  logo={visual.logo}
+                  testId={`setup-provider-${option.id}`}
+                />
+              );
+            })}
+          </div>
+          {chosen ? (
+            <section
+              key={provider}
+              aria-label={`Set up ${providerOption?.displayName ?? provider}`}
+              className={cn(
+                "min-w-0 animate-in rounded-2xl border border-border/60 bg-raised px-5 py-4 duration-300 ease-out fade-in slide-in-from-right-3 motion-reduce:animate-none",
+                side &&
+                  "min-[900px]:absolute min-[900px]:top-0 min-[900px]:left-full min-[900px]:ml-4 min-[900px]:w-full",
+                browsing && (side ? "hidden min-[900px]:block" : "hidden"),
+              )}
+            >
+              <button
+                type="button"
                 disabled={busy}
-                onSelect={() => pickProvider(option.id)}
-                title={option.displayName}
-                hint={option.description}
-                icon={visual.icon}
-                logo={visual.logo}
-                testId={`setup-provider-${option.id}`}
+                onClick={() => setBrowsing(true)}
+                className={cn(
+                  "mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50",
+                  side && "min-[900px]:hidden",
+                )}
               >
-                {provider === option.id ? providerDetails : null}
-              </Option>
-            );
-          })}
+                <ArrowLeft className="size-3.5" /> All providers
+              </button>
+              <h2 className="mb-3 flex items-center gap-2.5 font-heading text-lg text-heading">
+                <img
+                  src={PROVIDER_VISUALS[chosen].logo}
+                  alt=""
+                  className="size-5 shrink-0 object-contain dark:invert"
+                />
+                {providerOption?.displayName ?? provider}
+              </h2>
+              {providerDetails}
+            </section>
+          ) : null}
         </div>
       ) : (
         <div className="grid gap-3">

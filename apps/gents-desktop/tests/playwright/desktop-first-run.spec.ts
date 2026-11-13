@@ -6,7 +6,14 @@ import {
   openConfigSection,
   sendButton,
   test,
+  type Page,
 } from "./desktopTest";
+
+/* on a narrow window the chosen provider's setup stands in for the list */
+async function backToProviders(page: Page) {
+  const back = page.getByRole("button", { name: "All providers" });
+  if (await back.isVisible()) await back.click();
+}
 
 test.describe("first-run install", () => {
   test("configures Claude thinking and model-specific token defaults", async ({
@@ -16,7 +23,6 @@ test.describe("first-run install", () => {
     await page.getByTestId("setup-next").click();
     await page.getByTestId("setup-provider-anthropic").click();
     await expect(page.getByText("Account connected", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Find models", exact: true }).click();
     await page.getByRole("option", { name: "claude-sonnet-5", exact: true }).click();
     await expect(page.getByTestId("inference-settings-later")).toContainText(
       "Reasoning effort high",
@@ -65,7 +71,6 @@ test.describe("first-run install", () => {
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
     await expect(page.getByText("Account connected", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Find models", exact: true }).click();
     await page.getByRole("option", { name: "gpt-5.6-sol", exact: true }).click();
     await page.getByRole("button", { name: "Save backend", exact: true }).click();
     await expect(page.getByRole("button", { name: "New backend" })).toBeVisible();
@@ -97,9 +102,9 @@ test.describe("first-run install", () => {
   }) => {
     await gotoHarness(page, "empty-fleet");
     await page.getByTestId("setup-next").click();
-    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    /* picking a provider that signs in starts its sign-in */
+    await page.getByTestId("setup-provider-openai").click();
     await expect(page.getByText("Account connected", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Find models", exact: true }).click();
     await page.getByRole("option", { name: "gpt-5.6-sol", exact: true }).click();
     await expect(page.getByRole("listbox", { name: "Advertised models" })).toHaveCount(
       0,
@@ -110,7 +115,9 @@ test.describe("first-run install", () => {
     await page.getByRole("button", { name: "Advanced settings" }).click();
     await page.getByRole("combobox", { name: "Reasoning effort" }).click();
     await page.getByRole("option", { name: "high", exact: true }).click();
-    await expect(page.getByText("Provider managed", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Model selection" })).toContainText(
+      "max output set by the provider",
+    );
     await page.getByRole("button", { name: "Change model", exact: true }).click();
     await expect(
       page.getByRole("listbox", { name: "Advertised models" }),
@@ -174,7 +181,7 @@ test.describe("first-run install", () => {
     });
     await expect(page.getByTestId("setup-save-inference")).toHaveCount(0);
     await page.getByRole("option", { name: "GLM-5.3-Flash-NVFP4" }).click();
-    await expect(page.getByRole("heading", { name: "Model defaults" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Model defaults" })).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Choose an inference provider" }),
     ).toBeVisible();
@@ -286,13 +293,15 @@ test.describe("first-run install", () => {
     await page.getByTestId("setup-provider-local").click();
     await page.getByRole("button", { name: "Connect and find models" }).click();
     await page.getByRole("option", { name: "GLM-5.3-Flash-NVFP4" }).click();
-    await expect(page.getByRole("heading", { name: "Model defaults" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Model defaults" })).toBeVisible();
+    await backToProviders(page);
     await page.getByTestId("setup-provider-openrouter").click();
-    await expect(page.getByRole("heading", { name: "Model defaults" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Model defaults" })).toHaveCount(0);
     await expect(page.getByLabel("API key", { exact: true })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Connect and find models" }),
     ).toBeDisabled();
+    await backToProviders(page);
     await page.getByTestId("setup-provider-local").click();
     await expect(
       page.getByRole("textbox", { name: "Endpoint", exact: true }),

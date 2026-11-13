@@ -157,7 +157,7 @@ choose_model() {
 }
 
 save_inference() {
-  "$ax" click Gents "AXButton=Save and start chatting" || return 1
+  "$ax" click Gents "AXButton=Continue" || return 1
   "$ax" wait Gents "*=Message" 180 > /dev/null
 }
 

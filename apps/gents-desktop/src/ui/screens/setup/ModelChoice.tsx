@@ -1,11 +1,11 @@
 import type { Dispatch } from "react";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, RefreshCw } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { InferenceModelControls } from "../inference/InferenceModelControls";
-import { Field } from "./parts";
+import { Field, IconAction } from "./parts";
 import type { SetupEvent, SetupForm } from "./inferenceSetupForm";
 import { SEARCH_FIELD } from "@/lib/textAssist";
 
@@ -39,6 +39,24 @@ export function ModelChoice({
   const advertised = discovery?.models.find(
     (option) => option.advertised.model_name === model,
   )?.advertised;
+  const contextWindow =
+    advertised?.context_window ?? selectedRecommendation?.contextWindow?.recommended;
+  const maxOutput =
+    discovery?.providerKind === "ChatGptCodex"
+      ? null
+      : (advertised?.max_output_tokens ?? selectedRecommendation?.maxOutputTokens?.max);
+  const limits = selectedRecommendation
+    ? [
+        contextWindow ? `${contextWindow.toLocaleString()} context` : null,
+        discovery?.providerKind === "ChatGptCodex"
+          ? "max output set by the provider"
+          : maxOutput
+            ? `${maxOutput.toLocaleString()} max output`
+            : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
   const filteredModels =
     discovery?.models.filter((option) => {
       const query = modelSearch.trim().toLocaleLowerCase();
@@ -52,10 +70,18 @@ export function ModelChoice({
     <>
       {discovery ? (
         <section
-          className="grid gap-3 border-t border-border/60 pt-4"
+          className="grid animate-in gap-3 border-t border-border/60 pt-4 duration-300 ease-out fade-in slide-in-from-top-2 motion-reduce:animate-none"
           aria-label="Model selection"
         >
-          <h2 className="text-sm font-medium">Choose a model</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-medium">Choose a model</h2>
+            <IconAction
+              label="Refresh models"
+              icon={RefreshCw}
+              disabled={busy}
+              onClick={onDiscover}
+            />
+          </div>
           {discovery?.failure ? (
             <div className="mb-4 rounded-xl border border-destructive/30 p-3">
               <p className="text-sm text-destructive">{discovery.failure.message}</p>
@@ -72,9 +98,15 @@ export function ModelChoice({
           {discovery?.models.length ? (
             model && !modelPickerOpen ? (
               <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3">
-                <span className="min-w-0 break-words text-sm font-medium">{model}</span>
+                <span className="grid min-w-0 gap-0.5">
+                  <span className="break-words text-sm font-medium">{model}</span>
+                  {limits ? (
+                    <span className="text-xs text-muted-foreground">{limits}</span>
+                  ) : null}
+                </span>
                 <Button
                   variant="outline"
+                  size="sm"
                   disabled={busy}
                   onClick={() => dispatch({ type: "pickerOpened" })}
                 >
@@ -159,39 +191,10 @@ export function ModelChoice({
       ) : null}
       {selectedRecommendation && settings ? (
         <section
-          className="grid gap-3 border-t border-border/60 pt-4"
+          className="grid animate-in gap-3 duration-300 ease-out fade-in slide-in-from-top-2 motion-reduce:animate-none"
           aria-label="Model defaults"
         >
-          <h2 className="text-sm font-medium">Model defaults</h2>
           <fieldset disabled={busy} className="min-w-0">
-            <div className="mb-4 rounded-2xl border border-border/60 bg-raised p-4 text-sm">
-              <p className="font-medium">{model}</p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Model defaults and limits
-              </p>
-              <dl className="mt-1 grid grid-cols-2 gap-2 text-xs">
-                <div>
-                  <dt className="text-muted-foreground">Default context</dt>
-                  <dd>
-                    {(
-                      advertised?.context_window ??
-                      selectedRecommendation.contextWindow?.recommended
-                    )?.toLocaleString() ?? "Not advertised"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Max output</dt>
-                  <dd>
-                    {discovery?.providerKind === "ChatGptCodex"
-                      ? "Provider managed"
-                      : ((
-                          advertised?.max_output_tokens ??
-                          selectedRecommendation.maxOutputTokens?.max
-                        )?.toLocaleString() ?? "Not advertised")}
-                  </dd>
-                </div>
-              </dl>
-            </div>
             {selectedRecommendation && settings ? (
               <InferenceModelControls
                 recommendation={selectedRecommendation}
@@ -213,8 +216,7 @@ export function ModelChoice({
             onClick={onSave}
           >
             {busy ? <Spinner /> : null}{" "}
-            {purpose === "add-backend" ? "Save backend" : "Save and start chatting"}{" "}
-            <ArrowRight />
+            {purpose === "add-backend" ? "Save backend" : "Continue"} <ArrowRight />
           </Button>
         </section>
       ) : null}
