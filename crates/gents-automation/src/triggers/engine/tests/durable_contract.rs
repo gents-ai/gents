@@ -47,10 +47,6 @@ struct State {
     goals: Vec<GoalBinding>,
 }
 
-fn contract() -> serde_json::Value {
-    gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap()
-}
-
 fn decode<T>(value: &serde_json::Value) -> T
 where
     T: serde::de::DeserializeOwned,
@@ -187,151 +183,150 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
 
 #[tokio::test]
 async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_work() {
-    for (case_index, case) in contract()["trigger_delivery_latest_admission_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .enumerate()
+    for (case_index, case) in
+        gents_lean_vocab::families::trigger_delivery_latest_admission::cases()
+            .iter()
+            .enumerate()
     {
-        for pending_state in [
-            gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
-            gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
-        ] {
-            let (db, _user, _client, behavior) = signed_materializer_agent(&format!(
-                "latest-delivery-{case_index}-{}",
-                pending_state.as_str()
-            ))
-            .await;
-            let node = db.node.clone();
-            let access = agent_access(&node, &behavior);
-            let owner = behavior.node_did().to_owned();
-            let agent_did = behavior.agent_did.clone();
-            let pre: State = decode(&case["pre"]);
-            let next: Fire = decode(&case["fire"]);
-            let allowed = case["destination_allowed"].as_bool().unwrap();
-            let mut task = resolved_task("replace work");
-            task.agent_did = agent_did.clone();
-            if allowed {
-                access
-                    .transact_write("test.latest_delivery_session", |txn| {
-                        let (session, owner, agent_did) = (&next.session, &owner, &agent_did);
-                        Box::pin(async move {
-                            gents_session::session::ensure_session_in_txn(
-                                txn,
-                                session,
-                                owner,
-                                agent_did,
-                                Some(owner.as_str()),
-                                None,
-                                None,
-                                &chrono::Utc::now().to_rfc3339(),
-                            )
-                            .await
-                        })
-                    })
-                    .await
-                    .unwrap();
-            }
-            for (index, request) in pre.requests.iter().enumerate() {
-                let mut fire = receipt(&request.fire, index);
-                fire.identity.owner_did = owner.clone();
-                fire.fire_key = fire.identity.fire_key();
-                fire.request_id = fire.identity.request_id();
-                fire.task_id = task.task_id.clone();
-                access.transact_write(
-                "test.seed_latest_delivery", |txn| {
-                    let fire = &fire;
-                    let owner = &owner;
-                    let agent_did = &agent_did;
+        let pending_state =
+            gents_protocol::request_lifecycle::RequestLifecycleState::parse(&case.input.seeded)
+                .unwrap();
+        let (db, _user, _client, behavior) = signed_materializer_agent(&format!(
+            "latest-delivery-{case_index}-{}",
+            pending_state.as_str()
+        ))
+        .await;
+        let node = db.node.clone();
+        let access = agent_access(&node, &behavior);
+        let owner = behavior.node_did().to_owned();
+        let agent_did = behavior.agent_did.clone();
+        let pre: State = gents_lean_vocab::family::recode(&case.input.pre);
+        let next: Fire = gents_lean_vocab::family::recode(&case.input.fire);
+        let allowed = case.input.destination_allowed;
+        let mut task = resolved_task("replace work");
+        task.agent_did = agent_did.clone();
+        if allowed {
+            access
+                .transact_write("test.latest_delivery_session", |txn| {
+                    let (session, owner, agent_did) = (&next.session, &owner, &agent_did);
                     Box::pin(async move {
-                        durable::stage_fire_receipt(txn, fire).await?;
-                        txn.execute_with_variables(
-                            "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
-                            &serde_json::json!({"input": {
-                                "request_id": fire.request_id, "node_did": owner,
-                                "requester_did": owner, "session_id": fire.session_id,
-                                "agent_did": agent_did, "purpose": "normal", "content": "prior work",
-                                "lifecycle_state": pending_state.as_str(), "caused_by_trigger_id": fire.identity.trigger_id,
-                                "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
-                            }}),
-                        ).await?;
-                        Ok::<_, anyhow::Error>(())
+                        gents_session::session::ensure_session_in_txn(
+                            txn,
+                            session,
+                            owner,
+                            agent_did,
+                            Some(owner.as_str()),
+                            None,
+                            None,
+                            &chrono::Utc::now().to_rfc3339(),
+                        )
+                        .await
                     })
-                },
-            ).await.unwrap();
-            }
-            let mut schedule = resolved_schedule(&next.identity.trigger_id, task.clone());
-            schedule.session_id_template = Some(next.session.clone());
-            schedule.concurrency = ConcurrencyMode::LatestOnly;
-            let snapshot = snapshot_with_agent_and_schedules(
-                behavior,
-                RapidHashMap::from_iter([(next.identity.trigger_id.clone(), schedule)]),
-            );
-            let (_tx, rx) = watch::channel(snapshot);
-            let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
-            let engine = TriggerEngine::new(rx, materializer);
-            let result = engine
-                .dispatch(FireIntent {
-                    trigger_id: Some(next.identity.trigger_id.clone()),
-                    trigger_kind: TriggerKind::Schedule,
-                    task,
-                    concurrency: ConcurrencyMode::LatestOnly,
-                    event_vars: serde_json::json!({}),
-                    doc_vars: None,
-                    correlation: None,
-                    group_vars: None,
-                    trigger_context: None,
-                    args_vars: None,
-                    durable_fire_key: next.identity.source_doc_id.clone(),
-                    pre_materialized_request_id: None,
-                    event_source_generation: None,
-                    on_result: Box::new(|_| {}),
                 })
-                .await;
-            assert_eq!(
-                matches!(
-                    result,
-                    FireResult::Fired { .. } | FireResult::Duplicate { .. }
-                ),
-                allowed,
-                "{case}: {result:?}"
-            );
-            let response = access
-                .execute("{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }")
                 .await
                 .unwrap();
-            let post: State = decode(&case["post"]);
-            let data = &response["data"];
-            assert_eq!(
-                data["TriggerFire"].as_array().unwrap().len(),
-                post.receipts.len(),
-                "{case}"
-            );
-            let rows = data["AgentRequest"].as_array().unwrap();
-            assert_eq!(rows.len(), post.requests.len(), "{case}");
-            for request in post.requests {
-                let mut id = request.fire.identity;
-                let existed = pre.requests.iter().any(|prior| prior.fire.identity == id);
-                id.owner_did = owner.clone();
-                let row = rows
-                    .iter()
-                    .find(|row| row["request_id"] == id.request_id())
-                    .unwrap();
-                assert_eq!(
-                    row["lifecycle_state"],
-                    if request.terminal {
-                        "superseded"
-                    } else if existed {
-                        pending_state.as_str()
-                    } else {
-                        "pending"
-                    },
-                    "{case}"
-                );
-            }
         }
+        for (index, request) in pre.requests.iter().enumerate() {
+            let mut fire = receipt(&request.fire, index);
+            fire.identity.owner_did = owner.clone();
+            fire.fire_key = fire.identity.fire_key();
+            fire.request_id = fire.identity.request_id();
+            fire.task_id = task.task_id.clone();
+            access.transact_write(
+            "test.seed_latest_delivery", |txn| {
+                let fire = &fire;
+                let owner = &owner;
+                let agent_did = &agent_did;
+                Box::pin(async move {
+                    durable::stage_fire_receipt(txn, fire).await?;
+                    txn.execute_with_variables(
+                        "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {
+                            "request_id": fire.request_id, "node_did": owner,
+                            "requester_did": owner, "session_id": fire.session_id,
+                            "agent_did": agent_did, "purpose": "normal", "content": "prior work",
+                            "lifecycle_state": pending_state.as_str(), "caused_by_trigger_id": fire.identity.trigger_id,
+                            "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
+                        }}),
+                    ).await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            },
+        ).await.unwrap();
+        }
+        let mut schedule = resolved_schedule(&next.identity.trigger_id, task.clone());
+        schedule.session_id_template = Some(next.session.clone());
+        schedule.concurrency = ConcurrencyMode::LatestOnly;
+        let snapshot = snapshot_with_agent_and_schedules(
+            behavior,
+            RapidHashMap::from_iter([(next.identity.trigger_id.clone(), schedule)]),
+        );
+        let (_tx, rx) = watch::channel(snapshot);
+        let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
+        let engine = TriggerEngine::new(rx, materializer);
+        let result = engine
+            .dispatch(FireIntent {
+                trigger_id: Some(next.identity.trigger_id.clone()),
+                trigger_kind: TriggerKind::Schedule,
+                task,
+                concurrency: ConcurrencyMode::LatestOnly,
+                event_vars: serde_json::json!({}),
+                doc_vars: None,
+                correlation: None,
+                group_vars: None,
+                trigger_context: None,
+                args_vars: None,
+                durable_fire_key: next.identity.source_doc_id.clone(),
+                pre_materialized_request_id: None,
+                event_source_generation: None,
+                on_result: Box::new(|_| {}),
+            })
+            .await;
+        let outcome = match result {
+            FireResult::Fired { .. } => "fired",
+            FireResult::Duplicate { .. } => "duplicate",
+            _ => "rejected",
+        };
+        let response = access
+            .execute("{ TriggerFire { fire_key } AgentRequest { request_id lifecycle_state } }")
+            .await
+            .unwrap();
+        let data = &response["data"];
+        let rows = data["AgentRequest"].as_array().unwrap();
+        let mut admitted: Vec<FireIdentity> = pre
+            .requests
+            .iter()
+            .map(|request| request.fire.identity.clone())
+            .collect();
+        if !admitted.contains(&next.identity) {
+            admitted.push(next.identity.clone());
+        }
+        let requests = admitted
+            .iter()
+            .filter_map(|identity| {
+                let mut id = identity.clone();
+                id.owner_did = owner.clone();
+                rows.iter()
+                    .find(|row| row["request_id"] == id.request_id())
+                    .map(|row| {
+                        gents_lean_vocab::families::trigger_delivery_latest_admission::LatestRowWire {
+                            identity: gents_lean_vocab::family::recode(identity),
+                            lifecycle: row["lifecycle_state"].as_str().unwrap().to_owned(),
+                        }
+                    })
+            })
+            .collect();
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_latest_admission::LatestAdmissionOutput {
+                outcome: outcome.to_owned(),
+                receipt_count: data["TriggerFire"].as_array().unwrap().len() as u64,
+                request_count: rows.len() as u64,
+                requests,
+            },
+        );
     }
 }
+
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
     for case in gents_lean_vocab::families::trigger_delivery_fire_admission::cases() {
