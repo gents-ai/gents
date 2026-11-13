@@ -1079,10 +1079,10 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
     wait_for_port(port, &mut server)?;
     server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, ENROLL_BUDGET).await.context("activity runtime readiness")?;
-        // Only the owner is granted Node administration; the second observer
-        // is an approved member without it, so it must not read the owner's
-        // private request activity.
-        let enroll = |path: std::path::PathBuf, administered: bool| {
+        // Approving a client enrollment grants Node administration (Lean
+        // `Identity.EnrollmentGrant.Decision`), so the observer that must be
+        // refused is one whose request stays pending.
+        let enroll = |path: std::path::PathBuf, approved: bool| {
             let graphql = graphql.clone();
             let node_did = node_did.clone();
             let runtime_home = runtime_home.clone();
@@ -1094,19 +1094,16 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 let pending = core.request_status_enrollment_with_label(&status, Some("activity test")).await?;
                 wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await.context("publishing activity enrollment request")?;
                 let home = runtime_home.to_str().context("runtime home UTF-8")?;
-                if administered {
-                    run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
-                }
-                run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
-                wait_for_chat_ready_enrollment(&core, &node_did).await.context("activity enrollment approval projection")?;
-                if administered {
+                if approved {
+                    run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
+                    wait_for_chat_ready_enrollment(&core, &node_did).await.context("activity enrollment approval projection")?;
                     wait_for_client_node_readiness(&core, &node_did).await.context("activity client readiness")?;
                 }
                 Ok::<_, anyhow::Error>((core, pending.request_id))
             }
         };
         let (owner, enrollment) = enroll(temp.path().join("owner"), true).await.context("enrolling activity owner")?;
-        let (other, _) = enroll(temp.path().join("other"), false).await.context("enrolling second activity observer")?;
+        let (other, _) = enroll(temp.path().join("other"), false).await.context("requesting the unapproved observer's enrollment")?;
         let members = gents_service::server_host::managed_enrollment_members(&runtime_home, &graphql).await?;
         let member = members.iter().find(|member| member.request_id == enrollment).context("approved member missing")?;
         anyhow::ensure!(member.candidate_did == owner.node_identity().did() && !member.authorization_expires_at.is_empty(), "incorrect approved member");
@@ -1149,10 +1146,10 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         let operator_response = call(&operator, key.clone()).await?;
         anyhow::ensure!(operator_response.status().is_success(),
             "runtime operator could not observe enrolled request activity: {}", operator_response.status());
-        // The second member holds no node read: enrollment alone grants no
-        // document access, so the route's native node gate refuses it.
+        // The unapproved candidate holds no node read: a pending request
+        // grants no document access, so the route's native node gate refuses it.
         let denied = call(other.node_identity(), key.clone()).await?;
-        anyhow::ensure!(denied.status() == reqwest::StatusCode::FORBIDDEN, "an enrolled identity without node read was not refused: {}", denied.status());
+        anyhow::ensure!(denied.status() == reqwest::StatusCode::FORBIDDEN, "an unapproved identity without node read was not refused: {}", denied.status());
         let mut cross_session = key.clone();
         cross_session.session = Uuid::new_v4().to_string();
         let denied = call(owner.node_identity(), cross_session).await?;
