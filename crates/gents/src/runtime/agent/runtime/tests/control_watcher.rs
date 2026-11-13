@@ -1095,76 +1095,97 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
 }
 
 #[tokio::test]
-async fn control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted() {
-    let fixture = plugin_runtime_fixture(
-        "control-watcher-unbuildable-tools",
-        "backend-unbuildable-tools",
-        "http://127.0.0.1:8116/v1",
-    )
-    .await
-    .unwrap();
-    let node = fixture.node.clone();
-    let identity = fixture.runtime.clone();
-    let plugin_home = tempfile::tempdir().unwrap();
-    let agent = crate::Gents::from_default_agent_documents(
-        node.clone(),
-        identity,
-        crate::runtime::agent::DocumentRuntimeOptions {
-            backend_admission: Some(fixture.admission()),
-            tool_ceiling: ToolCeiling::meta_only(),
-            plugin_home: Some(plugin_home.path().to_path_buf()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let node_did = agent.node_did().to_string();
-    let agent_did = agent.default_agent_did().to_string();
-    // As at startup: the Tools document already names a plugin that is not
-    // installed, so the agent's tool surface resolves but cannot build.
-    write_tools_naming_plugin(
-        &fixture.user_access,
-        &node_did,
-        &format!("{agent_did}:tools"),
-    )
-    .await;
-    let resolve_context = agent
-        .document_runtime_context()
-        .cloned()
-        .expect("document-backed agent");
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
-    runtime_status.initialize_startup(&agent_did).await.unwrap();
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
-    let (health_tx, health_rx) = mpsc::channel::<()>(1);
-    let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
-        node: node.clone(),
-        backend_admission: agent.backend_admission.clone(),
-        subscription: subscribe_control_changes(&node).unwrap(),
-        node_did: node_did.clone(),
-        tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
-        resolve_context,
-        proposals_tx: proposal_tx,
-        runtime_status,
-        health_events_rx: health_rx,
-        shutdown: shutdown_rx,
-    }));
-
-    // The watcher's first resolve after startup, woken by an unrelated event.
-    health_tx.send(()).await.unwrap();
-    let proposal = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+async fn control_watcher_wake_follows_the_lean_tool_admission_model() {
+    use gents_lean_vocab::families::tool_admission_watcher_wake;
+    for case in gents_lean_vocab::families::tool_admission_watcher_wake::cases::<
+        String,
+        AgentReadinessUnavailableReason,
+    >() {
+        let fixture = plugin_runtime_fixture(
+            "control-watcher-unbuildable-tools",
+            "backend-unbuildable-tools",
+            "http://127.0.0.1:8116/v1",
+        )
         .await
-        .expect("the health event must reach the reconcile owner")
-        .expect("proposal channel");
-    assert!(
-        !proposal.agents.contains_key(&agent_did),
-        "an agent whose tools fail to build must not come back runnable"
-    );
-    assert_eq!(
-        proposal.unavailable_agents[&agent_did].public_reason,
-        AgentReadinessUnavailableReason::ToolSurfaceUnavailable
-    );
+        .unwrap();
+        let node = fixture.node.clone();
+        let identity = fixture.runtime.clone();
+        let plugin_home = tempfile::tempdir().unwrap();
+        let agent = crate::Gents::from_default_agent_documents(
+            node.clone(),
+            identity,
+            crate::runtime::agent::DocumentRuntimeOptions {
+                backend_admission: Some(fixture.admission()),
+                tool_ceiling: ToolCeiling::meta_only(),
+                plugin_home: Some(plugin_home.path().to_path_buf()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let node_did = agent.node_did().to_string();
+        let agent_did = agent.default_agent_did().to_string();
+        match case.input.admission.as_str() {
+            "fails_to_build" => {
+                write_tools_naming_plugin(
+                    &fixture.user_access,
+                    &node_did,
+                    &format!("{agent_did}:tools"),
+                )
+                .await
+            }
+            "builds" => {
+                let tools: Tools = serde_json::from_value(serde_json::json!({
+                    "tools_id": format!("{agent_did}:tools"),
+                    "node_did": node_did,
+                }))
+                .unwrap();
+                gents_documents::write_tools_document(
+                    &fixture.user_access,
+                    &tools,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .unwrap();
+            }
+            other => panic!("unmodeled tool admission {other}"),
+        }
+        let resolve_context = agent
+            .document_runtime_context()
+            .cloned()
+            .expect("document-backed agent");
+        let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
+        runtime_status.initialize_startup(&agent_did).await.unwrap();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
+        let (health_tx, health_rx) = mpsc::channel::<()>(1);
+        let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
+            node: node.clone(),
+            backend_admission: agent.backend_admission.clone(),
+            subscription: subscribe_control_changes(&node).unwrap(),
+            node_did: node_did.clone(),
+            tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
+            resolve_context,
+            proposals_tx: proposal_tx,
+            runtime_status,
+            health_events_rx: health_rx,
+            shutdown: shutdown_rx,
+        }));
 
-    let _ = shutdown_tx.send(true);
-    watcher_task.await.unwrap().unwrap();
+        health_tx.send(()).await.unwrap();
+        let proposal = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+            .await
+            .expect("the health event must reach the reconcile owner")
+            .expect("proposal channel");
+        case.check(tool_admission_watcher_wake::StandingOutput {
+            runnable: proposal.agents.contains_key(&agent_did),
+            reason: proposal
+                .unavailable_agents
+                .get(&agent_did)
+                .map(|unavailable| unavailable.public_reason),
+        });
+
+        let _ = shutdown_tx.send(true);
+        watcher_task.await.unwrap().unwrap();
+    }
 }

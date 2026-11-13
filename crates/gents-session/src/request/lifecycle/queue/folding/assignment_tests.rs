@@ -51,48 +51,93 @@ async fn row(
     row
 }
 
+fn reference_value(reference: Option<(&str, Option<&str>)>) -> Value {
+    match reference {
+        Some((goal_id, root_request_doc_id)) => json!({
+            "goal_id": goal_id,
+            "root_request_doc_id": root_request_doc_id,
+        }),
+        None => Value::Null,
+    }
+}
+
+async fn head_and_candidate(
+    identity: &KeyIdentity,
+    head: &Value,
+    candidate: &Value,
+) -> (AgentRequest, AgentRequestRow) {
+    let head = row(identity, "head-physical", head, None).await;
+    let head = AgentRequest::try_from(head).unwrap();
+    let candidate = row(
+        identity,
+        "candidate-physical",
+        candidate,
+        Some(QueueDelivery::Steer),
+    )
+    .await;
+    (head, candidate)
+}
+
 #[tokio::test]
-async fn generated_goal_assignments_bound_fold_and_steering() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_queue_assignment_cases;
-    assert_eq!(cases.len(), 10);
+async fn goal_assignment_folding_follows_the_lean_model() {
+    let cases = gents_lean_vocab::families::goal_queue_assignment_contracts_fold_decision::cases();
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-    for case in cases {
-        let head_reference = match &case.head_reference {
-            Some(reference) => json!({
-                "goal_id": reference.goal_id,
-                "root_request_doc_id": reference.root_request_doc_id,
-            }),
-            None => Value::Null,
-        };
-        let head = row(&identity, "head-physical", &head_reference, None).await;
-        let head = AgentRequest::try_from(head).unwrap();
-        let candidate_reference = match &case.candidate_reference {
-            Some(reference) => json!({
-                "goal_id": reference.goal_id,
-                "root_request_doc_id": reference.root_request_doc_id,
-            }),
-            None => Value::Null,
-        };
-        let candidate = row(
+    for case in &cases {
+        let (head, candidate) = head_and_candidate(
             &identity,
-            "candidate-physical",
-            &candidate_reference,
-            Some(QueueDelivery::Steer),
+            &reference_value(case.input.head_reference.as_ref().map(|reference| {
+                (
+                    reference.goal_id.as_str(),
+                    reference.root_request_doc_id.as_deref(),
+                )
+            })),
+            &reference_value(case.input.candidate_reference.as_ref().map(|reference| {
+                (
+                    reference.goal_id.as_str(),
+                    reference.root_request_doc_id.as_deref(),
+                )
+            })),
         )
         .await;
-        let now = chrono::Utc::now();
-        assert_eq!(
-            folds_into(&head, &candidate, now),
-            case.expected_fold,
-            "{}: claim folding",
-            case.name
+        case.check(
+            gents_lean_vocab::families::goal_queue_assignment_contracts_fold_decision::FoldOutput {
+                fold: folds_into(&head, &candidate, chrono::Utc::now()),
+            },
         );
-        assert_eq!(
-            super::super::intake::steering_compatible(&head, &candidate, now),
-            case.expected_steer,
-            "{}: live steering",
-            case.name
+    }
+}
+
+#[tokio::test]
+async fn goal_assignment_steering_follows_the_lean_model() {
+    let cases = gents_lean_vocab::families::goal_queue_assignment_contracts_steer_decision::cases();
+    let temp = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+    for case in &cases {
+        let (head, candidate) = head_and_candidate(
+            &identity,
+            &reference_value(case.input.head_reference.as_ref().map(|reference| {
+                (
+                    reference.goal_id.as_str(),
+                    reference.root_request_doc_id.as_deref(),
+                )
+            })),
+            &reference_value(case.input.candidate_reference.as_ref().map(|reference| {
+                (
+                    reference.goal_id.as_str(),
+                    reference.root_request_doc_id.as_deref(),
+                )
+            })),
+        )
+        .await;
+        case.check(
+            gents_lean_vocab::families::goal_queue_assignment_contracts_steer_decision::SteerOutput {
+                steer: super::super::intake::steering_compatible(
+                    &head,
+                    &candidate,
+                    chrono::Utc::now(),
+                ),
+            },
         );
     }
 }

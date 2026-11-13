@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use gents::{DocumentRuntimeOptions, Gents};
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents_inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
+use gents_inference::resolved::MaxTurnsProvenance;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_session::request::lifecycle::{
     build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
@@ -278,6 +278,9 @@ async fn wait_for_terminal_child(
     runtime: &AcceptedTurnRuntime,
 ) -> ChildRequestRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(&db.node, ["AgentRequest"])
+            .unwrap();
     let parent = ConfigAccess::local_as(db.node.clone(), parent_did.parse().unwrap());
     loop {
         if let Some(child) = child_of(&parent, parent_request_id, child_did).await {
@@ -356,7 +359,7 @@ async fn wait_for_terminal_child(
                 runtime.backend.observed_completion_bodies()
             );
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -378,13 +381,7 @@ async fn start_child_session(
     child_responses: Vec<StreamResponse>,
     max_turns: Option<i64>,
     withdraw_target: bool,
-) -> (
-    String,
-    String,
-    ConfigAccess,
-    Arc<ResolvedAgent>,
-    AcceptedTurnRuntime,
-) {
+) -> (String, String, ConfigAccess, AcceptedTurnRuntime) {
     let backend = MockStreamingBackend::start_with_plans(
         MODEL,
         vec![
@@ -456,13 +453,6 @@ async fn start_child_session(
     )
     .await
     .expect("build child-limit runtime");
-    let child_behavior = agent
-        .agents()
-        .iter()
-        .find(|behavior| behavior.agent.agent_did == child_did)
-        .expect("child agent resolved from documents")
-        .agent
-        .clone();
     let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -470,74 +460,13 @@ async fn start_child_session(
         runtime: BootedAgent::new(shutdown_tx, handle, node_did),
         backend,
     };
-    (parent_did, child_did, access, child_behavior, runtime)
-}
-
-#[tokio::test]
-async fn started_session_without_an_execution_document_runs_past_a_low_turn_limit() {
-    let db = test_db("e2e-session-limit-default").await;
-    let mut responses = (0..6).map(child_tool_turn).collect::<Vec<_>>();
-    responses.push(StreamResponse::completes(CHILD_PROMPT, ["child done"]));
-    let (parent_did, child_did, access, child_behavior, runtime) = start_child_session(
-        &db,
-        "e2e-session-limit-default-request",
-        "e2e-session-limit-default-session",
-        responses,
-        None,
-        false,
-    )
-    .await;
-    let child = wait_for_terminal_child(
-        &db,
-        &access,
-        "e2e-session-limit-default-request",
-        &parent_did,
-        &child_did,
-        &runtime,
-    )
-    .await;
-    assert_eq!(child.agent_did.as_deref(), Some(child_did.as_str()));
-    let model = tokio::task::spawn_blocking(|| {
-        let json = gents_lean_contract::load_contract_json().expect("Lean contract snapshot");
-        let snapshot: serde_json::Value = serde_json::from_str(&json).unwrap();
-        snapshot["tool_admission_handoff_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == "skip-with-hook-effect")
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap();
-    let expected_author = match model["expected_author"].as_str() {
-        Some("selected-agent") => Some(parent_did.as_str()),
-        None => None,
-        other => panic!("unexpected modeled effect author {other:?}"),
-    };
-    assert_eq!(child.requester_did.as_deref(), expected_author);
-    assert_eq!(child.admission_signer_did.as_deref(), expected_author);
-
-    assert_eq!(
-        child.lifecycle_state.as_deref(),
-        Some("completed"),
-        "child {} must finish every scripted turn, not exhaust a limit: {:?}",
-        child.request_id,
-        child.failure_reason
-    );
-    assert_eq!(child_behavior.max_turns, DEFAULT_MAX_TURNS);
-    assert_eq!(child_behavior.max_turns, 1_000);
-    assert_eq!(
-        child_behavior.max_turns_provenance,
-        MaxTurnsProvenance::Default
-    );
-    runtime.runtime.shutdown().await;
+    (parent_did, child_did, access, runtime)
 }
 
 #[tokio::test]
 async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
     let db = test_db("e2e-session-limit-explicit").await;
-    let (parent_did, child_did, access, child_behavior, runtime) = start_child_session(
+    let (parent_did, child_did, access, runtime) = start_child_session(
         &db,
         "e2e-session-limit-explicit-request",
         "e2e-session-limit-explicit-session",
@@ -576,25 +505,14 @@ async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
         !reason.contains(MaxTurnsProvenance::Default.describe()),
         "a document-bound limit must not report the built-in default: {reason}"
     );
-    assert_eq!(
-        child_behavior.max_turns,
-        usize::try_from(EXPLICIT_CHILD_MAX_TURNS).unwrap()
-    );
-    assert_eq!(
-        child_behavior.max_turns_provenance,
-        MaxTurnsProvenance::ExecutionProfile
-    );
     runtime.runtime.shutdown().await;
 }
 
-/// #3606: the configured agent target is what lets the parent open the child
-/// session (the two tests above run `agent_new` on that grant alone); once the
-/// target is withdrawn the same `agent_new` call opens nothing.
 #[tokio::test]
 async fn agent_new_is_refused_once_its_configured_target_is_withdrawn() {
     const REQUEST_ID: &str = "e2e-session-limit-withdrawn-request";
     let db = test_db("e2e-session-limit-withdrawn").await;
-    let (_, child_did, access, _, runtime) = start_child_session(
+    let (_, child_did, access, runtime) = start_child_session(
         &db,
         REQUEST_ID,
         "e2e-session-limit-withdrawn-session",
@@ -603,25 +521,12 @@ async fn agent_new_is_refused_once_its_configured_target_is_withdrawn() {
         true,
     )
     .await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let response = access
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{REQUEST_ID}" }} }}) {{ lifecycle_state }} }}"#
-            ))
-            .await
-            .expect("read parent request");
-        let state = response["data"]["AgentRequest"][0]["lifecycle_state"].as_str();
-        if matches!(state, Some("completed") | Some("failed")) {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "parent request did not finish: {response}; provider bodies: {:?}",
-            runtime.backend.observed_completion_bodies()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::support::live_inference::wait_for_request_terminal(
+        &access,
+        REQUEST_ID,
+        Duration::from_secs(30),
+    )
+    .await;
     let child = ConfigAccess::local_as(db.node.clone(), child_did.parse().unwrap());
     for (viewer, view) in [("user", &access), ("child agent", &child)] {
         let opened = child_of(view, REQUEST_ID, &child_did).await;

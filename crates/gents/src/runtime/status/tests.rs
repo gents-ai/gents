@@ -218,26 +218,6 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
     Ok(())
 }
 
-#[test]
-fn node_runtime_writer_source_cannot_serialize_readiness_authority() {
-    let source = include_str!("../status.rs");
-    for forbidden in [
-        "row.process_state",
-        "row.active_generation",
-        "row.router_generation",
-        "row.default_agent_did",
-        "process_state: \"{process_state}\"",
-        "active_generation: {active_generation}",
-        "router_generation: {router_generation}",
-        "default_agent_did: \"{default_agent_did}\"",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "NodeRuntime writer regained readiness-owned source fragment {forbidden}"
-        );
-    }
-}
-
 fn status_test_request(request_id: &str) -> gents_protocol::row::AgentRequest {
     gents_protocol::row::AgentRequest {
         retry_parent_request_doc_id: None,

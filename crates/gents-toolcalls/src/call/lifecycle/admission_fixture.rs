@@ -1201,48 +1201,62 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn timeout_adopts_terminal_written_by_terminal_parent_sweep() {
-        let admission = published_admission(PublishedAdmissionOptions {
-            name: "timeout-cas".to_owned(),
-            real_identity: true,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-        let node = admission.node;
-        let path = admission.path;
-        let node_did = admission.node_did;
-        let mut tool = admission.tool;
-        let tool_access = tool.access().unwrap();
-        let signer = tool_access.managed_agent_signer().unwrap();
-        let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
-        let request = gents_store::graphql::escape_graphql_string("request-timeout-cas");
-        // The Agent that owns the request ends it, as its runtime would.
-        let response = tool_access
-            .write(
-                "test.timeout_cas.interrupt_parent",
-                &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, input: {{ lifecycle_state: "interrupted" }}) {{ _docID }} }}"#),
+    async fn timeout_after_terminal_parent_sweep_matches_the_lean_model() {
+        let cases = gents_lean_vocab::families::tool_call_timeout_after_sweep_adoption::cases();
+        for (index, case) in cases.iter().enumerate() {
+            let name = format!("timeout-cas-{index}");
+            let admission = published_admission(PublishedAdmissionOptions {
+                name: name.clone(),
+                real_identity: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            let node = admission.node;
+            let path = admission.path;
+            let node_did = admission.node_did;
+            let mut tool = admission.tool;
+            let tool_access = tool.access().unwrap();
+            let signer = tool_access.managed_agent_signer().unwrap();
+            let identities: Vec<Arc<dyn NodeIdentity>> = vec![Arc::new(signer)];
+            let request = gents_store::graphql::escape_graphql_string(&format!("request-{name}"));
+            if case.input.parent != "live" {
+                let parent = gents_store::graphql::escape_graphql_string(&case.input.parent);
+                let response = tool_access
+                    .write(
+                        "test.timeout_cas.end_parent",
+                        &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{request}" }} }}, input: {{ lifecycle_state: "{parent}" }}) {{ _docID }} }}"#),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response["data"]["update_AgentRequest"]
+                        .as_array()
+                        .map(Vec::len),
+                    Some(1)
+                );
+            }
+
+            let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
+                &node,
+                &node_did,
+                &identities,
             )
             .await
             .unwrap();
-        assert_eq!(
-            response["data"]["update_AgentRequest"]
-                .as_array()
-                .map(Vec::len),
-            Some(1)
-        );
-
-        let report =
-            ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&node, &node_did, &identities)
-                .await
-                .unwrap();
-        assert_eq!(report.tool_calls_terminalized, 1);
-        assert!(!tool.timeout().await.unwrap());
-        let row = row(&tool_access, "session-timeout-cas").await;
-        assert_eq!(row["lifecycle_state"], "cancelled");
-        assert_eq!(row["cancel_cause"], "interrupted");
-        assert!(row["tool_failure_class"].is_null());
-        teardown(node, path).await;
+            let timeout_reported = tool.timeout().await.unwrap();
+            let persisted = row(&tool_access, &format!("session-{name}")).await;
+            case.check(
+                gents_lean_vocab::families::tool_call_timeout_after_sweep_adoption::Observed {
+                    swept: u64::try_from(report.tool_calls_terminalized).unwrap(),
+                    timeout_reported,
+                    lifecycle_state: persisted["lifecycle_state"].as_str().unwrap().to_owned(),
+                    cancel_cause: persisted["cancel_cause"].as_str().map(str::to_owned),
+                    failure_class: persisted["tool_failure_class"].as_str().map(str::to_owned),
+                },
+            );
+            teardown(node, path).await;
+        }
     }
 }
 

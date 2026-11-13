@@ -156,6 +156,9 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         &format!("recover across a long backoff {marker}"),
     )
     .await;
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(&actors.node, ["InferenceCall"])
+            .expect("subscribe to provider attempt changes");
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let calls = fetch_inference_calls(&actors, request_id).await;
@@ -166,7 +169,10 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
                 calls.len() <= 1,
                 "retry started before the first failed-call observation: {calls:?}"
             );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            changes
+                .recv()
+                .await
+                .expect("provider attempt subscription closed");
         }
     })
     .await
@@ -551,6 +557,9 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     )
     .await;
     let request_id = format!("req-{marker}");
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(&actors.node, ["InferenceCall"])
+            .expect("subscribe to provider attempt changes");
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let calls = fetch_inference_calls(&actors, &request_id).await;
@@ -566,7 +575,10 @@ async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
                 assert_stall_reason(&calls[0]);
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            changes
+                .recv()
+                .await
+                .expect("provider attempt subscription closed");
         }
     })
     .await
