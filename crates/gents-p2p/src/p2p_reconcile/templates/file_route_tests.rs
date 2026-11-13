@@ -1,73 +1,35 @@
-use serde::Deserialize;
-
 #[test]
 fn generated_routes_follow_executable_scope_filters() {
     use super::super::policy::{
         client_route_collections, resolve_template_filters, PairingDirection,
     };
-    use super::super::templates::{filter_conditions, resolve_template, CLIENT_TEMPLATE};
-    use serde_json::{json, Value};
+    use super::super::templates::{resolve_template, single_string_eq, CLIENT_TEMPLATE};
+    use gents_lean_vocab::families::file_review_routes::{
+        CollectionPredicate, FileReviewRouteOutput, FilterClause,
+    };
 
-    #[derive(Deserialize)]
-    struct Clause {
-        field: String,
-        operator: String,
-        value: String,
-    }
-    #[derive(Deserialize)]
-    struct Predicate {
-        collection: String,
-        clauses: Vec<Clause>,
-    }
-    fn sorted_conjunction(mut value: Value) -> Value {
-        if let Some(clauses) = value.get_mut("_and").and_then(Value::as_array_mut) {
-            clauses.sort_by_key(Value::to_string);
-        }
-        value
-    }
-    let cases = &gents_lean_vocab::lean_contract_snapshot().file_review_route_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let direction = PairingDirection::parse(&case.direction).unwrap();
+    gents_lean_vocab::families::file_review_routes::replay::<PairingDirection>(|input| {
+        let direction = input.direction;
         let template = resolve_template(CLIENT_TEMPLATE).unwrap();
-        let actual = resolve_template_filters(template, direction, &case.requester, &case.owner);
-        match &case.expected {
-            None => assert!(
-                !actual.contains_key(&case.demand_collection),
-                "{}: unexpected demand filter for {}",
-                case.direction,
-                case.demand_collection
-            ),
-            Some(expected_predicate) => {
-                let expected_predicate: Predicate =
-                    serde_json::from_value(expected_predicate.clone()).unwrap();
-                assert_eq!(expected_predicate.collection, case.demand_collection);
-                let mut clauses: Vec<Value> = expected_predicate
-                    .clauses
-                    .into_iter()
-                    .map(|clause| json!({(clause.field): {(clause.operator): clause.value}}))
-                    .collect();
-                let expected = if clauses.len() == 1 {
-                    clauses.remove(0)
-                } else {
-                    json!({"_and": clauses})
-                };
-                let predicate = actual.get(&case.demand_collection).unwrap();
-                assert_eq!(
-                    sorted_conjunction(Value::Object(filter_conditions(predicate).unwrap())),
-                    sorted_conjunction(expected),
-                    "{}",
-                    case.direction
-                );
-            }
+        let actual = resolve_template_filters(template, direction, &input.requester, &input.owner);
+        FileReviewRouteOutput {
+            expected: actual
+                .get_key_value(&input.demand_collection)
+                .map(|(collection, filter)| {
+                    let (field, value) = single_string_eq(filter)
+                        .expect("a demand filter is one string equality");
+                    CollectionPredicate {
+                        collection: collection.clone(),
+                        clauses: vec![FilterClause {
+                            field: field.to_owned(),
+                            operator: "_eq".to_owned(),
+                            value: value.to_owned(),
+                        }],
+                    }
+                }),
+            images_granted: client_route_collections(direction)
+                .contains(&input.image_collection.as_str()),
+            image_filter_installed: actual.contains_key(&input.image_collection),
         }
-        assert_eq!(
-            client_route_collections(direction).contains(&case.image_collection.as_str()),
-            case.images_granted
-        );
-        assert_eq!(
-            actual.contains_key(&case.image_collection),
-            case.image_filter_installed
-        );
-    }
+    });
 }

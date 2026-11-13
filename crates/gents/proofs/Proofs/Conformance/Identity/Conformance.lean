@@ -448,6 +448,8 @@ def changes : List Action :=
   , .revoke (actorRelation "agents" "general" "administrator" readerDid)
   , .check readerDid "children" "automated-message" "read"
   , .grant (actorRelation "nodes" "home" "administrator" strangerDid)
+  , .check strangerDid "sessions" "sibling-session" "read"
+  , .check strangerDid "delivered_requests" "remote-request" "read"
   , .check strangerDid "agents" "sibling" "update"
   , .check strangerDid "children" "automated-message" "read"
   , .check strangerDid "children" "automated-message" "update"
@@ -501,7 +503,24 @@ theorem household_ownership_and_isolation :
 
 theorem household_revocation : observed initial changes =
     [true, true, false, false, true, false, false, false, false, true, true, false,
-     true, true, true, false, true, false, false] := by native_decide
+     true, true, true, true, true, false, true, false, false] := by native_decide
+
+/-- Isolation between sibling Agents is a property of grants, not of Agents: an
+Agent with no grant on a sibling reads none of its sessions or requests
+(`invoke_only_preserves_session_isolation`,
+`delivered_request_preserves_sender_and_worker`), while a Node `administrator`
+reads every Agent's sessions and their requests. The initialised Engineer holds
+`administrator` by decision (`SelfConfig.engineerInitRelations`), so it is not a
+witness for sibling isolation; two Agents without grants are. -/
+theorem node_administrator_reads_sibling_sessions_and_requests :
+    [allowed 5 initial siblingDid "sessions" "general-session" "read",
+     allowed 5 initial agentDid "sessions" "sibling-session" "read",
+     allowed 5 initial siblingDid "delivered_requests" "remote-request" "read",
+     allowed 5 (apply initial (.grant (actorRelation "nodes" "home" "administrator" strangerDid)))
+       strangerDid "sessions" "sibling-session" "read",
+     allowed 5 (apply initial (.grant (actorRelation "nodes" "home" "administrator" strangerDid)))
+       strangerDid "delivered_requests" "remote-request" "read"] =
+    [false, false, false, true, true] := by native_decide
 
 theorem operations_follow_cause_and_preserve_user_visibility :
     [allowed 5 initial runtimeDid "operations" "readiness" "update",

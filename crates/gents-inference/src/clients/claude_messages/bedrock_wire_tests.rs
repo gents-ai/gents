@@ -695,32 +695,36 @@ async fn a_bearer_token_authenticates_bedrock_without_signing() {
 }
 
 #[tokio::test]
-async fn tools_stream_eagerly_only_on_the_default_bedrock_endpoint() {
+async fn bedrock_tool_streaming_matches_the_lean_model() {
     let _guard = lock_fixtures_for_test().await;
+    let cases = gents_lean_vocab::families::eager_streaming_bedrock_tool_streaming::cases();
     let sse = crate::clients::claude_messages::sse_fixture_final_text("tools");
-    let server = Server::start(vec![
-        profiles(&[], None),
-        answer(&sse),
-        profiles(&[], None),
-        answer(&sse),
-    ])
-    .await;
-    let custom = bedrock_route(&server, "us-east-1", "eager-custom", true);
-    run(&custom, MODEL).await;
-    // The same route marked as the provider's own endpoint.
-    let own = ClaudeRoute {
-        target: custom.target.at_default_endpoint(true),
-        ..bedrock_route(&server, "us-east-1", "eager-own", true)
-    };
-    run(&own, MODEL).await;
+    let mut replies = Vec::new();
+    for _ in &cases {
+        replies.push(profiles(&[], None));
+        replies.push(answer(&sse));
+    }
+    let server = Server::start(replies).await;
+    for (index, case) in cases.iter().enumerate() {
+        let base = bedrock_route(&server, "us-east-1", &format!("eager-{index}"), true);
+        let route = ClaudeRoute {
+            target: base.target.at_default_endpoint(case.input.default_endpoint),
+            ..base
+        };
+        let model = if case.input.flagged {
+            MODEL
+        } else {
+            "claude-sonnet-4-5"
+        };
+        run(&route, model).await;
+    }
     let requests = server.requests();
-    let body = |at: usize| String::from_utf8_lossy(&requests[at].body).into_owned();
-    assert!(!body(1).contains("eager_input_streaming"), "{}", body(1));
-    assert!(
-        body(3).contains(r#""eager_input_streaming":true"#),
-        "{}",
-        body(3)
-    );
+    for (index, case) in cases.iter().enumerate() {
+        let body = String::from_utf8_lossy(&requests[2 * index + 1].body).into_owned();
+        let sent = body.contains(r#""eager_input_streaming":true"#);
+        assert_eq!(body.contains("eager_input_streaming"), sent, "{body}");
+        case.check(sent);
+    }
 }
 
 #[tokio::test]

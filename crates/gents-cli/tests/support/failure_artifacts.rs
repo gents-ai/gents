@@ -54,6 +54,10 @@ impl FailureArtifacts {
         self.server = Some(server);
     }
 
+    pub fn take_server(&mut self) -> Option<ServeProcess> {
+        self.server.take()
+    }
+
     pub fn captured_output(&self) -> Result<(String, String)> {
         self.server
             .as_ref()

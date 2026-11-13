@@ -246,80 +246,84 @@ pub fn exposure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_documents::EvalTier;
 
-    fn v(
-        id: &str,
-        stage: usize,
-        kind: OutcomeKind,
-        score: Option<u32>,
-        weight: u32,
-    ) -> VerdictView {
-        VerdictView {
-            verdict_id: id.into(),
-            stage_index: stage,
-            check: format!("check-{id}"),
-            tier: EvalTier::Acceptance,
-            kind,
-            provider_reason: None,
-            score_bp: score,
-            weight,
-            regrade_of: None,
-        }
-    }
-
-    fn t(case: &str, index: u32, score: CaseTrialScore) -> TrialScore {
-        TrialScore {
-            case_id: case.into(),
-            trial_index: index,
-            score,
-        }
+    #[test]
+    fn generated_latest_verdicts_are_independent_of_database_row_order() {
+        use gents_lean_vocab::families::runtime_eval_selection_latest_verdicts as family;
+        family::replay(|input| {
+            let rows = input
+                .rows
+                .iter()
+                .map(|row| VerdictView {
+                    verdict_id: row.verdict_id.clone(),
+                    stage_index: usize::try_from(row.stage_index).unwrap(),
+                    check: row.check.clone(),
+                    tier: serde_json::from_value(serde_json::json!(row.tier)).unwrap(),
+                    kind: OutcomeKind::parse(&row.kind).unwrap(),
+                    provider_reason: row
+                        .provider_reason
+                        .as_deref()
+                        .map(|value| ProviderReason::parse(value).unwrap()),
+                    score_bp: row.score_bp.map(|value| u32::try_from(value).unwrap()),
+                    weight: u32::try_from(row.weight).unwrap(),
+                    regrade_of: row.regrade_of.clone(),
+                })
+                .collect();
+            latest_verdicts(rows)
+                .into_iter()
+                .map(|row| family::Verdict {
+                    verdict_id: row.verdict_id,
+                    stage_index: row.stage_index as u64,
+                    check: row.check,
+                    tier: serde_json::to_value(row.tier)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                    kind: row.kind.as_str().to_owned(),
+                    provider_reason: row.provider_reason.map(|reason| reason.as_str().to_owned()),
+                    score_bp: row.score_bp.map(u64::from),
+                    weight: u64::from(row.weight),
+                    regrade_of: row.regrade_of,
+                })
+                .collect()
+        });
     }
 
     #[test]
-    fn two_regrades_of_one_verdict_leave_one_survivor_whatever_the_row_order() {
-        let original = v("v1", 0, OutcomeKind::ModelAcceptance, Some(0), 1);
-        let regrade = |id: &str| {
-            let mut regrade = v(id, 0, OutcomeKind::Passed, Some(10_000), 1);
-            regrade.check = original.check.clone();
-            regrade.regrade_of = Some("v1".into());
-            regrade
-        };
-        let (v2, v3) = (regrade("v2"), regrade("v3"));
-        let forward = latest_verdicts(vec![original.clone(), v2.clone(), v3.clone()]);
-        let reversed = latest_verdicts(vec![v3, v2, original]);
-        assert_eq!(forward.len(), 1, "one verdict per (stage, check)");
-        assert_eq!(forward, reversed, "the survivor never depends on row order");
-        assert_eq!(
-            forward[0].verdict_id, "v3",
-            "the lexicographic maximum verdict_id wins"
-        );
-    }
-
-    #[test]
-    fn a_repeated_key_in_a_cell_is_read_as_unknown_whatever_the_row_order() {
-        let baseline = [t("a", 0, CaseTrialScore::Scored(5_000))];
-        let forward = pair_trials(
-            &baseline,
-            &[
-                t("a", 0, CaseTrialScore::Scored(9_000)),
-                t("a", 0, CaseTrialScore::Scored(1_000)),
-            ],
-        );
-        let reversed = pair_trials(
-            &baseline,
-            &[
-                t("a", 0, CaseTrialScore::Scored(1_000)),
-                t("a", 0, CaseTrialScore::Scored(9_000)),
-            ],
-        );
-        assert_eq!(forward, reversed, "duplicates must not depend on row order");
-        assert_eq!(forward.keys, 1);
-        assert_eq!(forward.pairs.len(), 1);
-        assert_eq!(
-            (forward.pairs[0].baseline_bp, forward.pairs[0].candidate_bp),
-            (5_000, 0),
-            "an ambiguous cell is unknown, imputed worst-case for the candidate"
-        );
+    fn generated_pair_trials_impute_ambiguous_cells_against_the_candidate() {
+        use gents_lean_vocab::families::runtime_eval_selection_pair_trials as family;
+        fn rows(rows: &[family::Trial]) -> Vec<TrialScore> {
+            rows.iter()
+                .map(|row| TrialScore {
+                    case_id: row.case_id.clone(),
+                    trial_index: u32::try_from(row.trial_index).unwrap(),
+                    score: match row.classification.as_str() {
+                        "scored" => CaseTrialScore::Scored(u32::try_from(row.score).unwrap()),
+                        "unknown" => CaseTrialScore::Unknown,
+                        "not_evidence" => CaseTrialScore::NotEvidence,
+                        other => panic!("unknown modeled score classification {other}"),
+                    },
+                })
+                .collect()
+        }
+        family::replay(|input| {
+            let paired = pair_trials(&rows(&input.baseline), &rows(&input.candidate));
+            family::Paired {
+                pairs: paired
+                    .pairs
+                    .into_iter()
+                    .map(|pair| family::Pair {
+                        case_id: pair.case_id,
+                        trial_index: u64::from(pair.trial_index),
+                        baseline_bp: u64::from(pair.baseline_bp),
+                        candidate_bp: u64::from(pair.candidate_bp),
+                    })
+                    .collect(),
+                keys: paired.keys as u64,
+                dropped_baseline: paired.dropped_baseline as u64,
+                dropped_candidate: paired.dropped_candidate as u64,
+            }
+        });
     }
 }

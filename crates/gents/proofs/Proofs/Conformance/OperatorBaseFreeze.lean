@@ -61,7 +61,7 @@ theorem cases_replay : ∀ c ∈ cases,
 theorem frozen_base_not_writer_integrable :
     (Workspace.PathCapability.execute
       (OperatorBaseFreeze.execute ready evidence).1 .integrate
-      ⟨binding workspace "base-tree",[],true,true,false,true,true⟩).2 = .denied := by decide
+      ⟨binding workspace "base-tree",[],true,true,false,true,true,[]⟩).2 = .denied := by decide
 
 private def boolJson (b : Bool) := if b then "true" else "false"
 private def dispositionString : Disposition → String
