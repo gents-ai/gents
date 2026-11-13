@@ -19,7 +19,8 @@ pub struct GoalCreateRequest {
     pub goal_create: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GoalCreateDisposition {
     Denied,
     Invalid,

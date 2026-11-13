@@ -49,10 +49,6 @@ pub fn lean_feature_surface_requirements() -> &'static [LeanFeatureSurfaceRequir
     &lean_contract_snapshot().feature_surface_requirements
 }
 
-pub fn lean_goal_create_cases() -> &'static [LeanGoalCreateCase] {
-    &lean_contract_snapshot().goal_create_cases
-}
-
 pub fn lean_identity_contracts() -> &'static [LeanIdentityContract] {
     &lean_contract_snapshot().identity_contracts
 }
@@ -143,10 +139,6 @@ pub fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
 
 pub fn lean_storage_observation_runtime_cases() -> &'static [LeanStorageObservationRuntimeCase] {
     &lean_contract_snapshot().storage_observation_runtime_cases
-}
-
-pub fn lean_task_goal_publication_cases() -> &'static [LeanTaskGoalPublicationCase] {
-    &lean_contract_snapshot().task_goal_publication_cases
 }
 
 pub fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
@@ -1157,13 +1149,11 @@ pub struct LeanContractSnapshot {
     pub process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
     pub request_input_cases: Vec<serde_json::Value>,
-    pub goal_create_cases: Vec<LeanGoalCreateCase>,
     pub goal_client_delivery_cases: Vec<serde_json::Value>,
     pub goal_client_control_cases: Vec<LeanGoalClientControlCase>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
     pub goal_client_receipt_cases: Vec<LeanGoalClientReceiptCase>,
     pub plugin_approval_cases: Vec<LeanPluginApprovalCase>,
-    pub task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub frontend_client_shell_case_count: usize,
     pub frontend_client_shell_cases: Vec<LeanClientShellCase>,
@@ -1992,23 +1982,6 @@ pub struct LeanGoalClientReceiptCaseRecovered {
     pub command_id: u64,
     pub digest: u64,
     pub outcome: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanGoalCreateCase {
-    pub name: String,
-    pub caller: String,
-    pub current_session: String,
-    pub requested_owner: String,
-    pub requested_session: String,
-    pub objective: String,
-    pub objective_nonempty: bool,
-    pub token_budget: Option<i128>,
-    pub goal_tools: bool,
-    pub goal_create: bool,
-    pub existing: bool,
-    pub existing_matches: bool,
-    pub expected: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4129,24 +4102,6 @@ pub struct LeanTaskCheckpointCase {
     pub through: u64,
     pub receipt: bool,
     pub expected: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanTaskGoalPublicationCase {
-    pub name: String,
-    pub node_did: String,
-    pub task_id: String,
-    pub fire_key: String,
-    pub goal_objective: Option<String>,
-    pub goal_token_budget: Option<i128>,
-    pub declaration_valid: bool,
-    pub expected_mode: String,
-    pub expected_published: bool,
-    pub expected_runnable_request: bool,
-    pub expected_durable_goal: bool,
-    pub expected_session_id: Option<String>,
-    pub expected_request_id: Option<String>,
-    pub expected_retry_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

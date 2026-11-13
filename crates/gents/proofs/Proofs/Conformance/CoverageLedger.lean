@@ -708,17 +708,29 @@ def caseCoverage : List CoverageEntry :=
       "contracts_goal_transition")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_create_cases"
-      "GoalCreateCases")
+      "family"
+      "contracts_goal_create")
+      "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_goal_create_committed")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "contracts_goal_capability_resolution")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_task_goal_declaration")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_task_goal_publication_identity")
+      "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "task_goal_publication_cases"
-      "TaskGoalPublicationCases"
-      "The consumer checks the production declaration validator and fire identity. Atomic task/goal/request publication needs the shared publication owner; fixture-only booleans are not an implementation check.")
+      "family"
+      "contracts_task_goal_publication_materialized"
+      "The production materializer publishes only the positive-budget scheduled goal Task; ordinary and invalid publication modes are checked through the declaration validator, not through a served publication.")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
