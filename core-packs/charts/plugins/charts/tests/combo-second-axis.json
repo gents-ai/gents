@@ -1,0 +1,78 @@
+{
+  "input": {
+    "chart": "combo",
+    "y": [
+      "revenue"
+    ],
+    "line": [
+      "margin"
+    ],
+    "y2_format": "{.0%}",
+    "title": "Revenue and margin",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "month",
+        "revenue",
+        "margin"
+      ],
+      "rows": [
+        [
+          "Jan",
+          100,
+          0.21
+        ],
+        [
+          "Feb",
+          150,
+          0.3
+        ],
+        [
+          "Mar",
+          120,
+          0.25
+        ],
+        [
+          "Apr",
+          170,
+          0.31
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Combined bar and line chart titled \"Revenue and margin\". 4 categories of month, from Jan to Apr. Value axis: revenue, from 0 to 200. Right axis: margin, from 0.2 to 0.32. 2 series. \"revenue\" (bar): highest 170 at Apr, lowest 100 at Jan. \"margin\" (line): highest 0.31 at Apr, lowest 0.21 at Jan.",
+      "chart": "combo",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 170.0,
+          "min": 100.0,
+          "name": "revenue",
+          "points": 4,
+          "sum": 540.0
+        },
+        {
+          "axis": "right",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "line",
+          "max": 0.31,
+          "min": 0.21,
+          "name": "margin",
+          "points": 4
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Revenue and margin</title><desc id=\"chart-desc\">Combined bar and line chart titled &quot;Revenue and margin&quot;. 4 categories of month, from Jan to Apr. Value axis: revenue, from 0 to 200. Right axis: margin, from 0.2 to 0.32. 2 series. &quot;revenue&quot; (bar): highest 170 at Apr, lowest 100 at Jan. &quot;margin&quot; (line): highest 0.31 at Apr, lowest 0.21 at Jan.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Revenue and margin</text><line x1=\"59.35\" y1=\"240.5\" x2=\"421.62\" y2=\"240.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"59.35\" y1=\"177.5\" x2=\"421.62\" y2=\"177.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"59.35\" y1=\"113.5\" x2=\"421.62\" y2=\"113.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"72.03\" y=\"176.5\" width=\"65.21\" height=\"126.5\" fill=\"#0072b2\"><title>revenue, Jan: 100</title></rect><text x=\"104.64\" y=\"172.5\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">100</text><rect x=\"162.6\" y=\"113.25\" width=\"65.21\" height=\"189.75\" fill=\"#0072b2\"><title>revenue, Feb: 150</title></rect><text x=\"195.2\" y=\"109.25\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">150</text><rect x=\"253.17\" y=\"151.2\" width=\"65.21\" height=\"151.8\" fill=\"#0072b2\"><title>revenue, Mar: 120</title></rect><text x=\"285.77\" y=\"147.2\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">120</text><rect x=\"343.73\" y=\"87.95\" width=\"65.21\" height=\"215.05\" fill=\"#0072b2\"><title>revenue, Apr: 170</title></rect><text x=\"376.34\" y=\"83.95\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">170</text><path d=\"M 104.64,281.92 L 195.2,92.17 L 285.77,197.58 L 376.34,71.08\" fill=\"none\" stroke=\"#e69f00\" stroke-width=\"2.5\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"104.64\" cy=\"281.92\" r=\"3.5\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>margin, Jan: 0.21</title></circle><circle cx=\"195.2\" cy=\"92.17\" r=\"3.5\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>margin, Feb: 0.3</title></circle><circle cx=\"285.77\" cy=\"197.58\" r=\"3.5\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>margin, Mar: 0.25</title></circle><circle cx=\"376.34\" cy=\"71.08\" r=\"3.5\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>margin, Apr: 0.31</title></circle><line x1=\"59.35\" y1=\"303.5\" x2=\"421.62\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"58.85\" y1=\"50\" x2=\"58.85\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"105.5\" y1=\"303\" x2=\"105.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"104.64\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Jan</text><line x1=\"195.5\" y1=\"303\" x2=\"195.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"195.2\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Feb</text><line x1=\"286.5\" y1=\"303\" x2=\"286.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"285.77\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Mar</text><line x1=\"376.5\" y1=\"303\" x2=\"376.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"376.34\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Apr</text><line x1=\"55.35\" y1=\"303.5\" x2=\"59.35\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"51.35\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"55.35\" y1=\"240.5\" x2=\"59.35\" y2=\"240.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"51.35\" y=\"243.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">50</text><line x1=\"55.35\" y1=\"177.5\" x2=\"59.35\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"51.35\" y=\"180.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">100</text><line x1=\"55.35\" y1=\"113.5\" x2=\"59.35\" y2=\"113.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"51.35\" y=\"117.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">150</text><line x1=\"55.35\" y1=\"50.5\" x2=\"59.35\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"51.35\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">200</text><line x1=\"422.12\" y1=\"50\" x2=\"422.12\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"421.62\" y1=\"303.5\" x2=\"425.62\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"429.62\" y=\"307\" font-size=\"11\" fill=\"#57606a\">20%</text><line x1=\"421.62\" y1=\"261.5\" x2=\"425.62\" y2=\"261.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"429.62\" y=\"264.83\" font-size=\"11\" fill=\"#57606a\">22%</text><line x1=\"421.62\" y1=\"219.5\" x2=\"425.62\" y2=\"219.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"429.62\" y=\"222.67\" font-size=\"11\" fill=\"#57606a\">24%</text><line x1=\"421.62\" y1=\"177.5\" x2=\"425.62\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"429.62\" y=\"180.5\" font-size=\"11\" fill=\"#57606a\">26%</text><line x1=\"421.62\" y1=\"134.5\" x2=\"425.62\" y2=\"134.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"429.62\" y=\"138.33\" font-size=\"11\" fill=\"#57606a\">28%</text><line x1=\"421.62\" y1=\"92.5\" x2=\"425.62\" y2=\"92.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"429.62\" y=\"96.17\" font-size=\"11\" fill=\"#57606a\">30%</text><line x1=\"421.62\" y1=\"50.5\" x2=\"425.62\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"429.62\" y=\"54\" font-size=\"11\" fill=\"#57606a\">32%</text><text x=\"240.49\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">month</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">revenue</text><text x=\"457.63\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(90 457.63 176.5)\">margin</text><rect x=\"482.63\" y=\"49\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"502.63\" y=\"59\" font-size=\"12\" fill=\"#1f2328\">revenue</text><line x1=\"482.63\" y1=\"73\" x2=\"496.63\" y2=\"73\" fill=\"none\" stroke=\"#e69f00\" stroke-width=\"2.5\"/><text x=\"502.63\" y=\"77\" font-size=\"12\" fill=\"#1f2328\">margin</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

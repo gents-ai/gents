@@ -1,0 +1,4 @@
+{
+  "input": {"script": "let n = 0; for (let i = 0; i < 20000000; i++) n += i % 3; return {n};"},
+  "expect": {"n": 19999999}
+}

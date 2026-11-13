@@ -1,0 +1,33 @@
+{
+  "runtime": {
+    "repository": {
+      "files": {
+        "data/sales.csv": "month,revenue\nJan,10\nFeb,12\n"
+      }
+    },
+    "seed": {
+      "collection": "ChartRequest",
+      "fields": {
+        "run_id": "run-${ATTEMPT}",
+        "chart": "line",
+        "path": "${REPOSITORY}/data/sales.csv",
+        "y": ["revnue"]
+      }
+    },
+    "taken": {
+      "collection": "ChartResult",
+      "fields": {
+        "chart": "line"
+      }
+    },
+    "expect": [
+      {
+        "collection": "ChartResult",
+        "fields": {
+          "chart": "line",
+          "error": "column \"revnue\" is not in the data; the columns are month, revenue"
+        }
+      }
+    ]
+  }
+}

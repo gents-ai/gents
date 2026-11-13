@@ -106,38 +106,43 @@ pub async fn install(
     .await
 }
 
-/// The Engineer's default packs as `home` has them: installed, waiting on an
-/// approval (with what its plugins request and the archive an approval
-/// installs), ready to install, or unavailable. Read through whatever serves
-/// the home, so it works while the runtime runs.
-pub async fn default_packs(home: PathBuf, registry: Option<String>) -> Result<Value> {
+/// The Engineer's core packs as `home` has them: `installed`, installed and
+/// not turned on (`not_enabled`), `missing` from the home and installable
+/// from this release, or `unavailable` in this build. Read through whatever
+/// serves the home, so it works while the runtime runs.
+pub async fn core_packs(home: PathBuf) -> Result<Value> {
+    core_packs_from(home, gents_core_packs::archives()).await
+}
+
+/// [`core_packs`], with `archives` as the release's `(coordinate, .pack
+/// bytes)`.
+pub async fn core_packs_from(home: PathBuf, archives: &[(&str, &[u8])]) -> Result<Value> {
     use crate::commands::init::default_packs as owner;
-    let packs = owner::status(&home, owner::ENGINEER_DEFAULT_PACKS, registry.as_deref()).await?;
+    let packs = owner::status(&home, archives).await?;
     Ok(serde_json::json!({ "packs": packs }))
 }
 
-/// Installs each `(pack, digest)` of `approved` for `home`'s Engineer, as
-/// `init --engineer` installs a default pack it was told to approve: the
-/// Engineer owns what the pack ships, its plugins are wired and its skills
-/// attached. Only a default pack, at the archive its status showed. The
-/// home's own store is opened, so the caller stops the runtime first.
-pub async fn approve_default_packs(
+/// Turns on each of `packs` (core pack coordinates) for `home`'s Engineer,
+/// installing one the home lacks from this release: the Engineer owns what
+/// the pack ships, its plugins are wired and its skills attached as enabling
+/// says. Returns `{enabled, failed}`. The home's own store is opened, so the
+/// caller stops the runtime first.
+pub async fn enable_core_packs(home: PathBuf, packs: Vec<String>) -> Result<Value> {
+    enable_core_packs_from(home, packs, gents_core_packs::archives()).await
+}
+
+/// [`enable_core_packs`], with `archives` as the release's.
+pub async fn enable_core_packs_from(
     home: PathBuf,
-    approved: Vec<(String, String)>,
-    registry: Option<String>,
+    packs: Vec<String>,
+    archives: &[(&str, &[u8])],
 ) -> Result<Value> {
     use crate::commands::init::default_packs as owner;
-    let approved: Vec<_> = approved
-        .into_iter()
-        .map(|(pack, digest)| (pack, Some(digest)))
-        .collect();
-    owner::approve(
-        &home,
-        owner::ENGINEER_DEFAULT_PACKS,
-        &approved,
-        registry.as_deref(),
-    )
-    .await
+    let packs = packs
+        .iter()
+        .map(|pack| owner::core_pack(&home, pack))
+        .collect::<Result<Vec<_>>>()?;
+    owner::enable(&home, archives, &packs).await
 }
 
 /// Wires the installed `plugin` into `agent`'s Tools and Context (or with

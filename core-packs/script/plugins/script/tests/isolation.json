@@ -1,0 +1,4 @@
+{
+  "input": {"script": "return {network: typeof fetch, process: typeof process, modules: typeof require, tools: typeof tools};", "tool_calls": true, "with_tools": false},
+  "expect": {"network": "undefined", "process": "undefined", "modules": "undefined", "tools": "undefined"}
+}

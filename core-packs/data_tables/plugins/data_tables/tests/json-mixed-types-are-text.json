@@ -1,0 +1,30 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "v",
+        "type": "text"
+      }
+    ],
+    "markdown": "| v |\n| --- |\n| 1 |\n| two |\n| [3] |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        "1"
+      ],
+      [
+        "two"
+      ],
+      [
+        "[3]"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM mixed_types"
+  }
+}

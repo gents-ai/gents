@@ -1,0 +1,33 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "active",
+        "type": "bool"
+      },
+      {
+        "name": "n",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| active | n |\n| --- | --- |\n| false | 1 |\n| true | 2 |",
+    "offset": 0,
+    "order": "columns",
+    "row_count": 2,
+    "rows": [
+      [
+        false,
+        1
+      ],
+      [
+        true,
+        2
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT active, count(*) AS n FROM people GROUP BY active"
+  }
+}

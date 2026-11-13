@@ -1,0 +1,138 @@
+{
+  "input": {
+    "chart": "histogram",
+    "x": "ms",
+    "series": "service",
+    "bins": 8,
+    "title": "Response times",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "ms",
+        "service"
+      ],
+      "rows": [
+        [
+          10,
+          "api"
+        ],
+        [
+          12,
+          "api"
+        ],
+        [
+          15,
+          "api"
+        ],
+        [
+          18,
+          "api"
+        ],
+        [
+          40,
+          "api"
+        ],
+        [
+          55,
+          "db"
+        ],
+        [
+          60,
+          "db"
+        ],
+        [
+          62,
+          "db"
+        ],
+        [
+          70,
+          "db"
+        ],
+        [
+          15,
+          "db"
+        ],
+        [
+          20,
+          "db"
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Histogram titled \"Response times\". 11 values of ms in 8 bins from 10 to 70. Count axis from 0 to 4. \"api\": 5 values, tallest bin 10 to 17.5 holds 3. \"db\": 6 values, tallest bin 55 to 62.5 holds 3.",
+      "chart": "histogram",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "counts": [
+            3,
+            1,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0
+          ],
+          "edges": [
+            10.0,
+            17.5,
+            25.0,
+            32.5,
+            40.0,
+            47.5,
+            55.0,
+            62.5,
+            70.0
+          ],
+          "gaps": 0,
+          "mark": "bar",
+          "max": 40.0,
+          "min": 10.0,
+          "name": "api",
+          "points": 5
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "counts": [
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            3,
+            1
+          ],
+          "edges": [
+            10.0,
+            17.5,
+            25.0,
+            32.5,
+            40.0,
+            47.5,
+            55.0,
+            62.5,
+            70.0
+          ],
+          "gaps": 0,
+          "mark": "bar",
+          "max": 70.0,
+          "min": 15.0,
+          "name": "db",
+          "points": 6
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Response times</title><desc id=\"chart-desc\">Histogram titled &quot;Response times&quot;. 11 values of ms in 8 bins from 10 to 70. Count axis from 0 to 4. &quot;api&quot;: 5 values, tallest bin 10 to 17.5 holds 3. &quot;db&quot;: 6 values, tallest bin 55 to 62.5 holds 3.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Response times</text><line x1=\"47.12\" y1=\"240.5\" x2=\"495.99\" y2=\"240.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"177.5\" x2=\"495.99\" y2=\"177.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"113.5\" x2=\"495.99\" y2=\"113.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"122.5\" y1=\"50\" x2=\"122.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"272.5\" y1=\"50\" x2=\"272.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"421.5\" y1=\"50\" x2=\"421.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"47.12\" y=\"113.25\" width=\"56.11\" height=\"189.75\" fill=\"#0072b2\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>api: 10 to 17.5, count 3</title></rect><rect x=\"103.23\" y=\"239.75\" width=\"56.11\" height=\"63.25\" fill=\"#0072b2\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>api: 17.5 to 25, count 1</title></rect><rect x=\"271.55\" y=\"239.75\" width=\"56.11\" height=\"63.25\" fill=\"#0072b2\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>api: 40 to 47.5, count 1</title></rect><rect x=\"47.12\" y=\"239.75\" width=\"56.11\" height=\"63.25\" fill=\"#e69f00\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>db: 10 to 17.5, count 1</title></rect><rect x=\"103.23\" y=\"239.75\" width=\"56.11\" height=\"63.25\" fill=\"#e69f00\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>db: 17.5 to 25, count 1</title></rect><rect x=\"383.77\" y=\"113.25\" width=\"56.11\" height=\"189.75\" fill=\"#e69f00\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>db: 55 to 62.5, count 3</title></rect><rect x=\"439.88\" y=\"239.75\" width=\"56.11\" height=\"63.25\" fill=\"#e69f00\" fill-opacity=\"0.55\" stroke=\"#ffffff\" stroke-width=\"1\"><title>db: 62.5 to 70, count 1</title></rect><line x1=\"47.12\" y1=\"303.5\" x2=\"495.99\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"46.62\" y1=\"50\" x2=\"46.62\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"122.5\" y1=\"303\" x2=\"122.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"121.93\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">20</text><line x1=\"272.5\" y1=\"303\" x2=\"272.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"271.55\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">40</text><line x1=\"421.5\" y1=\"303\" x2=\"421.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"421.17\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">60</text><line x1=\"43.12\" y1=\"303.5\" x2=\"47.12\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"43.12\" y1=\"240.5\" x2=\"47.12\" y2=\"240.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"243.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">1</text><line x1=\"43.12\" y1=\"177.5\" x2=\"47.12\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"180.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2</text><line x1=\"43.12\" y1=\"113.5\" x2=\"47.12\" y2=\"113.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"117.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">3</text><line x1=\"43.12\" y1=\"50.5\" x2=\"47.12\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><text x=\"271.55\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">ms</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">Count</text><rect x=\"509.99\" y=\"49\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"529.99\" y=\"59\" font-size=\"12\" fill=\"#1f2328\">api</text><rect x=\"509.99\" y=\"67\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"529.99\" y=\"77\" font-size=\"12\" fill=\"#1f2328\">db</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

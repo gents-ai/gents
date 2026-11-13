@@ -1,0 +1,75 @@
+{
+  "input": {
+    "chart": "heatmap",
+    "data": {
+      "columns": [
+        "day",
+        "slot",
+        "v"
+      ],
+      "rows": [
+        [
+          "Tue",
+          "am",
+          0
+        ],
+        [
+          "Tue",
+          "pm",
+          -4
+        ],
+        [
+          "Wed",
+          "pm",
+          6
+        ],
+        [
+          "Wed",
+          "night",
+          3
+        ],
+        [
+          "Tue",
+          "night",
+          -2
+        ]
+      ]
+    },
+    "height": 360,
+    "output": "svg",
+    "title": "Zero versus missing",
+    "value": "v",
+    "width": 560,
+    "x": "slot",
+    "y": [
+      "day"
+    ]
+  },
+  "expect": {
+    "response": {
+      "alt": "Heatmap titled \"Zero versus missing\". 3 columns of slot by 2 rows of day, coloured by v from -4 to 6, with 0 as the neutral colour. Highest 6 at pm and Wed; lowest -4 at pm and Tue.",
+      "chart": "heatmap",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#b2182b",
+          "columns": 3,
+          "empty_cells": 1,
+          "gaps": 1,
+          "mark": "cell",
+          "max": 6.0,
+          "min": -4.0,
+          "name": "v",
+          "points": 5,
+          "rows": 2
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Zero versus missing</title><desc id=\"chart-desc\">Heatmap titled &quot;Zero versus missing&quot;. 3 columns of slot by 2 rows of day, coloured by v from -4 to 6, with 0 as the neutral colour. Highest 6 at pm and Wed; lowest -4 at pm and Tue.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Zero versus missing</text><rect x=\"64.12\" y=\"50.5\" width=\"131.13\" height=\"125.5\" fill=\"#f7f7f7\"><title>Tue, am: 0</title></rect><text x=\"129.68\" y=\"117.25\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#111111\">0</text><rect x=\"196.25\" y=\"50.5\" width=\"131.13\" height=\"125.5\" fill=\"#4393c3\"><title>Tue, pm: -4</title></rect><text x=\"261.81\" y=\"117.25\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">-4</text><rect x=\"328.37\" y=\"50.5\" width=\"131.13\" height=\"125.5\" fill=\"#92c5de\"><title>Tue, night: -2</title></rect><text x=\"393.94\" y=\"117.25\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#111111\">-2</text><line x1=\"64.12\" y1=\"302.5\" x2=\"195.25\" y2=\"177\" fill=\"none\" stroke=\"#57606a\" stroke-width=\"0.75\"/><rect x=\"64.12\" y=\"177\" width=\"131.13\" height=\"125.5\" fill=\"none\" stroke=\"#57606a\" stroke-width=\"0.75\" stroke-dasharray=\"3 2\"><title>Wed, am: no value</title></rect><rect x=\"196.25\" y=\"177\" width=\"131.13\" height=\"125.5\" fill=\"#b2182b\"><title>Wed, pm: 6</title></rect><text x=\"261.81\" y=\"243.75\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">6</text><rect x=\"328.37\" y=\"177\" width=\"131.13\" height=\"125.5\" fill=\"#e58368\"><title>Wed, night: 3</title></rect><text x=\"393.94\" y=\"243.75\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#111111\">3</text><line x1=\"63.62\" y1=\"303.5\" x2=\"460\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"63.12\" y1=\"50\" x2=\"63.12\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"130.5\" y1=\"303\" x2=\"130.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"129.68\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">am</text><line x1=\"262.5\" y1=\"303\" x2=\"262.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"261.81\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">pm</text><line x1=\"394.5\" y1=\"303\" x2=\"394.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"393.94\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">night</text><line x1=\"59.62\" y1=\"113.5\" x2=\"63.62\" y2=\"113.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"55.62\" y=\"117.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Tue</text><line x1=\"59.62\" y1=\"240.5\" x2=\"63.62\" y2=\"240.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"55.62\" y=\"243.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Wed</text><text x=\"261.81\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">slot</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">day</text><linearGradient id=\"scale\" x1=\"0\" y1=\"1\" x2=\"0\" y2=\"0\"><stop offset=\"0\" stop-color=\"#4393c3\"/><stop offset=\"0.1\" stop-color=\"#6bacd1\"/><stop offset=\"0.2\" stop-color=\"#92c5de\"/><stop offset=\"0.3\" stop-color=\"#c5deeb\"/><stop offset=\"0.4\" stop-color=\"#f7f7f7\"/><stop offset=\"0.5\" stop-color=\"#f6cebd\"/><stop offset=\"0.6\" stop-color=\"#f4a582\"/><stop offset=\"0.7\" stop-color=\"#e58368\"/><stop offset=\"0.8\" stop-color=\"#d6604d\"/><stop offset=\"0.9\" stop-color=\"#c43c3c\"/><stop offset=\"1\" stop-color=\"#b2182b\"/></linearGradient><rect x=\"476\" y=\"50\" width=\"14\" height=\"225\" fill=\"url(#scale)\"/><line x1=\"490\" y1=\"275\" x2=\"494\" y2=\"275\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"278.5\" font-size=\"10\" fill=\"#57606a\">-4</text><line x1=\"490\" y1=\"230\" x2=\"494\" y2=\"230\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"233.5\" font-size=\"10\" fill=\"#57606a\">-2</text><line x1=\"490\" y1=\"185\" x2=\"494\" y2=\"185\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"188.5\" font-size=\"10\" fill=\"#57606a\">0</text><line x1=\"490\" y1=\"140\" x2=\"494\" y2=\"140\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"143.5\" font-size=\"10\" fill=\"#57606a\">2</text><line x1=\"490\" y1=\"95\" x2=\"494\" y2=\"95\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"98.5\" font-size=\"10\" fill=\"#57606a\">4</text><line x1=\"490\" y1=\"50\" x2=\"494\" y2=\"50\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"53.5\" font-size=\"10\" fill=\"#57606a\">6</text><line x1=\"476\" y1=\"297\" x2=\"490\" y2=\"287\" fill=\"none\" stroke=\"#57606a\" stroke-width=\"0.75\"/><rect x=\"476\" y=\"287\" width=\"14\" height=\"10\" fill=\"none\" stroke=\"#57606a\" stroke-width=\"0.75\" stroke-dasharray=\"3 2\"><title>no value</title></rect><text x=\"498\" y=\"295.5\" font-size=\"10\" fill=\"#57606a\">no value</text></svg>",
+      "warnings": [
+        "1 cell has no value and is drawn empty"
+      ],
+      "width": 560
+    }
+  }
+}

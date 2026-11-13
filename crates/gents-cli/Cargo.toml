@@ -57,6 +57,7 @@ gents-documents = { workspace = true }
 gents-inference = { workspace = true }
 gents-p2p = { workspace = true }
 gents-pack = { workspace = true }
+gents-core-packs.workspace = true
 gents-session = { workspace = true }
 gents-tools = { workspace = true }
 gents-toolcalls = { workspace = true }

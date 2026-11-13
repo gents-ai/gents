@@ -1,0 +1,44 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "name",
+        "type": "text"
+      },
+      {
+        "name": "score",
+        "type": "int64"
+      },
+      {
+        "name": "r",
+        "type": "uint64"
+      }
+    ],
+    "markdown": "| name | score | r |\n| --- | --- | --- |\n| Ana | 9 | 1 |\n| Bo, Jr. | 7 | 2 |\n| Cy | NULL | 3 |",
+    "offset": 0,
+    "order": "columns",
+    "row_count": 3,
+    "rows": [
+      [
+        "Ana",
+        9,
+        1
+      ],
+      [
+        "Bo, Jr.",
+        7,
+        2
+      ],
+      [
+        "Cy",
+        null,
+        3
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT name, score, rank() OVER (ORDER BY score DESC NULLS LAST) AS r FROM people"
+  }
+}

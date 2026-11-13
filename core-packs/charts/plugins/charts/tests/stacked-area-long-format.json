@@ -1,0 +1,108 @@
+{
+  "input": {
+    "chart": "stacked_area",
+    "x": "month",
+    "y": [
+      "v"
+    ],
+    "series": "s",
+    "title": "Stacked, one series short",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "month",
+        "s",
+        "v"
+      ],
+      "rows": [
+        [
+          "2024-01-01",
+          "a",
+          3
+        ],
+        [
+          "2024-02-01",
+          "a",
+          4
+        ],
+        [
+          "2024-03-01",
+          "a",
+          6
+        ],
+        [
+          "2024-01-01",
+          "b",
+          2
+        ],
+        [
+          "2024-03-01",
+          "b",
+          5
+        ],
+        [
+          "2024-01-01",
+          "c",
+          1
+        ],
+        [
+          "2024-02-01",
+          "c",
+          2
+        ],
+        [
+          "2024-03-01",
+          "c",
+          2
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Stacked area chart titled \"Stacked, one series short\". X axis: month, from 2024-01-01 to 2024-03-01. Y axis: v, from 0 to 15. 3 series. \"a\": 3 points, lowest 3 at 2024-01-01, highest 6 at 2024-03-01. \"b\": 2 points, lowest 2 at 2024-01-01, highest 5 at 2024-03-01. \"c\": 3 points, lowest 1 at 2024-01-01, highest 2 at 2024-02-01.",
+      "chart": "stacked_area",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "area",
+          "max": 6.0,
+          "min": 3.0,
+          "name": "a",
+          "points": 3
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "drawn": 3,
+          "gaps": 0,
+          "mark": "area",
+          "max": 5.0,
+          "min": 2.0,
+          "name": "b",
+          "points": 2
+        },
+        {
+          "axis": "left",
+          "color": "#009e73",
+          "gaps": 0,
+          "mark": "area",
+          "max": 2.0,
+          "min": 1.0,
+          "name": "c",
+          "points": 3
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Stacked, one series short</title><desc id=\"chart-desc\">Stacked area chart titled &quot;Stacked, one series short&quot;. X axis: month, from 2024-01-01 to 2024-03-01. Y axis: v, from 0 to 15. 3 series. &quot;a&quot;: 3 points, lowest 3 at 2024-01-01, highest 6 at 2024-03-01. &quot;b&quot;: 2 points, lowest 2 at 2024-01-01, highest 5 at 2024-03-01. &quot;c&quot;: 3 points, lowest 1 at 2024-01-01, highest 2 at 2024-02-01.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Stacked, one series short</text><line x1=\"53.24\" y1=\"219.5\" x2=\"505.33\" y2=\"219.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"134.5\" x2=\"505.33\" y2=\"134.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"287.5\" y1=\"50\" x2=\"287.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><path d=\"M 53.24,252.4 L 286.82,235.53 L 505.33,201.8 L 505.33,303 L 286.82,303 L 53.24,303 Z\" fill=\"#0072b2\" fill-opacity=\"0.85\" stroke=\"#ffffff\" stroke-width=\"1\"/><path d=\"M 53.24,218.67 L 286.82,235.53 L 505.33,117.47 L 505.33,201.8 L 286.82,235.53 L 53.24,252.4 Z\" fill=\"#e69f00\" fill-opacity=\"0.85\" stroke=\"#ffffff\" stroke-width=\"1\"/><path d=\"M 53.24,201.8 L 286.82,201.8 L 505.33,83.73 L 505.33,117.47 L 286.82,235.53 L 53.24,218.67 Z\" fill=\"#009e73\" fill-opacity=\"0.85\" stroke=\"#ffffff\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"303.5\" x2=\"505.33\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"52.74\" y1=\"50\" x2=\"52.74\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"53.5\" y1=\"303\" x2=\"53.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"53.24\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Jan 2024</text><line x1=\"287.5\" y1=\"303\" x2=\"287.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"286.82\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Feb 2024</text><line x1=\"505.5\" y1=\"303\" x2=\"505.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"505.33\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Mar 2024</text><line x1=\"49.24\" y1=\"303.5\" x2=\"53.24\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"49.24\" y1=\"219.5\" x2=\"53.24\" y2=\"219.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"222.67\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><line x1=\"49.24\" y1=\"134.5\" x2=\"53.24\" y2=\"134.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"138.33\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10</text><line x1=\"49.24\" y1=\"50.5\" x2=\"53.24\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">15</text><text x=\"279.28\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">month</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">v</text><rect x=\"519.33\" y=\"49\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"539.33\" y=\"59\" font-size=\"12\" fill=\"#1f2328\">a</text><rect x=\"519.33\" y=\"67\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"539.33\" y=\"77\" font-size=\"12\" fill=\"#1f2328\">b</text><rect x=\"519.33\" y=\"85\" width=\"12\" height=\"12\" fill=\"#009e73\"/><text x=\"539.33\" y=\"95\" font-size=\"12\" fill=\"#1f2328\">c</text></svg>",
+      "warnings": [
+        "series \"b\" has no value at 1 of 3 positions; it counts as zero there in the stack"
+      ],
+      "width": 560
+    }
+  }
+}
