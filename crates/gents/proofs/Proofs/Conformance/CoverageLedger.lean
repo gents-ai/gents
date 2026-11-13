@@ -2475,8 +2475,16 @@ def caseCoverage : List CoverageEntry :=
       "GoalSessionFoldCases")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "plugin_approval_cases"
-      "PluginApprovalCases")
+      "family"
+      "plugin_approval_unscoped_step")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_approval_scoped_step")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_approval_delivery")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

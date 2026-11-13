@@ -1159,7 +1159,6 @@ pub struct LeanContractSnapshot {
     pub goal_client_control_cases: Vec<LeanGoalClientControlCase>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
     pub goal_client_receipt_cases: Vec<LeanGoalClientReceiptCase>,
-    pub plugin_approval_cases: Vec<LeanPluginApprovalCase>,
     pub task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
     pub causal_hop_default_max_request_hop: Option<u32>,
     pub frontend_client_shell_case_count: usize,
@@ -2952,104 +2951,6 @@ pub struct LeanPersistenceFailurePolicyCase {
     pub records_failure: bool,
     pub records_success: bool,
     pub external_durability_claimed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCase {
-    pub directory: bool,
-    pub initial: LeanPluginApprovalCaseInitial,
-    pub scoped: Option<LeanPluginApprovalCaseScoped>,
-    pub steps: Vec<LeanPluginApprovalCaseStepsItem>,
-    pub write: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseInitial {
-    pub decision: Option<serde_json::Value>,
-    pub folder_grant: Option<bool>,
-    pub path_grant: Option<bool>,
-    pub present: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseScoped {
-    pub available: Vec<LeanPluginApprovalCaseScopedAvailableItem>,
-    pub deliveries: Vec<LeanPluginApprovalCaseScopedDeliveriesItem>,
-    pub expected: LeanPluginApprovalCaseScopedExpected,
-    pub kind: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseScopedAvailableItem {
-    pub revision: u64,
-    pub workspace: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseScopedDeliveriesItem {
-    pub available: Vec<LeanPluginApprovalCaseScopedDeliveriesItemAvailableItem>,
-    pub expected: Option<bool>,
-    pub received: LeanPluginApprovalCaseScopedDeliveriesItemReceived,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseScopedDeliveriesItemAvailableItem {
-    pub revision: u64,
-    pub workspace: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseScopedDeliveriesItemReceived {
-    pub action: u64,
-    pub scope: LeanPluginApprovalCaseScopedDeliveriesItemReceivedScope,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseScopedDeliveriesItemReceivedScope {
-    pub revision: u64,
-    pub workspace: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseScopedExpected {
-    pub action: u64,
-    pub scope: LeanPluginApprovalCaseScopedExpectedScope,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseScopedExpectedScope {
-    pub revision: u64,
-    pub workspace: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseStepsItem {
-    pub accepted: bool,
-    pub answer: Option<String>,
-    pub expected: LeanPluginApprovalCaseStepsItemExpected,
-    pub id: Option<String>,
-    pub kind: String,
-    pub now: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginApprovalCaseStepsItemExpected {
-    pub decision: Option<bool>,
-    pub folder_grant: Option<bool>,
-    pub path_grant: Option<bool>,
-    pub present: bool,
 }
 
 #[derive(Debug, Deserialize)]
