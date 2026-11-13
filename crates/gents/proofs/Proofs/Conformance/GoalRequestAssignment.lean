@@ -118,23 +118,6 @@ def messageInputCases : List MessageInputCase :=
   , ⟨"legacy_target_has_no_physical_binding", ⟨1, 10, true, true, some ⟨1, 10, 2, none⟩, some ⟨9, some 900⟩⟩⟩
   ]
 
-def messageInputCaseJson (c : MessageInputCase) : Json :=
-  let expected := match prepareMessageInput c.facts with
-    | .pending => Json.mkObj [("kind", toJson "pending")]
-    | .prepared reference => Json.mkObj [("kind", toJson "prepared"),
-        ("reference", reference.map referenceJson |>.getD Json.null)]
-  let observed := c.facts.observed.map fun a => Json.mkObj [
-    ("owner", toJson a.owner), ("session", toJson a.session),
-    ("goal", toJson a.goal), ("root", toJson a.root)]
-  Json.mkObj [("name", toJson c.name), ("owner", toJson c.facts.owner),
-    ("session", toJson c.facts.session), ("session_readable", toJson c.facts.sessionReadable),
-    ("observation_verified", toJson c.facts.observationVerified),
-    ("observed", observed.getD Json.null),
-    ("caller_reference", c.facts.callerReference.map referenceJson |>.getD Json.null),
-    ("expected", expected)]
-
-def messageInputCasesJson : String := (toJson (messageInputCases.map messageInputCaseJson)).compress
-
 example : messageInputCases.length = 5 := by decide
 
 def assignmentJson (a : Assignment) : Json :=
@@ -147,26 +130,11 @@ def entryJson (e : Entry) : Json :=
     ("reference", e.reference.map referenceJson |>.getD Json.null),
     ("signature_valid", toJson e.signatureValid)]
 
-def observationJson : Observation → Json
-  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
-  | .unknown => Json.mkObj [("kind", toJson "unknown")]
-  | .assigned goal root => Json.mkObj [("kind", toJson "assigned"),
-      ("goal", toJson goal), ("root", toJson root)]
-
 def queueScopeJson : QueueScope → Json
   | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
   | .unresolved entry => Json.mkObj [("kind", toJson "unresolved"), ("entry", toJson entry)]
   | .referenced goal root => Json.mkObj [("kind", toJson "referenced"),
       ("goal", toJson goal), ("root", toJson root)]
-
-def caseJson (c : Case) : Json :=
-  Json.mkObj [("name", toJson c.name), ("assignment", assignmentJson c.assignment),
-    ("entry", entryJson c.entry), ("observed", toJson (c.observed.map assignmentJson)),
-    ("expected_member", toJson (belongs c.assignment c.entry)),
-    ("expected_observation", observationJson (observe c.observed c.entry)),
-    ("expected_queue_scope", (queueScope c.observed c.entry).map queueScopeJson |>.getD Json.null)]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
 
 example : cases.length = 18 := by decide
 
@@ -281,6 +249,89 @@ def persistedHistory : Family HistoryCase PersistedObservation where
   model := fun c =>
     { observation := ObservationWire.ofModel (observeHistory c.versions c.entry)
       handoffReason := historyHandoffReason (observeHistory c.versions c.entry) }
+
+deriving instance ToJson for Case
+
+structure AssignmentObservationWire where
+  kind : String
+  goal : Option Nat
+  root : Option Nat
+  deriving ToJson
+
+def AssignmentObservationWire.ofModel : Observation → AssignmentObservationWire
+  | .unassigned => ⟨"unassigned", none, none⟩
+  | .unknown => ⟨"unknown", none, none⟩
+  | .assigned goal root => ⟨"assigned", some goal, some root⟩
+
+structure QueueScopeWire where
+  kind : String
+  entry : Option Nat
+  goal : Option Nat
+  root : Option Nat
+  deriving ToJson
+
+def QueueScopeWire.ofModel : QueueScope → QueueScopeWire
+  | .unassigned => ⟨"unassigned", none, none, none⟩
+  | .unresolved entry => ⟨"unresolved", some entry, none, none⟩
+  | .referenced goal root => ⟨"referenced", none, some goal, some root⟩
+
+structure SignedBindingOutput where
+  member : Bool
+  observation : AssignmentObservationWire
+  queueScope : Option QueueScopeWire
+  deriving ToJson
+
+/-- Membership by `request_belongs_to_goal`, the observation by
+`observe_request_assignment` and the queue scope by `request_assignment_scope`
+over the observed Goals, for every signed assignment case. -/
+@[conformance_family]
+def signedBinding : Family Case SignedBindingOutput where
+  inputs := cases
+  model := fun c =>
+    { member := belongs c.assignment c.entry
+      observation := AssignmentObservationWire.ofModel (observe c.observed c.entry)
+      queueScope := (queueScope c.observed c.entry).map QueueScopeWire.ofModel }
+
+/-- The scope `load_request_assignment_scopes` resolves when retained Goal
+history cannot be read: only a verified signed reference, with no historical
+entry to fall back on. -/
+@[conformance_family]
+def unreadHistoryScope : Family Case (Option QueueScopeWire) where
+  inputs := cases
+  model := fun c => (preferSignedQueueScope [] (some c.entry) none).map QueueScopeWire.ofModel
+
+structure MessageInputWire where
+  name : String
+  owner : Nat
+  session : Nat
+  sessionReadable : Bool
+  observationVerified : Bool
+  observed : Option Assignment
+  callerReference : Option Reference
+  deriving ToJson
+
+structure PreparedWire where
+  kind : String
+  reference : Option Reference
+  deriving ToJson
+
+def PreparedWire.ofModel : PreparedInput → PreparedWire
+  | .pending => ⟨"pending", none⟩
+  | .prepared reference => ⟨"prepared", reference⟩
+
+/-- The goal assignment `target_goal_assignment` selects for a session message,
+which planning signs and staging persists, over every message input case. -/
+@[conformance_family]
+def messageInput : Family MessageInputWire PreparedWire where
+  inputs := messageInputCases.map fun c =>
+    { name := c.name, owner := c.facts.owner, session := c.facts.session
+      sessionReadable := c.facts.sessionReadable
+      observationVerified := c.facts.observationVerified
+      observed := c.facts.observed, callerReference := c.facts.callerReference }
+  model := fun i => PreparedWire.ofModel (prepareMessageInput
+    ⟨i.owner, i.session, i.sessionReadable, i.observationVerified, i.observed, i.callerReference⟩)
+
+example : messageInputCases.all (·.facts.owner == 1) := by decide
 
 example : historyCases.length = 21 := by decide
 example : (historyCases.map fun c => observeHistory c.versions c.entry).take 2 =

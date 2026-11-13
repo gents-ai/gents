@@ -24,11 +24,25 @@ def agentDeliveryCaseJson (input : Option QueuedSteering.AgentDelivery × Option
     ",\"interrupt\":" ++ (match input.2 with | none => "null" | some b => boolString b) ++
     ",\"expected\":" ++ agentDeliveryJson (QueuedSteering.resolveAgentDelivery input.1 input.2) ++ "}"
 
-def interruptDeliveryCaseJson (input : Option Nat × Option Nat) : String :=
-  let number := fun value : Option Nat => match value with | none => "null" | some n => toString n
-  "{\"planned\":" ++ number input.1 ++ ",\"active\":" ++ number input.2 ++ ",\"expected\":" ++
-    number (QueuedSteering.interruptDeliveryTarget input.1 input.2) ++
-    ",\"goal_paused\":" ++ boolString ((QueuedSteering.interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status == .paused) ++ "}"
+structure InterruptDeliveryInput where
+  planned : Option Nat
+  active : Option Nat
+  deriving Lean.ToJson
+
+structure InterruptDeliveryOutput where
+  expected : Option Nat
+  goalPaused : Bool
+  deriving Lean.ToJson
+
+/-- The prepublication head `stage_planned_write_in_txn` latches for an
+interrupt delivery, and whether the local session's Goal is paused. -/
+@[conformance_family]
+def interruptDelivery : Family InterruptDeliveryInput InterruptDeliveryOutput where
+  inputs := QueuedSteering.interruptDeliveryCases.map fun (planned, active) => { planned, active }
+  model := fun i =>
+    { expected := QueuedSteering.interruptDeliveryTarget i.planned i.active
+      goalPaused :=
+        (QueuedSteering.interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status == .paused }
 
 def agentSteerDispositionCaseJson (input : Bool × Bool) : String :=
   let result := match QueuedSteering.agentSteerDisposition input.1 input.2 with

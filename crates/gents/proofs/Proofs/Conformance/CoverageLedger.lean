@@ -624,17 +624,17 @@ def caseCoverage : List CoverageEntry :=
       "Triggers.Durable.Outcomes")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "trigger_dispatch_cases"
-      "TriggerDispatch"
+      "family"
+      "trigger_contracts_engine_dispatch"
       "Dispatch decisions exercise the production engine. Existing materializer tests cover correlation scope, retry exclusion and live-execution supersession. Cross-node isolation and expired-claim deadline/grace cases still need direct materializer observations. A booted schedule-kind error-writeback observation is also outstanding.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_dispatch_cases"
-      "TriggerDispatch")
+      "family"
+      "trigger_contracts_manual_run")
       "triggers" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "trigger_dispatch_cases"
-      "TriggerDispatch")
+      "family"
+      "trigger_contracts_recent_run")
       "triggers" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -707,8 +707,8 @@ def caseCoverage : List CoverageEntry :=
       "EnrollmentDigestCases")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "event_group_cases"
-      "EventGroupCases"
+      "family"
+      "event_group_contracts_eligibility"
       "Exercises the production count/timeout eligibility owner for trigger and callback cases. Typed consumer/config/owner identity, durable marker suppression and atomic materialization require the migrated event-group owner; the old trigger-only spy cannot establish these guarantees.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -807,8 +807,8 @@ def caseCoverage : List CoverageEntry :=
       "Binds delivery resolution; transaction admission and owned-loop delivery need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "interrupt_delivery_cases"
-      "InterruptDeliveryCases"
+      "family"
+      "contracts_interrupt_delivery"
       "Binds the physical target selected in the message publication transaction; cross-node replication remains a separate boundary.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1885,12 +1885,24 @@ def caseCoverage : List CoverageEntry :=
       "GoalClaimedPublicationCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_first_request_binding_cases"
-      "GoalFirstRequestBindingCases")
+      "family"
+      "goal_first_request_binding_binding")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_continuation_assignment_cases"
-      "GoalContinuationAssignmentCases")
+      "family"
+      "goal_first_request_binding_task")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_first_request_binding_manual_task")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_first_request_binding_continuation")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_first_request_binding_edge")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1901,8 +1913,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_request_assignment_contracts_persisted_history")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_message_goal_input_cases"
-      "SessionMessageGoalInputCases")
+      "family"
+      "goal_request_assignment_contracts_message_input")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_delivery_input_cases"
@@ -1917,8 +1929,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalFreshSessionInputCases")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "goal_request_assignment_cases"
-      "GoalRequestAssignmentCases")
+      "family"
+      "goal_request_assignment_contracts_signed_binding")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_request_assignment_contracts_unread_history_scope")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_wake_receipt_cases"
@@ -1937,12 +1953,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalToolContextCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_request_scope_cases"
-      "GoalRequestScopeCases")
+      "family"
+      "goal_request_ancestry_contracts_scope")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_request_ancestry_cases"
-      "GoalRequestAncestryCases")
+      "family"
+      "goal_request_ancestry_contracts_ancestry")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2654,8 +2670,12 @@ def caseCoverage : List CoverageEntry :=
       "CallbackRetryCases")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "callback_recovery_cases"
-      "CallbackRecoveryCases")
+      "family"
+      "contracts_callback_recovery")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_callback_denial")
       "isolated-workspaces" [Surface.runtimeInternal]
 
   , tagged (consumerWithFollowUp "runtime_reconcile_cases" "RuntimeReconcileCases"
@@ -2751,7 +2771,7 @@ def caseCoverage : List CoverageEntry :=
       "Drive captured ordered input and typed origin through the callback capture owner; quiesced groups must reject capture.")
       "triggers" [Surface.runtimeInternal]
   , tagged (followUpCoverage "callback_transition_cases" "CallbackTransitionCases"
-      "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through callback_recovery_cases.")
+      "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through contracts_callback_recovery.")
       "triggers" [Surface.runtimeInternal]
 
   , tagged (consumerCoverage "discovery_guidance_cases" "DiscoveryGuidanceCases")

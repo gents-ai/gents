@@ -1,6 +1,7 @@
 import Proofs.Conformance.Triggers.Materialization
 import Proofs.Runtime.Properties.Safety
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.TriggerContracts
 
@@ -131,51 +132,6 @@ def targetNonterminalCountAfter? (scenario : TriggerScenario) : Option Nat :=
   targetKey? scenario |>.map fun key =>
     (after scenario).nonTerminalCountFor key
 
-def contractJson (scenario : TriggerScenario) : String :=
-  let materialized := newRequest? scenario
-  "{"
-    ++ "\"name\":" ++ jsonString scenario.name ++ ","
-    ++ "\"trigger_id\":" ++ jsonOptionString scenario.intent.triggerId ++ ","
-    ++ "\"trigger_kind\":" ++ jsonString scenario.intent.triggerKind.toDefraDB ++ ","
-    ++ "\"intent_task_id\":" ++ jsonString scenario.intent.taskId ++ ","
-    ++ "\"selected_task_id\":"
-      ++ jsonOptionString ((dispatch scenario.snap scenario.intent).map RequestSeed.taskId) ++ ","
-    ++ "\"concurrency\":" ++ jsonString (concurrencyName scenario.intent.concurrency) ++ ","
-    ++ "\"active_schedule_ids\":"
-      ++ jsonStringArray (scenario.snap.activeSchedules.map ActiveSchedule.triggerId) ++ ","
-    ++ "\"active_event_trigger_ids\":"
-      ++ jsonStringArray (scenario.snap.activeEventTriggers.map ActiveEventTrigger.triggerId) ++ ","
-    ++ "\"prior_nonterminal_keys\":"
-      ++ jsonArray (priorNonterminalKeys scenario |>.map keyJson) ++ ","
-    ++ "\"expected_result\":" ++ jsonString (expectedResult scenario) ++ ","
-    ++ "\"expected_skip_reason\":" ++ jsonOptionString (expectedSkipReason scenario) ++ ","
-    ++ "\"expected_materialize_trigger_id\":"
-      ++ (if expectedResult scenario = "fired" then
-            jsonOptionString scenario.intent.triggerId
-          else
-            "null") ++ ","
-    ++ "\"expected_materialize_trigger_kind\":"
-      ++ (if expectedResult scenario = "fired" then
-            jsonOptionString (some scenario.intent.triggerKind.toDefraDB)
-          else
-            "null") ++ ","
-    ++ "\"expected_request_caused_by_id\":"
-      ++ (materialized.bind causedById? |> jsonOptionString) ++ ","
-    ++ "\"expected_request_caused_by_kind\":"
-      ++ (materialized.bind (fun _ => causedByKind? scenario) |> jsonOptionString) ++ ","
-    ++ "\"expected_execution_origin\":"
-      ++ (materialized.map (fun request => request.executionOrigin.toDefraDB)
-          |> jsonOptionString) ++ ","
-    ++ "\"expected_supersede_call_keys\":"
-      ++ jsonArray (expectedSupersedeCallKeys scenario |>.map keyJson) ++ ","
-    ++ "\"superseded_prior_ids\":"
-      ++ jsonStringArray (supersededPriorIds scenario) ++ ","
-    ++ "\"target_nonterminal_count_after\":"
-      ++ jsonOptionNat (targetNonterminalCountAfter? scenario) ++ ","
-    ++ "\"request_count_before\":" ++ toString scenario.before.requests.length ++ ","
-    ++ "\"request_count_after\":" ++ toString (after scenario).requests.length
-    ++ "}"
-
 def triggerDispatchScenarios : List TriggerScenario :=
   [ { name := "manual_unconditional"
     , snap := snapshot [] []
@@ -259,10 +215,133 @@ def triggerDispatchScenarios : List TriggerScenario :=
     }
   ]
 
-def triggerDispatchCaseCount : Nat :=
-  triggerDispatchScenarios.length
+deriving instance Lean.ToJson for TriggerKind, ConcurrencyMode, ExecutionOrigin, AgentRequest
 
-def triggerDispatchCasesJson : String :=
-  jsonArray (triggerDispatchScenarios.map contractJson)
+structure DispatchInput where
+  name : String
+  triggerId : Option String
+  triggerKind : TriggerKind
+  intentTaskId : String
+  concurrency : ConcurrencyMode
+  activeScheduleIds : List String
+  activeEventTriggerIds : List String
+  priorRequests : List AgentRequest
+  priorNonterminalKeys : List String
+  requestCountBefore : Nat
+  deriving Lean.ToJson
+
+def DispatchInput.ofScenario (scenario : TriggerScenario) : DispatchInput :=
+  { name := scenario.name, triggerId := scenario.intent.triggerId
+    triggerKind := scenario.intent.triggerKind, intentTaskId := scenario.intent.taskId
+    concurrency := scenario.intent.concurrency
+    activeScheduleIds := scenario.snap.activeSchedules.map ActiveSchedule.triggerId
+    activeEventTriggerIds := scenario.snap.activeEventTriggers.map ActiveEventTrigger.triggerId
+    priorRequests := scenario.before.requests
+    priorNonterminalKeys := Conformance.TriggerContracts.priorNonterminalKeys scenario
+    requestCountBefore := scenario.before.requests.length }
+
+def DispatchInput.scenario (input : DispatchInput) : TriggerScenario :=
+  { name := input.name
+    snap := snapshot input.activeScheduleIds input.activeEventTriggerIds
+    before := { requests := input.priorRequests }
+    intent := { triggerId := input.triggerId, triggerKind := input.triggerKind
+                taskId := input.intentTaskId, concurrency := input.concurrency } }
+
+structure DispatchOutput where
+  result : String
+  skipReason : Option String
+  materializeTriggerId : Option String
+  materializeTriggerKind : Option String
+  requestCausedById : Option String
+  requestCausedByKind : Option String
+  executionOrigin : Option String
+  supersedeCallKeys : List String
+  supersededPriorIds : List String
+  targetNonterminalCountAfter : Option Nat
+  requestCountAfter : Nat
+  deriving Lean.ToJson
+
+def dispatchOutput (scenario : TriggerScenario) : DispatchOutput :=
+  let materialized := newRequest? scenario
+  let fired := expectedResult scenario == "fired"
+  { result := expectedResult scenario
+    skipReason := expectedSkipReason scenario
+    materializeTriggerId := if fired then scenario.intent.triggerId else none
+    materializeTriggerKind := if fired then some scenario.intent.triggerKind.toDefraDB else none
+    requestCausedById := materialized.bind causedById?
+    requestCausedByKind := materialized.bind fun _ => causedByKind? scenario
+    executionOrigin := materialized.map fun request => request.executionOrigin.toDefraDB
+    supersedeCallKeys := expectedSupersedeCallKeys scenario
+    supersededPriorIds := supersededPriorIds scenario
+    targetNonterminalCountAfter := targetNonterminalCountAfter? scenario
+    requestCountAfter := (after scenario).requests.length }
+
+/-- What `TriggerEngine::dispatch` does with each intent: its result, the
+request it materializes with that request's lineage, the supersede calls and
+the target's non-terminal requests afterwards. -/
+@[conformance_family]
+def engineDispatch : Family DispatchInput DispatchOutput where
+  inputs := triggerDispatchScenarios.map DispatchInput.ofScenario
+  model := fun input => dispatchOutput input.scenario
+
+/-- The dispatches the recent-runs view can project: it attributes only
+requests a schedule or event trigger caused, so manual and skipped dispatches
+leave it nothing to show. -/
+def recentRunScenarios : List TriggerScenario :=
+  triggerDispatchScenarios.filter fun scenario =>
+    (dispatchOutput scenario).result == "fired" &&
+      ((dispatchOutput scenario).requestCausedByKind == some "schedule" ||
+        (dispatchOutput scenario).requestCausedByKind == some "event")
+
+structure RecentRunOutput where
+  requestCausedById : Option String
+  requestCausedByKind : Option String
+  executionOrigin : Option String
+  deriving Lean.ToJson
+
+/-- The lineage `task_run_histories` shows for a request a schedule or event
+dispatch materialized. -/
+@[conformance_family]
+def recentRun : Family DispatchInput RecentRunOutput where
+  inputs := recentRunScenarios.map DispatchInput.ofScenario
+  model := fun input =>
+    let output := dispatchOutput input.scenario
+    { requestCausedById := output.requestCausedById
+      requestCausedByKind := output.requestCausedByKind
+      executionOrigin := output.executionOrigin }
+
+/-- `gents automation task run` dispatches a manual intent with no trigger id
+into an empty runtime, so the unconditional manual dispatch is the one case a
+CLI run can build. -/
+def manualRunScenarios : List TriggerScenario :=
+  triggerDispatchScenarios.filter fun scenario => scenario.name == "manual_unconditional"
+
+structure ManualRunOutput where
+  result : String
+  materializeTriggerId : Option String
+  materializeTriggerKind : Option String
+  executionOrigin : Option String
+  deriving Lean.ToJson
+
+/-- The request a CLI Task run materializes and the lineage it carries. -/
+@[conformance_family]
+def manualRun : Family DispatchInput ManualRunOutput where
+  inputs := manualRunScenarios.map DispatchInput.ofScenario
+  model := fun input =>
+    let output := dispatchOutput input.scenario
+    { result := output.result, materializeTriggerId := output.materializeTriggerId
+      materializeTriggerKind := output.materializeTriggerKind
+      executionOrigin := output.executionOrigin }
+
+example : manualRunScenarios.map (fun scenario =>
+    (scenario.intent.triggerId, scenario.intent.triggerKind.toDefraDB,
+      concurrencyName scenario.intent.concurrency,
+      (dispatchOutput scenario).requestCountAfter - scenario.before.requests.length)) =
+    [(none, "manual", "parallel", 1)] := by native_decide
+
+example : recentRunScenarios.any (fun scenario =>
+    (dispatchOutput scenario).requestCausedByKind == some "schedule") &&
+  recentRunScenarios.any (fun scenario =>
+    (dispatchOutput scenario).requestCausedByKind == some "event") := by native_decide
 
 end Conformance.TriggerContracts

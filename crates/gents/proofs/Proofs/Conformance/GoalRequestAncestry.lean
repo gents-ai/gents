@@ -1,6 +1,7 @@
 import Proofs.Automation.GoalAutomation.RequestAncestry
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.GoalRequestAncestryContracts
@@ -36,15 +37,28 @@ def cases : List Case :=
       rows := [root, child, {grandchild with receiptValid := false}]}
   ]
 
-def caseJson (c : Case) : String :=
-  "{\"name\":" ++ Conformance.Contracts.jsonString c.name ++
-    ",\"scope\":{\"owner\":1,\"session\":1,\"goal\":1}" ++
-    ",\"rows\":" ++ Conformance.Contracts.jsonArray (c.rows.map rowJson) ++
-    ",\"current\":" ++ toString c.current ++
-    ",\"expected_goal\":" ++ (toJson c.expectedGoal).compress ++
-    ",\"expected_entry\":" ++ (toJson (signedEntry 1 1 c.rows c.expectedGoal c.current)).compress ++ "}"
+structure AncestryInput where
+  name : String
+  scope : Scope
+  rows : List GoalRequestHeadContracts.RowWire
+  current : Nat
+  expectedGoal : Option Nat
+  deriving ToJson
 
-def casesJson : String := Conformance.Contracts.jsonArray (cases.map caseJson)
+structure AncestryOutput where
+  entry : Option Nat
+  deriving ToJson
+
+/-- The signed physical entry `authenticated_entry` proves for the current
+request, given the Goal the caller expects, over every ancestry case. -/
+@[conformance_family]
+def ancestry : Family AncestryInput AncestryOutput where
+  inputs := cases.map fun c =>
+    { name := c.name, scope := ⟨1, 1, 1⟩, rows := c.rows.map GoalRequestHeadContracts.RowWire.ofModel
+      current := c.current, expectedGoal := c.expectedGoal }
+  model := fun i =>
+    { entry := signedEntry i.scope.owner i.scope.session
+        (i.rows.map GoalRequestHeadContracts.RowWire.toModel) i.expectedGoal i.current }
 
 example : cases.length = 12 := by decide
 example : (cases.map fun c => signedEntry 1 1 c.rows c.expectedGoal c.current).take 6 =
@@ -59,6 +73,7 @@ structure ScopeCase where
   childOpenings : List Nat := []
   childValid : Bool := true
   missingParent : Bool := false
+  deriving ToJson
 
 def scopeCases : List ScopeCase :=
   [ {name := "signed_continuation"}
@@ -88,13 +103,12 @@ def scopeAssignments (c : ScopeCase) : List Assignment :=
 def scopeResult (c : ScopeCase) : Option QueueScope :=
   queueScopeWithAncestry 1 1 (scopeRows c) (scopeEntries c) (scopeAssignments c) 20
 
-def scopeCaseJson (c : ScopeCase) : Json := Json.mkObj
-  [("name", toJson c.name), ("root_tagged", toJson c.rootTagged),
-   ("root_openings", toJson c.rootOpenings), ("child_openings", toJson c.childOpenings),
-   ("child_valid", toJson c.childValid), ("missing_parent", toJson c.missingParent),
-   ("expected", (scopeResult c).map GoalRequestAssignmentContracts.queueScopeJson |>.getD Json.null)]
-
-def scopeCasesJson : String := (toJson (scopeCases.map scopeCaseJson)).compress
+/-- The queue scope `RequestAssignmentScopes::scope` composes for a signed
+continuation from its authenticated ancestry and retained openings. -/
+@[conformance_family]
+def scope : Family ScopeCase (Option GoalRequestAssignmentContracts.QueueScopeWire) where
+  inputs := scopeCases
+  model := fun c => (scopeResult c).map GoalRequestAssignmentContracts.QueueScopeWire.ofModel
 
 example : scopeResult {name := "conflicting", rootOpenings := [2]} =
     some (.referenced 1 10) := by native_decide

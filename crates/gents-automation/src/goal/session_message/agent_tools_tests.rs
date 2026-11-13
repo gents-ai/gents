@@ -57,14 +57,14 @@ async fn canonical_goal(
 
 #[tokio::test]
 async fn interrupt_delivery_latches_only_the_prepublication_head() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().interrupt_delivery_cases;
-    for case in cases {
+    for case in gents_lean_vocab::families::contracts_interrupt_delivery::cases() {
+        let input = &case.input;
         let (message, caller, caused) = started("interrupt-delivery-atomic").await;
         let node = message.admission.node.clone();
         set_state(
             &owner(&message),
             &caused.doc_id,
-            if case.planned.is_some() {
+            if input.planned.is_some() {
                 "processing"
             } else {
                 "completed"
@@ -104,7 +104,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         .await
         .unwrap()
         .unwrap();
-        let replacement = if case.active == Some(2) {
+        let replacement = if input.active == Some(2) {
             let replacement_plan = plan_with_delivery(
                 &node,
                 &SessionGoals,
@@ -141,7 +141,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         set_state(
             &owner(&message),
             &caused.doc_id,
-            if case.active == Some(1) {
+            if input.active == Some(1) {
                 "processing"
             } else {
                 "completed"
@@ -187,18 +187,19 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
         } else {
             None
         };
-        assert_eq!(actual, case.expected, "{case:?}, rows={rows:?}");
         let goal = canonical_goal(&message, &caused.node_did, &caused.session_id)
             .await
             .unwrap();
-        assert_eq!(
-            goal.parsed_status() == Some(gents_protocol::goal_status::GoalStatus::Paused),
-            case.goal_paused,
-            "{case:?}"
-        );
         assert!(
             new["interrupt_requested_at"].is_null(),
-            "{case:?}, rows={rows:?}"
+            "{input:?}, rows={rows:?}"
+        );
+        case.check(
+            gents_lean_vocab::families::contracts_interrupt_delivery::InterruptDeliveryOutput {
+                expected: actual,
+                goal_paused: goal.parsed_status()
+                    == Some(gents_protocol::goal_status::GoalStatus::Paused),
+            },
         );
         node.shutdown().await.expect("shut down test node");
         std::fs::remove_dir_all(&message.admission.path).unwrap();

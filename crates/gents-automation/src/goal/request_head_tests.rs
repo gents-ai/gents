@@ -211,46 +211,27 @@ async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocati
 
 #[tokio::test]
 async fn generated_goal_ancestry_cases_keep_one_signed_goal() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_ancestry_cases;
-    assert_eq!(cases.len(), 12);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
     ];
-    for value in cases {
-        let case = Case {
-            name: value.name.clone(),
-            scope: Scope {
-                owner: value.scope.owner,
-                session: value.scope.session,
-                goal: value.scope.goal,
-            },
-            rows: value
-                .rows
-                .iter()
-                .map(|row| ModelRow {
-                    purpose: serde_json::from_value(serde_json::Value::String(row.purpose.clone()))
-                        .unwrap(),
-                    doc: row.doc,
-                    request: row.request,
-                    owner: row.owner,
-                    session: row.session,
-                    goal: row.goal,
-                    parent_doc: row.parent_doc,
-                    parent_request: row.parent_request,
-                    sequence: row.sequence,
-                    receipt_valid: row.receipt_valid,
-                    deterministic_identity: row.deterministic_identity,
-                    input_disposition: serde_json::from_value(serde_json::Value::String(
-                        row.input_disposition.clone(),
-                    ))
-                    .unwrap(),
-                })
-                .collect(),
-            assignment_root: None,
-            receipt_checks: None,
-        };
+    for family_case in gents_lean_vocab::families::goal_request_ancestry_contracts_ancestry::cases::<
+        InputDisposition,
+    >() {
+        let value = &family_case.input;
+        let rows: Vec<head::RowWire<InputDisposition>> = value
+            .rows
+            .iter()
+            .map(gents_lean_vocab::family::recode)
+            .collect();
+        let case = model_case(
+            &value.name,
+            &gents_lean_vocab::family::recode(&value.scope),
+            &rows,
+            None,
+            None,
+        );
         let mut fixture = Fixture {
             case: &case,
             identities: &identities,
@@ -274,8 +255,16 @@ async fn generated_goal_ancestry_cases_keep_one_signed_goal() {
         )
         .ok()
         .and_then(|row| row.doc_id.clone());
-        let expected = value.expected_entry.map(|doc| format!("physical-{doc}"));
-        assert_eq!(actual, expected, "{}: signed physical ancestry", case.name);
+        family_case.check(
+            gents_lean_vocab::families::goal_request_ancestry_contracts_ancestry::AncestryOutput {
+                entry: actual.map(|doc| {
+                    doc.strip_prefix("physical-")
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap()
+                }),
+            },
+        );
     }
 }
 struct Scope {
