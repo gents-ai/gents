@@ -37,10 +37,6 @@ pub fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
     &lean_contract_snapshot().completion_retry_cases
 }
 
-pub fn lean_composed_invariant_witnesses() -> &'static [LeanComposedInvariantWitness] {
-    &lean_contract_snapshot().composed_invariant_witnesses
-}
-
 pub fn lean_feature_matrix() -> &'static LeanFeatureMatrix {
     &lean_contract_snapshot().feature_matrix
 }
@@ -1062,31 +1058,6 @@ pub struct LeanCompletionRetryCase {
     pub expected_usage_charged: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanComposedInvariantWitness {
-    pub theorem_name: String,
-    pub witness_kind: String,
-    pub scenario: String,
-    pub rust_path: String,
-    pub trace_step_count: usize,
-    pub transition_path: Vec<String>,
-    pub pre_request_state: String,
-    pub pre_request_admission: String,
-    pub tool_pre_state: String,
-    pub tool_post_state: String,
-    pub request_id: usize,
-    pub tool_request_id: usize,
-    pub tool_call_id: usize,
-    pub request_deadline: usize,
-    pub request_current_time: usize,
-    pub tool_deadline: usize,
-    pub tool_current_time: usize,
-    pub deadline_exceeded: bool,
-    pub well_formed_source: String,
-    pub pre_tool_persisted: bool,
-    pub cancel_cause: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanConfigurationImmutableCase {
@@ -1115,7 +1086,6 @@ pub struct LeanConfigurationSignedWriteRetryCase {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanContractSnapshot {
-    pub tool_admission_handoff_cases: Vec<LeanToolAdmissionHandoffCase>,
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
     pub vocabularies: Vec<LeanVocabularyContract>,
@@ -1131,14 +1101,11 @@ pub struct LeanContractSnapshot {
     pub file_inventory_reader_cases: Vec<serde_json::Value>,
     pub file_inventory_source_projection_cases: Vec<serde_json::Value>,
     pub file_review_subscription_cases: Vec<LeanFileReviewSubscriptionCase>,
-    pub count_carrier_cases: serde_json::Value,
-    pub schema_argument_repair_cases: Vec<LeanSchemaArgumentRepairCase>,
     pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
     pub plugin_job_adoption_cases: Vec<LeanPluginJobAdoptionCase>,
     pub plugin_job_control_cases: Vec<LeanPluginJobControlCase>,
     pub identity_publication_cases: Vec<LeanIdentityPublicationCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
-    pub client_publication_protected_collection: String,
     pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_readiness_preflight_cases: Vec<serde_json::Value>,
@@ -1181,7 +1148,6 @@ pub struct LeanContractSnapshot {
     pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
-    pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
@@ -3900,57 +3866,6 @@ pub struct LeanRuntimeReconcileCase {
     pub tracked_session_agent: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSchemaArgumentRepairCase {
-    pub expected: Option<serde_json::Value>,
-    pub input: Option<serde_json::Value>,
-    pub name: String,
-    pub native_expected: LeanSchemaArgumentRepairCaseNativeExpected,
-    pub native_input: LeanSchemaArgumentRepairCaseNativeInput,
-    pub native_paths: Vec<String>,
-    pub native_schema: LeanSchemaArgumentRepairCaseNativeSchema,
-    pub parses: Vec<LeanSchemaArgumentRepairCaseParsesItem>,
-    pub paths: Vec<String>,
-    pub schema: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSchemaArgumentRepairCaseNativeExpected {
-    pub value: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSchemaArgumentRepairCaseNativeInput {
-    pub value: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSchemaArgumentRepairCaseNativeSchema {
-    #[serde(rename = "additionalProperties")]
-    pub additional_properties: bool,
-    pub properties: LeanSchemaArgumentRepairCaseNativeSchemaProperties,
-    pub required: Vec<String>,
-    pub r#type: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSchemaArgumentRepairCaseNativeSchemaProperties {
-    pub value: BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSchemaArgumentRepairCaseParsesItem {
-    pub accepted: bool,
-    pub parsed: Option<serde_json::Value>,
-    pub raw: String,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanSelfConfigLookupCase {
@@ -4154,39 +4069,6 @@ pub struct LeanTaskGoalPublicationCase {
 pub enum LeanTerminalSelection {
     Message { id: u64 },
     NoMessage,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolAdmissionHandoffAction {
-    pub kind: String,
-    pub call: Option<u64>,
-    pub agent: Option<String>,
-    pub decision: Option<String>,
-    pub reason: Option<String>,
-    pub now: Option<u64>,
-    pub generation: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolAdmissionHandoffCase {
-    pub name: String,
-    pub published: bool,
-    pub request: u64,
-    pub session: u64,
-    pub call: u64,
-    pub generation: u64,
-    pub selected_agent: String,
-    pub actions: Vec<LeanToolAdmissionHandoffAction>,
-    pub expected_phase: String,
-    pub expected_replies: u64,
-    pub expected_decision: Option<String>,
-    pub expected_dispatch: String,
-    pub expected_native_dispatch_committed: Option<bool>,
-    pub expected_effect: String,
-    pub expected_invoked: bool,
-    pub expected_author: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

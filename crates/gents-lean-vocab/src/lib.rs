@@ -208,30 +208,6 @@ pub fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCas
         .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
 }
 
-pub fn lean_composed_invariant_witness(
-    theorem_name: &str,
-) -> &'static LeanComposedInvariantWitness {
-    lean_contract_snapshot()
-        .composed_invariant_witnesses
-        .iter()
-        .find(|witness| witness.theorem_name == theorem_name)
-        .unwrap_or_else(|| {
-            panic!("Lean composed invariant witness {theorem_name:?} was not emitted")
-        })
-}
-
-pub fn lean_composed_invariant_witness_by_scenario(
-    scenario: &str,
-) -> &'static LeanComposedInvariantWitness {
-    lean_contract_snapshot()
-        .composed_invariant_witnesses
-        .iter()
-        .find(|witness| witness.scenario == scenario)
-        .unwrap_or_else(|| {
-            panic!("Lean composed invariant witness scenario {scenario:?} was not emitted")
-        })
-}
-
 pub fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
     lean_contract_snapshot()
         .transcript_conformance_cases

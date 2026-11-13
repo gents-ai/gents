@@ -2598,9 +2598,9 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "composed_invariant_witnesses"
-      "ComposedInvariantWitnesses"
-      "Covers four persisted tool recovery/cancellation outcomes through canonical accepted admission and physical request/tool rows. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
+      "family"
+      "composed_termination_linked"
+      "Covers four persisted tool recovery/cancellation outcomes of ComposedState.linkedTermination (justified by linkedTermination_reachable_from_initial over the ToolTermination theorems) through canonical accepted admission and physical request/tool rows: ToolCallLifecycle::cancel_before_dispatch, ToolCallLifecycle::cancel_during_run and the ToolCallLifecycle::recover_all deadline sweep. Full composed request, admission and clock traces still need their runtime owners.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

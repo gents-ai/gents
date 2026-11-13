@@ -299,5 +299,4 @@ fn lean_executable_contracts_cover_initial_domains() {
         );
     }
     assert_eq!(lean_transcript_cases().len(), 11);
-    assert_eq!(lean_composed_invariant_witnesses().len(), 4);
 }
