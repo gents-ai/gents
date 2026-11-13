@@ -379,8 +379,8 @@ state machines explicit enough that:
 
 - lifecycle invariants are written down once
 - Rust changes can be checked against an executable model
-- unresolved Rust/spec mismatches are isolated as deviations, while intentional
-  product boundaries are documented explicitly
+- a Rust/spec mismatch is a model definition that drives conformance cases,
+  while intentional product boundaries are documented explicitly
 
 The proofs are strongest where the runtime is a state machine:
 
@@ -717,7 +717,6 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Runtime/Properties/SchedulingLiveness.lean` | Scheduler/fleet liveness properties |
 | `Proofs/Runtime/Properties/Decidable.lean` | Finite-state exhaustive checks |
 | `Proofs/Conformance/Gents.lean` | Mapping from Lean state to Rust/DefraDB state |
-| `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches |
 | `Proofs/Conformance/RuntimeConnectionObservation.lean` | Desktop runtime connection status (`ClientShell.ObservationOrdering` `RuntimeConnectionObservation`): transitions including planned renewal and missing endpoint, the presentation tone and reason each status shows, stream-end and snapshot-outcome classification (an omitted root is an empty view; the runtime's own refusal is shown as `refused` while the source reconnects), the armed notice and armed state, the renewal cadence and the snapshot retry delay; replayed by `gents-desktop-core` `client::observe` and the desktop's operational-state projection. TLA `RuntimeConnectionTransport` models the source, observer and reconcile interleavings |
 | `Proofs/Conformance/RuntimeConnectionBackoff.lean` | Reconnect backoff (`reconnects` by origin: a snapshot that failed for a transport reason keeps the source armed; `reconnectDelayMs`: five 250 ms reconnects, then doubling to 30 s; `reconnectAttempt`, reset only after the source stayed connected for `reconnectStableMs`) replayed by `client::observe::remote`, the one delay of every reconnect path |
 | `Proofs/Conformance/ClientWindowScope.lean` | Desktop window scope (`ClientShell.ObservationScope` `ClientWindowScope`): executes serialized register/select/destroy traces and reports each window's command node, with and without a named node, and the nodes a delivery reaches it for; replayed against `DesktopBridge` by `gents-desktop-bridge` `state::window_selection_tests` |
@@ -1418,7 +1417,6 @@ The main conformance files are:
 - `Proofs/Conformance/Boundaries.lean`
 - `Proofs/Conformance/CoverageLedger.lean`
 - `Proofs/Conformance/Triggers.lean`
-- `Proofs/Conformance/Deviations.lean`
 
 The Rust/Lean vocabulary checks compare Rust-visible strings against Lean
 `toDefraDB` definitions for request lifecycle states, execution origins,
@@ -1465,11 +1463,10 @@ structurally pin the finite vocabularies; the cardinality output is diagnostic
 and is not itself a separate proof obligation beyond those instances and the
 theorems established in `Proofs/Runtime/Properties/Decidable.lean`.
 
-## Boundaries And Deviations
+## Boundaries
 
 `Proofs/Conformance/Boundaries.lean` records intentional product policies,
-reserved vocabulary, closed historical items, and external assumptions. These
-are not deviations.
+reserved vocabulary, closed historical items, and external assumptions.
 
 Current boundaries:
 
@@ -1485,10 +1482,8 @@ Current boundaries:
   failed mutations, stale reads/events, and minimum visibility paths. DefraDB
   storage-engine correctness remains external.
 
-`Proofs/Conformance/Deviations.lean` is reserved only for real unresolved
-Rust/spec mismatches. Active deviations are expected to name an accepted failure
-mode or a follow-up tracker. Current entries cover live event-source rescan
-gaps.
+A real unresolved Rust/spec mismatch is stated as a model definition whose
+conformance family drives the production owner, not as a hand-written record.
 
 ## Known Limitations
 

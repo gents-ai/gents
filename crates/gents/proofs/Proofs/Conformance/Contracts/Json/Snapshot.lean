@@ -288,7 +288,6 @@ import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.Conformance.ClientLiveDelta
 import Proofs.Conformance.ApplyReconcile.ContractCases
-import Proofs.Conformance.Deviations
 import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Identity.Conformance
 import Proofs.Store.Identity.SessionChild
@@ -437,10 +436,6 @@ def snapshotRequestCasesJson : String :=
 def snapshotSessionCasesJson : String :=
   ""
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
-    ++ "\"frontend_client_shell_case_count\":"
-      ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
-    ++ "\"frontend_client_shell_cases\":"
-      ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
 
 def snapshotIdentityCasesJson : String :=
   ""
@@ -502,10 +497,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
-    ++ "\"deviations\":"
-      ++ deviationsJson ++ ","
-    ++ "\"request_progress_cases\":"
-      ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
     ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=

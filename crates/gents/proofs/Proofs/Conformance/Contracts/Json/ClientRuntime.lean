@@ -7,6 +7,7 @@ import Proofs.Session.Compaction.Executable
 import Proofs.Conformance.Recovery.ContractCases
 import Proofs.Clients.QueuedSteering
 import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
 
 namespace Conformance.Contracts
 
@@ -149,13 +150,28 @@ def steeringBoundaryPublication : Family SteeringBoundary.Input SteeringBoundary
       pending := (i.inputs.filter fun e => some e.id != selected).map (·.id)
       superseded := selected.toList }
 
-def requestProgressCaseJson (witness : RequestProgressCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"lifecycleState\":" ++ jsonString witness.lifecycleState ++ ","
-    ++ "\"label\":" ++ jsonString witness.label ++ ","
-    ++ "\"animated\":" ++ boolString witness.animated
-    ++ "}"
+namespace RequestProgress
+
+open Lean
+
+structure Input where
+  name : String
+  lifecycleState : RequestState
+  deriving ToJson
+
+structure Output where
+  label : String
+  animated : Bool
+  deriving ToJson
+
+end RequestProgress
+
+@[conformance_family]
+def requestProgress : Family RequestProgress.Input RequestProgress.Output where
+  inputs := requestProgressCases.map fun c => { name := c.name, lifecycleState := c.lifecycleState }
+  model := fun i =>
+    let progress := projectRequestProgress i.lifecycleState
+    { label := progress.label, animated := progress.animated }
 
 namespace PendingUserTurn
 

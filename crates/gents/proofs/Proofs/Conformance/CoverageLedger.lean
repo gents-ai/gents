@@ -957,8 +957,8 @@ def caseCoverage : List CoverageEntry :=
       "task_hooks_contracts_recovery")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "request_progress_cases"
-      "RequestProgressCases")
+      "family"
+      "contracts_request_progress")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -1416,8 +1416,8 @@ def caseCoverage : List CoverageEntry :=
       "client_request_cache_identity_merge")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "frontend_client_shell_cases"
-      "FrontendClientShellCases")
+      "family"
+      "client_shell_contracts_frontend")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
