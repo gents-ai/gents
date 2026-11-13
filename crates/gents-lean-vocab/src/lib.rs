@@ -79,6 +79,7 @@ pub mod claude_replay;
 pub mod consumer_scan;
 pub mod family;
 mod plugin_job_wire;
+mod request_input_wire;
 mod session_turn_wire;
 mod title;
 
@@ -91,6 +92,7 @@ pub use canonical_execution::*;
 pub use canonical_output::*;
 pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use plugin_job_wire::*;
+pub use request_input_wire::*;
 pub use session_turn_wire::*;
 pub use title::*;
 
