@@ -223,7 +223,7 @@ pub enum InventoryError {
     MissingDocumentId(String),
     #[error("backend catalog scope is ambiguous")]
     Catalog(#[source] anyhow::Error),
-    #[error(transparent)]
+    #[error("{0}")]
     Store(#[from] gents_store::config_client::ConfigClientError),
 }
 
