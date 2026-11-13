@@ -541,8 +541,7 @@ impl DefraSessionHook {
             }
             Err(error) => {
                 if let gents_session::session::message::CommitError::Other(ref error) = error {
-                    if let Some(capacity) = error
-                        .downcast_ref::<BackgroundSlotRefusal>()
+                    if let Some(capacity) = BackgroundSlotRefusal::in_failure(error)
                         .and_then(BackgroundSlotRefusal::capacity)
                     {
                         refuse!(
