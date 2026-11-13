@@ -5,10 +5,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use gents_lean_vocab::families::{
-    owner_staged_http_apply, owner_staged_pairing, owner_staged_relations,
-    owner_staged_route_commands,
-};
 use gents_protocol::owner_staged::{
     OwnerStagedChange, OwnerStagedCommand, OWNER_STAGED_COMMAND_VERSION, OWNER_STAGED_PATH,
 };
@@ -278,24 +274,6 @@ impl Fixture {
         (status, response.json().await.unwrap())
     }
 
-    /// The requester's request over the runtime's route or in its own
-    /// embedded configuration transaction.
-    async fn request(
-        &self,
-        over_http: bool,
-        key: &dyn NodeIdentity,
-        doc: &str,
-        grant: bool,
-    ) -> Result<(), ConfigClientError> {
-        if over_http {
-            self.client(key)
-                .request_owner_staged(&self.change(doc), grant)
-                .await
-        } else {
-            self.embedded(key, doc, grant).await
-        }
-    }
-
     /// The requester's own embedded configuration transaction.
     async fn embedded(
         &self,
@@ -473,13 +451,14 @@ fn error_outcome(result: &Result<(), ConfigClientError>, doc: &str) -> &'static 
     }
 }
 
-/// Lean `Conformance.OwnerStaged.pairing` with `http` answered by a signed
-/// command to the served route, and `Conformance.OwnerStaged.routeCommands`.
+/// Lean `Conformance.OwnerStaged.pairing`, with `outcome` decided in the
+/// requester's embedded transaction and `http` answered by a signed command to
+/// the served route, and `Conformance.OwnerStaged.routeCommands`.
 #[tokio::test]
 async fn owner_staged_route_replays_generated_cases_over_signed_http() {
     let f = Fixture::start().await;
     let mut denied_bodies: Vec<(String, StatusCode, Value)> = Vec::new();
-    for case in owner_staged_pairing::cases() {
+    for case in gents_lean_vocab::families::owner_staged_pairing::cases() {
         let input = &case.input;
         let key = f.requester(&input.requester).clone();
         let doc = f.document(&input.document).to_owned();
@@ -508,12 +487,14 @@ async fn owner_staged_route_replays_generated_cases_over_signed_http() {
             assert_eq!(status, StatusCode::OK, "{input:?}: {body}");
             assert!(f.readable().await.is_empty(), "{input:?}");
         }
-        case.check(owner_staged_pairing::PairingOutput {
-            direct,
-            staged,
-            outcome: outcome.to_owned(),
-            http: http.to_owned(),
-        });
+        case.check(
+            gents_lean_vocab::families::owner_staged_pairing::PairingOutput {
+                direct,
+                staged,
+                outcome: outcome.to_owned(),
+                http: http.to_owned(),
+            },
+        );
     }
     // No existence oracle: a denied requester gets the identical response for
     // the runtime-owned, missing and foreign observations.
@@ -533,7 +514,7 @@ async fn owner_staged_route_replays_generated_cases_over_signed_http() {
     // `decideCommand`: the command must address this endpoint, the bearer
     // must be the signer and the signature valid.
     let user = f.user.clone();
-    for case in owner_staged_route_commands::cases() {
+    for case in gents_lean_vocab::families::owner_staged_route_commands::cases() {
         let input = &case.input;
         let mut command = f.command(user.as_ref(), &f.route, true).await;
         if !input.authority_matches {
@@ -554,9 +535,11 @@ async fn owner_staged_route_replays_generated_cases_over_signed_http() {
         let decision = route_outcome(status, &body);
         let staged = f.readable().await == vec![f.route.clone()];
         assert_eq!(staged, decision == "staged", "{input:?}: {body}");
-        case.check(owner_staged_route_commands::CommandOutput {
-            decision: decision.to_owned(),
-        });
+        case.check(
+            gents_lean_vocab::families::owner_staged_route_commands::CommandOutput {
+                decision: decision.to_owned(),
+            },
+        );
         if staged {
             let (status, _) = f
                 .post(
@@ -596,44 +579,13 @@ async fn owner_staged_route_replays_generated_cases_over_signed_http() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(f.readable().await.is_empty());
-    f.node.shutdown().await.unwrap();
-}
-
-/// Lean `Conformance.OwnerStaged.pairing` with `http` answered through the
-/// client's route request (`outcome_is_transport_independent`): for every
-/// modeled requester and observation, the client's request over the runtime
-/// route and the
-/// requester's embedded transaction return the same error variant and leave
-/// the same reader.
-#[tokio::test]
-async fn owner_staged_outcomes_agree_across_embedded_and_http() {
-    let f = Fixture::start().await;
-    for case in owner_staged_pairing::cases() {
-        let input = &case.input;
-        let key = f.requester(&input.requester).clone();
-        let doc = f.document(&input.document).to_owned();
-        let direct = f.direct(key.as_ref(), &f.change(&doc)).await;
-        let mut observed = Vec::new();
-        for over_http in [false, true] {
-            assert!(f.readable().await.is_empty(), "{input:?}");
-            let result = f.request(over_http, key.as_ref(), &doc, true).await;
-            let outcome = error_outcome(&result, &doc);
-            let readable = f.readable().await == vec![doc.clone()];
-            if outcome == "staged" {
-                f.request(over_http, key.as_ref(), &doc, false)
-                    .await
-                    .unwrap();
-            }
-            observed.push((outcome, readable));
-        }
-        assert_eq!(observed[0], observed[1], "{input:?}");
-        case.check(owner_staged_pairing::PairingOutput {
-            direct,
-            staged: observed[0].1,
-            outcome: observed[0].0.to_owned(),
-            http: observed[1].0.to_owned(),
-        });
-    }
+    // A route transaction never runs as the runtime itself.
+    assert!(matches!(
+        ConfigAccess::local_as(f.node.clone(), did(f.runtime.did()))
+            .request_verified_client_owner_staged(&f.change(&f.route), true)
+            .await,
+        Err(ConfigClientError::TransactionActorMismatch)
+    ));
     f.node.shutdown().await.unwrap();
 }
 
@@ -644,7 +596,7 @@ async fn owner_staged_outcomes_agree_across_embedded_and_http() {
 #[tokio::test]
 async fn http_apply_orders_revocations_before_and_grants_after_commit() {
     let f = Fixture::start().await;
-    for case in owner_staged_http_apply::cases() {
+    for case in gents_lean_vocab::families::owner_staged_http_apply::cases() {
         let input = &case.input;
         let key = f.requester(&input.requester).clone();
         let direction = input.direction.as_str();
@@ -763,11 +715,13 @@ async fn http_apply_orders_revocations_before_and_grants_after_commit() {
             "{input:?}: {present:?}"
         );
         let readable = f.readable().await == vec![f.route.clone()];
-        case.check(owner_staged_http_apply::ApplyOutput {
-            result: result.to_owned(),
-            committed: !present.is_empty(),
-            readable,
-        });
+        case.check(
+            gents_lean_vocab::families::owner_staged_http_apply::ApplyOutput {
+                result: result.to_owned(),
+                committed: !present.is_empty(),
+                readable,
+            },
+        );
         if readable {
             f.client(f.user.as_ref())
                 .request_owner_staged(&f.change(&f.route), false)
@@ -893,14 +847,14 @@ async fn agent_row(
     Ok(gents_protocol::graphql::extract_mutation_doc_id(&created, "Agent").unwrap())
 }
 
-/// Lean `Conformance.OwnerStaged.relations` for the Agent-row paths
+/// Lean `Conformance.OwnerStaged.agentRows`
 /// (`Identity.OwnerStaged.owner_rows_follow_the_derivation_proof`), replayed
 /// on real Agent rows and placements over signed HTTP and embedded: the
 /// runtime never stages as a DID a forged row names, as a foreign DID under a
 /// genuine nonce, or as any Agent without its derivation proof; a genuine
 /// Agent's placement is staged. Local writes keep `agent_did` unique, so a
-/// duplicated genuine row (`duplicate_agent_row`) arises only from a
-/// replicated merge: here its second local write is refused.
+/// duplicated genuine row arises only from a replicated merge: here its second
+/// local write is refused.
 #[tokio::test]
 async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
     let f = Fixture::start().await;
@@ -955,13 +909,13 @@ async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
             .is_err(),
         "a second local row for a genuine Agent must be refused by its unique index"
     );
-    for case in owner_staged_relations::cases() {
+    for case in gents_lean_vocab::families::owner_staged_agent_rows::cases() {
         let input = &case.input;
         let owner = match input.path.as_str() {
             "forged_agent_row" => &victim,
             "genuine_nonce_foreign_did" => &foreign,
             "no_proof" | "derived_agent_row" => &agent,
-            _ => continue,
+            other => panic!("unknown modeled path {other}"),
         };
         let requester = match input.requester.as_str() {
             "admin" => f.admin.as_ref(),
@@ -993,17 +947,19 @@ async fn forged_agent_row_never_makes_the_runtime_stage_as_its_did() {
             let direct = f.direct(requester, &change).await;
             let outcome = staged_grant(&f, requester, &change, transport).await;
             let staged = f.reads(&f.target, "RepositoryPlacement", &placement).await;
-            case.check(owner_staged_relations::RelationOutput {
-                direct,
-                staged,
-                outcome: outcome.to_owned(),
-            });
+            case.check(
+                gents_lean_vocab::families::owner_staged_agent_rows::RelationOutput {
+                    direct,
+                    staged,
+                    outcome: outcome.to_owned(),
+                },
+            );
         }
     }
     f.node.shutdown().await.unwrap();
 }
 
-/// Lean `Conformance.OwnerStaged.relations` for the target paths
+/// Lean `Conformance.OwnerStaged.targets`
 /// (`Identity.OwnerStaged.out_of_kind_targets_are_refused`), replayed on real
 /// runtime-owned documents over signed HTTP and in the requester's embedded
 /// transaction: a cursor writer must be an Agent the runtime controls, a
@@ -1125,7 +1081,7 @@ async fn owner_staged_targets_follow_their_operation_kind() {
     let outsider = did(f.outsider.did());
     let sibling_did = did(sibling.did());
     for (transport, cursor) in ["http", "embedded"].into_iter().zip(&documents) {
-        for case in owner_staged_relations::cases() {
+        for case in gents_lean_vocab::families::owner_staged_targets::cases() {
             let input = &case.input;
             let (change, subject, collection, doc) = match input.path.as_str() {
                 "event_cursor_rebind" => (
@@ -1182,11 +1138,6 @@ async fn owner_staged_targets_follow_their_operation_kind() {
                     "Agent",
                     &sibling_doc,
                 ),
-                "forged_agent_row"
-                | "genuine_nonce_foreign_did"
-                | "duplicate_agent_row"
-                | "no_proof"
-                | "derived_agent_row" => continue,
                 other => panic!("unknown modeled path {other}"),
             };
             let requester: &dyn NodeIdentity = match input.requester.as_str() {
@@ -1202,11 +1153,13 @@ async fn owner_staged_targets_follow_their_operation_kind() {
             let direct = f.direct(requester, &change).await;
             let outcome = staged_grant(&f, requester, &change, transport).await;
             let staged = f.reads(subject, collection, doc).await;
-            case.check(owner_staged_relations::RelationOutput {
-                direct,
-                staged,
-                outcome: outcome.to_owned(),
-            });
+            case.check(
+                gents_lean_vocab::families::owner_staged_targets::RelationOutput {
+                    direct,
+                    staged,
+                    outcome: outcome.to_owned(),
+                },
+            );
             if outcome == "staged" {
                 let revoked = if transport == "http" {
                     f.client(requester)

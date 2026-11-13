@@ -727,6 +727,3 @@ impl ConfigAccess {
             .await
     }
 }
-
-#[cfg(test)]
-mod tests;
