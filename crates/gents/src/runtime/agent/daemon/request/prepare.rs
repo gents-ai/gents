@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use tracing::Instrument;
 
 use super::super::AgentDaemon;
-use super::is_stale_compaction_generation;
 use crate::runtime::agent::loop_stream::{AggregateTokenBudget, FoldedPrompt};
 use crate::turn::prompt::{BuiltPrompt, PromptBuilder};
 use crate::turn::provider_input::budget::ContextCalibration;
@@ -613,7 +612,9 @@ where
                         summaries.push(compaction::bounded_summary(entry.summary));
                     }
                     Err(error)
-                        if is_stale_compaction_generation(&error) && assembly_attempt == 0 =>
+                        if gents_session::session::StaleCompactionGeneration::occurs_in(
+                            error.as_ref(),
+                        ) && assembly_attempt == 0 =>
                     {
                         tracing::info!(
                             request_id = %request.request_id,
@@ -622,7 +623,11 @@ where
                         );
                         return Ok(None);
                     }
-                    Err(error) if is_stale_compaction_generation(&error) => {
+                    Err(error)
+                        if gents_session::session::StaleCompactionGeneration::occurs_in(
+                            error.as_ref(),
+                        ) =>
+                    {
                         tracing::warn!(
                             request_id = %request.request_id,
                             session_id = %request.session_id,

@@ -69,6 +69,9 @@ where
     classify::<C>
 }
 
+/// External premise: rmcp erases a transport failure behind
+/// `DynamicTransportError`; an authorization refusal exists only as its
+/// `StreamableHttpError` variant.
 fn classify<C>(error: &ClientInitializeError) -> Option<McpAuthRefusal>
 where
     C: StreamableHttpClient + 'static,

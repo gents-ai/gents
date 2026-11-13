@@ -101,12 +101,12 @@ pub fn canonical_read_loading(error: &anyhow::Error) -> bool {
 
 fn classify_terminal_read_error(error: &anyhow::Error) -> Option<CanonicalRequestOutput> {
     if matches!(
-        error.downcast_ref::<super::CanonicalOutputReadError>(),
+        super::CanonicalOutputReadError::in_error(error),
         Some(super::CanonicalOutputReadError::MissingCanonicalHeader { .. })
     ) {
         return Some(CanonicalRequestOutput::Loading);
     }
-    let error = error.downcast_ref::<ReconstructionError>()?;
+    let error = ReconstructionError::in_chain(error.as_ref())?;
     if error.is_incomplete() {
         Some(CanonicalRequestOutput::Loading)
     } else {

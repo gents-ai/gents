@@ -87,7 +87,7 @@ pub(super) async fn wait_for_managed_server<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
     node_home: &Path,
-) -> anyhow::Result<Readiness>
+) -> Result<Readiness, StartError>
 where
     R: Runtime,
 {
@@ -128,7 +128,7 @@ pub(super) async fn await_runtime_readiness<P, PF, N, NF, E, EF>(
     mut probe: P,
     mut native: N,
     mut last_error: E,
-) -> anyhow::Result<Readiness>
+) -> Result<Readiness, StartError>
 where
     E: FnMut() -> EF,
     EF: Future<Output = Option<String>>,
@@ -145,7 +145,7 @@ where
         let (observed_booting, occupied) = match probe().await? {
             PortReadiness::Ready(status) => return Ok(Readiness::Ready(status)),
             PortReadiness::StatusUnreadable { cause, .. } => {
-                return Err(anyhow::Error::new(status_unreadable_error(&cause)))
+                return Err(StartError::Bridge(status_unreadable_error(&cause)))
             }
             PortReadiness::Outdated { version } => {
                 return Ok(Readiness::Outdated {
@@ -153,7 +153,9 @@ where
                     selected: false,
                 });
             }
-            PortReadiness::Foreign(foreign) => anyhow::bail!(foreign.message()),
+            PortReadiness::Foreign(foreign) => {
+                return Err(anyhow::anyhow!(foreign.message()).into())
+            }
             PortReadiness::Occupied(port) => (false, Some(port)),
             PortReadiness::Booting => (true, None),
             PortReadiness::NotListening => (false, None),
@@ -172,39 +174,47 @@ where
                 return Err(explain(format!(
                     "the native Gents service stopped after {} seconds, before it published runtime readiness",
                     started.elapsed().as_secs()
-                )))
+                ))
+                .into())
             }
             NativeProgress::Exited(exit) | NativeProgress::Failed(exit)
                 if store_refusal(&exit).is_some() =>
             {
-                let error = anyhow::Error::new(BridgeError::new(
+                let error = BridgeError::new(
                     BridgeErrorCode::IncompatibleLocalStore,
                     format!(
                         "the native Gents service refused its store: it {}",
                         exit.reason
                     ),
-                ));
+                );
                 return Err(match store_refusal(&exit) {
-                    Some(kind) => error.context(RefusedStoreKind(kind)),
-                    None => error,
+                    Some(kind) => StartError::Refused {
+                        kind: RefusedStoreKind(kind),
+                        source: error,
+                    },
+                    None => StartError::Bridge(error),
                 });
             }
             NativeProgress::Failed(exit) => {
                 let cause = last_error()
                     .await
                     .or_else(|| exit.code.is_none().then(|| exit.reason.clone()));
-                anyhow::bail!(sentence(&blocker_for_exit(&exit, cause)))
+                return Err(anyhow::anyhow!(sentence(&blocker_for_exit(&exit, cause))).into());
             }
-            NativeProgress::Exited(exit) if exit.clean => anyhow::bail!(
-                "the native Gents service exited normally before it published runtime readiness, so it will not be restarted"
-            ),
+            NativeProgress::Exited(exit) if exit.clean => {
+                return Err(anyhow::anyhow!(
+                    "the native Gents service exited normally before it published runtime readiness, so it will not be restarted"
+                )
+                .into())
+            }
             NativeProgress::Exited(exit) => {
                 let restarts = restarts_since(&mut first_exit_restarts, exit.restarts);
                 if restarts >= CRASH_LOOP_RESTARTS {
                     return Err(explain(sentence(&blocker_for_exit(
                         &exit,
                         last_error().await,
-                    ))));
+                    )))
+                    .into());
                 }
             }
             NativeProgress::Loaded => {}
@@ -216,10 +226,11 @@ where
                 }
                 .into());
             }
-            anyhow::bail!(
+            return Err(anyhow::anyhow!(
                 "the native Gents service is running but did not publish runtime readiness within {} seconds",
                 timeout.as_secs()
-            );
+            )
+            .into());
         }
         tokio::time::sleep(interval).await;
     }
@@ -242,6 +253,40 @@ impl std::fmt::Display for RuntimeStillBooting {
 
 impl std::error::Error for RuntimeStillBooting {}
 
+/// Why a managed start or adoption did not reach readiness. Its chain renders
+/// as the user-visible failure text.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum StartError {
+    #[error(transparent)]
+    StillBooting(#[from] RuntimeStillBooting),
+    #[error("{kind}")]
+    Refused {
+        kind: RefusedStoreKind,
+        source: BridgeError,
+    },
+    #[error(transparent)]
+    Bridge(#[from] BridgeError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl StartError {
+    pub(super) fn message(&self) -> String {
+        match self {
+            Self::Other(error) => format!("{error:#}"),
+            typed => gents_protocol::error_chain::ErrorChain(typed).to_string(),
+        }
+    }
+
+    pub(super) fn bridge(&self) -> Option<&BridgeError> {
+        match self {
+            Self::Bridge(typed) | Self::Refused { source: typed, .. } => Some(typed),
+            Self::Other(error) => BridgeError::carried_by(error),
+            Self::StillBooting(_) => None,
+        }
+    }
+}
+
 pub(super) enum BootOutcome<'a> {
     Ready(ManagedServerStatus, LifecycleGuard<'a>),
     NeedsLaunch(LifecycleGuard<'a>, StartWait),
@@ -251,15 +296,15 @@ pub(super) async fn adopt_booting_runtime<'a>(
     state: &'a DesktopAppState,
     token: &StartWait,
     lifecycle: LifecycleGuard<'a>,
-    readiness: impl Future<Output = anyhow::Result<Readiness>>,
-) -> anyhow::Result<BootOutcome<'a>> {
+    readiness: impl Future<Output = Result<Readiness, StartError>>,
+) -> Result<BootOutcome<'a>, StartError> {
     drop(lifecycle);
     let readiness = wait_unlocked(token, readiness).await?;
     let lifecycle = relock_start(state, token).await?;
     Ok(match readiness {
         Readiness::Ready(status) => BootOutcome::Ready(status, lifecycle),
         Readiness::ApprovalRequired => BootOutcome::NeedsLaunch(lifecycle, token.clone()),
-        Readiness::Outdated { message, .. } => anyhow::bail!(message),
+        Readiness::Outdated { message, .. } => return Err(anyhow::anyhow!(message).into()),
     })
 }
 
@@ -289,7 +334,7 @@ where
         return Err(BridgeError::untyped(token.cancel_message()));
     }
     if matches!(adopted, Ok(BootOutcome::NeedsLaunch(..))) {
-        return adopted.map_err(|error| BridgeError::untyped(format!("{error:#}")));
+        return adopted.map_err(|error| BridgeError::untyped(error.message()));
     }
     let result = settle_adoption(state, &token, node_home, adopted).await;
     emit_status(app, state).await;
@@ -300,15 +345,15 @@ pub(super) async fn settle_adoption<'a>(
     state: &'a DesktopAppState,
     token: &StartWait,
     node_home: &Path,
-    adopted: anyhow::Result<BootOutcome<'a>>,
+    adopted: Result<BootOutcome<'a>, StartError>,
 ) -> Result<BootOutcome<'a>, BridgeError> {
     finish_start_wait(state, token).await;
     let error = match adopted {
         Ok(outcome) => return Ok(outcome),
         Err(error) => error,
     };
-    let message = format!("{error:#}");
-    if error.is::<RuntimeStillBooting>() {
+    let message = error.message();
+    if matches!(error, StartError::StillBooting(_)) {
         return Err(BridgeError::new(
             BridgeErrorCode::RuntimeStillBooting,
             message,
@@ -316,7 +361,7 @@ pub(super) async fn settle_adoption<'a>(
     }
     tracing::warn!(target: "gents_desktop::managed_server", error = %message, "managed Gents server did not become ready");
     let refused = refused_kind(&error);
-    let typed = match error.downcast_ref::<BridgeError>() {
+    let typed = match error.bridge() {
         Some(typed) => {
             let mut typed = typed.clone();
             typed.message = message;
@@ -332,7 +377,9 @@ pub(super) async fn settle_adoption<'a>(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RefusedStoreKind(gents_protocol::operations::install_repair::IncompatibleStoreKind);
+pub(super) struct RefusedStoreKind(
+    gents_protocol::operations::install_repair::IncompatibleStoreKind,
+);
 
 impl std::fmt::Display for RefusedStoreKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -346,11 +393,12 @@ impl std::fmt::Display for RefusedStoreKind {
 }
 
 pub(super) fn refused_kind(
-    error: &anyhow::Error,
+    error: &StartError,
 ) -> Option<gents_protocol::operations::install_repair::IncompatibleStoreKind> {
-    error
-        .downcast_ref::<RefusedStoreKind>()
-        .map(|refused| refused.0)
+    match error {
+        StartError::Refused { kind, .. } => Some(kind.0),
+        _ => None,
+    }
 }
 
 pub(super) fn refused_runtime_store(

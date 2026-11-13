@@ -237,7 +237,7 @@ where
                     }
                     .await;
                     initialized.map_err(|error| LaunchFailure {
-                        error,
+                        error: error.into(),
                         attempted_start: true,
                         preserve_runtime: false,
                         lifecycle: Some(lifecycle),
@@ -247,7 +247,7 @@ where
             }
         }
         Err(error) => Err(LaunchFailure {
-            error,
+            error: error.into(),
             attempted_start: false,
             preserve_runtime: false,
             lifecycle: Some(lifecycle),

@@ -70,6 +70,13 @@ impl std::fmt::Display for BackgroundApprovalPending {
 
 impl std::error::Error for BackgroundApprovalPending {}
 
+impl BackgroundApprovalPending {
+    /// The pending approval a failed start carries, or the failure unchanged.
+    pub fn take(error: anyhow::Error) -> std::result::Result<Self, anyhow::Error> {
+        error.downcast::<Self>()
+    }
+}
+
 /// How a start ended when it did not fail: the job started, or macOS withheld
 /// it until the user approves Gents under Login Items. `detail` is launchd's
 /// refusal, when there was one.
@@ -99,6 +106,12 @@ pub enum NativeServicePlatform {
 #[derive(Debug, thiserror::Error)]
 #[error("native Gents services are supported only on macOS and Linux")]
 pub struct UnsupportedNativeServicePlatform;
+
+impl UnsupportedNativeServicePlatform {
+    pub fn occurs_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        gents_protocol::error_chain::find_source::<Self>(error).is_some()
+    }
+}
 
 impl NativeServicePlatform {
     pub fn current() -> Result<Self> {

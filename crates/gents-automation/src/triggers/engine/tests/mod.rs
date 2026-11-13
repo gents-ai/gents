@@ -245,7 +245,13 @@ impl MaterializerHandle for SpyMaterializer {
         durable_fire_key: &str,
         delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
         _prepared_ids: Option<(&str, &str)>,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<String, crate::triggers::engine::MaterializeError>>
+                + Send
+                + '_,
+        >,
+    > {
         let entry = (
             trigger_id.map(str::to_owned),
             trigger_kind,

@@ -89,18 +89,24 @@ pub(super) fn access_error_in<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a ConfigClientError> {
     gents_protocol::error_chain::find_map_source(error, |cause| {
-        asked::<ConfigClientError>(cause)
-            .or_else(|| asked::<Box<ConfigClientError>>(cause))
-            .or_else(|| asked::<GraphqlResponseError>(cause))
-            .or_else(|| asked::<Box<GraphqlResponseError>>(cause))
+        cause
+            .downcast_ref::<ConfigClientError>()
+            .or_else(|| {
+                cause
+                    .downcast_ref::<Box<ConfigClientError>>()?
+                    .config_client_error()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<GraphqlResponseError>()?
+                    .config_client_error()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<Box<GraphqlResponseError>>()?
+                    .config_client_error()
+            })
     })
-}
-
-fn asked<'a, O>(cause: &'a (dyn std::error::Error + 'static)) -> Option<&'a ConfigClientError>
-where
-    O: TransactionFailure + std::error::Error + 'static,
-{
-    cause.downcast_ref::<O>()?.config_client_error()
 }
 
 /// The first request to run again in an erased error's chain. It is found by
@@ -131,8 +137,9 @@ where
 }
 
 impl ConfigClientError {
-    /// The pinned DefraDB mutation adapter reports an inaccessible or missing
-    /// document with this shared GraphQL message and no structured error code.
+    /// External premise: the pinned DefraDB mutation adapter reports an
+    /// inaccessible or missing document with this shared GraphQL message and
+    /// no structured error code.
     /// Both cases are permanent for this attempted write, not storage failures,
     /// and the adapter does not say which one occurred.
     pub fn is_missing_or_denied_write(&self) -> bool {

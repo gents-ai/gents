@@ -21,8 +21,10 @@ pub(crate) enum Documents<'a> {
 }
 
 /// Whether `error` is the store refusing a second opener: another process
-/// (or this one) holds it. The texts are regolith's (`env/db_lock.rs`);
-/// they arrive only as text through the node builder's error.
+/// (or this one) holds it.
+///
+/// External premise: the texts are regolith's (`env/db_lock.rs`); they
+/// arrive only as text through the node builder's error.
 pub(crate) fn store_locked(error: &anyhow::Error) -> bool {
     if gents_store::local::home::store_lock_held(error.as_ref()).is_some() {
         return true;

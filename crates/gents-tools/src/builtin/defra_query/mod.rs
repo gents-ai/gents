@@ -142,11 +142,11 @@ impl Tool for DefraQueryTool {
                 &self.node,
                 Some(actor.clone()),
                 "application_query",
-                |txn| Box::pin(execute_command(txn, &args, &self.scope)),
+                |txn| Box::pin(command::execute_typed_command(txn, &args, &self.scope)),
             )
             .await
         } else {
-            execute_command(
+            command::execute_typed_command(
                 &gents_store::config_client::ConfigAccess::local(self.node.clone()),
                 &args,
                 &self.scope,
@@ -155,8 +155,11 @@ impl Tool for DefraQueryTool {
         };
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
-            Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
-            Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
+            Err(error @ command::QueryCommandError::Discovery(_)) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
+            Err(error) => {
+                let error = error.erased();
+                Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into())
+            }
         }
     }
 }
