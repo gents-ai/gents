@@ -129,6 +129,12 @@ def nextJson : NextAction → Json
   | .controlGoal => "control_goal" | .startGoal => "start_goal"
   | .send => "send" | .awaitPublication => "await_publication"
 
+def caseJson (c : Case) : Json :=
+  (toJson c).mergeObj (Json.mkObj [("expected_state", stateJson c.state),
+    ("expected_view", viewJson (view c.state)), ("expected_next", nextJson (next c.state))])
+
+def casesJson : String := (toJson (cases.map caseJson)).compress
+
 /-! Histories of reads the client folds (`SessionObservation.fold`). Session 1
 is the one shown; session 2 is another chat. -/
 
