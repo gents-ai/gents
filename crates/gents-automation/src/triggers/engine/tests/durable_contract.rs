@@ -1712,7 +1712,7 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
         let exhausted = result
             .as_ref()
             .err()
-            .is_some_and(|error| error.downcast_ref::<MaterializeBudgetExhausted>().is_some());
+            .is_some_and(|error| matches!(error, MaterializeError::BudgetExhausted(_)));
         let row = client
             .execute(r#"{ Trigger(filter: {trigger_id: {_eq: "handoff"}}) { enabled last_status last_error } }"#)
             .await
