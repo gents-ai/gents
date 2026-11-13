@@ -8,7 +8,6 @@ use gents_inference::resolved::ProviderProfilePolicy;
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::NodeIdentity as _;
 use serde_json::{json, Value};
 
 fn provision_agents(
