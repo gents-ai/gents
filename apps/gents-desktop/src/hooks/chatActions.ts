@@ -1,4 +1,3 @@
-import { attachmentMetadata } from "./attachmentMetadata";
 import { splitSkillLines } from "@/lib/skillLines";
 import type {
   RequestAttachment,
@@ -35,6 +34,7 @@ import { heldFor, readSession } from "./sessionStore";
 import type { ShellProjection, ShellStores } from "./shellProjection";
 import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
 import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
+import type { SendAttachmentStore } from "./sendAttachments";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
 import { GOAL_CHANGED, GOAL_NEXT_STEP, GOAL_NOT_CURRENT } from "./goalState";
@@ -48,26 +48,8 @@ type ChatActionParams = {
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
+  sendAttachments: SendAttachmentStore;
 };
-
-export function sessionShowsRequest(
-  session: DesktopSessionSnapshot | null,
-  requestId: string,
-): boolean {
-  if (!session) return false;
-  return (
-    session.latestRequestId === requestId ||
-    session.pendingTurn?.requestId === requestId ||
-    session.queuedTurns.some((turn) => turn.requestId === requestId) ||
-    session.foldedInputs.some((input) => input.requestId === requestId) ||
-    (session.pendingQueue ?? []).some((entry) => entry.requestId === requestId) ||
-    session.timelineItems.some(
-      (item) =>
-        item.kind === "userMessage" &&
-        (item.requestId === requestId || item.inputRequestId === requestId),
-    )
-  );
-}
 
 function queueEditFailure(
   after: DesktopSessionSnapshot | null,
@@ -130,12 +112,13 @@ export function createChatActions({
   refreshSession,
   refreshSnapshot,
   reportFailure,
+  sendAttachments,
 }: ChatActionParams) {
   const store = stores.selection;
   let submissionInFlight = false;
   const forkDestinations = new Map<string, string>();
   const goalDelivery = createGoalDelivery(api, stores);
-  const chatDelivery = createChatDelivery(api, stores);
+  const chatDelivery = createChatDelivery(api, stores, sendAttachments);
 
   const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
   const folderFor = (nodeDid: string | null | undefined, sessionId: string | null) =>
@@ -213,10 +196,7 @@ export function createChatActions({
     try {
       request = chatDraftRequest(draft);
     } catch {}
-    const attachmentViews = request?.attachments?.length
-      ? await Promise.all(request.attachments.map(attachmentMetadata))
-      : [];
-    if (!showing()) return false;
+    const attachmentViews = request?.attachments ?? [];
     if (draft.selectedSessionId === null) {
       if (request)
         writeChatFolders(stores.chat, (folders) =>
@@ -265,6 +245,8 @@ export function createChatActions({
     attachments: RequestAttachment[] = [],
     followUp?: QueueDelivery,
     acceptsView: () => boolean = () => true,
+
+    saved?: () => void,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
     const node = nodeOrFirst(stores.fleet.getState(), store.getState().nodeDid);
@@ -273,12 +255,14 @@ export function createChatActions({
     const callerDid = stores.client.getState().snapshot?.client?.clientDid;
     const cwd = folderFor(node.nodeDid, selectedSessionId);
     const intent = selection.captureIntent(store);
+    let savedRequestId: string | undefined;
     const reportSendFailure = (message: string) => {
       stores.chat.setState({
         submissionError: {
           nodeDid: node.nodeDid,
           sessionId: selectedSessionId,
           message,
+          requestId: savedRequestId,
         },
       });
       reportFailure(message);
@@ -322,6 +306,11 @@ export function createChatActions({
         selectedSessionId,
         status.kind === "queue",
         (result, draft) => applyChatResult(result, draft, intent, acceptsView),
+        undefined,
+        (draft) => {
+          savedRequestId = draft.requestId;
+          saved?.();
+        },
       );
       return result;
     } catch (error) {

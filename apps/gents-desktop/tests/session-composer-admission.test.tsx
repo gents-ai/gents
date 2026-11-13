@@ -24,6 +24,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import { MemoryNavProvider } from "@gents/shell";
 import { writeSession } from "../src/hooks/sessionStore";
 import { composerText, typeInComposer, typeText } from "./composer-field";
+import { CHAT_SEND_DEADLINE_MS } from "../src/hooks/chatDelivery";
 import { goalControl, observedGoal } from "./goal-state-fixture";
 
 const navigate = vi.hoisted(() => vi.fn());
@@ -1111,6 +1112,7 @@ it("does not clear the replacement history draft when an earlier client's reply 
   typeInComposer(screen.getByLabelText("Message"), "same text in another history");
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   expect(sendChatMessage).toHaveBeenCalledTimes(1);
+  expect(composerText(screen.getByLabelText("Message"))).toBe("");
   act(() =>
     app.stores.client.setState((state) => ({
       snapshot: {
@@ -1119,6 +1121,7 @@ it("does not clear the replacement history draft when an earlier client's reply 
       },
     })),
   );
+  typeInComposer(screen.getByLabelText("Message"), "same text in another history");
   await act(async () => {
     finish();
     await pending;
@@ -1130,4 +1133,42 @@ it("does not clear the replacement history draft when an earlier client's reply 
   // Confirmed under its original client: the runtime holds it, so the
   // payload is released (Lean `ClientOptimisticSend`).
   expect(app.stores.chat.getState().chatDrafts).toEqual([]);
+});
+
+it("moves a sent message out of the composer, so Enter after a slow send's deadline sends nothing new", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    let finish!: () => void;
+    const sendChatMessage = vi.fn(
+      (request) =>
+        new Promise((resolve) => {
+          finish = () => resolve(acceptedChat(request));
+        }),
+    );
+    const { app } = screenApp({ session: heldSession(), sendChatMessage });
+    renderScreen(app);
+    const field = screen.getByLabelText("Message");
+    await typeText(field, "Only once{Enter}");
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(composerText(field)).toBe("");
+    expect(screen.getByRole("status", { name: "Saved message" }).textContent).toContain(
+      "Only once",
+    );
+    await act(() => vi.advanceTimersByTimeAsync(CHAT_SEND_DEADLINE_MS));
+    await screen.findByText("The message wasn't sent");
+    within(screen.getByRole("status", { name: "Saved message" })).getByRole("button", {
+      name: "Retry message",
+    });
+    await screen.findByText(/No reply arrived within/);
+    await typeText(field, "{Enter}");
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull(),
+    );
+    expect(screen.queryByText(/No reply arrived within/)).toBeNull();
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

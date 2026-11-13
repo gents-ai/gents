@@ -10,6 +10,7 @@ import { loadChatDrafts, removeChatDraft, type ChatDraft } from "./chatDrafts";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { keepSelectedSession } from "./sessionStore";
+import type { SendAttachmentStore } from "./sendAttachments";
 import type { ShellStores } from "./shellProjection";
 
 type MailboxActionParams = {
@@ -17,6 +18,7 @@ type MailboxActionParams = {
   stores: ShellStores;
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
+  sendAttachments: SendAttachmentStore;
 };
 
 export function createMailboxActions({
@@ -24,9 +26,10 @@ export function createMailboxActions({
   stores,
   refreshSnapshot,
   reportFailure,
+  sendAttachments,
 }: MailboxActionParams) {
   const store = stores.selection;
-  const delivery = createChatDelivery(api, stores);
+  const delivery = createChatDelivery(api, stores, sendAttachments);
   async function openMailboxItem(
     itemId: string,
     nodeDid?: string | null,

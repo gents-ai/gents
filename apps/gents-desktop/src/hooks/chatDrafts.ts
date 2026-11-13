@@ -1,9 +1,12 @@
 import type {
+  AttachmentView,
   BridgeErrorPayload,
   ChatSendRequest,
   ChatSendResult,
 } from "@source-inc/gents-desktop-client";
+import { attachmentMetadata } from "./attachmentMetadata";
 import type { ChatStore } from "./chatStore";
+import type { SendAttachmentStore } from "./sendAttachments";
 
 const PREFIX = "gents.chat.sendDraft.v1:";
 /** The base client's list of sends with an unknown outcome and no kept
@@ -19,8 +22,7 @@ export type ChatDraft = {
   selectedSessionId: string | null;
   queued: boolean;
   mailbox?: { nodeDid: string; itemId: string; summary: string };
-  /** The authored payload, kept until the runtime confirms it (Lean
-   * `ClientOptimisticSend.payload_retained`); a retry resends it as is. */
+
   requestJson: string;
   /** The runtime holds this request. Only a mailbox answer stays saved once
    * confirmed, until its question is observed closed. A draft saved by the
@@ -39,6 +41,16 @@ const identifier = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
+const attachmentView = (value: unknown): value is AttachmentView =>
+  object(value) &&
+  typeof value.name === "string" &&
+  typeof value.mediaType === "string" &&
+  typeof value.digest === "string" &&
+  typeof value.size === "number";
+
+export type SavedChatInput = Omit<ChatSendRequest, "attachments"> & {
+  attachments?: AttachmentView[];
+};
 
 export function chatDraftKey(
   draft: Pick<ChatDraft, "clientDid" | "nodeDid" | "requestId">,
@@ -128,22 +140,66 @@ export function loadChatDrafts(): {
   }
 }
 
-export function retainChatDraft(
+export function chatDraftOf(
   request: ChatSendRequest,
   selectedSessionId: string | null,
   queued = false,
   mailbox?: ChatDraft["mailbox"],
+  attachments: AttachmentView[] = [],
 ): ChatDraft {
+  const { attachments: files, ...input } = request;
+  if ((files?.length ?? 0) !== attachments.length)
+    throw new Error("The message's attachments were not kept.");
+  const saved: SavedChatInput = attachments.length ? { ...input, attachments } : input;
   return decode({
-    ...request,
+    ...input,
     selectedSessionId,
     queued,
     mailbox,
-    requestJson: JSON.stringify(request),
+    requestJson: JSON.stringify(saved),
   });
 }
 
-export function chatDraftRequest(draft: ChatDraft): ChatSendRequest {
+export function saveNewChatDraft(
+  store: SendAttachmentStore,
+  chat: ChatStore,
+  request: ChatSendRequest,
+  selectedSessionId: string | null,
+  queued: boolean,
+  mailbox: ChatDraft["mailbox"],
+  save: (draft: ChatDraft) => ChatDraft,
+): ChatDraft | Promise<ChatDraft> {
+  const files = request.attachments ?? [];
+  if (!files.length)
+    return save(chatDraftOf(request, selectedSessionId, queued, mailbox));
+  return (async () => {
+    const saved = save(
+      chatDraftOf(
+        request,
+        selectedSessionId,
+        queued,
+        mailbox,
+        await Promise.all(files.map(attachmentMetadata)),
+      ),
+    );
+    try {
+      await store.put(
+        chatDraftKey(saved),
+        files.map((file) => file.data),
+      );
+    } catch (error) {
+      removeChatDraft(chat, saved);
+      throw new Error(
+        `The attachments could not be saved on this device, so the message was not sent: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return saved;
+  })();
+}
+
+export function chatDraftRequest(draft: ChatDraft): SavedChatInput {
   const request: unknown = JSON.parse(draft.requestJson);
   if (
     !object(request) ||
@@ -152,11 +208,82 @@ export function chatDraftRequest(draft: ChatDraft): ChatSendRequest {
     request.requestId !== draft.requestId ||
     request.sessionId !== draft.sessionId ||
     typeof request.content !== "string" ||
+    !(
+      request.attachments === undefined ||
+      (Array.isArray(request.attachments) && request.attachments.every(attachmentView))
+    ) ||
     (draft.mailbox !== undefined &&
       request.causedBySourceDocId !== draft.mailbox.itemId)
   )
     throw new Error("The saved message input is unreadable or has changed identity.");
-  return request as ChatSendRequest;
+  return request as SavedChatInput;
+}
+
+export function chatDraftPayload(
+  store: SendAttachmentStore,
+  draft: ChatDraft,
+): ChatSendRequest | Promise<ChatSendRequest> {
+  const { attachments: kept = [], ...input } = chatDraftRequest(draft);
+  if (!kept.length) return input;
+  return (async () => {
+    let data: string[] | undefined;
+    try {
+      data = await store.get(chatDraftKey(draft));
+    } catch (error) {
+      throw new Error(
+        `This message's attachments could not be read on this device, so it was not sent: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const attachments =
+      data?.length === kept.length
+        ? kept.map(({ name, mediaType }, index) => ({
+            name,
+            mediaType,
+            data: data[index],
+          }))
+        : null;
+    if (
+      !attachments ||
+      (await Promise.all(attachments.map(attachmentMetadata))).some(
+        (view, index) => view.digest !== kept[index].digest,
+      )
+    )
+      throw new Error(
+        "This message's attachments are no longer saved on this device, so it was not sent. Discard it and attach the files again.",
+      );
+    return { ...input, attachments };
+  })();
+}
+
+export async function chatDraftHandBack(
+  store: SendAttachmentStore,
+  draft: ChatDraft,
+): Promise<ChatSendRequest | null> {
+  try {
+    return await chatDraftPayload(store, draft);
+  } catch {}
+  try {
+    return { ...chatDraftRequest(draft), attachments: undefined };
+  } catch {
+    return null;
+  }
+}
+
+export async function forgetChatDraftAttachments(
+  store: SendAttachmentStore,
+  draft: ChatDraft,
+) {
+  let kept = true;
+  try {
+    kept = Boolean(chatDraftRequest(draft).attachments?.length);
+  } catch {}
+  if (kept) await store.delete(chatDraftKey(draft)).catch(() => {});
+}
+
+export async function pruneChatDraftAttachments(store: SendAttachmentStore) {
+  await store.prune((key) => localStorage.getItem(key) !== null).catch(() => {});
 }
 
 /** Each message has its own key, so another window cannot overwrite it. The
@@ -216,7 +343,7 @@ export function validateChatResult(draft: ChatDraft, result: ChatSendResult) {
     result.sessionId !== draft.sessionId
   )
     throw new Error("The reply does not match the saved message.");
-  let request: ChatSendRequest | null = null;
+  let request: SavedChatInput | null = null;
   try {
     request = chatDraftRequest(draft);
   } catch {}

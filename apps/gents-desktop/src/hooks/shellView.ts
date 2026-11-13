@@ -77,12 +77,15 @@ function viewOf(inputs: ViewInputs): ShellView {
     sentTurns: inputs.sentTurns,
     draftKey: selection.sessionId
       ? sessionDraftKey(selection.nodeDid, selection.sessionId)
-      : JSON.stringify(["new", selection.nodeDid, projection.agentReadiness.agentDid]),
+      : newSessionDraftKey(selection.nodeDid, projection.agentReadiness.agentDid),
   };
 }
 
 export const sessionDraftKey = (nodeDid: string | null, sessionId: string) =>
   JSON.stringify(["session", nodeDid, sessionId]);
+
+export const newSessionDraftKey = (nodeDid: string | null, agentDid: string | null) =>
+  JSON.stringify(["new", nodeDid, agentDid]);
 
 export function createShellView(stores: ShellStores): ShellViewStore {
   let inputs = inputsOf(stores);

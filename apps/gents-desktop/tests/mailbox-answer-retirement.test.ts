@@ -8,11 +8,7 @@ import type {
 import { testApp, node, publish, publishSnapshot } from "./app-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { deferred } from "./deferred";
-import {
-  loadChatDrafts,
-  retainChatDraft,
-  saveChatDraft,
-} from "../src/hooks/chatDrafts";
+import { loadChatDrafts, chatDraftOf, saveChatDraft } from "../src/hooks/chatDrafts";
 
 beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
 afterEach(() => vi.unstubAllGlobals());
@@ -56,7 +52,7 @@ function answer(requestId = "answer", sourceNodeDid = NODE) {
     answer: { option_ids: ["yes"] },
   };
   return {
-    ...retainChatDraft(request, "session", false, {
+    ...chatDraftOf(request, "session", false, {
       nodeDid: sourceNodeDid,
       itemId: "question",
       summary: "Yes",

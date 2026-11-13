@@ -207,6 +207,19 @@ function factsOf(
   };
 }
 
+export function sessionHoldsRequest(state: SessionState, requestId: string): boolean {
+  const session = state.session;
+  if (!session) return false;
+  return (
+    session.latestRequestId === requestId ||
+    session.pendingTurn?.requestId === requestId ||
+    state.facts.userRequestIds.has(requestId) ||
+    session.queuedTurns.some((turn) => turn.requestId === requestId) ||
+    (session.pendingQueue ?? []).some((entry) => entry.requestId === requestId) ||
+    session.foldedInputs.some((folded) => folded.requestId === requestId)
+  );
+}
+
 export function holdsRequest(
   state: SessionState,
   sent: { sessionId: string; requestId: string; latestWhenSent: string | null },
@@ -215,11 +228,7 @@ export function holdsRequest(
   if (session?.sessionId !== sent.sessionId) return false;
   const latest = session.latestRequestId;
   return (
-    latest === sent.requestId ||
-    state.facts.userRequestIds.has(sent.requestId) ||
-    session.queuedTurns.some((turn) => turn.requestId === sent.requestId) ||
-    (session.pendingQueue ?? []).some((entry) => entry.requestId === sent.requestId) ||
-    session.foldedInputs.some((folded) => folded.requestId === sent.requestId) ||
+    sessionHoldsRequest(state, sent.requestId) ||
     (latest !== null && latest !== sent.latestWhenSent)
   );
 }

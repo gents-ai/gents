@@ -19,6 +19,8 @@ export type ChatState = {
     nodeDid: string;
     sessionId: string | null;
     message: string;
+
+    requestId?: string;
   } | null;
   optimisticPendingTurn: OptimisticPendingTurn | null;
 
@@ -29,6 +31,8 @@ export type ChatState = {
   goalCommandsInFlight: ReadonlySet<string>;
   chatDrafts: ChatDraft[];
   chatDraftError: string | null;
+
+  sendDeadlineTick: number;
 };
 
 /* enough for a run of sends queued behind one turn */
@@ -48,6 +52,7 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       ...loadGoalDrafts(),
       goalCommandsInFlight: new Set(),
       ...loadChatDrafts(),
+      sendDeadlineTick: 0,
       ...initial,
     })),
   );

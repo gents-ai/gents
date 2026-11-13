@@ -8,12 +8,16 @@ import type {
   ChatSendResult,
   DesktopApiAdapter,
   DesktopClientSnapshot,
+  DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 
 import {
   CHAT_SEND_DEADLINE_MS,
   createChatDelivery,
+  observeLandedChatSends,
 } from "../../src/hooks/chatDelivery";
+import { writeSession } from "../../src/hooks/sessionStore";
+import { keepSendDeadlineClock } from "../../src/hooks/sendDeadlineClock";
 import { loadChatDrafts } from "../../src/hooks/chatDrafts";
 import {
   deliveryAffordances,
@@ -25,6 +29,7 @@ import {
 import { acceptedChat } from "../chat-delivery-fixture";
 import { goalDeliveryStorage } from "../goal-delivery-storage";
 import { shellStores } from "../shell-fixture";
+import { memorySendAttachments } from "../send-attachments-fixture";
 
 type ViewCase = Omit<DeliveryAffordances, "view"> & {
   status: SendStatus;
@@ -97,7 +102,9 @@ async function replay(trace: Trace, mailbox: boolean) {
         wire.push({ request, resolve, reject }),
       ),
   } as unknown as DesktopApiAdapter;
-  const delivery = createChatDelivery(api, stores);
+  const delivery = createChatDelivery(api, stores, memorySendAttachments());
+  const stopClock = keepSendDeadlineClock(stores.chat);
+  const stopObserving = observeLandedChatSends(stores);
   const applied = async () => true;
   let requestId: string | null = null;
   let discarded = false;
@@ -187,6 +194,17 @@ async function replay(trace: Trace, mailbox: boolean) {
         await delivery.discard(requestId!);
         discarded = true;
         break;
+      case "observe":
+        writeSession(stores.session, {
+          sessionId: "session",
+          nodeDid: "node",
+          latestRequestId: requestId,
+          pendingTurn: null,
+          queuedTurns: [],
+          foldedInputs: [],
+          timelineItems: [],
+        } as unknown as DesktopSessionSnapshot);
+        break;
       default:
         throw new Error(`unmodeled action ${action.kind}`);
     }
@@ -198,6 +216,8 @@ async function replay(trace: Trace, mailbox: boolean) {
     if (action.kind === "compose" || action.kind === "retry")
       expect(wire.at(-1)?.request.requestId).toBe(requestId);
   }
+  stopObserving();
+  stopClock();
   vi.useRealTimers();
 }
 
@@ -222,6 +242,7 @@ it("runs chatDelivery through every Lean optimistic send trace", async () => {
       "discard",
       "drop",
       "loseReply",
+      "observe",
       "receive",
       "refuse",
       "retry",

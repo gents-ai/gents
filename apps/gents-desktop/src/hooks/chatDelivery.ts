@@ -5,20 +5,27 @@ import {
   type DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
 import {
-  chatDraftRequest,
+  chatDraftHandBack,
+  chatDraftPayload,
   chatDraftsFor,
+  forgetChatDraftAttachments,
   loadChatDrafts,
   removeChatDraft,
-  retainChatDraft,
   saveChatDraft,
+  saveNewChatDraft,
   savedChatDraft,
   validateChatResult,
   type ChatDraft,
 } from "./chatDrafts";
 import { deliveryAffordances, resendRefused, sendStatus } from "./chatDeliveryView";
+import type { ChatStore } from "./chatStore";
+import type { SendAttachmentStore } from "./sendAttachments";
 import type { ShellStores } from "./shellProjection";
+import { heldFor, sessionHoldsRequest } from "./sessionStore";
 
 type Applied = (result: ChatSendResult, draft: ChatDraft) => Promise<boolean>;
+
+type Saved = (draft: ChatDraft) => void;
 
 /** The client deadline of one send (Lean `ClientOptimisticSend.timeout`).
  * Neither the bridge nor the runtime bounds a create, so a send with no reply
@@ -44,6 +51,21 @@ export class ChatViewUpdateError extends Error {
 
 type Reply = { ok: true; result: ChatSendResult } | { ok: false; error: unknown };
 
+function proceed<T, U>(value: T | Promise<T>, next: (value: T) => U) {
+  return value instanceof Promise ? value.then(next) : next(value);
+}
+
+function confirm(store: ChatStore, current: ChatDraft) {
+  if (current.mailbox)
+    saveChatDraft(store, {
+      ...current,
+      confirmed: true,
+      pendingUntil: undefined,
+      failure: undefined,
+    });
+  else removeChatDraft(store, current);
+}
+
 /** The optimistic send (Lean `ClientOptimisticSend`): the message gets its
  * request identity and a kept payload before dispatch, is pending until its
  * saved deadline while the one signed create is in flight, and is confirmed by
@@ -53,6 +75,7 @@ type Reply = { ok: true; result: ChatSendResult } | { ok: false; error: unknown 
 export function createChatDelivery(
   api: DesktopApiAdapter,
   stores: ShellStores,
+  attachments: SendAttachmentStore,
   now: () => number = Date.now,
 ) {
   function clientDid() {
@@ -100,35 +123,37 @@ export function createChatDelivery(
       return reply.result;
     }
     // Confirmed before the view applies it: a view failure never shows a
-    // confirmed message as failed. A mailbox answer stays saved, confirmed,
-    // until its question is observed closed.
-    if (current.mailbox)
-      saveChatDraft(stores.chat, {
-        ...current,
-        confirmed: true,
-        pendingUntil: undefined,
-        failure: undefined,
-      });
-    else removeChatDraft(stores.chat, current);
+    confirm(stores.chat, current);
     try {
       await applied(reply.result, current);
     } catch (error) {
       throw new ChatViewUpdateError(reply.result, error);
+    } finally {
+      if (!current.mailbox) await forgetChatDraftAttachments(attachments, current);
     }
     return reply.result;
   }
-  async function send(draft: ChatDraft, applied: Applied) {
+
+  function attempt(draft: ChatDraft) {
     if (clientDid() !== draft.clientDid)
       throw new Error("The selected client changed before dispatch.");
-    const attempt: ChatDraft = {
+    const pending: ChatDraft = {
       ...draft,
       failure: undefined,
       pendingUntil: now() + CHAT_SEND_DEADLINE_MS,
     };
-    saveChatDraft(stores.chat, attempt);
+    saveChatDraft(stores.chat, pending);
+    return pending;
+  }
+
+  async function send(attempt: ChatDraft, applied: Applied, saved?: Saved) {
+    saved?.(attempt);
     const reply: Promise<Reply> = (async () => {
       try {
-        const result = await api.sendChatMessage(chatDraftRequest(attempt));
+        const result = await proceed(
+          chatDraftPayload(attachments, attempt),
+          (payload) => api.sendChatMessage(payload),
+        );
         validateChatResult(attempt, result);
         return { ok: true as const, result };
       } catch (error) {
@@ -159,41 +184,51 @@ export function createChatDelivery(
       queued: boolean,
       applied: Applied,
       mailbox?: ChatDraft["mailbox"],
+      saved?: Saved,
     ) {
       const actor = clientDid();
       if (request.clientDid && request.clientDid !== actor)
         throw new Error("The selected client changed before dispatch.");
-      if (
-        chatDraftsFor(
-          load(),
-          actor,
-          request.nodeDid,
-          selectedSessionId,
-          mailbox?.itemId,
-        ).some(
-          (draft) =>
-            deliveryAffordances(
-              sendStatus(draft, now()),
-              mailbox !== undefined,
-              resendRefused(draft),
-            ).blocksComposer,
+      const input: ChatSendRequest = {
+        ...request,
+        clientDid: actor,
+        requestId: crypto.randomUUID(),
+        sessionId: request.sessionId ?? crypto.randomUUID(),
+      };
+      const admitted = (draft: ChatDraft) => {
+        if (
+          chatDraftsFor(
+            load(),
+            actor,
+            request.nodeDid,
+            selectedSessionId,
+            mailbox?.itemId,
+          ).some(
+            (row) =>
+              deliveryAffordances(
+                sendStatus(row, now()),
+                mailbox !== undefined,
+                resendRefused(row),
+              ).blocksComposer,
+          )
         )
-      )
-        throw new Error(
-          "Retry or discard the saved answer before answering this question again.",
-        );
-      const draft = retainChatDraft(
-        {
-          ...request,
-          clientDid: actor,
-          requestId: crypto.randomUUID(),
-          sessionId: request.sessionId ?? crypto.randomUUID(),
-        },
-        selectedSessionId,
-        queued,
-        mailbox,
+          throw new Error(
+            "Retry or discard the saved answer before answering this question again.",
+          );
+        return attempt(draft);
+      };
+      return proceed(
+        saveNewChatDraft(
+          attachments,
+          stores.chat,
+          input,
+          selectedSessionId,
+          queued,
+          mailbox,
+          admitted,
+        ),
+        (draft) => send(draft, applied, saved),
       );
-      return send(draft, applied);
     },
     /** Resend a failed message: the same payload under the same identity. */
     async retry(requestId: string, applied: Applied) {
@@ -202,15 +237,81 @@ export function createChatDelivery(
       if (status === "pending") throw new Error("This message is still being sent.");
       if (status === "confirmed")
         throw new Error("This message was already delivered.");
-      return send(draft, applied);
+      return send(attempt(draft), applied);
     },
-    /** Discard a failed message. It sends nothing; if an earlier send of it
-     * reached the runtime, it still appears in the session. */
+
     async discard(requestId: string) {
+      const handed = await chatDraftHandBack(attachments, original(requestId));
       const draft = original(requestId);
       if (sendStatus(draft, now()) !== "failed")
         throw new Error("Only a message that wasn't sent can be discarded.");
       removeChatDraft(stores.chat, draft);
+      await forgetChatDraftAttachments(attachments, draft);
+      return handed;
     },
+  };
+}
+
+export function observeLandedChatSends(
+  stores: Pick<ShellStores, "chat" | "client" | "session">,
+  now: () => number = Date.now,
+) {
+  let disposed = false;
+  let scheduled = false;
+  function schedule() {
+    if (disposed || scheduled) return;
+    scheduled = true;
+    queueMicrotask(() => {
+      scheduled = false;
+      if (!disposed) sweep();
+    });
+  }
+  function sweep() {
+    const held = stores.session.getState();
+    const session = held.session;
+    const clientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const at = now();
+    if (session && clientDid)
+      for (const draft of stores.chat.getState().chatDrafts) {
+        if (
+          draft.clientDid !== clientDid ||
+          sendStatus(draft, at) !== "failed" ||
+          !heldFor(session, draft.sessionId, draft.nodeDid) ||
+          !sessionHoldsRequest(held, draft.requestId)
+        )
+          continue;
+        try {
+          const current = savedChatDraft(draft);
+          if (current && sendStatus(current, at) === "failed")
+            confirm(stores.chat, current);
+        } catch {}
+      }
+    const { submissionError, chatDrafts } = stores.chat.getState();
+    const about = submissionError?.requestId;
+    if (
+      about &&
+      !chatDrafts.some((draft) => draft.requestId === about && !draft.confirmed)
+    )
+      stores.chat.setState({ submissionError: null });
+  }
+  const stop = [
+    stores.session.subscribe(schedule),
+    stores.client.subscribe((state, previous) => {
+      if (state.snapshot?.client?.clientDid !== previous.snapshot?.client?.clientDid)
+        schedule();
+    }),
+    stores.chat.subscribe((state, previous) => {
+      if (
+        state.chatDrafts !== previous.chatDrafts ||
+        state.submissionError !== previous.submissionError ||
+        state.sendDeadlineTick !== previous.sendDeadlineTick
+      )
+        schedule();
+    }),
+  ];
+  schedule();
+  return () => {
+    disposed = true;
+    stop.forEach((unsubscribe) => unsubscribe());
   };
 }
