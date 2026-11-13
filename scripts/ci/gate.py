@@ -314,10 +314,10 @@ def resolve_plan(arguments):
         return json.loads(os.environ["GATE_PLAN"])
     only = set(filter(None, os.environ.get("GATE_ONLY", "").replace(",", " ").split())) or None
     everything = getattr(arguments, "everything", False) or os.environ.get("GATE_EVERYTHING") == "true"
-    if getattr(arguments, "files", None):
-        files = [line.strip() for line in Path(arguments.files).read_text().splitlines() if line.strip()]
-    elif everything:
+    if everything:
         files = []
+    elif getattr(arguments, "files", None):
+        files = [line.strip() for line in Path(arguments.files).read_text().splitlines() if line.strip()]
     else:
         files = changed_files(arguments.base)
     return plan(files, workspace(), everything, only)
@@ -524,6 +524,8 @@ def run_test(selection, name):
                 arguments += ["--features", PACKAGE_FEATURES[package]]
             cargo_test(package, arguments, expect_tests=package not in NO_TESTS, **options)
     if name == "desktop":
+        if os.environ.get("GITHUB_ACTIONS") and os.environ.get("CARGO_TARGET_DIR"):
+            sh(["python3", ".github/scripts/ensure-rust-build-space.py", os.environ["CARGO_TARGET_DIR"]])
         if sh([".github/scripts/desktop-runtime-journey.sh", "build"]):
             cargo_test("native client runtime journey", [
                 "-p", "gents-cli", "-p", "gents-client-host", "-p", "gents-media-host",
