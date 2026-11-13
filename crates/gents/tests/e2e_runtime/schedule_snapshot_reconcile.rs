@@ -31,7 +31,7 @@ async fn apply_documents(
     )
     .unwrap();
     access
-        .transact_write("test.automation_configuration", |txn| {
+        .transact_signed_conflict_rebuild("test.automation_configuration", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 gents_documents::apply_desired_state_plan(
@@ -72,10 +72,21 @@ fn schedule_trigger(
     })
 }
 
-async fn create_schedule(access: &ConfigAccess, owner: &str, schedule_id: &str, task_id: &str) {
+async fn create_scheduled_task(
+    access: &ConfigAccess,
+    owner: &str,
+    schedule_id: &str,
+    task_id: &str,
+    agent_did: &str,
+    prompt_template: &str,
+) {
     apply_documents(
         access,
         vec![
+            (
+                gents_store::collection::Collection::Task,
+                serde_json::json!({"node_did":owner,"task_id":task_id,"display_name":task_id,"agent_did":agent_did,"prompt_template":prompt_template}),
+            ),
             (
                 gents_store::collection::Collection::Schedule,
                 serde_json::json!({"node_did":owner,"schedule_id":schedule_id,"cadence":{"kind":"interval","interval_secs":60}}),
@@ -252,19 +263,13 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
         startup.last_reconcile_error
     );
 
-    create_task(
-        &fixture.access,
-        &node_did,
-        "task-reconcile-alpha",
-        &default_agent_did,
-        "alpha prompt",
-    )
-    .await;
-    create_schedule(
+    create_scheduled_task(
         &fixture.access,
         &node_did,
         "schedule-reconcile-alpha",
         "task-reconcile-alpha",
+        &default_agent_did,
+        "alpha prompt",
     )
     .await;
 
