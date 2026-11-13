@@ -3,12 +3,6 @@ use gents_session::session::message::MessageContent;
 use gents_session::session::message::*;
 use gents_toolcalls::call::lifecycle::admission_fixture::{owner, set_state, started};
 
-/// A User starts Agent A; A starts Agent B through `agent_new`. B lists A's
-/// session, which the User requested, from B's own verified creation receipt;
-/// A lists B's; an unrelated Agent C lists neither.
-
-/// The calling Agent's DID, which signs the session-message interrupt checks.
-
 #[tokio::test]
 async fn steer_reachability_matches_lean() {
     use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};

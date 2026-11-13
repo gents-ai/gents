@@ -344,6 +344,8 @@ async fn boot_goal_background_handoff_with_plans(
 struct ChildRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    #[cfg(test)]
+    request_id: String,
     node_did: String,
     session_id: String,
     caused_by_parent_request_id: Option<String>,
@@ -869,7 +871,7 @@ async fn goal_recovery_actors(
 async fn goal_children_from_access(access: &ConfigAccess) -> Vec<ChildRow> {
     let response = access.execute(r#"{
         AgentRequest(filter: {caused_by_trigger_kind: {_eq: "goal"}}) {
-            _docID node_did session_id caused_by_parent_request_id input
+            _docID request_id node_did session_id caused_by_parent_request_id input
         }
     }"#).await.expect("query selected Agent's goal children");
     serde_json::from_value(response["data"]["AgentRequest"].clone()).expect("decode goal children")
