@@ -936,71 +936,73 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
 }
 
 #[tokio::test]
-async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
-    let (message, caller, caused) = started(
-        "agent-stop-drains",
-        gents_session::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = message.admission.node.clone();
-    let receipt = gents_session::session::stop_session_with_access(
-        &node,
-        &owner(&message),
-        &caused.node_did,
-        &caused.session_id,
-        caused.requester_did.as_deref(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(receipt.status.as_str(), "stop_requested");
-    assert_eq!(receipt.drained_request_ids, vec![caused.request_id.clone()]);
-    assert!(gents_session::session::session_is_stopped(
-        &node,
-        &identity::Did::new(caused.agent_did.clone()).unwrap(),
-        &caused.node_did,
-        &caused.session_id,
-        caused.requester_did.as_deref(),
-    )
-    .await
-    .unwrap());
-
-    let error = plan(
-        &node,
-        &NoSessionMessageGoals,
-        &SessionMessageCause {
-            caller_node_did: caller.node_did.clone(),
-            caller_agent_did: caller.agent_did.clone(),
-            caller_session_id: "caller-session".to_owned(),
-            caller_requester_did: None,
-            caller_request_id: caller.request_id.clone(),
-            caller_request_doc_id: caller.doc_id.clone(),
-            caller_hop: caller.request_hop,
-            tool_call_id: "late-message".to_owned(),
-            tool_call_doc_id: "late-message-doc".to_owned(),
-            correlation: None,
-        },
-        &SessionMessageTarget {
-            node_did: caused.node_did.clone(),
-            agent_did: caused.agent_did.clone(),
-            session_id: caused.session_id.clone(),
-        },
-        RenderedBody {
-            content: "too late".to_owned(),
-            goal: None,
-        },
-        None,
-        false,
-        &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
-    )
-    .await
-    .unwrap();
-    assert!(
-        error.is_err(),
-        "late message admission must honor durable stop"
-    );
-
-    node.shutdown().await.expect("shut down test node");
-    std::fs::remove_dir_all(&message.admission.path).unwrap();
+async fn stop_then_late_message_matches_lean_session_stop_admission() {
+    for case in gents_lean_vocab::families::session_stop_admission_drains::cases() {
+        let (message, caller, caused) = started(
+            "agent-stop-drains",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = message.admission.node.clone();
+        let receipt = gents_session::session::stop_session_with_access(
+            &node,
+            &owner(&message),
+            &caused.node_did,
+            &caused.session_id,
+            caused.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        let stopped = gents_session::session::session_is_stopped(
+            &node,
+            &identity::Did::new(caused.agent_did.clone()).unwrap(),
+            &caused.node_did,
+            &caused.session_id,
+            caused.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        let late = plan(
+            &node,
+            &NoSessionMessageGoals,
+            &SessionMessageCause {
+                caller_node_did: caller.node_did.clone(),
+                caller_agent_did: caller.agent_did.clone(),
+                caller_session_id: "caller-session".to_owned(),
+                caller_requester_did: None,
+                caller_request_id: caller.request_id.clone(),
+                caller_request_doc_id: caller.doc_id.clone(),
+                caller_hop: caller.request_hop,
+                tool_call_id: "late-message".to_owned(),
+                tool_call_doc_id: "late-message-doc".to_owned(),
+                correlation: None,
+            },
+            &SessionMessageTarget {
+                node_did: caused.node_did.clone(),
+                agent_did: caused.agent_did.clone(),
+                session_id: caused.session_id.clone(),
+            },
+            RenderedBody {
+                content: "too late".to_owned(),
+                goal: None,
+            },
+            None,
+            false,
+            &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
+        )
+        .await
+        .unwrap();
+        case.check(
+            gents_lean_vocab::families::session_stop_admission_drains::StopOutput {
+                stop_accepted: receipt.status.as_str() == "stop_requested",
+                drained_pending: receipt.drained_request_ids == vec![caused.request_id.clone()],
+                stopped,
+                late_message_refused: late.is_err(),
+            },
+        );
+        node.shutdown().await.expect("shut down test node");
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
 }
 
 #[tokio::test]

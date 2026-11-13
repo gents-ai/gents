@@ -349,47 +349,32 @@ fn commitments_do_not_reinterpret_authored_strings_as_json() {
 }
 
 #[test]
-fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
-    let mut value = backend(
-        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-        "local",
-    );
-    value["probe_status"] = "healthy".into();
-    assert!(DesiredStateApplyPlan::new(vec![document(value)]).is_err());
-    let mut doc = document(backend(
-        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-        "local",
-    ));
-    doc.update = json!({"enabled":false});
-    assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
-    let mut doc = document(backend(
-        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-        "local",
-    ));
-    doc.update["node_did"] = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into();
-    assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
-    assert!(DesiredStateApplyPlan::new(vec![
-        document(backend(
-            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
-            "same"
-        )),
-        document(backend(
-            "did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76",
-            "same"
-        ))
-    ])
-    .is_ok());
-    assert!(DesiredStateApplyPlan::new(vec![
-        document(backend(
-            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
-            "same"
-        )),
-        document(backend(
-            "did:key:z6MkfU66Fr2mkFNav8t5hQVbTHbbFL8hkPhoaoHegSNThyRh",
-            "same"
-        ))
-    ])
-    .is_err());
+fn plan_admission_matches_lean() {
+    use gents_lean_vocab::families::desired_state_plan_admission as plan_family;
+    let owner = |index: u64| DEFAULT_REPLACEMENT_OWNER_DIDS[usize::try_from(index).unwrap()];
+    gents_lean_vocab::families::desired_state_plan_admission::replay(|plan: &plan_family::Plan| {
+        DesiredStateApplyPlan::new(
+            plan.documents
+                .iter()
+                .map(|planned| {
+                    let mut value =
+                        backend(owner(planned.owner), &format!("backend-{}", planned.id));
+                    if planned.undeclared_field {
+                        value["probe_status"] = "healthy".into();
+                    }
+                    let mut doc = document(value);
+                    if planned.sparse_replacement {
+                        doc.update = json!({"enabled": false});
+                    }
+                    if let Some(replacement_owner) = planned.replacement_owner {
+                        doc.update["node_did"] = owner(replacement_owner).into();
+                    }
+                    doc
+                })
+                .collect(),
+        )
+        .is_ok()
+    });
 }
 
 #[tokio::test]

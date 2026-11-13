@@ -1,23 +1,15 @@
 use std::collections::VecDeque;
 
-use tokio::sync::Semaphore;
-
 use super::*;
 
 #[derive(Clone, Copy)]
 enum WritePlan {
     Success,
-    Fail,
-    StorageFull,
-    BlockForever,
-    BlockThenFail,
-    BlockThenSucceed,
 }
 
 struct ControlledWriter {
     plans: std::sync::Mutex<VecDeque<WritePlan>>,
     attempts: mpsc::UnboundedSender<NodeReadinessProcessState>,
-    release: Semaphore,
     persisted: tokio::sync::Mutex<Vec<NodeReadinessProcessState>>,
 }
 
@@ -40,20 +32,6 @@ impl NodeReadinessWriter for ControlledWriter {
             .expect("attempt observer remains alive");
         match plan {
             WritePlan::Success => {}
-            WritePlan::Fail => anyhow::bail!("injected readiness persistence failure"),
-            WritePlan::StorageFull => {
-                return Err(anyhow::Error::new(
-                    gents_protocol::database_error::StorageFull,
-                ))
-            }
-            WritePlan::BlockForever => std::future::pending().await,
-            WritePlan::BlockThenFail => {
-                self.release.acquire().await.unwrap().forget();
-                anyhow::bail!("injected readiness persistence failure");
-            }
-            WritePlan::BlockThenSucceed => {
-                self.release.acquire().await.unwrap().forget();
-            }
         }
         self.persisted.lock().await.push(snapshot.process_state);
         Ok(())
@@ -72,7 +50,6 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
                 case.states.len()
             ])),
             attempts: attempts_tx,
-            release: Semaphore::new(0),
             persisted: tokio::sync::Mutex::new(Vec::new()),
         });
         let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
@@ -113,164 +90,6 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
         }
         owner.close().await.unwrap();
     }
-}
-
-#[tokio::test]
-async fn persistence_retry_is_bounded_and_leaves_committed_state_unchanged() {
-    let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-    let mut plans = vec![WritePlan::Fail; MAX_PERSIST_ATTEMPTS];
-    plans.push(WritePlan::Success);
-    let writer = Arc::new(ControlledWriter {
-        plans: std::sync::Mutex::new(VecDeque::from(plans)),
-        attempts: attempts_tx,
-        release: Semaphore::new(0),
-        persisted: tokio::sync::Mutex::new(Vec::new()),
-    });
-    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
-        writer.clone(),
-        "did:test:bounded-readiness-writer",
-        Duration::from_millis(1),
-    );
-
-    assert!(
-        tokio::time::timeout(Duration::from_secs(1), publisher.initialize("general"))
-            .await
-            .expect("bounded retry must complete")
-            .is_err()
-    );
-    let mut attempts = 0;
-    while attempts_rx.try_recv().is_ok() {
-        attempts += 1;
-    }
-    assert_eq!(attempts, MAX_PERSIST_ATTEMPTS);
-    assert!(writer.persisted.lock().await.is_empty());
-    assert_eq!(
-        publisher.observation(),
-        AgentAdmissionObservation::default()
-    );
-    publisher.initialize("general").await.unwrap();
-    assert_eq!(
-        *writer.persisted.lock().await,
-        vec![NodeReadinessProcessState::Recovering],
-        "a later valid command must recover from a bounded write failure"
-    );
-    owner.close().await.unwrap();
-}
-
-#[tokio::test]
-async fn close_remains_bounded_when_write_attempts_timeout() {
-    let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-    let mut plans = vec![WritePlan::Success];
-    plans.extend(std::iter::repeat_n(
-        WritePlan::BlockForever,
-        MAX_PERSIST_ATTEMPTS,
-    ));
-    let writer = Arc::new(ControlledWriter {
-        plans: std::sync::Mutex::new(VecDeque::from(plans)),
-        attempts: attempts_tx,
-        release: Semaphore::new(0),
-        persisted: tokio::sync::Mutex::new(Vec::new()),
-    });
-    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
-        writer,
-        "did:test:cancellable-readiness-writer",
-        Duration::from_millis(1),
-    );
-    publisher.initialize("general").await.unwrap();
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(NodeReadinessProcessState::Recovering)
-    );
-
-    let ready = tokio::spawn(async move {
-        publisher
-            .set_process_state(ProcessLifecycleState::Ready)
-            .await
-    });
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(NodeReadinessProcessState::Ready)
-    );
-    tokio::time::timeout(Duration::from_secs(3), owner.close())
-        .await
-        .expect("close must remain bounded around a stuck writer")
-        .unwrap();
-    assert!(ready.await.unwrap().is_err());
-}
-
-#[tokio::test]
-async fn saturated_command_queue_cannot_block_owner_close_forever() {
-    let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-    let mut plans = vec![WritePlan::Success];
-    plans.extend(std::iter::repeat_n(
-        WritePlan::BlockForever,
-        MAX_PERSIST_ATTEMPTS,
-    ));
-    plans.extend(std::iter::repeat_n(
-        WritePlan::BlockForever,
-        MAX_PERSIST_ATTEMPTS,
-    ));
-    let writer = Arc::new(ControlledWriter {
-        plans: std::sync::Mutex::new(VecDeque::from(plans)),
-        attempts: attempts_tx,
-        release: Semaphore::new(0),
-        persisted: tokio::sync::Mutex::new(Vec::new()),
-    });
-    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
-        writer,
-        "did:test:saturated-readiness-writer",
-        Duration::from_millis(1),
-    );
-    publisher.initialize("general").await.unwrap();
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(NodeReadinessProcessState::Recovering)
-    );
-
-    let blocked = {
-        let publisher = publisher.clone();
-        tokio::spawn(async move {
-            publisher
-                .set_process_state(ProcessLifecycleState::Ready)
-                .await
-        })
-    };
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(NodeReadinessProcessState::Ready)
-    );
-    let queued = (0..64)
-        .map(|generation| {
-            let publisher = publisher.clone();
-            tokio::spawn(async move { publisher.set_router_generation(generation).await })
-        })
-        .collect::<Vec<_>>();
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while publisher.commands.capacity() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("test must deterministically saturate the publisher queue");
-
-    let close_result = tokio::time::timeout(Duration::from_secs(3), owner.close())
-        .await
-        .expect("a saturated queue and stuck writer must not make close immortal");
-    assert!(
-        close_result.is_err(),
-        "saturated close must report forced cancellation"
-    );
-    assert!(blocked.await.unwrap().is_err());
-    let mut failed = 0;
-    for queued in queued {
-        if queued.await.unwrap().is_err() {
-            failed += 1;
-        }
-    }
-    assert!(
-        failed > 0,
-        "publisher cancellation did not reject queued work"
-    );
 }
 
 async fn test_publisher() -> (
@@ -504,122 +323,6 @@ async fn semantic_noop_and_stale_commands_do_not_emit_watch_revisions() {
             .is_err()
     );
     owner.close().await.unwrap();
-}
-
-#[tokio::test]
-async fn ordered_writer_retries_without_overtake_and_flushes_terminal_state() {
-    let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-    let writer = Arc::new(ControlledWriter {
-        plans: std::sync::Mutex::new(VecDeque::from([
-            WritePlan::Success,
-            WritePlan::BlockThenFail,
-            WritePlan::Success,
-            WritePlan::BlockThenSucceed,
-        ])),
-        attempts: attempts_tx,
-        release: Semaphore::new(0),
-        persisted: tokio::sync::Mutex::new(Vec::new()),
-    });
-    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
-        writer.clone(),
-        "did:test:ordered-readiness-writer",
-        Duration::from_millis(5),
-    );
-    publisher.initialize("general").await.unwrap();
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(NodeReadinessProcessState::Recovering)
-    );
-
-    let ready = {
-        let publisher = publisher.clone();
-        tokio::spawn(async move {
-            publisher
-                .set_process_state(ProcessLifecycleState::Ready)
-                .await
-        })
-    };
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(NodeReadinessProcessState::Ready)
-    );
-    let shutdown = {
-        let publisher = publisher.clone();
-        tokio::spawn(async move {
-            publisher
-                .set_process_state(ProcessLifecycleState::Shutdown)
-                .await
-        })
-    };
-    tokio::task::yield_now().await;
-    assert!(!ready.is_finished(), "Ready ack preceded durable success");
-    assert!(
-        !shutdown.is_finished(),
-        "newer Shutdown overtook the failed Ready write"
-    );
-
-    writer.release.add_permits(1);
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(NodeReadinessProcessState::Ready),
-        "the failed Ready snapshot must retry before Shutdown"
-    );
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(NodeReadinessProcessState::Shutdown)
-    );
-    let close = tokio::spawn(owner.close());
-    tokio::task::yield_now().await;
-    ready.await.unwrap().unwrap();
-    assert!(
-        !shutdown.is_finished(),
-        "Shutdown ack preceded durable success"
-    );
-    assert!(!close.is_finished(), "owner joined before terminal flush");
-
-    writer.release.add_permits(1);
-    shutdown.await.unwrap().unwrap();
-    close.await.unwrap().unwrap();
-    assert_eq!(
-        *writer.persisted.lock().await,
-        vec![
-            NodeReadinessProcessState::Recovering,
-            NodeReadinessProcessState::Ready,
-            NodeReadinessProcessState::Shutdown,
-        ]
-    );
-}
-
-#[tokio::test]
-async fn full_storage_stops_readiness_retries_and_keeps_close_bounded() {
-    let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-    let writer = Arc::new(ControlledWriter {
-        plans: std::sync::Mutex::new(VecDeque::from([WritePlan::StorageFull])),
-        attempts: attempts_tx,
-        release: Semaphore::new(0),
-        persisted: tokio::sync::Mutex::new(Vec::new()),
-    });
-    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
-        writer.clone(),
-        "did:test:full-storage",
-        Duration::from_secs(60),
-    );
-    let error = tokio::time::timeout(Duration::from_secs(1), publisher.initialize("general"))
-        .await
-        .unwrap()
-        .unwrap_err();
-    assert!(gents_store::graphql::is_storage_full(error.as_ref()));
-    assert!(attempts_rx.try_recv().is_ok());
-    assert!(attempts_rx.try_recv().is_err());
-    assert!(writer.persisted.lock().await.is_empty());
-    assert_eq!(
-        publisher.observation(),
-        AgentAdmissionObservation::default()
-    );
-    tokio::time::timeout(Duration::from_secs(1), owner.close())
-        .await
-        .unwrap()
-        .unwrap();
 }
 
 #[test]

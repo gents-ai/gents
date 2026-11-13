@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{sync::Arc, time::Duration};
 
 use futures::{future::BoxFuture, StreamExt};
@@ -9,31 +10,52 @@ use crate::llm::rig_compat::hold_stream_guard;
 use gents_lean_vocab::families::storage_write_gate_contracts_stream_finalization as family;
 use gents_store::config_client::ConfigAccess;
 
+struct GuardDrop(Arc<AtomicUsize>);
+
+impl Drop for GuardDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 struct Finalizer {
     gate: Arc<Mutex<()>>,
     entered: oneshot::Sender<()>,
     storage_return: oneshot::Receiver<()>,
+    finished: Arc<AtomicBool>,
+    guard: GuardDrop,
 }
 
 impl StreamGuardLifecycle for Finalizer {
     fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
         Box::pin(async move {
+            let _guard_drop = self.guard;
             let _guard = self.gate.lock().await;
             let _ = self.entered.send(());
             let _ = self.storage_return.await;
+            self.finished.store(true, Ordering::SeqCst);
             Ok(())
         })
     }
 }
 
-async fn stream_guard_gate_held(case: &family::FinalizationInput) -> bool {
+async fn gate_still_held(gate: &Mutex<()>) -> bool {
+    let sibling = tokio::time::timeout(Duration::from_millis(250), gate.lock()).await;
+    sibling.is_err()
+}
+
+async fn observe_finalization(case: &family::FinalizationInput) -> family::FinalizationOutput {
     let gate = Arc::new(Mutex::new(()));
     let (entered_tx, mut entered_rx) = oneshot::channel();
     let (return_tx, return_rx) = oneshot::channel();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let finished = Arc::new(AtomicBool::new(false));
     let finalizer = Finalizer {
         gate: gate.clone(),
         entered: entered_tx,
         storage_return: return_rx,
+        finished: finished.clone(),
+        guard: GuardDrop(drops.clone()),
     };
     let mut owner: BoxFuture<'static, ()> = if case.independently_scheduled {
         Box::pin(async move {
@@ -57,12 +79,30 @@ async fn stream_guard_gate_held(case: &family::FinalizationInput) -> bool {
     } else {
         Some(return_tx)
     };
-    let sibling = tokio::time::timeout(Duration::from_millis(250), gate.lock()).await;
-    let gate_held = sibling.is_err();
-    drop(sibling);
-    drop(owner);
+    let (gate_held, guard_drops, finalizer_finished) = if case.consumer_drops {
+        drop(owner);
+        let gate_held = gate_still_held(&gate).await;
+        (
+            gate_held,
+            drops.load(Ordering::SeqCst),
+            finished.load(Ordering::SeqCst),
+        )
+    } else {
+        let gate_held = gate_still_held(&gate).await;
+        let observed = (
+            gate_held,
+            drops.load(Ordering::SeqCst),
+            finished.load(Ordering::SeqCst),
+        );
+        drop(owner);
+        observed
+    };
     drop(pending_return);
-    gate_held
+    family::FinalizationOutput {
+        gate_held,
+        guard_drops: guard_drops as u64,
+        finalizer_finished,
+    }
 }
 
 struct NativeFinalizer {
@@ -158,9 +198,15 @@ async fn native_gate_held_after_independent_completion() -> bool {
 #[tokio::test]
 async fn lean_storage_gate_scenarios_drive_stream_finalization() {
     for case in family::cases() {
-        case.check(stream_guard_gate_held(&case.input).await);
+        let output = observe_finalization(&case.input).await;
         if case.input.independently_scheduled && case.input.storage_returns {
-            case.check(native_gate_held_after_independent_completion().await);
+            let native_gate_held = native_gate_held_after_independent_completion().await;
+            assert_eq!(
+                native_gate_held, output.gate_held,
+                "{}: native node gate disagrees with the stream finalizer",
+                case.input.name
+            );
         }
+        case.check(output);
     }
 }

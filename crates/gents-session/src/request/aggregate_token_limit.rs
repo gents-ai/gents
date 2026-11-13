@@ -9,3 +9,21 @@ pub fn parse_aggregate_token_limit(max_total_tokens: Option<i64>) -> anyhow::Res
         })
         .transpose()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_pinned_token_limits_preserve_signed_integer_boundaries() {
+        use gents_lean_vocab::families::request_pinned_token_limit_pinned_limit as family;
+        family::replay(|input| {
+            let result = parse_aggregate_token_limit(input.limit);
+            family::Outcome {
+                accepted: result.is_ok(),
+                error: result.as_ref().err().map(ToString::to_string),
+                limit: result.ok().flatten(),
+            }
+        });
+    }
+}

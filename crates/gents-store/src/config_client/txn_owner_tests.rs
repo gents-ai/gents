@@ -155,35 +155,75 @@ async fn http_transaction_cursors_keep_all_pages() {
 }
 
 #[tokio::test]
-async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    ConfigAccess::local(Arc::clone(&node))
-        .add_collection("type ReadGateProbe { value: String }")
+async fn config_access_entry_admission_matches_lean() {
+    for case in gents_lean_vocab::families::storage_write_gate_admission_entry::cases::<String>() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        ConfigAccess::local(Arc::clone(&node))
+            .add_collection("type ReadGateProbe { value: String }")
+            .await
+            .unwrap();
+        ConfigAccess::write_local(
+            &node,
+            "test.read_gate_seed",
+            r#"mutation { create_ReadGateProbe(input: {value: "ready"}) {_docID} }"#,
+        )
         .await
         .unwrap();
-    ConfigAccess::write_local(
-        &node,
-        "test.read_gate_seed",
-        r#"mutation { create_ReadGateProbe(input: {value: "ready"}) {_docID} }"#,
-    )
-    .await
-    .unwrap();
-
-    let gate = super::mutation_write_gate(&node);
-    let held = fill_write_gate(&gate, "test.hold_mutation_gate_for_read").await;
-    let response = tokio::time::timeout(
-        Duration::from_secs(5),
-        ConfigAccess::local(Arc::clone(&node))
-            .transact_readonly("test.config_access_readonly", |txn| {
-                Box::pin(async move { txn.execute("{ ReadGateProbe { value } }").await })
-            }),
-    )
-    .await
-    .expect("read-only transaction waited on the mutation gate")
-    .unwrap();
-    assert_eq!(response["data"]["ReadGateProbe"][0]["value"], "ready");
-    drop(held);
-    node.shutdown().await.expect("node shutdown");
+        let gate = super::mutation_write_gate(&node);
+        let mut held = Vec::new();
+        for _ in 0..case.input.held {
+            held.push(
+                gate.acquire(
+                    crate::config_client::write_telemetry::WriteOperation::new(
+                        "test.hold_mutation_gate_for_entry",
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        let operation_node = Arc::clone(&node);
+        let read_only = match case.input.operation.as_str() {
+            "read_only" => true,
+            "write" => false,
+            other => panic!("unknown operation {other}"),
+        };
+        let mut operation = tokio::spawn(async move {
+            if read_only {
+                let access = ConfigAccess::local(operation_node);
+                access
+                    .transact_readonly("test.config_access_readonly", |txn| {
+                        Box::pin(async move { txn.execute("{ ReadGateProbe { value } }").await })
+                    })
+                    .await
+                    .map(|response| response["data"]["ReadGateProbe"][0]["value"] == "ready")
+                    .map_err(|error| format!("{error:#}"))
+            } else {
+                ConfigAccess::write_local(
+                    &operation_node,
+                    "test.config_access_entry_write",
+                    r#"mutation { create_ReadGateProbe(input: {value: "next"}) {_docID} }"#,
+                )
+                .await
+                .map(|_| true)
+                .map_err(|error| format!("{error:#}"))
+            }
+        });
+        let proceeded = tokio::select! {
+            result = &mut operation => {
+                assert!(result.unwrap().unwrap(), "{:?}", case.input);
+                true
+            }
+            () = wait_for_gate_waiters(&gate, 1) => false,
+        };
+        drop(held);
+        if !proceeded {
+            assert!(operation.await.unwrap().unwrap(), "{:?}", case.input);
+        }
+        case.check(proceeded);
+        node.shutdown().await.expect("node shutdown");
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -560,8 +600,28 @@ async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
     node.shutdown().await.expect("node shutdown");
 }
 
-#[tokio::test]
-async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() {
+fn gate_owns(gate: &super::MutationWriteGate, operation: &str) -> bool {
+    lock(&gate.owners)
+        .values()
+        .any(|owner| owner.operation.as_str() == operation)
+}
+
+async fn registry_abandoned(node: &EmbeddedNode, handle: &query::TransactionHandle) -> bool {
+    matches!(
+        node.discard_transaction(handle).await,
+        Err(query::TransactionError::NotFound(_))
+    )
+}
+
+fn in_flight(tracker: &super::NativeOperationTracker) -> u64 {
+    count_u64(lock(&tracker.state).in_flight)
+}
+
+type NativeObservation =
+    gents_lean_vocab::families::native_completion_trace_abandonment::Observation<String>;
+
+async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
+    assert_eq!(steps, 1, "a dropped caller is observed once");
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let node_ref = Arc::clone(&node);
     let gate = Arc::new(super::MutationWriteGate::new());
@@ -572,6 +632,10 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
     let registered_notify_for_begin = Arc::clone(&registered_notify);
     let release = Arc::new(Notify::new());
     let release_for_begin = Arc::clone(&release);
+    let tracker = Arc::new(Mutex::new(None));
+    let tracker_for_begin = Arc::clone(&tracker);
+    let begins = Arc::new(AtomicUsize::new(0));
+    let begins_for_begin = Arc::clone(&begins);
     let telemetry = EventCapture::default();
     let events = Arc::clone(&telemetry.events);
     let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
@@ -587,9 +651,12 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
             let registered = Arc::clone(&registered_for_begin);
             let registered_notify = Arc::clone(&registered_notify_for_begin);
             let release = Arc::clone(&release_for_begin);
+            let tracker = Arc::clone(&tracker_for_begin);
+            begins_for_begin.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 let write_guard = gate.acquire(operation).await?;
                 let native_operations = Arc::new(super::NativeOperationTracker::default());
+                *lock(&tracker) = Some(Arc::clone(&native_operations));
                 let (rollback_on_drop, handle) = super::begin_embedded_owned(
                     node.clone(),
                     Arc::clone(&gate),
@@ -637,47 +704,48 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
     let handle = lock(&registered)
         .clone()
         .expect("registered transaction handle was observed");
+    let tracker = lock(&tracker)
+        .clone()
+        .expect("native begin built its tracker");
     drop(transaction);
-    assert_eq!(
-        gate_for_assert.permits.available_permits(),
-        super::MUTATION_WRITE_GATE_CAPACITY
-    );
-    assert_native_transaction_abandoned(&node, &handle).await;
-
-    let next_guard = tokio::time::timeout(
-        Duration::from_secs(2),
-        gate_for_assert.acquire(
-            crate::config_client::write_telemetry::WriteOperation::new(
-                "test.write_after_cancelled_begin",
-            )
-            .expect("valid test write operation"),
-        ),
-    )
-    .await
-    .expect("rollback finishes before releasing the write gate")
-    .expect("write gate acquisition succeeds");
-    drop(next_guard);
-    let error = node
-        .discard_transaction(&handle)
-        .await
-        .expect_err("cancelled begin already removed the registered transaction");
-    assert!(matches!(error, query::TransactionError::NotFound(_)));
-
+    let gate_held = gate_owns(&gate_for_assert, "test.cancel_after_embedded_begin");
+    let native_outstanding = in_flight(&tracker);
+    let abandoned = registry_abandoned(&node, &handle).await;
     let events = std::mem::take(&mut *lock(&events));
-    assert_eq!(events.len(), 1);
     assert_eq!(
-        events[0].get("outcome").map(String::as_str),
-        Some("cancelled")
+        events.len(),
+        1,
+        "a cancelled transaction reports its outcome once: {events:?}"
     );
+    let caller = events
+        .last()
+        .and_then(|event| event.get("outcome"))
+        .cloned()
+        .unwrap_or_else(|| "waiting".to_owned());
     assert_eq!(
-        events[0].get("rollback").map(String::as_str),
-        Some("not_needed")
+        events
+            .last()
+            .and_then(|event| event.get("rollback"))
+            .map(String::as_str),
+        Some("not_needed"),
+        "a transaction abandoned synchronously schedules no rollback owner"
     );
+    let observed = vec![NativeObservation {
+        caller,
+        native_outstanding,
+        registry_abandoned: abandoned,
+        gate_held,
+        retry_started: begins.load(Ordering::SeqCst) > 1,
+    }];
     node.shutdown().await.expect("node shutdown");
+    observed
 }
 
-#[tokio::test]
-async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drained() {
+async fn abandoned_statement_trace(steps: usize) -> Vec<NativeObservation> {
+    assert_eq!(
+        steps, 2,
+        "an abandoned statement is observed at its deadline and its drain"
+    );
     let dir = tempfile::tempdir().unwrap();
     let identity = crate::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
         .expect("signing identity");
@@ -712,7 +780,13 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
                 IdempotentTransactionRetry::FiveAttempts,
                 "test.native_completion_abandonment",
                 move |txn| {
-                    *lock(&registered_for_callback) = Some(transaction_handle(txn));
+                    let tracker = match &txn.backend {
+                        TxnBackend::Embedded {
+                            native_operations, ..
+                        } => Arc::clone(native_operations),
+                        _ => unreachable!("a local transaction"),
+                    };
+                    *lock(&registered_for_callback) = Some((transaction_handle(txn), tracker));
                     attempts_for_callback.fetch_add(1, Ordering::SeqCst);
                     Box::pin(async move {
                         txn.execute(
@@ -737,80 +811,70 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
         .await
         .expect("transaction caller task")
         .expect_err("abandoned statement must fail its transaction");
-    assert!(
-        crate::config_client::is_transaction_step_unavailable(&error),
-        "abandoned native work remains a storage-unavailable result: {}",
-        ErrorChain(error.as_ref())
-    );
-    assert_eq!(
-        attempts.load(Ordering::SeqCst),
-        1,
-        "poisoned attempt replayed"
-    );
     tokio::time::resume();
-    let handle = lock(&registered)
+    let caller = if crate::config_client::is_transaction_step_unavailable(&error) {
+        "timed_out"
+    } else {
+        panic!(
+            "abandoned native work is a storage-unavailable result: {}",
+            ErrorChain(error.as_ref())
+        )
+    };
+    let (handle, tracker) = lock(&registered)
         .clone()
         .expect("native operation has a transaction");
-    assert_native_transaction_abandoned(&node, &handle).await;
     let gate = super::mutation_write_gate(&node);
-    assert!(
-        gate.owners
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .values()
-            .any(|owner| owner.operation.as_str() == "test.native_completion_abandonment"),
-        "the native transaction lost the mutation gate before its statement returned"
-    );
-    let mut other_owners = Vec::with_capacity(super::MUTATION_WRITE_GATE_CAPACITY - 1);
-    for _ in 1..super::MUTATION_WRITE_GATE_CAPACITY {
-        other_owners.push(
-            gate.acquire(
-                crate::config_client::write_telemetry::WriteOperation::new(
-                    "test.native_completion_gate_filler",
-                )
-                .unwrap(),
-            )
-            .await
-            .unwrap(),
-        );
-    }
-    assert_eq!(gate.permits.available_permits(), 0);
-
-    let node_for_writer = Arc::clone(&node);
-    let writer = tokio::spawn(async move {
-        ConfigAccess::write_local(
-            &node_for_writer,
-            "test.native_completion_after_abandonment",
-            r#"mutation { create_NativeCompletionProbe(input: { value: "next" }) { _docID } }"#,
-        )
-        .await
-    });
-    wait_for_gate_waiters(&gate, 1).await;
-    assert!(
-        !writer.is_finished(),
-        "a later writer passed the gate while native work was still owned"
-    );
+    let mut observed = vec![NativeObservation {
+        caller: caller.to_owned(),
+        native_outstanding: in_flight(&tracker),
+        registry_abandoned: registry_abandoned(&node, &handle).await,
+        gate_held: gate_owns(&gate, "test.native_completion_abandonment"),
+        retry_started: attempts.load(Ordering::SeqCst) > 1,
+    }];
 
     release.notify_one();
-    tokio::time::timeout(Duration::from_secs(30), writer)
-        .await
-        .expect("later writer remained blocked after native operation returned")
-        .expect("writer task")
-        .expect("later write succeeds after native work drains");
-    drop(other_owners);
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while in_flight(&tracker) > 0 || gate_owns(&gate, "test.native_completion_abandonment") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the returned statement drains and its owner releases the gate");
+    observed.push(NativeObservation {
+        caller: caller.to_owned(),
+        native_outstanding: in_flight(&tracker),
+        registry_abandoned: registry_abandoned(&node, &handle).await,
+        gate_held: gate_owns(&gate, "test.native_completion_abandonment"),
+        retry_started: attempts.load(Ordering::SeqCst) > 1,
+    });
 
     let result = ConfigAccess::local(Arc::clone(&node))
         .execute("{ NativeCompletionProbe { value } }")
         .await
         .unwrap();
-    let values: Vec<&str> = result["data"]["NativeCompletionProbe"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|row| row["value"].as_str())
-        .collect();
-    assert_eq!(values, ["next"], "abandoned transaction leaked a write");
+    assert_eq!(
+        result["data"]["NativeCompletionProbe"],
+        json!([]),
+        "an abandoned DefraDB transaction discards its writes"
+    );
     node.shutdown().await.expect("node shutdown");
+    observed
+}
+
+#[tokio::test]
+async fn native_abandonment_traces_match_lean() {
+    for case in gents_lean_vocab::families::native_completion_trace_abandonment::cases::<
+        String,
+        String,
+        String,
+    >() {
+        let observed = match case.input.path.as_str() {
+            "cancelled_after_begin" => cancelled_after_begin_trace(case.input.steps.len()).await,
+            "abandoned_statement" => abandoned_statement_trace(case.input.steps.len()).await,
+            other => panic!("unknown native completion path {other}"),
+        };
+        case.check(observed);
+    }
 }
 
 #[tokio::test]

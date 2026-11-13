@@ -1,0 +1,104 @@
+{
+ "ok": true,
+ "problems": [],
+ "notes": [
+  "kept workspace_seal_completes_before_the_after_phase_is_selected: end_to_end:real workspace seal failure through daemon run selects after_failure; hook-workspace integration is an open design TODO",
+  "kept shutdown_before_any_hook_launches_leaves_no_record_to_recover: end_to_end:daemon claim boundary under shutdown plus host hook record journal plus startup recovery after restart",
+  "kept writes_require_an_acp_addressable_agent_identity: premise_evidence:identity Did parse refusal and the model-facing ACP-addressable refusal text",
+  "kept non_deadline_request_terminalization_does_not_timeout_running_wait: end_to_end:interrupt latch owner then terminal owner leave a running foreground tool row untouched",
+  "kept builder_rejects_backend_vetoed_by_measured_health: premise_evidence:operator-facing veto text naming measured_unhealthy",
+  "kept goal_usage_rejects_a_review_without_its_same_session_parent: premise_evidence:refusal text and the model lacks the same-session-parent rule",
+  "kept access_review_without_reported_usage_invalidates_the_callers_allowance: end_to_end:review runner plus shared token ledger plus restart recovery plus terminal row",
+  "completion_retry_output_obligation_loop_terminal: new, consumer crates/gents/src/runtime/agent/loop_stream/tests/streaming.rs, 5 cases",
+  "materialized_lineage_materialization: new, consumer crates/gents/tests/conformance/request_lifecycle.rs, 8 cases",
+  "router_dispatch_blocked_dispatch: new, consumer crates/gents/src/runtime/agent/runtime/tests/router.rs, 3 cases",
+  "task_hooks_hookless_bound_request: new, consumer crates/gents/src/runtime/agent/daemon/task_hook_tests.rs, 3 cases"
+ ],
+ "deleted_test_assertions": {
+  "crates/gents/src/runtime/agent/daemon/task_hook_tests.rs::workspace_seal_completes_before_the_after_phase_is_selected": [
+   "3: let placement = tempfile::tempdir().expect(\"workspace placement directory\");",
+   "27: .expect(\"materialize the writer binding\");",
+   "29: assert_eq!(harness.calls(), 1, \"{row}\");",
+   "30: assert_eq!(row[\"lifecycle_state\"], \"failed\", \"{row}\");",
+   "31: assert!(reason(&row).contains(\"placement\"), \"the seal failed: {row}\");",
+   "32: assert!(",
+   "36: assert!("
+  ],
+  "crates/gents/src/runtime/agent/daemon/task_hook_tests.rs::a_request_bound_to_a_missing_task_fails_closed": [
+   "5: assert_eq!(harness.calls(), 0, \"{row}\");",
+   "6: assert_eq!(row[\"lifecycle_state\"], \"failed\", \"{row}\");",
+   "7: assert!(reason(&row).contains(\"no longer exists\"), \"{row}\");"
+  ],
+  "crates/gents/src/runtime/agent/daemon/task_hook_tests.rs::a_request_bound_to_a_disabled_hookless_task_fails_closed": [
+   "18: assert_eq!(harness.calls(), 0, \"{row}\");",
+   "19: assert_eq!(row[\"lifecycle_state\"], \"failed\", \"{row}\");",
+   "20: assert!(reason(&row).contains(\"disabled\"), \"{row}\");"
+  ],
+  "crates/gents/src/runtime/agent/daemon/task_hook_tests.rs::shutdown_before_any_hook_launches_leaves_no_record_to_recover": [
+   "19: .expect(\"request processing returned\");",
+   "20: assert!(harness.log_lines().is_empty(), \"no hook launched\");",
+   "21: assert!(harness.calls() == 0);",
+   "22: assert!(",
+   "35: assert!(outcome.task_hooks.unwrap() == 0);"
+  ],
+  "crates/gents/tests/conformance/request_lifecycle.rs::scheduled_materialization_persists_trigger_lineage": [
+   "33: assert_eq!(",
+   "48: assert_eq!(",
+   "66: assert_eq!(row[\"admission_kind\"], \"local-self\");",
+   "67: assert_eq!(row[\"admission_signer_did\"], agent.did());",
+   "68: assert!(row[\"admission_signature\"]",
+   "70: .is_some_and(|signature| !signature.is_empty()));"
+  ],
+  "crates/gents/tests/e2e_runtime/self_config_tools.rs::writes_require_an_acp_addressable_agent_identity": [
+   "17: .unwrap_err();",
+   "18: assert!(error.contains(\"ACP-addressable\"), \"{error}\");",
+   "19: assert_eq!("
+  ],
+  "crates/gents/src/runtime/agent/output_obligation/logical_tests.rs::non_deadline_request_terminalization_does_not_timeout_running_wait": [
+   "49: lifecycle.claimed_deadline_at().expect(\"claimed deadline\"),",
+   "68: assert_eq!(",
+   "94: assert_eq!(observed[\"lifecycle_state\"], \"running\");",
+   "95: assert!(observed[\"cancel_cause\"].is_null());",
+   "96: assert!(observed[\"tool_failure_class\"].is_null());",
+   "97: assert!(observed[\"stuck_since\"].is_string());"
+  ],
+  "crates/gents/src/runtime/agent/tests/builder.rs::builder_rejects_backend_vetoed_by_measured_health": [
+   "33: Ok(_) => panic!(\"builder should reject a backend this runtime has measured unhealthy\"),",
+   "37: assert!("
+  ],
+  "crates/gents/src/runtime/agent/daemon/title/owned_tests.rs::goal_usage_rejects_a_review_without_its_same_session_parent": [
+   "19: .unwrap_err();",
+   "20: assert!(format!(\"{error:#}\").contains(\"goal review has no same-session parent\"));"
+  ],
+  "crates/gents/src/runtime/agent/daemon/title/owned_tests.rs::access_review_without_reported_usage_invalidates_the_callers_allowance": [
+   "31: .unwrap_err();",
+   "32: assert!(format!(\"{error:#}\").contains(\"aggregate_token_usage_missing\"));",
+   "34: assert!(budget.snapshot().is_err());",
+   "40: .unwrap_err();",
+   "41: assert!(recovered",
+   "44: assert_eq!(calls.load(Ordering::SeqCst), 1);",
+   "45: assert_eq!(fixture.session_message_count().await, 0);",
+   "46: assert_eq!("
+  ],
+  "crates/gents/src/runtime/agent/loop_stream/tests/streaming.rs::unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder": [
+   "31: expected_count_field: None,",
+   "54: assert!(format!(\"{reminder:?}\").contains(\"write_result\"));",
+   "62: assert!(saw_pending);",
+   "63: assert!(!saw_final);",
+   "65: assert_eq!(histories.len(), 2);",
+   "66: assert!(format!(\"{:?}\", histories[1]).contains(\"configured output obligation is unmet\"));",
+   "67: node.shutdown().await.expect(\"node shutdown\");"
+  ],
+  "crates/gents/src/runtime/agent/runtime/tests/router.rs::snapshot_change_reroutes_request_blocked_on_old_executor_queue": [
+   "70: .expect(\"router must reach the full queue\");",
+   "79: .expect(\"router must leave the old full queue\")",
+   "80: .expect(\"updated executor must receive the request\");",
+   "81: assert_eq!(dispatched.session_id, \"blocked-dispatch\");",
+   "82: assert_eq!(old_rx.recv().await.unwrap().session_id, \"already-queued\");",
+   "83: assert!(old_rx.try_recv().is_err());",
+   "88: .expect(\"router must shut down\")",
+   "92: node.shutdown().await.expect(\"node shutdown\");"
+  ]
+ },
+ "reviewer_note": "every line in deleted_test_assertions must be a field of a family output on a listed case, or the test is kept with a reason"
+}
