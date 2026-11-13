@@ -1811,7 +1811,7 @@ async fn drive_claim_preserves_explicit_deadline(case: &ClaimDeadlineInput) -> C
     let mut lifecycle = lifecycle_for(
         &actors,
         request,
-        case.synthesized_claim_deadline.unwrap() as u64,
+        case.synthesized_claim_deadline.unwrap(),
     );
     let outcome = lifecycle.claim().await.unwrap();
 
