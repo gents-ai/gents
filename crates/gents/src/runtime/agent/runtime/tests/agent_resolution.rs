@@ -142,7 +142,7 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
         )
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(&name)
+            escape_graphql_string(name)
         ))
         .await
         .unwrap();

@@ -373,15 +373,17 @@ pub async fn load_client_identity() -> Result<gents_desktop_core::client::Princi
     gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await
 }
 
-/// [`load_client_identity`] in the shape a pack wire takes to load the held
-/// User identity only when it writes through a local transaction.
-pub fn load_held_user_identity() -> std::pin::Pin<
+type HeldUserIdentity = std::pin::Pin<
     Box<
         dyn std::future::Future<
                 Output = Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>>,
             > + Send,
     >,
-> {
+>;
+
+/// [`load_client_identity`] in the shape a pack wire takes to load the held
+/// User identity only when it writes through a local transaction.
+pub fn load_held_user_identity() -> HeldUserIdentity {
     Box::pin(async {
         let identity: std::sync::Arc<dyn gents_store::identity::NodeIdentity> =
             std::sync::Arc::new(load_client_identity().await?);

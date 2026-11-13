@@ -1,9 +1,7 @@
 use super::*;
-use gents_lean_vocab::families::goal_session_observation_contracts_classification as wire;
 use crate::goal::operator_resume::support::{Fixture, SESSION};
-use futures::FutureExt;
+use gents_lean_vocab::families::goal_session_observation_contracts_classification as wire;
 use serde_json::{json, Value};
-use tokio_util::sync::CancellationToken;
 
 async fn fixture() -> Fixture {
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,

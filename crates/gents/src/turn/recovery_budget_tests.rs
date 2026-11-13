@@ -15,7 +15,6 @@ async fn grant_test_agent(
     signer: &gents_store::identity::ManagedAgentSigner,
 ) {
     use gents_store::config_client::NodePermission;
-    use gents_store::identity::NodeIdentity as _;
     let admin = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).unwrap(),

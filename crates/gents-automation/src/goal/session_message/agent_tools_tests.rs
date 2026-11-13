@@ -2,6 +2,7 @@ use super::SessionGoals;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_protocol::tool_call::AwaitMode;
 use gents_session::session::message::plan::plan;
+use gents_session::session::message::MessageContent;
 use gents_session::session::message::{
     commit, plan_with_delivery, stage_planned_write_in_txn, AgentMessageDelivery, RenderedBody,
 };
@@ -93,11 +94,13 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             &SessionGoals,
             &cause,
             &target,
-            RenderedBody {
-                content: "deliver after interruption".to_owned(),
-                goal: None,
+            MessageContent {
+                rendered: RenderedBody {
+                    content: "deliver after interruption".to_owned(),
+                    goal: None,
+                },
+                title: None,
             },
-            None,
             AgentMessageDelivery::Interrupt,
             &signer(&message),
         )
@@ -110,11 +113,13 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
                 &SessionGoals,
                 &cause,
                 &target,
-                RenderedBody {
-                    content: "replacement active request".to_owned(),
-                    goal: None,
+                MessageContent {
+                    rendered: RenderedBody {
+                        content: "replacement active request".to_owned(),
+                        goal: None,
+                    },
+                    title: None,
                 },
-                None,
                 AgentMessageDelivery::Queue,
                 &signer(&message),
             )
@@ -299,11 +304,13 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         &SessionGoals,
         &cause,
         &target_scope,
-        RenderedBody {
-            content: "start nested work".into(),
-            goal: Some(("finish nested work".into(), Some(500))),
+        MessageContent {
+            rendered: RenderedBody {
+                content: "start nested work".into(),
+                goal: Some(("finish nested work".into(), Some(500))),
+            },
+            title: None,
         },
-        None,
         false,
         &signer,
     )

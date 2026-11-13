@@ -6,6 +6,7 @@ use tempfile::TempDir;
 
 use super::*;
 
+#[cfg(test)]
 pub fn capabilities() -> BTreeSet<String> {
     [
         CAP_CREATE_WORKSPACE,
@@ -38,6 +39,7 @@ pub fn integrate_caps() -> BTreeSet<String> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn cleanup_caps() -> BTreeSet<String> {
     [CAP_CLEANUP_WORKSPACE]
         .into_iter()
@@ -179,6 +181,12 @@ impl Fixture {
             documents: docs,
             route: Default::default(),
         }
+    }
+}
+
+impl Default for Fixture {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

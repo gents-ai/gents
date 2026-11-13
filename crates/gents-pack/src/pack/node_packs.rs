@@ -691,8 +691,10 @@ impl NodePacks<'_> {
                             "node DID is not ACP-addressable"
                         ))
                     })?),
-                    &notify_home,
-                    &identity.coordinate,
+                    super::PluginStoreLocation {
+                        home: &notify_home,
+                        coordinate: &identity.coordinate,
+                    },
                     Some(&identity),
                     super::PluginStageContext {
                         node_binding: node_binding.as_ref(),

@@ -115,6 +115,14 @@ impl WorkspaceAuthority {
         matches!(self, Self::ReadWrite)
     }
 
+    pub fn denies_git_metadata_writes(self) -> bool {
+        matches!(self, Self::ReadWrite)
+    }
+
+    pub fn may_write_git_metadata(self) -> bool {
+        self.allows_file_writes() && !self.denies_git_metadata_writes()
+    }
+
     pub fn infimum(self, other: Self) -> Self {
         if self.rank() <= other.rank() {
             self

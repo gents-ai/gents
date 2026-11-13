@@ -175,7 +175,7 @@ async fn prepare_with_lock(
         home
     };
     let mut facts = match &manager {
-        Some(manager) => gather_facts(manager, &choice.home, server, home.clone(), program).await?,
+        Some(manager) => gather_facts(manager, &choice.home, server, home, program).await?,
         None => ServiceFacts {
             definition_home: None,
             executable_present: true,

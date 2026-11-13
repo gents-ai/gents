@@ -10,7 +10,7 @@ use gents_lean_vocab::families::interrupt_queue_contracts_sequential::{
 use gents_protocol::row::AgentRequest;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::identity::NodeIdentity;
-use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;

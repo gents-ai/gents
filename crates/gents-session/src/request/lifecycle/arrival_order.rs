@@ -138,7 +138,7 @@ mod tests {
     fn observed_claim_cohorts_match_lean() {
         gents_lean_vocab::families::trigger_delivery_observed_claim::replay(|case| {
             let candidate: ClaimObservation = recode(&case.candidate);
-            let rows: Vec<ClaimObservation> = case.rows.iter().map(|row| recode(row)).collect();
+            let rows: Vec<ClaimObservation> = case.rows.iter().map(recode).collect();
             observed_claim_allowed(&candidate, &rows)
         });
     }

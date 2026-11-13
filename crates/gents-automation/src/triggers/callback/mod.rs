@@ -24,8 +24,6 @@ pub(crate) use documents::{
     create_callback_result, create_pending_invocation, update_invocation, CallbackInvocationDoc,
     CallbackResultDoc,
 };
-#[cfg(test)]
-pub(crate) use gents_session::workspace::flush_workspace_docs;
 pub(crate) use run::recover_local_invocations;
 
 pub(crate) const LIFECYCLE_PENDING: &str = "pending";

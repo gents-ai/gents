@@ -3831,11 +3831,13 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         &access,
         owner,
         initial,
-        DriftPolicy::Refuse,
+        documents::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         Some(home.path()),
         false,
         None,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3853,11 +3855,13 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         &access,
         owner,
         replacement,
-        DriftPolicy::Refuse,
+        documents::DocumentGraphPolicy {
+            drift: DriftPolicy::Refuse,
+            profiles: &gents_inference::resolved::ProviderProfilePolicy,
+        },
         Some(home.path()),
         false,
         None,
-        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

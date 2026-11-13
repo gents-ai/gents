@@ -33,7 +33,10 @@ pub use documents::{
     HostedDocumentGraph, HostedPackPreparation, InstallerRootAgent, PreparedDependency,
     PreparedDocumentPackInstall,
 };
-pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
+pub use hosted::{
+    stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
+    HostedPackStageError,
+};
 pub use removal::{
     ensure_plugins_unreferenced, plugin_pin_conflicts, visible_plugin_selections,
     PluginPinConflict, PluginSelection,
@@ -1255,8 +1258,7 @@ pub async fn record_plugin_store_change_as(
         access,
         owner,
         identity,
-        home,
-        coordinate,
+        PluginStoreLocation { home, coordinate },
         installed,
         None,
         profile_policy,
@@ -1279,8 +1281,7 @@ pub async fn record_plugin_retirement_as(
         access,
         owner,
         identity,
-        home,
-        coordinate,
+        PluginStoreLocation { home, coordinate },
         None,
         PluginStageContext {
             node_binding: None,
@@ -1296,8 +1297,7 @@ pub async fn record_plugin_store_change_as_with_node_binding(
     access: &ConfigAccess,
     owner: &str,
     identity: Option<Did>,
-    home: &Path,
-    coordinate: &str,
+    location: PluginStoreLocation<'_>,
     installed: Option<&PackIdentity>,
     node_binding: Option<&gents_documents::ConfigurationNodeBinding>,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
@@ -1306,8 +1306,7 @@ pub async fn record_plugin_store_change_as_with_node_binding(
         access,
         owner,
         identity,
-        home,
-        coordinate,
+        location,
         installed,
         PluginStageContext {
             node_binding,
@@ -1334,8 +1333,7 @@ pub async fn record_staged_plugin_store_change(
         access,
         owner,
         None,
-        home,
-        coordinate,
+        PluginStoreLocation { home, coordinate },
         installed,
         PluginStageContext {
             node_binding: None,
@@ -1351,8 +1349,7 @@ pub(crate) async fn record_staged_plugin_store_change_as_with_node_binding(
     access: &ConfigAccess,
     owner: &str,
     identity: Option<Did>,
-    home: &Path,
-    coordinate: &str,
+    location: PluginStoreLocation<'_>,
     installed: Option<&PackIdentity>,
     stage: PluginStageContext<'_>,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
@@ -1361,13 +1358,18 @@ pub(crate) async fn record_staged_plugin_store_change_as_with_node_binding(
         access,
         owner,
         identity,
-        home,
-        coordinate,
+        location,
         installed,
         stage,
         profile_policy,
     )
     .await
+}
+
+#[derive(Clone, Copy)]
+pub struct PluginStoreLocation<'a> {
+    pub home: &'a Path,
+    pub coordinate: &'a str,
 }
 
 pub(crate) struct PluginStageContext<'a> {
@@ -1382,8 +1384,7 @@ async fn record_plugin_store_change_with_stage(
     access: &ConfigAccess,
     owner: &str,
     identity: Option<Did>,
-    home: &Path,
-    coordinate: &str,
+    location: PluginStoreLocation<'_>,
     installed: Option<&PackIdentity>,
     stage: PluginStageContext<'_>,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
@@ -1421,8 +1422,7 @@ async fn record_plugin_store_change_with_stage(
                 write_plugin_record(
                     txn,
                     owner,
-                    home,
-                    coordinate,
+                    location,
                     installed,
                     node_binding,
                     retired,
@@ -1511,13 +1511,13 @@ async fn write_installed_plugin_identity(
 async fn write_plugin_record(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    home: &Path,
-    coordinate: &str,
+    location: PluginStoreLocation<'_>,
     installed: Option<&PackIdentity>,
     node_binding: Option<&gents_documents::ConfigurationNodeBinding>,
     retired: bool,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
+    let PluginStoreLocation { home, coordinate } = location;
     if let Some(pack) = installed {
         if let Some(conflict) =
             plugin_replacement_conflict_in_txn(txn, owner, std::slice::from_ref(pack)).await?

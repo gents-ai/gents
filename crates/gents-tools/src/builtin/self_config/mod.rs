@@ -3,8 +3,6 @@
 pub mod agent;
 pub mod agent_management;
 mod agent_queries;
-#[cfg(test)]
-use agent_management::agent_mutate;
 pub use agent_management::holds_agent_catalog;
 use agent_management::load_agent_catalog;
 pub use agent_management::ObservedAdmission;
@@ -12,8 +10,6 @@ pub use agent_management::{
     apply_agent, apply_agent_in_txn, create_agent, observe_admission, preview_agent,
 };
 pub use agent_management::{configure_agent, grant_own_self_configuration};
-#[cfg(test)]
-use agent_queries::node_default_agent;
 use agent_queries::{agent_inspect, agent_list, guard_agent_profile_choice};
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 pub mod command;
@@ -37,8 +33,6 @@ mod pack_wiring;
 mod read;
 mod requests;
 pub mod tools_operation;
-#[cfg(test)]
-use requests::{agent_request, profile_request};
 use requests::{
     anchored_request, automation_request, automation_target, backend_request,
     local_backend_create_request, outcome_text, profile_create_request, profile_target_request,

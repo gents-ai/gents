@@ -477,6 +477,7 @@ where
         Ok(scope)
     }
 
+    #[cfg(test)]
     pub(crate) async fn scope_for_request(
         &mut self,
         doc: &str,

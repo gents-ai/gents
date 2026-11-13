@@ -851,8 +851,10 @@ pub async fn apply_pending_user_edit_in_txn(
                 &receipt.request_ids[index],
                 new_id,
                 REPLACED_REASON,
-            )
+            )?
         } else {
+            let transition =
+                RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Interrupted)?;
             format!(
                 r#"mutation($terminal_output: JSON) {{ update_AgentRequest(docID: "{}", filter: {{
                         _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "{pending}" }}
@@ -864,8 +866,8 @@ pub async fn apply_pending_user_edit_in_txn(
                 escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
                 escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
                 escape_graphql_string(REMOVED_REASON),
-                pending = RequestLifecycleState::Pending.as_str(),
-                interrupted = RequestLifecycleState::Interrupted.as_str()
+                pending = transition.from().as_str(),
+                interrupted = transition.to().as_str()
             )
         };
         let result = if creates.is_empty() {

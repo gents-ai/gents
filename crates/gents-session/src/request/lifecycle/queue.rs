@@ -2,8 +2,6 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-#[cfg(test)]
-use serde::Deserialize;
 use serde_json::Value;
 
 use gents_protocol::row::AgentRequest;

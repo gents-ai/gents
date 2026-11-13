@@ -19,8 +19,8 @@ mod compaction_entries;
 mod control;
 pub mod fork;
 mod history;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub mod model_test_support;
+#[cfg(test)]
+mod model_test_support;
 pub mod observations;
 pub mod output;
 pub mod output_render;

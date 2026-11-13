@@ -1,10 +1,7 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::support::{test_db, TestDb};
-use anyhow::{bail, Context, Result};
-use chrono::{SecondsFormat, Utc};
-use defra_node::Node as EmbeddedNode;
+use chrono::Utc;
 use gents_automation::goal::readiness_gate::GoalClaimedDecision;
 use gents_automation::goal::readiness_gate::GoalReconcileSettled;
 use gents_automation::goal::{
@@ -15,14 +12,12 @@ use gents_automation::goal::{
     MAX_INFRASTRUCTURE_RETRIES,
 };
 use gents_automation::triggers::engine::goal_source::*;
-use gents_automation::triggers::engine::{FireIntent, FireResult, TriggerSource};
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::node_readiness::{
     AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
     NodeReadinessProcessState, NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
 };
-use gents_protocol::row::{AgentRequest, AgentRequestRow};
 
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
