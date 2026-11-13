@@ -1714,8 +1714,24 @@ def caseCoverage : List CoverageEntry :=
       "operator_base_freeze_contracts_freeze")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_path_capability_cases"
-      "WorkspacePathCapabilityCases")
+      "family"
+      "workspace_path_capability_contracts_provision")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_sealing")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_tree_delta")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_integrate")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_replay")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

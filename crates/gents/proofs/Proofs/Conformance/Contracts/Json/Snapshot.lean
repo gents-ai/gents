@@ -538,8 +538,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
-    ++ "\"workspace_path_capability_cases\":"
-      ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
     ++ "\"file_inventory_direct_reader_cases\":"
       ++ Conformance.FileInventoryContracts.directReaderCasesJson ++ ","
     ++ "\"file_inventory_fork_cases\":"
