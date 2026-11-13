@@ -316,7 +316,7 @@ pub async fn build_responses_client(
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
-) -> Result<rig::providers::openai::Client<CapturingXaiGrokOAuthHttpClient>> {
+) -> Result<crate::llm::rig_compat::providers::ResponsesClient<CapturingXaiGrokOAuthHttpClient>> {
     let headers = build_xai_grok_oauth_headers()?;
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, node_did, account_ref).await?;
@@ -334,7 +334,8 @@ pub async fn build_chat_completions_client(
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
-) -> Result<rig::providers::openai::CompletionsClient<CapturingXaiGrokOAuthHttpClient>> {
+) -> Result<crate::llm::rig_compat::providers::ChatCompletionsClient<CapturingXaiGrokOAuthHttpClient>>
+{
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, node_did, account_ref).await?;
     crate::clients::inference_http::build_openai_chat_completions_client(

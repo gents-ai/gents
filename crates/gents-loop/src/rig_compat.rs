@@ -52,13 +52,13 @@ pub mod completion {
 }
 
 /// The HTTP exchange types Rig's client hands a transport and takes back, for
-/// code that inspects or rewrites an exchange. `Request`, `Response` and
-/// `HeaderValue` are the `http` crate's. Rig's client trait, its lazy body
+/// code that inspects or rewrites an exchange. `Request`, `Response`, `Uri`
+/// and `HeaderValue` are the `http` crate's. Rig's client trait, its lazy body
 /// and its provider clients are deliberately absent: a module that implements
 /// or builds them names Rig and stays on the ratchet's list.
 pub mod http {
     pub use rig::http_client::sse::BoxedStream;
-    pub use rig::http_client::{Error, HeaderValue, Request, Response, StreamingResponse};
+    pub use rig::http_client::{Error, HeaderValue, Request, Response, StreamingResponse, Uri};
 }
 
 pub fn charged_usage_total(usage: rig::completion::Usage) -> u64 {

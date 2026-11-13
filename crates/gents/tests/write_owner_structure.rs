@@ -1227,10 +1227,9 @@ const RIG_OWNER_MODULES: &[&str] = &[
 /// credential and limit-header clients, the Responses and session-tagging
 /// layers, the Codex and xAI policies and the Claude transport implement
 /// `HttpClientExt` or are generic over it; `claude_subscription` implements
-/// `CompletionModel` and `CompletionClient`; `backend_client`, `inference_http`,
-/// `chatgpt_codex` and `xai_grok` name or build `rig::providers` clients. A row
-/// leaves when its owner exposes a native transport or model trait that one
-/// adapter in `rig_compat` lifts into Rig's.
+/// `CompletionModel` and `CompletionClient`. A row leaves when its owner
+/// exposes a native transport or model trait that one adapter in `rig_compat`
+/// lifts into Rig's.
 #[rustfmt::skip]
 const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-loop/src/rendered_request/transport.rs",
@@ -1238,7 +1237,6 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-inference/src/clients/claude_messages/transport.rs",
     "crates/gents-inference/src/clients/claude_subscription.rs",
     "crates/gents-inference/src/clients/inference_http.rs",
-    "crates/gents-inference/src/llm/backend_client.rs",
     "crates/gents-inference/src/auth/http.rs",
     "crates/gents-inference/src/clients/provider_http.rs",
     "crates/gents-inference/src/clients/xai_grok.rs",
