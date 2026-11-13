@@ -1123,7 +1123,6 @@ pub struct LeanContractSnapshot {
     pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
-    pub trigger_delivery_callback_visibility_cases: serde_json::Value,
     pub trigger_delivery_latest_admission_cases: serde_json::Value,
     pub workspace_path_capability_cases: Vec<LeanWorkspacePathCapabilityCase>,
     pub file_inventory_direct_reader_cases: Vec<serde_json::Value>,

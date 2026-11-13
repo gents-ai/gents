@@ -1686,12 +1686,10 @@ async fn callback_result_visibility_and_repair_match_the_executable_cursor_contr
         tokio_util::sync::CancellationToken::new(),
     );
     engine.snapshots = Some(super::test_snapshot());
-    let cases =
-        &gents_lean_vocab::lean_contract_snapshot().trigger_delivery_callback_visibility_cases;
     let mut interrupted_after_grant = false;
-    for case in cases.as_array().expect("Lean callback visibility cases") {
-        let visible = case["visible"].as_bool().unwrap();
-        let linked = case["linked"].as_bool().unwrap();
+    for case in gents_lean_vocab::families::event_delivery_durable_callback_result_ready::cases() {
+        let visible = case.input.visible;
+        let linked = case.input.linked;
         if linked {
             if !interrupted_after_grant {
                 gents_store::test_support::relationships::resource_in_txn(
@@ -1741,12 +1739,7 @@ async fn callback_result_visibility_and_repair_match_the_executable_cursor_contr
         )
         .await
         .unwrap();
-        assert_eq!(ready, case["ready"].as_bool().unwrap(), "{case}");
-        assert_eq!(
-            if ready { 5 } else { 4 },
-            case["after"].as_u64().unwrap(),
-            "{case}"
-        );
+        case.check(ready);
     }
     let mut before_grant = result.clone();
     before_grant.result_id = "repair-before-grant-result".into();

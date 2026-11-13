@@ -92,13 +92,6 @@ def StateWire.toModel (s : StateWire) : State :=
   { receipts := s.receipts.map (·.toModel), requests := s.requests.map (·.toModel),
     outcomes := s.outcomes.map (·.toModel), goals := s.goals.map (·.toModel) }
 
-def callbackVisibilityCases : List String := do
-  let visible ← [false, true]
-  let linked ← [false, true]
-  pure <| "{\"visible\":" ++ toString visible ++ ",\"linked\":" ++ toString linked ++
-    ",\"ready\":" ++ toString (EventDelivery.Durable.callbackResultReady visible linked) ++
-    ",\"after\":" ++ toString (EventDelivery.Durable.callbackResultCursor 4 5 visible linked) ++ "}"
-
 def object (fields : List (String × String)) : String :=
   "{" ++ String.intercalate "," (fields.map fun (k, v) => jsonString k ++ ":" ++ v) ++ "}"
 
@@ -918,9 +911,7 @@ def latestAdmissionCases : List String :=
       ("fire", fireJson next), ("destination_allowed", toString allowed),
       ("post", stateJson (admitLatest before next allowed))]
 
-
-def triggerDeliveryCallbackVisibilityCasesJson : String :=
-  jsonArray callbackVisibilityCases
+attribute [conformance_function] EventDelivery.Durable.callbackResultReady
 
 
 def triggerDeliveryLatestAdmissionCasesJson : String :=

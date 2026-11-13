@@ -364,7 +364,6 @@ def snapshotCaptureTailJson : String :=
 
 def snapshotCoverageTailJson : String :=
   ""
-    ++ "\"trigger_delivery_callback_visibility_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryCallbackVisibilityCasesJson ++ ","
     ++ "\"trigger_delivery_latest_admission_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryLatestAdmissionCasesJson ++ ","
     ++ "\"watcher_scoped_scan_cases\":"
       ++ EventDelivery.WatcherConformance.casesJson ++ ","
