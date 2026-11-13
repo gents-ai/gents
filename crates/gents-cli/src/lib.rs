@@ -376,10 +376,12 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     // Client-facing commands load their principal before resolving an endpoint,
     // creating it only for a default home not yet set up; runtime entry points
     // never load this client key.
-    if matches!(
+    if let Command::Status(args) = &command {
+        let home = resolve_home_dir(args.home.as_deref());
+        gents_service::home_state::client_identity_for(&home).await?;
+    } else if matches!(
         &command,
-        Command::Status(_)
-            | Command::Sessions { .. }
+        Command::Sessions { .. }
             | Command::Automation { .. }
             | Command::Config { .. }
             | Command::Runtime {
