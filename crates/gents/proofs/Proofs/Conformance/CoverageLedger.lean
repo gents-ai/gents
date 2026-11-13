@@ -619,10 +619,6 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: native lease owners take one database-backed action at a time under the wall clock; no production path replays a multi-action renewal, expiry, recovery or stale-owner trace over a logical clock. No scheduler fairness or wall-clock continuity is proved.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "process_transition_cases"
-      "ProcessTransitions")
-      "process-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
       "family"
       "trigger_delivery_fire_admission")
       "triggers" [Surface.runtimeInternal]

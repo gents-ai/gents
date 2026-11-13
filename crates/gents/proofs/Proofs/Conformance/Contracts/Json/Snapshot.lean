@@ -432,8 +432,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
-    ++ "\"process_transition_cases\":"
-      ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
     ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
 

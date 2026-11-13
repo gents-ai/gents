@@ -101,10 +101,6 @@ pub fn lean_process_stop_cases() -> &'static [LeanProcessStopCase] {
     &lean_contract_snapshot().process_stop_cases
 }
 
-pub fn lean_process_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
-    &lean_contract_snapshot().process_transition_cases
-}
-
 pub fn lean_queue_deadline_cases() -> &'static [LeanQueueDeadlineConformanceCase] {
     &lean_contract_snapshot().queue_deadline_conformance_cases
 }
@@ -1154,7 +1150,6 @@ pub struct LeanContractSnapshot {
     pub client_data_publication_cases: LeanClientDataPublicationCases,
     pub client_request_closure_cases: Vec<serde_json::Value>,
     pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
-    pub process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub goal_create_cases: Vec<LeanGoalCreateCase>,
