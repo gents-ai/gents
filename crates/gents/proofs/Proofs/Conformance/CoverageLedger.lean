@@ -505,9 +505,19 @@ def caseCoverage : List CoverageEntry :=
       "The snapshot emits and the decoder accepts these cases; no native test reads them.")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_owed_delivery_cases"
-      "LifecycleHookOwedDeliveryCases"
-      "The production record (hooks::owed::Record, owe_runner, derive_halts, prunable) is driven by every case. Its publication through the store's post-commit runtime write, the redrive's and the halt derivation's observation of core rows as the owning Agent, and the deletion of pruned rows are not driven by these cases.")
+      "family"
+      "hooks_contracts_owed_trace"
+      "The production record (hooks::owed::Record, owe_runner, publish, redrive, performs) is driven by every case. Its publication through the store's post-commit runtime write and the redrive's observation of core rows as the owning Agent are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "hooks_contracts_owed_derive"
+      "Production derive_halts decides every case. The halt derivation's observation of core rows as the owning Agent is not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "hooks_contracts_owed_prune"
+      "Production prunable decides every record. The deletion of pruned rows is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "cross_actor_authorization_cases" "CrossActorAuthorization"
@@ -1267,17 +1277,22 @@ def caseCoverage : List CoverageEntry :=
       "SessionControlCases")
       "session-control" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_effect_cases"
-      "LifecycleHookEffectCases"
+      "family"
+      "hooks_contracts_effect_commit"
       "Production validate decides every case; application runs through the conformance test's in-memory Host, whose all-or-none apply mirrors Hooks.applyEffects. The DefraDB transaction host (request::hooks::native) is crate-private and is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_stage_cases"
-      "LifecycleHookStageCases")
+      "family"
+      "hooks_contracts_refusable_staging")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_must_commit_cases"
-      "LifecycleHookMustCommitCases")
+      "family"
+      "hooks_contracts_must_commit_staging")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "hooks_contracts_must_commit_staging_unreached"
+      "model-production-gap: production stages a must-commit point only after core's transition committed, so a refused transition never reaches stage_dropping; the model finds that such a case commits nothing and owes nothing.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_rerun_cases"
@@ -1290,30 +1305,35 @@ def caseCoverage : List CoverageEntry :=
       "Production RestageOnResume and BindResumedRoot decide every case on rows built from it; the Goal row is advanced by applying their writes. Core's request.create operation and the DefraDB host are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_combine_cases"
-      "LifecycleHookCombineCases")
+      "family"
+      "hooks_contracts_verdict_combination")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_gate_cases"
-      "LifecycleHookGateCases")
+      "family"
+      "hooks_contracts_claim_gate")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_queue_scope_cases"
-      "LifecycleHookQueueScopeCases"
+      "family"
+      "hooks_contracts_queue_partition"
       "Production gate runs every case and production partition combines the answers through the conformance test's in-memory Host. The DefraDB transaction host, its revision read and the Goals listener (goal::lifecycle_hooks::AssignmentScope) are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_delivery_cases"
-      "LifecycleHookDeliveryCases")
+      "family"
+      "hooks_contracts_delivery_step")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "lifecycle_hook_admit_cases"
-      "LifecycleHookAdmitCases")
+      "family"
+      "hooks_contracts_prepared_admission")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_grant_cases"
-      "LifecycleHookGrantCases"
-      "Production validate decides every representable case. A native grant rides on its create, so a grant on a document the result does not create cannot be expressed and is checked to be invalid in the model. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
+      "family"
+      "hooks_contracts_grant_validity"
+      "Production validate decides every case whose grants ride on creates. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "hooks_contracts_grant_validity_unreached"
+      "model-production-gap: a native grant is a field of the create that carries it, so a grant on a document the result does not create has no production form; the model finds every such case invalid.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "lifecycle_hook_supersede_cases"

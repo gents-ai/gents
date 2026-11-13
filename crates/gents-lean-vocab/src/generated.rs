@@ -253,26 +253,6 @@ pub fn lean_interrupt_queue_cases() -> &'static [LeanInterruptQueueCase] {
     &lean_contract_snapshot().interrupt_queue_cases
 }
 
-pub fn lean_lifecycle_hook_admit_cases() -> &'static [LeanLifecycleHookAdmitCase] {
-    &lean_contract_snapshot().lifecycle_hook_admit_cases
-}
-
-pub fn lean_lifecycle_hook_combine_cases() -> &'static [LeanLifecycleHookCombineCase] {
-    &lean_contract_snapshot().lifecycle_hook_combine_cases
-}
-
-pub fn lean_lifecycle_hook_delivery_cases() -> &'static [LeanLifecycleHookDeliveryCase] {
-    &lean_contract_snapshot().lifecycle_hook_delivery_cases
-}
-
-pub fn lean_lifecycle_hook_effect_cases() -> &'static [LeanLifecycleHookEffectCase] {
-    &lean_contract_snapshot().lifecycle_hook_effect_cases
-}
-
-pub fn lean_lifecycle_hook_gate_cases() -> &'static [LeanLifecycleHookGateCase] {
-    &lean_contract_snapshot().lifecycle_hook_gate_cases
-}
-
 pub fn lean_lifecycle_hook_goal_halt_cases() -> &'static [LeanLifecycleHookGoalHaltCase] {
     &lean_contract_snapshot().lifecycle_hook_goal_halt_cases
 }
@@ -281,32 +261,12 @@ pub fn lean_lifecycle_hook_goal_resume_cases() -> &'static [LeanLifecycleHookGoa
     &lean_contract_snapshot().lifecycle_hook_goal_resume_cases
 }
 
-pub fn lean_lifecycle_hook_grant_cases() -> &'static [LeanLifecycleHookGrantCase] {
-    &lean_contract_snapshot().lifecycle_hook_grant_cases
-}
-
 pub fn lean_lifecycle_hook_history_cases() -> &'static [LeanLifecycleHookHistoryCase] {
     &lean_contract_snapshot().lifecycle_hook_history_cases
 }
 
-pub fn lean_lifecycle_hook_must_commit_cases() -> &'static [LeanLifecycleHookMustCommitCase] {
-    &lean_contract_snapshot().lifecycle_hook_must_commit_cases
-}
-
-pub fn lean_lifecycle_hook_owed_delivery_cases() -> &'static LeanLifecycleHookOwedDeliveryCases {
-    &lean_contract_snapshot().lifecycle_hook_owed_delivery_cases
-}
-
-pub fn lean_lifecycle_hook_queue_scope_cases() -> &'static [LeanLifecycleHookQueueScopeCase] {
-    &lean_contract_snapshot().lifecycle_hook_queue_scope_cases
-}
-
 pub fn lean_lifecycle_hook_rerun_cases() -> &'static [LeanLifecycleHookRerunCase] {
     &lean_contract_snapshot().lifecycle_hook_rerun_cases
-}
-
-pub fn lean_lifecycle_hook_stage_cases() -> &'static [LeanLifecycleHookStageCase] {
-    &lean_contract_snapshot().lifecycle_hook_stage_cases
 }
 
 pub fn lean_lifecycle_hook_supersede_cases() -> &'static [LeanLifecycleHookSupersedeCase] {
@@ -3302,18 +3262,8 @@ pub struct LeanContractSnapshot {
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
-    pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
-    pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
-    pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
     pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
     pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
-    pub lifecycle_hook_combine_cases: Vec<LeanLifecycleHookCombineCase>,
-    pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
-    pub lifecycle_hook_queue_scope_cases: Vec<LeanLifecycleHookQueueScopeCase>,
-    pub lifecycle_hook_delivery_cases: Vec<LeanLifecycleHookDeliveryCase>,
-    pub lifecycle_hook_owed_delivery_cases: LeanLifecycleHookOwedDeliveryCases,
-    pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
-    pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
     pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
     pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
     pub lifecycle_hook_history_cases: Vec<LeanLifecycleHookHistoryCase>,
@@ -6574,145 +6524,11 @@ pub struct LeanKillObservationCase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LeanLifecycleHookAccess {
-    Create,
-    Update,
-    Delete,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookAdmitCase {
-    pub name: String,
-    pub authorized: bool,
-    pub cancelled: bool,
-    pub current: LeanLifecycleHookBinding,
-    pub prepared: Option<LeanLifecycleHookPrepared>,
-    pub result: LeanLifecycleHookAdmitResult,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookAdmitResult {
-    Ok { payload: String },
-    Error { stale: LeanLifecycleHookStale },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookAgedOwedRecord {
-    pub record: LeanLifecycleHookOwedRecord,
-    pub age: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookBinding {
-    pub actor: String,
-    pub point: String,
-    pub subject: String,
-    pub inputs: String,
-    pub configuration: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum LeanLifecycleHookCarrier {
     Context,
     Sourced,
     Transparent,
     Stringified,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookCombineCase {
-    pub name: String,
-    pub verdicts: Vec<LeanLifecycleHookVerdict>,
-    pub combined: LeanLifecycleHookVerdict,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookDeliveryCase {
-    pub name: String,
-    pub initial: LeanLifecycleHookDeliveryRecord,
-    pub trace: Vec<LeanLifecycleHookDeliveryTraceStep>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookDeliveryRecord {
-    pub terminal: Option<String>,
-    pub owed: Vec<String>,
-    pub delivered: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookDeliveryStep {
-    Publish { outcome: String, keys: Vec<String>, commit: bool },
-    Deliver { key: String, applied: bool },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookDeliveryTraceStep {
-    pub step: LeanLifecycleHookDeliveryStep,
-    pub state: LeanLifecycleHookDeliveryRecord,
-    pub pending: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookDenial {
-    pub access: LeanLifecycleHookAccess,
-    pub collection: String,
-    pub doc: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookDerivedHalt {
-    pub session: String,
-    pub at: String,
-    pub owner: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookEffect {
-    Create { collection: String, doc: String, value: String },
-    Update { collection: String, doc: String, expected: u64, value: String },
-    Delete { collection: String, doc: String, expected: u64 },
-    Core { op: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookEffectCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub manifest: LeanLifecycleHookManifest,
-    pub effects: Vec<LeanLifecycleHookEffect>,
-    pub valid: bool,
-    pub committed: Option<LeanLifecycleHookState>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGateCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub plugins: Vec<LeanLifecycleHookScript<LeanLifecycleHookVerdict>>,
-    pub result: LeanLifecycleHookGateResult,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookGateResult {
-    Ok { verdicts: Vec<LeanLifecycleHookVerdict>, combined: LeanLifecycleHookVerdict },
-    Error { refusal: LeanLifecycleHookRefusal },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -6739,47 +6555,6 @@ pub struct LeanLifecycleHookGoalResumeCase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGrant {
-    pub target: LeanLifecycleHookRef,
-    pub relation: String,
-    pub subject: LeanLifecycleHookSubject,
-}
-
-/// `Hooks.grantsValid` on one result: the declared grantable relations, the
-/// transaction's actor, what the event names and what core showed, the
-/// result's effects and grants.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGrantCase {
-    pub name: String,
-    pub declared: Vec<LeanLifecycleHookGrantable>,
-    pub actor: String,
-    pub named_actors: Vec<String>,
-    pub named_docs: Vec<LeanLifecycleHookRef>,
-    pub effects: Vec<LeanLifecycleHookEffect>,
-    pub grants: Vec<LeanLifecycleHookGrant>,
-    pub valid: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookGrantable {
-    pub collection: String,
-    pub relation: String,
-    pub subject: LeanLifecycleHookSubjectKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookHaltedSession {
-    pub session: String,
-    pub owner: Option<String>,
-    pub latched_at: Option<String>,
-    pub current: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookHistoryCase {
     pub name: String,
     pub owns: Vec<String>,
@@ -6787,183 +6562,6 @@ pub struct LeanLifecycleHookHistoryCase {
     pub named: Vec<LeanLifecycleHookRef>,
     pub read: LeanHistoryRead,
     pub permitted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookManifest {
-    pub name: String,
-    pub owns: Vec<String>,
-    pub bound: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookMustCommitCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub plugins: Vec<LeanLifecycleHookScript<String>>,
-    pub transition: String,
-    pub transition_refused: bool,
-    pub read_failed: Vec<String>,
-    pub committed: Option<LeanLifecycleHookMustCommitted>,
-    pub owed: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookMustCommitted {
-    pub state: LeanLifecycleHookState,
-    pub dropped: Vec<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookOwedAttempt {
-    Applied { writes: Vec<LeanLifecycleHookOwedWrite> },
-    Failed { error: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedDeliveryCases {
-    pub traces: Vec<LeanLifecycleHookOwedTraceCase>,
-    pub derive: Vec<LeanLifecycleHookOwedDeriveCase>,
-    pub prune: Vec<LeanLifecycleHookOwedPruneCase>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedDeriveCase {
-    pub name: String,
-    pub bound: usize,
-    pub sessions: Vec<LeanLifecycleHookHaltedSession>,
-    pub derived: Vec<LeanLifecycleHookDerivedHalt>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedKey {
-    pub point: String,
-    pub plugin: String,
-    pub subject: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanLifecycleHookOwedKind {
-    Staging,
-    OnBehalf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedPruneCase {
-    pub name: String,
-    pub retention: u64,
-    pub records: Vec<LeanLifecycleHookAgedOwedRecord>,
-    pub kept: Vec<LeanLifecycleHookAgedOwedRecord>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedRecord {
-    pub key: LeanLifecycleHookOwedKey,
-    pub kind: LeanLifecycleHookOwedKind,
-    pub actor: Option<String>,
-    pub runner: String,
-    pub attempts: u64,
-    pub last_error: Option<String>,
-    pub settled: Option<LeanLifecycleHookOwedSettlement>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanLifecycleHookOwedSettlement {
-    Delivered,
-    Dropped,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookOwedStep {
-    Owe {
-        point: String,
-        actor: Option<String>,
-        owner: Option<String>,
-        signable: Vec<String>,
-        keys: Vec<LeanLifecycleHookOwedKey>,
-        commit: bool,
-    },
-    Redrive {
-        key: LeanLifecycleHookOwedKey,
-        authorized: bool,
-        current: bool,
-        attempt: LeanLifecycleHookOwedAttempt,
-        refused: Vec<LeanLifecycleHookOwedWrite>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedTraceCase {
-    pub name: String,
-    pub trace: Vec<LeanLifecycleHookOwedTraceStep>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedTraceStep {
-    pub step: LeanLifecycleHookOwedStep,
-    pub runner: Option<String>,
-    pub records: Vec<LeanLifecycleHookOwedRecord>,
-    pub performed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedWrite {
-    pub subject: String,
-    pub doc: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookPartition {
-    Ok { partition: Vec<LeanLifecycleHookScopeKey> },
-    Error { refusal: LeanLifecycleHookRefusal },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookPrepared {
-    pub binding: LeanLifecycleHookBinding,
-    pub verdict: LeanLifecycleHookPreparedVerdict,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookPreparedVerdict {
-    Allow { payload: String },
-    Deny { reason: String },
-    Unavailable,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookQueueScopeCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub plugins: Vec<LeanLifecycleHookScript<Vec<LeanLifecycleHookScopeAnswer>>>,
-    pub asked: Vec<String>,
-    pub result: LeanLifecycleHookQueueScopeResult,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookQueueScopeResult {
-    Ok { scopes: Vec<LeanLifecycleHookPartition> },
-    Error { refusal: LeanLifecycleHookRefusal },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -6992,110 +6590,12 @@ pub struct LeanLifecycleHookRerunCase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookRow {
-    pub collection: String,
-    pub doc: String,
-    pub revision: u64,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookScopeAnswer {
-    Unanswered,
-    Keyed { key: String },
-    Failed { reason: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookScopeKey {
-    pub plugin: String,
-    pub key: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookStageCase {
-    pub name: String,
-    pub world: LeanLifecycleHookWorld,
-    pub plugins: Vec<LeanLifecycleHookScript<String>>,
-    pub result: LeanLifecycleHookStageResult,
-    pub settled: LeanLifecycleHookState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookStageResult {
-    Ok { state: LeanLifecycleHookState, values: Vec<String> },
-    Error { refusal: LeanLifecycleHookRefusal },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookStale {
-    Unauthorized,
-    Cancelled,
-    Missing,
-    Stale,
-    Denied { reason: String },
-    Unavailable,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookState {
-    pub core: Vec<String>,
-    pub rows: Vec<LeanLifecycleHookRow>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookSubject {
-    Actor { did: String },
-    Document { collection: String, doc: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookSubjectKind {
-    Actor,
-    Document { resource: String, collection: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookSuccessor {
-    pub request_id: String,
-    pub request_doc_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookSupersedeCase {
     pub name: String,
     pub selector: LeanSupersedeSelector,
     pub rows: Vec<LeanSupersedeRow>,
     pub parents: Vec<LeanSupersedeParent>,
     pub stale: Vec<LeanSupersedeStale>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum LeanLifecycleHookVerdict {
-    Allow,
-    LeaveQueued,
-    Retire { reason: String, successor: LeanLifecycleHookSuccessor },
-    Reject { reason: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookWorld {
-    pub rows: Vec<LeanLifecycleHookRow>,
-    pub core: Vec<String>,
-    pub denied: Vec<LeanLifecycleHookDenial>,
-    pub failing_ops: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

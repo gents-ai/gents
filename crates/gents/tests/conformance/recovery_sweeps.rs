@@ -154,7 +154,7 @@ async fn drive_recovery_sweep_case(case: &gents_lean_vocab::LeanRecoverySweepCas
         return;
     }
     // Owed-delivery rows are driven through the production record by
-    // `generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record`.
+    // `owed_delivery_traces_follow_the_lean_model`.
     if case.collection == "OwedDelivery" {
         return;
     }
