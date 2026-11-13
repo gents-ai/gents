@@ -27,12 +27,21 @@ async fn selected_configuration_requires_and_observes_user_grant() {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    assert!(tool.call(update("Denied before grant")).await.is_err());
+    assert!(tool
+        .call(
+            update("Denied before grant"),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await
+        .is_err());
 
     fixture.grant_selected_configuration().await;
-    tool.call(update("Allowed"))
-        .await
-        .expect("User grant permits the selected Agent update");
+    tool.call(
+        update("Allowed"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect("User grant permits the selected Agent update");
 
     let admin = gents_store::config_client::ConfigAccess::local_as(
         fixture.db.node.clone(),
@@ -62,7 +71,13 @@ async fn selected_configuration_requires_and_observes_user_grant() {
         )
         .await
         .unwrap();
-    assert!(tool.call(update("Denied after revocation")).await.is_err());
+    assert!(tool
+        .call(
+            update("Denied after revocation"),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await
+        .is_err());
 }
 
 async fn signed_pack_tool(
@@ -306,6 +321,7 @@ async fn config_tools_cannot_self_grant_pack_install() {
                     }))]
             })
             .to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .expect_err("pack install cannot be self-granted");
@@ -409,9 +425,12 @@ async fn config_call_message(
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered");
-    tool.call(json!({ "argv": argv }).to_string())
-        .await
-        .map_err(config_error_message)
+    tool.call(
+        json!({ "argv": argv }).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .map_err(config_error_message)
 }
 
 struct ReselectionFixture {
@@ -657,7 +676,10 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
             }
         })
         .to_string();
-        let error = tool.call(argv).await.unwrap_err();
+        let error = tool
+            .call(argv, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap_err();
         let diagnostic = format!("{error:#}");
         assert!(
             diagnostic.contains("cannot carry the count"),
@@ -674,7 +696,9 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
             "a refused event source publishes no row"
         );
     }
-    tool.call(set("total")).await.unwrap();
+    tool.call(set("total"), &gents_loop::tool::ToolCallEnvelope::ambient())
+        .await
+        .unwrap();
     let rows = fixture
         .user_access
         .execute("{ EventSource { event_source_id group } }")
@@ -1294,6 +1318,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
                 "set":{"display_name":"Jobs"}
             })
             .to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap();
@@ -1303,8 +1328,16 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
         "options":{"mailbox":{"identity":{"mode":"condition","key":"host-health"},"kind":"flag","action":"ack"}},
         "set":{"enabled":true}
     });
-    let mailbox_preview: Value =
-        serde_json::from_str(&config_tool.call(mailbox_args.to_string()).await.unwrap()).unwrap();
+    let mailbox_preview: Value = serde_json::from_str(
+        &config_tool
+            .call(
+                mailbox_args.to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(mailbox_preview["committed"], false);
     assert!(
         call_config_tool(&tools, command(&["datastore", "get", "host-attention"]))
@@ -1312,7 +1345,13 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
             .is_err()
     );
     mailbox_args["argv"] = json!(["datastore", "create"]);
-    config_tool.call(mailbox_args.to_string()).await.unwrap();
+    config_tool
+        .call(
+            mailbox_args.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     let mailbox_created: Value = serde_json::from_str(
         &call_config_tool(&tools, command(&["datastore", "get", "host-attention"]))
             .await
@@ -1332,7 +1371,10 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
         serde_json::from_str::<Value>(&preview).unwrap()
     );
     let error = config_tool
-        .call(json!({"argv":["datastore","create"],"set":{"display_name":"Test"}}).to_string())
+        .call(
+            json!({"argv":["datastore","create"],"set":{"display_name":"Test"}}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("missing SURFACE_ID"));
@@ -1461,31 +1503,72 @@ async fn structured_config_preview_and_apply_match_the_lean_model() {
             .find(|tool| tool.name() == CONFIG_TOOL_NAME)
             .unwrap();
         let read = json!({"argv":["agent","context","get"]}).to_string();
-        let before = tool.call(read.clone()).await.unwrap();
+        let before = tool
+            .call(read.clone(), &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap();
         let prompt = case.input.prompt.clone();
         let mut request =
             json!({"argv":["agent","context","preview"],"set":{"system_prompt":prompt}});
-        let preview: Value =
-            serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
+        let preview: Value = serde_json::from_str(
+            &tool
+                .call(
+                    request.to_string(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         let preview_committed = preview["committed"]
             .as_bool()
             .expect("preview reports whether it committed");
         let preview_mutation_entered = preview["config_execution"]["mutation_entered"]
             .as_bool()
             .expect("preview reports whether it entered the write path");
-        let unchanged_after_preview = tool.call(read.clone()).await.unwrap() == before;
+        let unchanged_after_preview = tool
+            .call(read.clone(), &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap()
+            == before;
         request["argv"][2] = json!("edit");
-        let applied: Value =
-            serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
+        let applied: Value = serde_json::from_str(
+            &tool
+                .call(
+                    request.to_string(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         let applied_mutation_entered = applied["config_execution"]["mutation_entered"]
             .as_bool()
             .expect("apply reports whether it entered the write path");
-        let after: Value = serde_json::from_str(&tool.call(read.clone()).await.unwrap()).unwrap();
+        let after: Value = serde_json::from_str(
+            &tool
+                .call(read.clone(), &gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         let stored_prompt_matches =
             after["document"]["system_prompt"].as_str() == Some(prompt.as_str());
         request["set"] = json!({"node_did":"foreign"});
-        let foreign_refused = tool.call(request.to_string()).await.is_err();
-        let after_refusal: Value = serde_json::from_str(&tool.call(read).await.unwrap()).unwrap();
+        let foreign_refused = tool
+            .call(
+                request.to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .is_err();
+        let after_refusal: Value = serde_json::from_str(
+            &tool
+                .call(read, &gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         let unchanged_after_refusal = after_refusal == after;
         case.check(TraceOutput {
             preview_committed,
@@ -1536,10 +1619,21 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
         json!({"argv":["event-source","create","deliveries"],"set":{"source_collection":"Delivery","event_kind":"created"}}),
         json!({"argv":["task","create","handle"],"set":{"prompt_template":"Handle {{ doc.body }}","emit_outcome":true}}),
     ] {
-        tool.call(call.to_string()).await.unwrap();
+        tool.call(
+            call.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     }
     let trigger = json!({"argv":["trigger","create","on-delivery"],"set":{"task_id":"handle","source":{"kind":"event","event_source_id":"deliveries"}}});
-    let error = tool.call(trigger.to_string()).await.unwrap_err();
+    let error = tool
+        .call(
+            trigger.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err();
     let gents_loop::tool::ToolError::ToolCallError(error) = error else {
         panic!("{error}")
     };
@@ -1560,6 +1654,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
         &Tool::call(
             &schema,
             serde_json::from_value(failure["recovery"]["next_call"].clone()).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap(),
@@ -1568,10 +1663,16 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     Tool::call(
         &schema,
         serde_json::from_value(preview["next_call"]["args"].clone()).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
-    tool.call(trigger.to_string()).await.unwrap();
+    tool.call(
+        trigger.to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     let rows = fixture
         .user_access
         .execute("{ Trigger { trigger_id } }")
@@ -1598,7 +1699,13 @@ async fn config_errors_name_the_next_call() {
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
     let failure = |args: Value| async move {
-        let error = tool.call(args.to_string()).await.unwrap_err();
+        let error = tool
+            .call(
+                args.to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap_err();
         let gents_loop::tool::ToolError::ToolCallError(error) = error else {
             panic!("missing typed config error: {error}");
         };
@@ -1619,9 +1726,12 @@ async fn config_errors_name_the_next_call() {
         skill["recovery"]["next_call"],
         json!({"argv":["skill","list"]})
     );
-    tool.call(skill["recovery"]["next_call"].to_string())
-        .await
-        .unwrap();
+    tool.call(
+        skill["recovery"]["next_call"].to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     assert_eq!(skill["config_execution"]["mutation_entered"], false);
 
     let tools_ref = failure(json!({"argv":["agent","context","preview"],"options":{"agent":builder},"set":{"tools_id":"proposed-tools"}})).await;
@@ -1635,12 +1745,15 @@ async fn config_errors_name_the_next_call() {
         tools_ref["recovery"]["next_call"],
         json!({"argv":["tools","list"]})
     );
-    tool.call(tools_ref["recovery"]["next_call"].to_string())
-        .await
-        .unwrap();
+    tool.call(
+        tools_ref["recovery"]["next_call"].to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
 
     let aliased = tool
-        .call(json!({"argv":["agent","context","preview","edit"],"options":{"agent":builder},"set":{"skill_ids":[]}}).to_string())
+        .call(json!({"argv":["agent","context","preview","edit"],"options":{"agent":builder},"set":{"skill_ids":[]}}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
         .await
         .unwrap();
     assert!(aliased.contains("\"committed\": false"), "{aliased}");
@@ -1742,7 +1855,13 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
             false,
         ),
     ] {
-        let text = match tool.call(args.to_string()).await {
+        let text = match tool
+            .call(
+                args.to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+        {
             Ok(text) => text,
             Err(gents_loop::tool::ToolError::ToolCallError(error)) => error.to_string(),
             Err(error) => panic!("missing typed result for {args}: {error}"),
@@ -1755,7 +1874,10 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
     }
     let read: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv":["datastore","get"],"target_id":"notifications"}).to_string())
+            .call(
+                json!({"argv":["datastore","get"],"target_id":"notifications"}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -1887,7 +2009,10 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
 
     let first: Value = serde_json::from_str(
         &config
-            .call(json!({"argv":["agent", "list", "--limit", "1"]}).to_string())
+            .call(
+                json!({"argv":["agent", "list", "--limit", "1"]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -1897,7 +2022,10 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     let cursor = first["page"]["next_cursor"].as_str().unwrap();
     let second: Value = serde_json::from_str(
         &config
-            .call(json!({"argv":["agent", "list", "--limit", "1", "--cursor", cursor]}).to_string())
+            .call(
+                json!({"argv":["agent", "list", "--limit", "1", "--cursor", cursor]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -1907,7 +2035,10 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     let agent_did = first["agents"][0]["agent_did"].as_str().unwrap();
     let inspected: Value = serde_json::from_str(
         &config
-            .call(json!({"argv":["agent", "get", agent_did]}).to_string())
+            .call(
+                json!({"argv":["agent", "get", agent_did]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -1917,7 +2048,10 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     for resource in ["profile", "backend"] {
         let inventory: Value = serde_json::from_str(
             &config
-                .call(json!({"argv":[resource, "list", "--limit", "2"]}).to_string())
+                .call(
+                    json!({"argv":[resource, "list", "--limit", "2"]}).to_string(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
                 .await
                 .unwrap(),
         )
@@ -2685,8 +2819,13 @@ async fn agent_clone_accepts_sibling_agent_did() {
         "--profile", profile_id
     ]})
     .to_string();
-    let output: Value =
-        serde_json::from_str(&tool.call(args).await.expect("clone commits")).unwrap();
+    let output: Value = serde_json::from_str(
+        &tool
+            .call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .expect("clone commits"),
+    )
+    .unwrap();
     assert_eq!(output["committed"], true);
     let source = gents_documents::list_agents(node, node_did)
         .await
@@ -2739,10 +2878,21 @@ async fn agent_clone_never_copies_the_source_self_config_grants() {
         argv.extend(["--profile", &profile]);
         json!({ "argv": argv }).to_string()
     };
-    let preview: Value = serde_json::from_str(&tool.call(argv(true)).await.unwrap()).unwrap();
+    let preview: Value = serde_json::from_str(
+        &tool
+            .call(argv(true), &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(preview["admitted"], true, "{preview}");
-    let output: Value =
-        serde_json::from_str(&tool.call(argv(false)).await.expect("the clone commits")).unwrap();
+    let output: Value = serde_json::from_str(
+        &tool
+            .call(argv(false), &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .expect("the clone commits"),
+    )
+    .unwrap();
     assert_eq!(output["committed"], true);
     let tools_id = format!("{}:tools", output["agent_did"].as_str().unwrap());
     let node_did = fixture.node_did().to_owned();
@@ -2793,14 +2943,20 @@ async fn agent_clone_by_holder_copies_granted_source() {
         json!({"argv": ["agent", "preview", "clone", "--display-name", "Granted Copy",
                         "--from", granted, "--profile", profile]})
         .to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect("a holder may preview copying a granted source");
     let args = json!({"argv": ["agent", "clone", "--display-name", "Granted Copy",
                                "--from", granted, "--profile", profile]})
     .to_string();
-    let output: Value =
-        serde_json::from_str(&tool.call(args).await.expect("a holder's clone commits")).unwrap();
+    let output: Value = serde_json::from_str(
+        &tool
+            .call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .expect("a holder's clone commits"),
+    )
+    .unwrap();
     assert_eq!(output["committed"], true);
     assert!(
         gents_documents::list_agents(node, node_did)
@@ -2854,6 +3010,7 @@ async fn clone_does_not_inherit_self_config_from_its_source() {
                 json!({"argv": ["agent", "clone", "--display-name", "Plain Copy",
                                 "--from", source, "--profile", profile]})
                 .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .expect("a catalog holder clones a source that carries self-config"),
@@ -2898,21 +3055,24 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
     // LSP is a host tool; on a signed Node it needs an admitted Tools.host.root.
     let root = fixture.admitted_workspace_root().await;
     config
-        .call(json!({"argv":["tools","edit"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string())
+        .call(json!({"argv":["tools","edit"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
         .await
         .unwrap();
     let safe = json!({"integrations":{"lsp":{"config":json!({"servers":{"rust-analyzer":{"disabled":true,"priority":2}}}).to_string()}}});
     config
-        .call(json!({"argv":["tools", "preview", "--set", format!("integrations={}", safe["integrations"])]}).to_string())
+        .call(json!({"argv":["tools", "preview", "--set", format!("integrations={}", safe["integrations"])]}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
         .await
         .unwrap();
     config
-        .call(json!({"argv":["tools", "edit", "--set", format!("integrations={}", safe["integrations"])]}).to_string())
+        .call(json!({"argv":["tools", "edit", "--set", format!("integrations={}", safe["integrations"])]}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
         .await
         .unwrap();
     let baseline: Value = serde_json::from_str(
         &config
-            .call(json!({"argv":["get"]}).to_string())
+            .call(
+                json!({"argv":["get"]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -2927,18 +3087,21 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
         gents_documents::LspConfigDocument::parse_operator(Some(&raw)).unwrap();
         let patch = json!({"integrations":{"lsp":{"config":raw}}});
         let preview = config
-            .call(json!({"argv":["tools", "preview", "--set", format!("integrations={}", patch["integrations"])]}).to_string())
+            .call(json!({"argv":["tools", "preview", "--set", format!("integrations={}", patch["integrations"])]}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
             .await
             .unwrap_err();
         assert!(preview.to_string().contains(field), "{preview}");
         let apply = config
-            .call(json!({"argv":["tools", "edit", "--set", format!("integrations={}", patch["integrations"])]}).to_string())
+            .call(json!({"argv":["tools", "edit", "--set", format!("integrations={}", patch["integrations"])]}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
             .await
             .unwrap_err();
         assert!(apply.to_string().contains(field), "{apply}");
         let after: Value = serde_json::from_str(
             &config
-                .call(json!({"argv":["get"]}).to_string())
+                .call(
+                    json!({"argv":["get"]}).to_string(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
                 .await
                 .unwrap(),
         )
@@ -3805,7 +3968,10 @@ async fn pack_search_uses_registry_pagination_without_installing() {
     let tool = tools.iter().find(|t| t.name() == CONFIG_TOOL_NAME).unwrap();
     let first: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv":["pack","search"],"options":{"query":"code review"}}).to_string())
+            .call(
+                json!({"argv":["pack","search"],"options":{"query":"code review"}}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -3814,8 +3980,16 @@ async fn pack_search_uses_registry_pagination_without_installing() {
         first["items"][0]["inspect"],
         json!({"argv":["pack","get","fixture/documents_fixture"]})
     );
-    let next: Value =
-        serde_json::from_str(&tool.call(first["next_call"].to_string()).await.unwrap()).unwrap();
+    let next: Value = serde_json::from_str(
+        &tool
+            .call(
+                first["next_call"].to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(next["page"], 2);
     assert!(next["next_call"].is_null());
     for options in [
@@ -3824,7 +3998,10 @@ async fn pack_search_uses_registry_pagination_without_installing() {
         json!({"registry":"http://untrusted"}),
     ] {
         assert!(tool
-            .call(json!({"argv":["pack","search"],"options":options}).to_string())
+            .call(
+                json!({"argv":["pack","search"],"options":options}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
             .await
             .is_err());
     }
@@ -4038,7 +4215,10 @@ async fn an_agent_decides_what_a_pack_does_with_documents_edited_live() {
                 .iter()
                 .find(|tool| tool.name() == CONFIG_TOOL_NAME)
                 .unwrap()
-                .call(next.to_string())
+                .call(
+                    next.to_string(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
                 .await
                 .unwrap_or_else(|error| panic!("{decision}: {error}"))
         }
@@ -4236,7 +4416,10 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     let before = account_state_rows(&fixture).await;
 
     let text = config
-        .call(json!({"argv":["backend", "accounts"]}).to_string())
+        .call(
+            json!({"argv":["backend", "accounts"]}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
 
@@ -4276,12 +4459,18 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     assert_eq!(account_state_rows(&fixture).await, before);
 
     let help = config
-        .call(json!({"argv":["help", "backend"]}).to_string())
+        .call(
+            json!({"argv":["help", "backend"]}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(help.contains("backend accounts"), "{help}");
     assert!(config
-        .call(json!({"argv":["backend", "accounts", "--set", "x"]}).to_string())
+        .call(
+            json!({"argv":["backend", "accounts", "--set", "x"]}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .is_err());
 }
@@ -4295,7 +4484,10 @@ async fn config_backend_accounts_needs_the_backend_grant() {
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
     let error = config
-        .call(json!({"argv":["backend", "accounts"]}).to_string())
+        .call(
+            json!({"argv":["backend", "accounts"]}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err()
         .to_string();
@@ -4304,7 +4496,10 @@ async fn config_backend_accounts_needs_the_backend_grant() {
         "{error}"
     );
     assert!(config
-        .call(json!({"argv":["backend", "list"]}).to_string())
+        .call(
+            json!({"argv":["backend", "list"]}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .is_err());
 }
@@ -4445,7 +4640,7 @@ async fn pack_wire_into_a_shared_tools_needs_the_catalog_grant() {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap()
-        .call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string())
+        .call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
         .await
         .unwrap();
     config_call(
@@ -4531,10 +4726,11 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap();
     tool.call(
         json!({"argv":["tools","update"],"set":{"integrations":{"lsp":{"timeout_secs":31}}}})
             .to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -4598,9 +4794,12 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .as_object_mut()
         .unwrap()
         .insert("plugins".into(), json!([inspect["selection"].clone()]));
-    tool.call(json!({"argv":["tools","update"],"set":{"integrations":integrations}}).to_string())
-        .await
-        .unwrap();
+    tool.call(
+        json!({"argv":["tools","update"],"set":{"integrations":integrations}}).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
     assert!(readback.contains("fixture/native_echo"));
     let persisted: gents_documents::Tools = fixture
@@ -4653,7 +4852,13 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .iter()
         .find(|tool| tool.name() == "native_echo")
         .expect("a fresh ToolSurface built from persisted Tools should expose the selected plugin");
-    let output: Value = serde_json::from_str(&fresh_tool.call("{}".into()).await.unwrap()).unwrap();
+    let output: Value = serde_json::from_str(
+        &fresh_tool
+            .call("{}".into(), &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(output, json!({"native_pack_echo":"ok"}));
     let (_next_dir, next_path, next) =
         gents_pack::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
@@ -4712,7 +4917,12 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
             .version,
         "2.0.0"
     );
-    tool.call(move_pin.to_string()).await.unwrap();
+    tool.call(
+        move_pin.to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     config_call(
         &tools,
         &["pack", "update", path, "--digest", rebuilt.digest()],
@@ -4777,7 +4987,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap();
     let preview: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "preview", "install", path])
             .await
@@ -4794,7 +5004,8 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     assert!(tool
         .call(
             json!({"argv":["pack","install",path],"options":{"digest":digest,"approved":true}})
-                .to_string()
+                .to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
         )
         .await
         .is_err());
@@ -5119,7 +5330,7 @@ async fn pack_tool_with_local_read(
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap();
     (fixture, tools)
 }
 

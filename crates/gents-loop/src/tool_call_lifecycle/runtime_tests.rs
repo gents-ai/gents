@@ -19,7 +19,11 @@ impl ToolDyn for PendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a crate::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }
@@ -41,7 +45,11 @@ impl ToolDyn for FastTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a crate::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async { Ok("ok".to_string()) })
     }
 }
@@ -76,7 +84,11 @@ impl ToolDyn for ReceiptTool {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a crate::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async { Ok(serde_json::to_string(&plugin_receipt()).unwrap()) })
     }
     #[expect(
@@ -86,13 +98,14 @@ impl ToolDyn for ReceiptTool {
     fn call_with_receipt<'a>(
         &'a self,
         args: String,
+        context: &'a crate::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, crate::tool::ToolDispatchResult> {
         Box::pin(async move {
             if self.delay {
                 std::thread::sleep(Duration::from_millis(30));
             }
             crate::tool::ToolDispatchResult {
-                result: self.call(args).await,
+                result: self.call(args, context).await,
                 plugin_receipt: (!self.forge_text).then(plugin_receipt),
                 deferred_writes: None,
             }
@@ -111,6 +124,7 @@ async fn receipt_shaped_output_does_not_create_native_evidence() {
         },
         "{}".into(),
         Some(writer),
+        &crate::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -135,6 +149,7 @@ async fn returned_receipt_survives_outer_deadline_and_conflicting_receipt_is_ref
                 forge_text: false,
             },
             "{}".into(),
+            &crate::tool::ToolCallEnvelope::ambient(),
         ),
     )
     .await;
@@ -167,7 +182,11 @@ async fn managed_call_times_out_at_request_deadline() {
     let outcome = scope_request_tool_execution(
         Some(deadline),
         CancellationToken::new(),
-        call_tool_managed(&PendingTool, "{}".to_string()),
+        call_tool_managed(
+            &PendingTool,
+            "{}".to_string(),
+            &crate::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await;
 
@@ -182,7 +201,11 @@ async fn managed_call_cancels_before_inner_future_completes() {
     let outcome = scope_request_tool_execution(
         None,
         token,
-        call_tool_managed(&PendingTool, "{}".to_string()),
+        call_tool_managed(
+            &PendingTool,
+            "{}".to_string(),
+            &crate::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await;
 
@@ -196,7 +219,11 @@ async fn managed_call_preserves_fast_success() {
     let outcome = scope_request_tool_execution(
         Some(deadline),
         CancellationToken::new(),
-        call_tool_managed(&FastTool, "{}".to_string()),
+        call_tool_managed(
+            &FastTool,
+            "{}".to_string(),
+            &crate::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await;
 
@@ -208,9 +235,16 @@ async fn managed_call_prefers_fired_cancellation_over_ready_output() {
     let token = CancellationToken::new();
     token.cancel();
 
-    let outcome =
-        scope_request_tool_execution(None, token, call_tool_managed(&FastTool, "{}".to_string()))
-            .await;
+    let outcome = scope_request_tool_execution(
+        None,
+        token,
+        call_tool_managed(
+            &FastTool,
+            "{}".to_string(),
+            &crate::tool::ToolCallEnvelope::ambient(),
+        ),
+    )
+    .await;
 
     assert_eq!(outcome, ToolOutcome::Cancelled);
 }

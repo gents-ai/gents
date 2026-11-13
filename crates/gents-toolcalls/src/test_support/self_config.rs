@@ -632,7 +632,10 @@ pub async fn config_call(
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered")
-        .call(json!({ "argv": argv }).to_string())
+        .call(
+            json!({ "argv": argv }).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
 }
 
@@ -657,9 +660,12 @@ pub async fn call_config_tool(
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered");
-    tool.call(json!({"argv": argv}).to_string())
-        .await
-        .map_err(|error| format!("{error:#}"))
+    tool.call(
+        json!({"argv": argv}).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .map_err(|error| format!("{error:#}"))
 }
 
 pub fn take_agent_tool(

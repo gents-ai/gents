@@ -412,7 +412,11 @@ impl Tool for WriteTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition{name:Self::NAME.into(),description:"Create, update or delete application documents within your exact collection grant. Call [help] for syntax. Mutations require [preview,VERB], then apply its observed-state-bound next_call. Configuration uses config; schemas use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string"},"options":{"type":"object"}}})}
     }
-    async fn call(&self, args: WriteParams) -> std::result::Result<String, WriteError> {
+    async fn call(
+        &self,
+        args: WriteParams,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> std::result::Result<String, WriteError> {
         match self.execute(&args).await {
             Ok(value) => serde_json::to_string(
                 &gents_session::session::output_render::Ordered::reading_order(

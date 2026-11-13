@@ -59,7 +59,10 @@ async fn call(tools: &[Box<dyn ToolDyn>], args: Value) -> Result<Value, String> 
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered")
-        .call(args.to_string())
+        .call(
+            args.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .map_err(|error| error.to_string())?;
     Ok(serde_json::from_str(&text).unwrap_or(Value::String(text)))

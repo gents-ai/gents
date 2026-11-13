@@ -42,7 +42,13 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
     let args = r#"{"tool_call_id":"job-call"}"#;
     accept_hook_tool_call(&hook, "wait-call", "wait_process", args, None).await;
     let ToolCallHookAction::Skip { reason } = hook
-        .on_tool_call("wait_process", None, "wait-call", args)
+        .on_tool_call(
+            "wait_process",
+            None,
+            "wait-call",
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
     else {
         panic!("wait_process must publish a structured refusal")

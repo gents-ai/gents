@@ -576,39 +576,40 @@ export function OnboardingWizard({
                   </div>
                 </div>
               ) : (
-              <div className="flex items-center gap-4">
-                <AvatarRoll
-                  rollId={NAMING}
-                  name={nodeName}
-                  avatar={avatar}
-                  onChange={setAvatar}
-                  disabled={busy}
-                  className="ring-offset-raised"
-                />
-                <div className="min-w-0 flex-1">
-                  <Field
-                    label="Node name"
-                    htmlFor="setup-node-name"
-                    info={
-                      <>
-                        Its identity and data live in{" "}
-                        <span className="font-mono break-all">{root}</span>. Your
-                        operating system runs it as a background service: closing this
-                        window or quitting Desktop leaves it running, and the menu bar’s
-                        Stop Node stops it. Starting at login is a separate setting.
-                      </>
-                    }
-                  >
-                    <Input
-                      id="setup-node-name"
-                      value={nodeName}
-                      onChange={(event) => setName(event.target.value)}
-                      readOnly={existingName !== null}
-                      aria-readonly={existingName !== null}
-                    />
-                  </Field>
+                <div className="flex items-center gap-4">
+                  <AvatarRoll
+                    rollId={NAMING}
+                    name={nodeName}
+                    avatar={avatar}
+                    onChange={setAvatar}
+                    disabled={busy}
+                    className="ring-offset-raised"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <Field
+                      label="Node name"
+                      htmlFor="setup-node-name"
+                      info={
+                        <>
+                          Its identity and data live in{" "}
+                          <span className="font-mono break-all">{root}</span>. Your
+                          operating system runs it as a background service: closing this
+                          window or quitting Desktop leaves it running, and the menu
+                          bar’s Stop Node stops it. Starting at login is a separate
+                          setting.
+                        </>
+                      }
+                    >
+                      <Input
+                        id="setup-node-name"
+                        value={nodeName}
+                        onChange={(event) => setName(event.target.value)}
+                        readOnly={existingName !== null}
+                        aria-readonly={existingName !== null}
+                      />
+                    </Field>
+                  </div>
                 </div>
-              </div>
               )}
               <p className="text-xs text-muted-foreground">
                 Continuing connects this desktop and grants it access to the local node.

@@ -28,16 +28,37 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     let hook = &fixture.hook;
     accept_hook_tool_call(hook, "script", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "script", "{}").await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "script",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let name = gents_protocol::tool_names::AGENT_NEW_TOOL_NAME;
     let args = json!({"agent":"general", "prompt":"work"}).to_string();
     let child = hook
-        .admit_tool_effect("script", 1, name, &args)
+        .admit_tool_effect(
+            "script",
+            1,
+            name,
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
-    let ToolCallHookAction::Skip { reason } = hook.on_tool_call(name, None, &child, &args).await
+    let ToolCallHookAction::Skip { reason } = hook
+        .on_tool_call(
+            name,
+            None,
+            &child,
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
     else {
         panic!("agent_new did not return a receipt")
     };

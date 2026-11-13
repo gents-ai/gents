@@ -21,6 +21,7 @@ impl gents_loop::tool::ToolDyn for PendingTool {
     fn call<'a>(
         &'a self,
         _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> gents_loop::tool::BoxFuture<'a, Result<String, gents_loop::tool::ToolError>> {
         Box::pin(std::future::pending())
     }
@@ -72,7 +73,13 @@ async fn publish_hook_action(
         .await
         .unwrap();
     let action = hook
-        .on_tool_call(tool_name, None, internal_id, &args.to_string())
+        .on_tool_call(
+            tool_name,
+            None,
+            internal_id,
+            &args.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await;
     (action, published.message_doc_id)
 }

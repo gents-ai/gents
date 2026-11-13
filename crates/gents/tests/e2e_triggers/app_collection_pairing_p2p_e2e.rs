@@ -632,6 +632,7 @@ async fn p2p_call(tool: &P2pTool, value: Value) -> Result<Value, String> {
     Tool::call(
         tool,
         serde_json::from_value(value).expect("valid p2p parameters"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .map(|output| serde_json::from_str(&output).expect("p2p replies with JSON"))

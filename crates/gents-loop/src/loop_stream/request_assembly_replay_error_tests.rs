@@ -421,6 +421,7 @@ fn replay_assembly_config() -> LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: crate::tool::ToolCallEnvelope::ambient(),
     }
 }
 

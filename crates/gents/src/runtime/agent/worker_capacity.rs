@@ -23,7 +23,7 @@ impl WorkerTicket {
 pub(crate) enum CapacityError {
     #[error("request worker capacity acquisition cancelled")]
     Cancelled,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     #[error("request worker capacity is full")]
     ActiveFull,
     #[error("request generation already has an active worker")]
@@ -115,7 +115,7 @@ impl WorkerCapacity {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn try_acquire_unbound(
         self: &Arc<Self>,
     ) -> Result<UnboundActiveGuard, CapacityError> {

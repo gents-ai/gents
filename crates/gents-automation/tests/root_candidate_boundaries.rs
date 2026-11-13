@@ -485,7 +485,11 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
                 parameters: serde_json::json!({"type": "object"}),
             }
         }
-        async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        async fn call(
+            &self,
+            args: Self::Args,
+            _context: &gents_loop::tool::ToolCallEnvelope,
+        ) -> Result<Self::Output, Self::Error> {
             Ok(format!("described:{}", args.tool_name))
         }
     }
@@ -566,7 +570,11 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
                 parameters: serde_json::json!({"type": "object"}),
             }
         }
-        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        async fn call(
+            &self,
+            _args: Self::Args,
+            _context: &gents_loop::tool::ToolCallEnvelope,
+        ) -> Result<Self::Output, Self::Error> {
             panic!("the tool must not run on non-object arguments");
         }
     }
@@ -922,6 +930,7 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
                 None,
                 "spawn-malformed",
                 args,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await;
         let ToolCallHookAction::Skip { reason } = &action else {

@@ -214,7 +214,15 @@ impl<'a> ProtectedBackendStore<'a> {
         let node = builder.build().await?;
         let checked = validate_binding(&node).await;
         let shutdown = node.shutdown().await;
-        checked?;
+        checked.map_err(|error| match error {
+            BackendProtectionError::InvalidBinding => BackendProtectionError::Incompatible(
+                gents_protocol::operations::install_repair::IncompatibleStore {
+                    kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::OtherVersionSchema,
+                    data_path: self.data.clone(),
+                },
+            ),
+            error => error,
+        })?;
         shutdown?;
         if !stamped {
             super::store_compat::record_compatible(&self.data)?;

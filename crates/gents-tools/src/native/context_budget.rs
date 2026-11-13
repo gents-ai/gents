@@ -243,7 +243,11 @@ impl Tool for ContextBudgetTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         let scope = ContextBudgetScope::from_tool_runtime(&self.node_did)?;
         let snapshot = load_context_budget_snapshot(&self.node, &scope).await?;
         gents_session::session::output_render::render(
@@ -774,7 +778,15 @@ mod tests {
             None,
             None,
             Some(session_id.into()),
-            async { Tool::call(tool, ContextBudgetParams {}).await.unwrap() },
+            async {
+                Tool::call(
+                    tool,
+                    ContextBudgetParams {},
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await
+                .unwrap()
+            },
         )
         .await
     }
@@ -961,9 +973,13 @@ mod tests {
         let node = seeded_node().await;
         let tool = ContextBudgetTool::new(node, "did:key:z-context");
 
-        let error = Tool::call(&tool, ContextBudgetParams {})
-            .await
-            .expect_err("unscoped call must not fall back to a node-wide scan");
+        let error = Tool::call(
+            &tool,
+            ContextBudgetParams {},
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .expect_err("unscoped call must not fall back to a node-wide scan");
         assert!(
             error.to_string().contains("calling agent identity"),
             "{error}"

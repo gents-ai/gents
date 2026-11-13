@@ -9,6 +9,7 @@ use gents_tools::builtin::self_config::test_support::{
 mod live_documents;
 #[path = "tests/pack_authoring.rs"]
 mod pack_authoring;
+#[cfg(target_os = "macos")]
 static PLUGIN_BUILDER_STUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
@@ -967,6 +968,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
             .call(
                 json!({"argv": ["pack", "preview", "install", "fixture/plugin_documents_fixture"]})
                     .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .expect("incomplete preview remains readable"),
@@ -1002,7 +1004,10 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     preview_argv.extend(slot_argv);
     let preview: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv": preview_argv}).to_string())
+            .call(
+                json!({"argv": preview_argv}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .expect("complete preview succeeds"),
     )
@@ -1018,7 +1023,10 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     ];
     install_argv.extend(slot_argv);
     let output = tool
-        .call(json!({"argv": install_argv}).to_string())
+        .call(
+            json!({"argv": install_argv}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("a stored pack installs");
     let output: serde_json::Value = serde_json::from_str(&output).expect("JSON receipt");
@@ -1044,7 +1052,10 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     );
     let inspected: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv": ["pack", "get", "fixture/plugin_documents_fixture"]}).to_string())
+            .call(
+                json!({"argv": ["pack", "get", "fixture/plugin_documents_fixture"]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .expect("installed pack is inspectable"),
     )
@@ -1074,7 +1085,10 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     staged_preview.extend(slot_argv);
     let preview: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv": staged_preview}).to_string())
+            .call(
+                json!({"argv": staged_preview}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -1082,7 +1096,10 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     assert_eq!(preview["committed"], false);
     let listed: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv": ["pack", "list"]}).to_string())
+            .call(
+                json!({"argv": ["pack", "list"]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -1108,6 +1125,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
                 "--inference-slot", verifier_slot.as_str()
             ]})
             .to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .expect_err("a digest not returned by preview is rejected");
@@ -1142,6 +1160,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
                     "--inference-slot", verifier_slot.as_str()
                 ]})
                 .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .expect("installed pack update previews"),
@@ -1151,15 +1170,13 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     let update_digest = update_preview["artifact_digest"].as_str().unwrap();
     let updated: Value = serde_json::from_str(
         &tool
-            .call(
-                json!({"argv": [
+            .call(json!({"argv": [
                     "pack", "update", "fixture/plugin_documents_fixture@1.0.0", "--digest", update_digest,
                     "--inference-slot", coordinator_slot.as_str(),
                     "--inference-slot", worker_slot.as_str(),
                     "--inference-slot", verifier_slot.as_str()
                 ]})
-                .to_string(),
-            )
+                .to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
             .await
             .expect("same distribution update is idempotent"),
     )
@@ -1192,7 +1209,10 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     std::fs::remove_dir_all(home.path().join("packs").join("unpacked")).unwrap();
     let listed: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv": ["pack", "list"]}).to_string())
+            .call(
+                json!({"argv": ["pack", "list"]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap(),
     )
@@ -1212,9 +1232,12 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     std::fs::write(installed_path, installed_bytes).unwrap();
     // Nothing that survives the removal selects the pack's plugin, so the
     // pack is removed and its plugin retired (`ensure_plugins_unreferenced`).
-    tool.call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
-        .await
-        .expect("an unselected plugin retires with its pack");
+    tool.call(
+        json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect("an unselected plugin retires with its pack");
     let response = fixture
         .user_access
         .execute(&format!(

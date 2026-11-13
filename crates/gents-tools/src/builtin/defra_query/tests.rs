@@ -34,9 +34,13 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
     );
     let base = json!({"argv":["search"],"collection":"Reports","options":{"fields":["duty"],"search_fields":["duty"],"text":"crew duty","limit":3,"order":[{"rank":"ASC"}]}});
     let result: Value = serde_json::from_str(
-        &Tool::call(&tool, serde_json::from_value(base.clone()).unwrap())
-            .await
-            .unwrap(),
+        &Tool::call(
+            &tool,
+            serde_json::from_value(base.clone()).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(result["returned_count"], 3);
@@ -50,9 +54,13 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
     let mut filtered = base.clone();
     filtered["options"]["filter"] = json!({"rank":{"_eq":"Commander"}});
     let result: Value = serde_json::from_str(
-        &Tool::call(&tool, serde_json::from_value(filtered).unwrap())
-            .await
-            .unwrap(),
+        &Tool::call(
+            &tool,
+            serde_json::from_value(filtered).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(result["returned_count"], 1);
@@ -83,10 +91,14 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
     ] {
         let mut args = base.clone();
         args["options"][key] = value;
-        let error = Tool::call(&tool, serde_json::from_value(args).unwrap())
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = Tool::call(
+            &tool,
+            serde_json::from_value(args).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(error.contains(expected), "{key}: {error}");
         assert!(error.contains("search"), "{error}");
     }
@@ -94,19 +106,27 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
     escaped["options"]["text"] = json!("crew\" ) { rank } #");
     escaped["options"]["filter"] = json!({"duty":{"_neq":") { order: ["}});
     let result: Value = serde_json::from_str(
-        &Tool::call(&tool, serde_json::from_value(escaped).unwrap())
-            .await
-            .unwrap(),
+        &Tool::call(
+            &tool,
+            serde_json::from_value(escaped).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(result["returned_count"], 3);
     for collection in ["OtherReports", "OAuthCredential"] {
         let mut args = base.clone();
         args["collection"] = json!(collection);
-        let error = Tool::call(&tool, serde_json::from_value(args).unwrap())
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = Tool::call(
+            &tool,
+            serde_json::from_value(args).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(
             error.contains("scope") || error.contains("protected"),
             "{error}"
@@ -186,6 +206,7 @@ async fn oversized_field_is_truncated_json_stays_valid() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect("query must succeed");
@@ -231,6 +252,7 @@ async fn returns_only_rows_matching_the_filter() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect("filtered query should succeed");
@@ -267,6 +289,7 @@ async fn rejects_query_against_collection_outside_scope() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("querying outside the allowed scope must fail");
@@ -298,6 +321,7 @@ async fn protected_collections_are_refused_by_reads_and_discovery() {
                 limit: None,
             }
             .into(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .err()
@@ -311,6 +335,7 @@ async fn protected_collections_are_refused_by_reads_and_discovery() {
                 limit: None,
             }
             .into(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .err()
@@ -338,6 +363,7 @@ async fn invalid_tool_call_created_at_suggests_started_and_completed_at() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("invalid field must fail");
@@ -364,6 +390,7 @@ async fn invalid_agent_request_fields_get_suggestions() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("invalid field must fail");
@@ -381,6 +408,7 @@ async fn invalid_agent_request_fields_get_suggestions() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("invalid field must fail");
@@ -403,6 +431,7 @@ async fn invalid_filter_key_gets_diagnostics() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("invalid filter key must fail");
@@ -425,6 +454,7 @@ async fn wildcard_fields_returns_field_inventory() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect("discovery must succeed");
@@ -458,6 +488,7 @@ async fn discovery_lists_exactly_the_fields_the_model_leaves_visible() {
                 limit: None,
             }
             .into(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .expect("discovery must succeed");
@@ -490,6 +521,7 @@ async fn discovery_respects_collection_scope() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("discovery outside scope must fail");
@@ -514,6 +546,7 @@ async fn unknown_collection_reports_does_not_exist() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("unknown collection must fail");
@@ -528,6 +561,7 @@ async fn unknown_collection_reports_does_not_exist() {
                 collection: Some(collection.into()),
                 ..Default::default()
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap_err();
@@ -557,6 +591,7 @@ async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
             limit: None,
         }
         .into(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("mixed wildcard must fail");
@@ -583,12 +618,20 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
         CollectionScope::restricted(vec!["Ticket".into()]),
     );
     let count:QueryParams=serde_json::from_value(json!({"argv":["count"],"collection":"Ticket","options":{"filter":{"status":{"_eq":"open"}}}})).unwrap();
-    let result: serde_json::Value =
-        serde_json::from_str(&Tool::call(&tool, count).await.unwrap()).unwrap();
+    let result: serde_json::Value = serde_json::from_str(
+        &Tool::call(&tool, count, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(result["total_count"], 73);
     let find:QueryParams=serde_json::from_value(json!({"argv":["find"],"collection":"Ticket","options":{"fields":["name","priority"],"order":[{"priority":"ASC"}],"offset":5,"limit":5}})).unwrap();
-    let result: serde_json::Value =
-        serde_json::from_str(&Tool::call(&tool, find).await.unwrap()).unwrap();
+    let result: serde_json::Value = serde_json::from_str(
+        &Tool::call(&tool, find, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(result["returned_count"], 5);
     assert_eq!(result["results"][0]["name"], "T005");
     assert_eq!(result["results"][4]["name"], "T009");
@@ -686,12 +729,22 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             json!({"argv":["find"],"collection":"PrivateRecord","options":{"fields":["label"]}}),
         )
         .unwrap();
-        let result: Value = serde_json::from_str(&Tool::call(&tool, find).await.unwrap()).unwrap();
+        let result: Value = serde_json::from_str(
+            &Tool::call(&tool, find, &gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(result["returned_count"], 1);
         assert_eq!(result["results"][0]["label"], label);
         for (target, permitted) in [(label, true), (hidden, false)] {
             let request: QueryParams=serde_json::from_value(json!({"argv":["find"],"collection":"PrivateRecord","options":{"fields":["label"],"filter":{"_or":[{"label":{"_eq":label}},{"label":{"_eq":hidden}}]},"field_page":{"doc_id":ids[target],"field":"label"}}})).unwrap();
-            let read = Tool::call(&tool, request).await;
+            let read = Tool::call(
+                &tool,
+                request,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await;
             assert_eq!(read.is_ok(), permitted);
             if permitted {
                 let value: Value = serde_json::from_str(&read.unwrap()).unwrap();
@@ -699,8 +752,16 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             }
         }
         let search: QueryParams = serde_json::from_value(json!({"argv":["search"],"collection":"PrivateRecord","options":{"fields":["label"],"search_fields":["label"],"text":label,"limit":10}})).unwrap();
-        let result: Value =
-            serde_json::from_str(&Tool::call(&tool, search).await.unwrap()).unwrap();
+        let result: Value = serde_json::from_str(
+            &Tool::call(
+                &tool,
+                search,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(result["returned_count"], 1);
         assert_eq!(result["results"][0]["label"], label);
         assert!(result["results"][0]["_score"].as_f64().unwrap() > 0.0);
@@ -721,6 +782,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             &Tool::call(
                 &bounded,
                 super::bounded::BoundedQueryParams(serde_json::Map::new()),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .unwrap(),
@@ -730,7 +792,12 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
         assert_eq!(result["results"][0]["label"], label);
 
         let count: QueryParams = serde_json::from_value(json!({"argv":["count"],"collection":"PrivateRecord","options":{"filter":{"label":{"_eq":hidden}}}})).unwrap();
-        let result: Value = serde_json::from_str(&Tool::call(&tool, count).await.unwrap()).unwrap();
+        let result: Value = serde_json::from_str(
+            &Tool::call(&tool, count, &gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(result["total_count"], 0);
     }
     node.shutdown().await.expect("shut down test node");
@@ -834,10 +901,14 @@ async fn a_write_verb_is_sent_to_the_write_tool_and_its_grant() {
                 json!({"argv":[verb],"collection":"Board","options":{"input":{"title":"x"}}}),
             )
             .unwrap();
-            let error = Tool::call(&tool, params)
-                .await
-                .expect_err("query has no write verb")
-                .to_string();
+            let error = Tool::call(
+                &tool,
+                params,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .expect_err("query has no write verb")
+            .to_string();
             let error: serde_json::Value = serde_json::from_str(&error).expect(&error);
             assert!(
                 error["error"]

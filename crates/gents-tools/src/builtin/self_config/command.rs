@@ -416,7 +416,11 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         let call = Self {
             execution: Arc::new(super::execution::ExecutionObservation::default()),
             ..self.clone()

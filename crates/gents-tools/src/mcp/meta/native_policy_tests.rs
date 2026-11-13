@@ -17,11 +17,14 @@ use super::shared::{lookup_service, MetaToolContext};
 use gents_loop::tool::Tool;
 
 async fn invoke(tool: &super::CallToolTool, service: &str, name: &str) -> Result<String> {
-    tool.call(super::CallToolArgs {
-        service_id: service.into(),
-        tool_name: name.into(),
-        arguments: json!({}),
-    })
+    tool.call(
+        super::CallToolArgs {
+            service_id: service.into(),
+            tool_name: name.into(),
+            arguments: json!({}),
+        },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
     .await
     .map_err(anyhow::Error::new)
 }

@@ -299,7 +299,10 @@ async fn agent_create_commits_and_resolves_after_restart() {
     ]})
     .to_string();
 
-    let output = tool.call(args).await.expect("direct agent create commits");
+    let output = tool
+        .call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+        .await
+        .expect("direct agent create commits");
     let agents = gents_documents::list_agents(&node, &node_did)
         .await
         .expect("list agents");
@@ -981,7 +984,10 @@ async fn a_profile_edit_is_fenced_alike_through_its_agent_and_by_its_exact_id() 
             other => panic!("unknown route {other:?}"),
         };
         let text = tool
-            .call(json!({"argv": argv, "set": {"backend_id": backend}}).to_string())
+            .call(
+                json!({"argv": argv, "set": {"backend_id": backend}}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap_or_else(|error| panic!("{input}: {error:#}"));
         let answer: Value = serde_json::from_str(&text).unwrap();

@@ -53,7 +53,13 @@ async fn dispatch_with_lost_receipt(
     accept_hook_tool_call(hook, call_id, tool_name, &args, None).await;
     let (action, fired) = ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
         Some(operation),
-        hook.on_tool_call(tool_name, None, call_id, &args),
+        hook.on_tool_call(
+            tool_name,
+            None,
+            call_id,
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await;
     assert!(
@@ -355,6 +361,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
             None,
             "incompatible-steer",
             &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
     let ToolCallHookAction::Skip { reason } = action else {

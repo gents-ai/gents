@@ -41,7 +41,14 @@ async fn an_allow_listed_request_reaches_the_server_only_when_granted() {
 
     let (home, record) = installed_asking(requests.clone(), net.clone(), true);
     let executor = PluginExecutor::new(Some(home.path().to_owned()));
-    let call = executor.call(&record, json!({"n": 1})).await.unwrap();
+    let call = executor
+        .call(
+            &record,
+            json!({"n": 1}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         call.outcome.verdict,
         PluginVerdict::Success,
@@ -58,7 +65,11 @@ async fn an_allow_listed_request_reaches_the_server_only_when_granted() {
 
     let (home, record) = installed_asking(requests, net, false);
     let call = PluginExecutor::new(Some(home.path().to_owned()))
-        .call(&record, json!({"n": 1}))
+        .call(
+            &record,
+            json!({"n": 1}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::Success);
@@ -105,7 +116,11 @@ async fn a_round_asking_both_services_is_bad_output() {
     store::write_record(home.path(), &record).unwrap();
     let call = PluginExecutor::new(Some(home.path().to_owned()))
         .with_models(Arc::new(Endpoint))
-        .call(&record, json!({}))
+        .call(
+            &record,
+            json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(call.outcome.verdict, PluginVerdict::BadOutput);

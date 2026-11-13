@@ -36,7 +36,11 @@ impl ToolDyn for Probe {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             Ok(json!({"ordinal": self.0.fetch_add(1, Ordering::SeqCst) + 1}).to_string())
         })
@@ -58,7 +62,11 @@ impl ToolDyn for Stall {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.0.notify_one();
             std::future::pending().await
@@ -95,7 +103,13 @@ pub async fn control(
     accept_hook_tool_call(&fixture.hook, internal_id, tool, &args, None).await;
     let ToolCallHookAction::Skip { reason } = fixture
         .hook
-        .on_tool_call(tool, None, internal_id, &args)
+        .on_tool_call(
+            tool,
+            None,
+            internal_id,
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
     else {
         panic!("{tool} did not return its result")
@@ -218,15 +232,35 @@ pub async fn script_with_children(
     let hook = &fixture.hook;
     accept_hook_tool_call(hook, "script", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "script", "{}").await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "script",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let completed = hook
-        .admit_tool_effect("script", 1, "probe", "{}")
+        .admit_tool_effect(
+            "script",
+            1,
+            "probe",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("probe", None, &completed, "{}").await,
+        hook.on_tool_call(
+            "probe",
+            None,
+            &completed,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     hook.on_tool_result(
@@ -239,23 +273,55 @@ pub async fn script_with_children(
     .await;
     hook.finish_tool_effect(&completed, None).await.unwrap();
     let pending = hook
-        .admit_tool_effect("script", 2, "probe", "{}")
+        .admit_tool_effect(
+            "script",
+            2,
+            "probe",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     let running = hook
-        .admit_tool_effect("script", 3, "probe", "{}")
+        .admit_tool_effect(
+            "script",
+            3,
+            "probe",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("probe", None, &running, "{}").await,
+        hook.on_tool_call(
+            "probe",
+            None,
+            &running,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let cancelled = hook
-        .admit_tool_effect("script", 4, "probe", "{}")
+        .admit_tool_effect(
+            "script",
+            4,
+            "probe",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("probe", None, &cancelled, "{}").await,
+        hook.on_tool_call(
+            "probe",
+            None,
+            &cancelled,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     hook.finish_tool_effect(

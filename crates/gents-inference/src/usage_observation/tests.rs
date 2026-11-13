@@ -1076,9 +1076,21 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
         node_did: did.into(),
         cache,
     };
-    let output = tool.call(ProviderLimitsArgs {}).await.unwrap();
+    let output = tool
+        .call(
+            ProviderLimitsArgs {},
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     received.await.unwrap();
-    let cached = tool.call(ProviderLimitsArgs {}).await.unwrap();
+    let cached = tool
+        .call(
+            ProviderLimitsArgs {},
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     let cached: Value = serde_json::from_str(&cached).unwrap();
     assert_eq!(cached["accounts"][0]["read"]["outcome"], "skipped_recent");
     let value: Value = serde_json::from_str(&output).unwrap();

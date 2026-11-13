@@ -1024,6 +1024,7 @@ impl Stepper {
                 serde_json::to_value(input).unwrap(),
                 Some(data),
                 jobs,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .1
@@ -1043,6 +1044,7 @@ struct LiveTools;
 impl gents_loop::tool_effects::ToolEffectDispatcher for LiveTools {
     fn call<'a>(
         &'a self,
+        _parent: &'a gents_loop::tool::ToolCallEnvelope,
         _ordinal: u32,
         _name: &'a str,
         _arguments: &'a str,
@@ -1066,13 +1068,17 @@ async fn job_step_runs_without_a_tool_dispatcher() {
     // tools, so the step's `false` below is the job entry's, not an
     // absent dispatcher's.
     let (input, _) = step.input(&step.row).await;
+    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
     let ordinary = gents_loop::tool_effects::scope(
         live(),
         step.job.runtime.plugins.call_data_bound_with_receipt(
             &step.installed,
             serde_json::to_value(&input).unwrap(),
-            None,
-            true,
+            crate::plugin::executor::ToolInvocation {
+                tool_root: None,
+                tool_calls: true,
+                context: &envelope,
+            },
         ),
     )
     .await

@@ -314,7 +314,11 @@ impl gents_loop::tool::Tool for BoundedWriteTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         self.ensure_declaration()?;
         let types = self.resolved_field_types().await?;
         let mutation = self.build_mutation(&args.0, &types)?;

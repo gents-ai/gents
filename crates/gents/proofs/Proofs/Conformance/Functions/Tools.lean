@@ -4,6 +4,7 @@ import Proofs.Tools.Lsp.ServerStart
 import Proofs.Tools.MCPHealth.Coupling
 import Proofs.Tools.ToolPolicy.OperatorPaths
 import Proofs.Tools.ToolPolicy.PluginCalls
+import Proofs.Tools.ToolPolicy.CallEnvelope
 import Proofs.Tools.SelfConfig.ToolsSave
 import Proofs.Tools.WorkspaceRootOperations
 import Proofs.Conformance.Family
@@ -21,6 +22,10 @@ namespace ToolExecution
 deriving instance Lean.ToJson for Health
 end ToolExecution
 
+namespace ToolPolicy.CallEnvelope
+deriving instance Lean.ToJson for Path, Source, Cancel, Seen
+end ToolPolicy.CallEnvelope
+
 attribute [conformance_function]
   Identity.Configuration.ordinaryMutationAllowed
   Identity.Configuration.clientSignedWriteMayRetry
@@ -28,6 +33,7 @@ attribute [conformance_function]
   Lsp.LspAction.mayColdStart
   ToolPolicy.OperatorPaths.commandGuardAllows
   ToolPolicy.PluginCalls.available
+  ToolPolicy.CallEnvelope.derive
   Proofs.MCPHealth.healthProjection
 
 namespace DocumentOperations

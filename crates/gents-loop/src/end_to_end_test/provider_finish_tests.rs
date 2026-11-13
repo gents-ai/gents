@@ -247,7 +247,11 @@ impl Tool for ResponsesTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &crate::tool::ToolCallEnvelope,
+    ) -> Result<String, Self::Error> {
         self.0.lock().unwrap().push(args.text.clone());
         Ok(args.text.to_uppercase())
     }

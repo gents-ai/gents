@@ -14,7 +14,11 @@ impl ToolDyn for InvalidProgressProbe {
             }
         })
     }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             use gents_loop::tool_call_lifecycle::FailureClass;
             let value: serde_json::Value = serde_json::from_str(&args).unwrap();

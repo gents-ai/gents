@@ -217,6 +217,7 @@ async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Resu
         environment: Some(environment),
         tool_name: None,
         live_output: None,
+        process_recorder: None,
     })
     .await;
     match outcome {

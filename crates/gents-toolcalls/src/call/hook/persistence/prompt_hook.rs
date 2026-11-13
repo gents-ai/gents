@@ -116,6 +116,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> ToolCallHookAction {
         let owned = HookOwnedTool::of(tool_name).filter(|route| match route {
             HookOwnedTool::GetGoal | HookOwnedTool::UpdateGoal => self.goal_tools_enabled,
@@ -189,8 +190,13 @@ impl DefraSessionHook {
                         unreachable!("session messages are handled above")
                     }
                     HookOwnedTool::SpawnProcess => {
-                        self.persist_background_tool_call(tool_call_id, internal_call_id, args)
-                            .await
+                        self.persist_background_tool_call(
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                            context,
+                        )
+                        .await
                     }
                     HookOwnedTool::WaitProcess => {
                         self.persist_wait_tool_call(tool_call_id, internal_call_id, args)
@@ -234,14 +240,19 @@ impl DefraSessionHook {
         }
 
         if let Some(binding) = self.job_tools.get(tool_name) {
-            let result =
-                Box::pin(self.persist_job_tool_call(binding, tool_call_id, internal_call_id, args))
-                    .instrument(tracing::info_span!(
-                        "tool.call",
-                        tool_name = %tool_name,
-                        tool_call_id = %internal_call_id,
-                    ))
-                    .await;
+            let result = Box::pin(self.persist_job_tool_call(
+                binding,
+                tool_call_id,
+                internal_call_id,
+                args,
+                context,
+            ))
+            .instrument(tracing::info_span!(
+                "tool.call",
+                tool_name = %tool_name,
+                tool_call_id = %internal_call_id,
+            ))
+            .await;
             return match result {
                 Ok(action) => {
                     self.record_success();
@@ -299,6 +310,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> anyhow::Result<ToolCallHookAction> {
         let tool_name = binding.tool_name.as_str();
         let (session_id, request_id, deadline_at, _seq) =
@@ -318,8 +330,14 @@ impl DefraSessionHook {
         lifecycle.start_running().await?;
         let payload = match serde_json::from_str(args) {
             Ok(args) => {
-                crate::background::job::dispatch::run_step0(self, &mut lifecycle, binding, args)
-                    .await?
+                crate::background::job::dispatch::run_step0(
+                    self,
+                    &mut lifecycle,
+                    binding,
+                    args,
+                    context,
+                )
+                .await?
             }
             Err(error) => {
                 let payload = invalid_tool_arguments_payload(

@@ -34,10 +34,8 @@ async fn authoring_tool(
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap()
-        .call(
-            json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadWrite"},"bash":{"mode":"Off"}}}})
-                .to_string(),
-        )
+        .call(json!({"argv":["tools","update"],"set":{"host":{"root":root,"files":{"mode":"ReadWrite"},"bash":{"mode":"Off"}}}})
+                .to_string(), &gents_loop::tool::ToolCallEnvelope::ambient())
         .await
         .unwrap();
     (fixture, tools)
@@ -239,6 +237,7 @@ async fn pack_authority_grants_what_a_plugins_pack_asks_for() {
             .call(
                 json!({"argv":["plugin","run","fixture/native_echo"],"options":{"input":{}}})
                     .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .unwrap();

@@ -268,7 +268,11 @@ impl Tool for LspTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         if args
             .limit
             .is_some_and(|limit| !(1..=actions::MAX_REQUESTED_RESULTS).contains(&limit))

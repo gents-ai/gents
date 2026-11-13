@@ -2,13 +2,16 @@ use async_trait::async_trait;
 use gents_protocol::message::Message;
 
 use crate::live_output::LiveToolOutputWriter;
+use crate::tool::ToolCallEnvelope;
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
 
 pub type NativeCleanupCheck = std::sync::Arc<dyn Fn(Option<&ToolOutcome>) -> bool + Send + Sync>;
+/// Runs a foreground tool call under the envelope its hook gives it: the hook's
+/// cancellation encloses the call, which re-enters its admitted request scope.
 pub type ForegroundCall = Box<
     dyn FnOnce(
-            tokio_util::sync::CancellationToken,
+            ToolCallEnvelope,
             Option<NativeCleanupCheck>,
         ) -> crate::tool::BoxFuture<'static, ToolOutcome>
         + Send,
@@ -52,16 +55,15 @@ pub trait SessionHook: Send + Sync {
 
     async fn bind_tool_surface(&self, _tools: std::sync::Arc<Vec<Box<dyn crate::tool::ToolDyn>>>) {}
 
+    /// `context` is the envelope of the request the loop runs for.
     async fn run_foreground_tool(
         &self,
         _name: &str,
         _internal_id: &str,
         call: ForegroundCall,
+        context: &ToolCallEnvelope,
     ) -> ForegroundResult {
-        let token = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-            .map(|scope| scope.cancellation_token)
-            .unwrap_or_default();
-        ForegroundResult::Settled(call(token, None).await)
+        ForegroundResult::Settled(call(context.clone(), None).await)
     }
 
     /// Bind canonical arguments and the physical parent before exposing the
@@ -72,6 +74,7 @@ pub trait SessionHook: Send + Sync {
         _ordinal: u32,
         _tool_name: &str,
         _arguments: &str,
+        _context: &ToolCallEnvelope,
     ) -> Result<String, String> {
         Err("tool effects require a durable session owner".to_owned())
     }
@@ -116,13 +119,15 @@ pub trait SessionHook: Send + Sync {
         context: Option<&Message>,
     ) -> HookAction;
 
-    /// Persist and decide a tool call before dispatch.
+    /// Persist and decide a tool call before dispatch. `context` is the
+    /// envelope the call will run under.
     async fn on_tool_call(
         &self,
         tool_name: &str,
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
+        context: &ToolCallEnvelope,
     ) -> ToolCallHookAction;
 
     /// Settle rejected calls from Pending with their pre-dispatch failure.
@@ -179,6 +184,7 @@ impl SessionHook for NoopSessionHook {
         _tool_call_id: Option<String>,
         _internal_call_id: &str,
         _args: &str,
+        _context: &ToolCallEnvelope,
     ) -> ToolCallHookAction {
         ToolCallHookAction::Continue
     }

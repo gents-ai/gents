@@ -19,6 +19,7 @@ async fn capture(cwd: PathBuf, path: &str, program: &str, script: &str) -> Manag
         environment: Some(RapidHashMap::from_iter([("PATH".into(), path.into())])),
         tool_name: None,
         live_output: None,
+        process_recorder: None,
     })
     .await
 }

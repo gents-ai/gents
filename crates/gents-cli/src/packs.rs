@@ -538,7 +538,17 @@ pub async fn plugin_call(
     gents_tools::plugin::approval::scope_interactive(
         true,
         crate::commands::plugin::call_installed_for_operator(
-            &home, namespace, &name, input, operator,
+            &home,
+            namespace,
+            &name,
+            input,
+            operator,
+            &gents_loop::tool::ToolCallEnvelope::default().with_extension(
+                gents_tools::runtime_context::ToolHostContext {
+                    interactive: true,
+                    ..Default::default()
+                },
+            ),
         ),
     )
     .await
