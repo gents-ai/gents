@@ -680,6 +680,31 @@ where
         Ok(())
     }
 
+    /// Whether the service manager holds the Gents job, asked of the service
+    /// manager itself: launchd keeps and restarts a loaded job after its
+    /// definition file is deleted, so the file does not answer this.
+    pub fn job_loaded(&self) -> Result<bool> {
+        match self.platform {
+            NativeServicePlatform::Macos => {
+                let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
+                let print =
+                    self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
+                ensure_launchd_result(&print, LaunchdOperation::Inspect)?;
+                Ok(print.success)
+            }
+            NativeServicePlatform::Linux => {
+                let active = self.run_allow_failure(
+                    "systemctl",
+                    &["--user".into(), "is-active".into(), SYSTEMD_UNIT.into()],
+                )?;
+                Ok(matches!(
+                    active.stdout.as_str(),
+                    "active" | "activating" | "deactivating" | "reloading"
+                ))
+            }
+        }
+    }
+
     /// The pid of the service's running job, if the service manager has one.
     pub fn job_pid(&self) -> Result<Option<u32>> {
         match self.platform {
@@ -871,10 +896,11 @@ where
     }
 
     pub fn stop(&self, disable_at_login: bool) -> Result<()> {
-        if !self.config.definition_path(self.platform).is_file() {
+        if self.config.definition_path(self.platform).is_file() {
+            self.require_installed()?;
+        } else if self.platform != NativeServicePlatform::Macos {
             return Ok(());
         }
-        self.require_installed()?;
         match self.platform {
             NativeServicePlatform::Macos => {
                 let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
@@ -933,10 +959,23 @@ where
     pub fn status(&self) -> Result<NativeServiceStatus> {
         let installed = self.config.definition_path(self.platform).is_file();
         if !installed {
+            let (job_loaded, running) = match self.platform {
+                NativeServicePlatform::Macos => {
+                    let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
+                    let print =
+                        self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
+                    ensure_launchd_result(&print, LaunchdOperation::Inspect)?;
+                    (
+                        print.success,
+                        print.success && launchd_is_running(&print.stdout),
+                    )
+                }
+                NativeServicePlatform::Linux => (false, false),
+            };
             return Ok(NativeServiceStatus {
                 installed: false,
-                running: false,
-                job_loaded: false,
+                running,
+                job_loaded,
                 enabled: false,
                 requires_approval: false,
                 background_item: BackgroundItemStatus::Unavailable,

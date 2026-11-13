@@ -12,8 +12,7 @@ const FULL_DELETE_CONSEQUENCE: &str = "The managed home, client state and servic
 
 /// How the desktop client state relates to the managed home, as
 /// `managed-server.json`'s `reviewedFor` records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientBinding {
     /// No reviewed home is remembered, or its home cannot be read.
     Unbound,
