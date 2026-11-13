@@ -469,6 +469,7 @@ where
     loop {
         let routed_snapshot = active_snapshot_rx.borrow_and_update().clone();
         watcher.set_agent_identities(routed_snapshot.watcher_identities()?)?;
+        watcher.set_disabled_agents(routed_snapshot.disabled_watcher_agents());
         let readiness_observation = readiness_changed.borrow_and_update().clone();
         *active_snapshot = routed_snapshot.clone();
         let readiness_aligned =

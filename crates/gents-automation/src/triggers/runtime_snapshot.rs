@@ -455,6 +455,18 @@ impl ActiveRuntimeSnapshot {
         Ok(identities)
     }
 
+    /// Lean `EventDelivery.Watcher.skippedActors`.
+    pub fn disabled_watcher_agents(&self) -> RapidHashSet<String> {
+        self.unavailable_agents
+            .iter()
+            .filter(|(_, unavailable)| {
+                unavailable.public_reason == AgentReadinessUnavailableReason::AgentDisabled
+                    && unavailable.watcher_identity.is_some()
+            })
+            .map(|(did, _)| did.clone())
+            .collect()
+    }
+
     pub fn agent(&self, agent_did: &str) -> Option<&Arc<ResolvedAgent>> {
         self.agents.get(agent_did)
     }

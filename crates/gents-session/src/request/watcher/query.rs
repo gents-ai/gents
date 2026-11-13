@@ -85,6 +85,9 @@ impl DefraWatcher {
         let mut has_parked = false;
         let mut wait_metadata = rapidhash::RapidHashMap::default();
         for identity in &self.agents {
+            if self.disabled.contains(identity.did()) {
+                continue;
+            }
             let actor = identity::Did::new(identity.did())?;
             let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                 self.node.clone(),
@@ -219,6 +222,7 @@ impl DefraWatcher {
         }
         let merged = merge_scoped_scans(
             self.agents.iter().map(|identity| identity.did()),
+            &self.disabled,
             scans,
             &positions,
         );
