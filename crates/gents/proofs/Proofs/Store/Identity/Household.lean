@@ -1049,6 +1049,92 @@ theorem management_change_collides :
 theorem type_change_collides :
     (policyIdInput policy == policyIdInput policyWithDifferentTypes) = true := by native_decide
 
+/-- The subject shape a relation type names. External premise: the pinned
+DefraDB `acp::policy_yaml::build_subject_restriction`, enforced when a
+relationship is added: `actor` admits any actor DID and the all-actors
+wildcard, a bare resource admits an object of it, and `resource->relation`
+admits that userset. -/
+def subjectType : Subject → String
+  | .wildcard | .actor _ => "actor"
+  | .object resource _ => resource
+  | .entitySet resource _ relation => resource ++ "->" ++ relation
+
+/-- A relation that declares no type admits every subject. -/
+def typeAdmitted (definitions : List ResourceDefinition) (resource relation type : String) : Bool :=
+  match (definitions.find? (·.name == resource)).bind
+      (fun definition => definition.relations.find? (·.name == relation)) with
+  | some definition => definition.types.isEmpty || definition.types.contains type
+  | none => false
+
+def subjectAdmittedIn (definitions : List ResourceDefinition) (relation : Relation) : Bool :=
+  typeAdmitted definitions relation.resource relation.relation (subjectType relation.subject)
+
+def subjectAdmitted (relation : Relation) : Bool := subjectAdmittedIn policy relation
+
+/-- A relation's declared types name subject shapes, never kinds of actor: no
+policy admits one actor DID as a relation's subject and refuses another. A
+User, an Agent, an enrolled member and an unknown DID are the same subject to
+document ACP. -/
+theorem subject_types_do_not_separate_actors (definitions : List ResourceDefinition)
+    (resource id relation : String) (first second : DID) :
+    subjectAdmittedIn definitions ⟨resource, id, relation, .actor first⟩ =
+      subjectAdmittedIn definitions ⟨resource, id, relation, .actor second⟩ := rfl
+
+theorem agent_manager_type_admits_actors :
+    typeAdmitted policy "nodes" "agent_manager" "actor" = true := by native_decide
+
+/-- Decision (maintainer, 2026-11-13): only an enrolled User should hold
+`agent_manager`, besides the Node owner and administrators, who hold
+`manage_agents` without it. The policy does not say that: the relation admits
+every actor and the wildcard, so whoever manages it (the Node owner or an
+administrator) can give the catalog to an Agent, to an unenrolled DID or to
+everyone. Open: by `subject_types_do_not_separate_actors` no choice of types
+admits an enrolled User's DID and refuses an Agent's. What document ACP can
+say is `policyWithUsersetCatalog`, or a relation that marks an enrolled User
+on the Node and a `manage_agents` expression over it, which changes the policy
+ID and what an enrollment grant writes (`Identity.EnrollmentGrant.derived`). -/
+theorem agent_manager_admits_every_actor (node : String) (did : DID) :
+    subjectAdmitted ⟨"nodes", node, "agent_manager", .actor did⟩ = true ∧
+    subjectAdmitted ⟨"nodes", node, "agent_manager", .wildcard⟩ = true :=
+  ⟨agent_manager_type_admits_actors, agent_manager_type_admits_actors⟩
+
+/-- The restriction document ACP can state without a new relation:
+`agent_manager` takes only the userset of a Node's administrators. An
+enrollment approval makes its member a Node administrator
+(`Identity.EnrollmentGrant.approve_grants_node_administrator_and_operator_user`),
+so that userset holds every enrolled User, and also every other administrator,
+the Engineer included; all of them hold `manage_agents` already. Not adopted:
+it ends the catalog-only grant for a person, and by
+`userset_catalog_collides` it keeps the policy ID, so a store that registered
+the present policy keeps admitting every actor. -/
+def policyWithUsersetCatalog : List ResourceDefinition := policy.map fun resource =>
+  if resource.name == "nodes" then
+    { resource with relations := resource.relations.map fun relation =>
+        if relation.name == "agent_manager" then
+          { relation with types := ["nodes->administrator"] } else relation }
+  else resource
+
+theorem userset_catalog_admits_no_actor (node : String) (did : DID) :
+    subjectAdmittedIn policyWithUsersetCatalog ⟨"nodes", node, "agent_manager", .actor did⟩ = false ∧
+    subjectAdmittedIn policyWithUsersetCatalog ⟨"nodes", node, "agent_manager", .wildcard⟩ = false ∧
+    subjectAdmittedIn policyWithUsersetCatalog
+      ⟨"nodes", node, "agent_manager", .entitySet "nodes" node "administrator"⟩ = true := by
+  have actor : typeAdmitted policyWithUsersetCatalog "nodes" "agent_manager" "actor" = false := by
+    native_decide
+  have userset : typeAdmitted policyWithUsersetCatalog "nodes" "agent_manager"
+      ("nodes" ++ "->" ++ "administrator") = true := by native_decide
+  exact ⟨actor, actor, userset⟩
+
+theorem userset_catalog_collides :
+    (policyIdInput policy == policyIdInput policyWithUsersetCatalog) = true := by native_decide
+
+/-- The userset changes no permission expression, so every actor that holds
+`manage_agents` through ownership or `administrator` keeps it: the Engineer's
+catalog needs no `agent_manager`. -/
+theorem userset_catalog_keeps_permissions :
+    ((policyWithUsersetCatalog.map fun resource => (resource.name, resource.permissions)) ==
+      policy.map fun resource => (resource.name, resource.permissions)) = true := by native_decide
+
 def objectJson (object : Object) : Json := Json.mkObj
   [("resource", toJson object.resource), ("id", toJson object.id), ("owner", toJson object.owner)]
 
