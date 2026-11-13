@@ -1993,18 +1993,6 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // HistoryUnlockRequired in Provider::failed
     ("crates/gents-client-host/src/editor_store.rs", 1),
-    // Error in Listener::bind
-    ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
-    // EnrollmentDecisionRejected in enrollment_request_is_not_visible_yet
-    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
-    // TryLockError in reserve_client_listener
-    ("crates/gents-desktop-bridge/src/tauri_commands/lifecycle/single_flight.rs", 1),
-    // BackgroundApprovalPending in NativeLaunch::start; BridgeError in settle_launch_failure; RuntimeStillBooting in launch_managed_server; RuntimeStillBooting in settle_launch_failure
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
-    // UnsupportedNativeServicePlatform in native_error
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
-    // BridgeError in settle_adoption; RefusedStoreKind in refused_kind; RuntimeStillBooting in settle_adoption
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     // RemoteP2pAdminError in ClientRouteManager::reconcile_route
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
     // ModelDiscoveryHttpError in classify_discovery_failure
@@ -2038,7 +2026,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 /// a new entry is a reviewed addition.
 #[rustfmt::skip]
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
-    ("crates/gents-desktop-core/src/error.rs", &["BridgeError::classify_transport_error"]),
+    ("crates/gents-desktop-core/src/error.rs", &["BridgeError::carried_by", "BridgeError::classify_transport_error"]),
     ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
     ("crates/gents-documents/src/desired_state/validate.rs", &["OutcomeSourceSchemaError::in_error"]),
     ("crates/gents-documents/src/references.rs", &["MissingReference::in_error"]),
@@ -2057,6 +2045,8 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
     ("crates/gents-protocol/src/output.rs", &["ReconstructionError::in_chain"]),
     ("crates/gents-protocol/src/output/recovery.rs", &["RecoveryPlanError::in_chain"]),
+    ("crates/gents-service/src/enrollment_admin.rs", &["EnrollmentDecisionRejected::in_chain"]),
+    ("crates/gents-service/src/native_service.rs", &["BackgroundApprovalPending::take", "UnsupportedNativeServicePlatform::occurs_in"]),
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
     ("crates/gents-session/src/request/lifecycle/execution_lease.rs", &["ExecutionOwnershipLost::occurs_in"]),
@@ -2107,6 +2097,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 #[rustfmt::skip]
 const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-cli/src/commands/eval/watch.rs", &["store_locked"]),
+    ("crates/gents-desktop-bridge/src/host/local/windows.rs", &["pipe_name_reserved"]),
     ("crates/gents-desktop-core/src/inference.rs", &["classify_discovery_failure"]),
     ("crates/gents-eval/src/report/store.rs", &["unresolvable"]),
     ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", &["provider_reason_from_failure"]),

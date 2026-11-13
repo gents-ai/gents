@@ -31,6 +31,15 @@ pub struct LocalListener {
     _lock: FileLock,
 }
 
+/// Why the installation listener could not be bound.
+#[derive(Debug, thiserror::Error)]
+pub enum ListenerBindError {
+    #[error("another process owns the client installation listener")]
+    Held(#[source] std::fs::TryLockError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// Serializes service discovery and process creation. The service holds its
 /// separate listener lock after the attaching process releases this guard.
 pub async fn startup_lock(paths: &DesktopPaths) -> Result<FileLock> {
@@ -52,11 +61,20 @@ async fn acquire_startup_lock(file: std::fs::File) -> Result<FileLock> {
 }
 
 impl LocalListener {
-    pub async fn bind(paths: &DesktopPaths) -> Result<Self> {
+    pub async fn bind(paths: &DesktopPaths) -> std::result::Result<Self, ListenerBindError> {
         platform::prepare_home(paths).await?;
         let file = platform::lock_file(paths, "client-host.lock")?;
-        let lock = FileLock::try_exclusive(file)
-            .context("another process owns the client installation listener")?;
+        let lock = match FileLock::try_exclusive(file) {
+            Ok(lock) => lock,
+            Err(held @ std::fs::TryLockError::WouldBlock) => {
+                return Err(ListenerBindError::Held(held))
+            }
+            Err(error) => {
+                return Err(anyhow::Error::from(error)
+                    .context("another process owns the client installation listener")
+                    .into())
+            }
+        };
         Ok(Self {
             listener: platform::Listener::bind(paths).await?,
             _lock: lock,
