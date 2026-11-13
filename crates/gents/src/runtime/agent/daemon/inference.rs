@@ -245,6 +245,7 @@ where
             request.requester_did.as_deref(),
             &agent_did,
             workspace.workspace_cwd.as_deref(),
+            Some(session_id.as_str()),
         )?
         .map(|context| context.with_reviewer(reviewer.callback.clone()));
         let backend_id = lifecycle.backend_id().to_string();
@@ -1249,7 +1250,7 @@ pub(super) mod tests {
             wake.max_total_tokens, None,
             "fixture allows the daemon to create an auxiliary title request"
         );
-        assert!(
+        assert_eq!(
             gents_session::session::session_needs_generated_title(
                 &admission.client,
                 &admission.node_did,
@@ -1258,6 +1259,7 @@ pub(super) mod tests {
             )
             .await
             .expect("read fixture session title"),
+            gents_session::session::GeneratedTitleNeed::Needed,
             "fixture starts with a placeholder title so title work is created"
         );
 
@@ -1350,7 +1352,7 @@ pub(super) mod tests {
         })
         .await
         .expect("daemon must persist pending title work before test shutdown");
-        assert!(
+        assert_eq!(
             gents_session::session::session_needs_generated_title(
                 &admission.client,
                 &admission.node_did,
@@ -1359,6 +1361,7 @@ pub(super) mod tests {
             )
             .await
             .expect("read title pending session"),
+            gents_session::session::GeneratedTitleNeed::Needed,
             "creator cannot update the title without watcher dispatch"
         );
 

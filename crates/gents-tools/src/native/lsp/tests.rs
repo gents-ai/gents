@@ -1238,6 +1238,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         Some("requester"),
         &config.agent_did,
         Some(&root),
+        None,
     )
     .unwrap();
     workspace::scope(scope, async {
@@ -1365,6 +1366,7 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
         Some("requester"),
         &config.agent_did,
         Some(&root),
+        None,
     )
     .unwrap();
     workspace::scope(scope, async {

@@ -1,5 +1,10 @@
+use super::super::router::session_selection::{
+    session_selection_disposition, SessionSelection, SessionSelectionDisposition,
+    UnresolvedSessions,
+};
 use super::support::*;
 use super::*;
+use gents_protocol::request_admission::RequestPurpose;
 use gents_store::config_client::{ConfigAccess, NodePermission};
 use gents_store::identity::{GrantSet, NodeIdentity};
 
@@ -137,7 +142,7 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
         )
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(name)
+            escape_graphql_string(&name)
         ))
         .await
         .unwrap();
@@ -165,6 +170,93 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
     .await
     .unwrap()
     .is_none());
+    fixture.db.node.shutdown().await.unwrap();
+}
+
+fn check_selection_case(
+    case: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::runtime_session_selection::SelectionInput,
+        gents_lean_vocab::families::runtime_session_selection::SelectionOutput<String, String>,
+    >,
+    selection: SessionSelection,
+) {
+    let disposition = session_selection_disposition(
+        selection,
+        case.input.attempts.try_into().unwrap(),
+        case.input.bound.try_into().unwrap(),
+    );
+    case.check(
+        gents_lean_vocab::families::runtime_session_selection::SelectionOutput {
+            selection: match selection {
+                SessionSelection::Unavailable => "unavailable",
+                SessionSelection::Matched => "matched",
+                SessionSelection::Mismatched => "mismatched",
+            }
+            .to_owned(),
+            disposition: match disposition {
+                SessionSelectionDisposition::Claim => "claim",
+                SessionSelectionDisposition::Wait => "wait",
+                SessionSelectionDisposition::Reject => "reject",
+            }
+            .to_owned(),
+        },
+    );
+}
+
+#[test]
+fn generated_session_selection_disposition_cases_match_lean() {
+    use gents_lean_vocab::families::runtime_session_selection as family;
+    for case in family::cases::<String, String>() {
+        let selection = match case.input.visible {
+            None => SessionSelection::Unavailable,
+            Some(visible) if visible == case.input.requested => SessionSelection::Matched,
+            Some(_) => SessionSelection::Mismatched,
+        };
+        check_selection_case(&case, selection);
+    }
+}
+
+#[test]
+fn unresolved_session_attempts_count_consecutive_observations_per_request() {
+    let mut unresolved = UnresolvedSessions::default();
+    assert_eq!(unresolved.record("a"), 1);
+    assert_eq!(unresolved.record("b"), 1);
+    assert_eq!(unresolved.record("a"), 2);
+    unresolved.forget("a");
+    assert_eq!(unresolved.record("a"), 1);
+    assert_eq!(unresolved.record("b"), 2);
+}
+
+#[tokio::test]
+async fn auxiliary_request_resolves_a_client_opened_session() {
+    let fixture = PrivateSessionFixture::new().await;
+    fixture
+        .create_session("aux", fixture.selected.did(), true)
+        .await;
+    let mut request = fixture.request("aux", fixture.selected.did());
+    request.purpose = RequestPurpose::TitleAudit;
+    request.requester_did = Some(fixture.selected.did().to_owned());
+    let resolved = resolve_agent_for_request(&fixture.db.node, &request)
+        .await
+        .unwrap()
+        .expect("an auxiliary request resolves its own session");
+    assert_eq!(resolved.agent_did, fixture.selected.did());
+    assert_eq!(resolved.rejection_reason, None);
+
+    fixture
+        .create_session("aux-foreign", fixture.other.did(), true)
+        .await;
+    let mut foreign = fixture.request("aux-foreign", fixture.selected.did());
+    foreign.purpose = RequestPurpose::TitleAudit;
+    foreign.requester_did = Some(fixture.selected.did().to_owned());
+    let resolved = resolve_agent_for_request(&fixture.db.node, &foreign)
+        .await
+        .unwrap()
+        .expect("a foreign session is visible to the auxiliary request");
+    assert!(
+        resolved.rejection_reason.is_some(),
+        "the session pin still rejects an auxiliary request for another agent"
+    );
     fixture.db.node.shutdown().await.unwrap();
 }
 

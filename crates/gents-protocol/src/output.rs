@@ -165,6 +165,46 @@ pub struct OutputSegment {
     pub created_at: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSegmentShape {
+    pub node_did: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_did: Option<String>,
+    pub session_id: String,
+    pub request_doc_id: String,
+    pub source: OutputSource,
+    pub writer: OutputWriter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinal: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub runs: Vec<SegmentRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<SourceClose>,
+    pub created_at: String,
+}
+
+impl OutputSegment {
+    pub fn shape(&self) -> OutputSegmentShape {
+        OutputSegmentShape {
+            node_did: self.node_did.clone(),
+            requester_did: self.requester_did.clone(),
+            session_id: self.session_id.clone(),
+            request_doc_id: self.request_doc_id.clone(),
+            source: self.source.clone(),
+            writer: self.writer.clone(),
+            ordinal: self.ordinal,
+            runs: self.runs.clone(),
+            close: self.close.clone(),
+            created_at: self.created_at.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SegmentRun {

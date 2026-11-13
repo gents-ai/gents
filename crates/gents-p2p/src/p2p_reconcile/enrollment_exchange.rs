@@ -421,6 +421,7 @@ mod cleanup_tests {
                 owner_node_did: "owner".into(),
                 profile: "client".into(),
                 schema_fingerprint: "fingerprint".into(),
+                live_schema_digest: format!("sha256:{}", "a".repeat(64)),
                 issued_at: (now - chrono::Duration::minutes(2))
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 expires_at: expires_at.clone(),

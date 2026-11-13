@@ -10,6 +10,7 @@ use crate::runtime::agent::ProcessLifecycleState;
 use crate::runtime::node_readiness_publisher::{
     NodeReadinessPublisherHandle, NodeReadinessPublisherOwner,
 };
+use crate::runtime::storage_fault::StorageFaultObservation;
 use gents_automation::goal::GoalReconcileSettled;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_protocol::node_readiness::{ReconcilePhase, ReconcileResult};
@@ -64,6 +65,7 @@ pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::Node>,
     state: Arc<Mutex<RuntimeStatusRow>>,
     readiness: NodeReadinessPublisherHandle,
+    storage_fault: StorageFaultObservation,
 }
 
 #[async_trait::async_trait]
@@ -82,6 +84,7 @@ impl RuntimeStatusHandle {
     pub(crate) fn start(
         node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
+        storage_fault: StorageFaultObservation,
     ) -> (RuntimeStatusOwner, Self) {
         let node_did = node_did.into();
         let (readiness_owner, readiness) =
@@ -94,6 +97,7 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                storage_fault,
             },
         )
     }
@@ -104,6 +108,7 @@ impl RuntimeStatusHandle {
         node_did: impl Into<String>,
         writer: Arc<dyn crate::runtime::node_readiness_publisher::NodeReadinessWriter>,
         retry_delay: Duration,
+        storage_fault: StorageFaultObservation,
     ) -> (RuntimeStatusOwner, Self) {
         let node_did = node_did.into();
         let (readiness_owner, readiness) =
@@ -116,6 +121,7 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                storage_fault,
             },
         )
     }
@@ -131,6 +137,7 @@ impl RuntimeStatusHandle {
             node,
             state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
             readiness,
+            storage_fault: StorageFaultObservation::new(),
         }
     }
 
@@ -153,6 +160,7 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                storage_fault: StorageFaultObservation::new(),
             },
         )
     }
@@ -161,8 +169,22 @@ impl RuntimeStatusHandle {
         &self.readiness
     }
 
+    #[cfg(test)]
+    pub(crate) fn storage_fault(&self) -> &StorageFaultObservation {
+        &self.storage_fault
+    }
+
+    fn record_readiness_write<T>(&self, result: anyhow::Result<T>) -> anyhow::Result<T> {
+        if let Err(error) = &result {
+            if gents_store::graphql::is_storage_full(error.as_ref()) {
+                self.storage_fault.record_unavailable(format!("{error:#}"));
+            }
+        }
+        result
+    }
+
     pub(crate) async fn initialize_startup(&self, default_agent_did: &str) -> anyhow::Result<()> {
-        self.readiness.initialize(default_agent_did).await?;
+        self.record_readiness_write(self.readiness.initialize(default_agent_did).await)?;
         Ok(())
     }
 
@@ -170,7 +192,7 @@ impl RuntimeStatusHandle {
         &self,
         state: ProcessLifecycleState,
     ) -> anyhow::Result<()> {
-        self.readiness.set_process_state(state).await
+        self.record_readiness_write(self.readiness.set_process_state(state).await)
     }
 
     #[cfg(test)]
@@ -242,9 +264,7 @@ impl RuntimeStatusHandle {
     }
 
     pub(crate) async fn publish_router_generation(&self, generation: u64) -> anyhow::Result<()> {
-        self.readiness
-            .set_router_generation(generation)
-            .await
+        self.record_readiness_write(self.readiness.set_router_generation(generation).await)
             .with_context(|| format!("publish agent readiness router generation {generation}"))
     }
 
@@ -259,7 +279,7 @@ impl RuntimeStatusHandle {
         snapshot: &ActiveRuntimeSnapshot,
         result: ReconcileResult,
     ) -> anyhow::Result<()> {
-        self.readiness.publish_snapshot(snapshot).await?;
+        self.record_readiness_write(self.readiness.publish_snapshot(snapshot).await)?;
         let executor_status = executor_status_fields(snapshot);
         self.update(|row| {
             let mut changed = false;

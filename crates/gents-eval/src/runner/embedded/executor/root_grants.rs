@@ -89,6 +89,7 @@ mod tests {
             agent_did: agent_did.to_owned(),
             state,
             reason,
+            effective_inference: None,
         };
         let snapshot = NodeReadinessSnapshot {
             format_version: 1,

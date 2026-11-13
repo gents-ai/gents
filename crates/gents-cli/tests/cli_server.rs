@@ -3165,3 +3165,203 @@ impl McpHome {
         })
     }
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restarted_server_never_reports_the_killed_process_ready() -> Result<()> {
+    let (tempdir, home_dir, _mock_endpoint, node_did, killed_port, killed) =
+        tokio::task::spawn_blocking(|| -> Result<_> {
+            let tempdir = tempfile::tempdir().context("creating tempdir")?;
+            let home_dir = tempdir.path().join("home");
+            fs::create_dir_all(&home_dir)?;
+
+            let model_name = format!("mock-restart-claim-model-{}", Uuid::new_v4().simple());
+            let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+            let agent_name = format!("cli-restart-claim-{}", Uuid::new_v4().simple());
+
+            let init = run_init_json(
+                &home_dir,
+                &[
+                    "--node-name",
+                    &agent_name,
+                    "--model-name",
+                    &model_name,
+                    "--inference-url",
+                    mock_endpoint.endpoint(),
+                ],
+            )?;
+            let node_did = node_did_from_init(&init)?;
+
+            let killed_port = allocate_port()?;
+            let mut killed = spawn_server(&home_dir, killed_port)?;
+            wait_for_port(killed_port, &mut killed)?;
+            Ok((
+                tempdir,
+                home_dir,
+                mock_endpoint,
+                node_did,
+                killed_port,
+                killed,
+            ))
+        })
+        .await??;
+    wait_for_runtime_ready(
+        &graphql_url(killed_port),
+        &node_did,
+        Duration::from_secs(30),
+    )
+    .await?;
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut killed = killed;
+        killed.child.kill()?;
+        killed.child.wait()?;
+        Ok(())
+    })
+    .await??;
+
+    let stall = tempdir.path().join("startup-stall");
+    let mkfifo = tokio::process::Command::new("mkfifo")
+        .arg(&stall)
+        .status()
+        .await
+        .context("creating the startup stall FIFO")?;
+    assert!(mkfifo.success(), "mkfifo failed: {mkfifo}");
+
+    let (port, serve) = tokio::task::spawn_blocking({
+        let home_dir = home_dir.clone();
+        let stall = stall.clone();
+        move || -> Result<_> {
+            let port = allocate_port()?;
+            let mut serve = spawn_server_with_env(
+                &home_dir,
+                port,
+                &[],
+                &[(
+                    "GENTS_TEST_STALL_AFTER_CLIENT_ACCESS",
+                    stall.to_str().context("stall path is not UTF-8")?,
+                )],
+            )?;
+            wait_for_port(port, &mut serve)?;
+            Ok((port, serve))
+        }
+    })
+    .await??;
+
+    let authorization = support::graphql::node_principal_endpoint(&graphql_url(port))
+        .authorization()?
+        .context("served home has no node principal")?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, authorization.parse()?);
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+
+    let healthz_url = format!("http://127.0.0.1:{port}/healthz");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let stalled = loop {
+        if let Ok(response) = client.get(&healthz_url).send().await {
+            let status = response.status();
+            if let Ok(body) = response.json::<Value>().await {
+                if body.get("checks").is_some() {
+                    break (status, body);
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            let (stdout, stderr) =
+                tokio::task::spawn_blocking(move || serve.captured_output()).await??;
+            anyhow::bail!(
+                "timed out waiting for the restarted server to serve a health payload\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let (stalled_status, stalled_body) = stalled;
+    assert_eq!(
+        stalled_body.pointer("/checks/runtime/count").and_then(Value::as_u64),
+        Some(1),
+        "the killed process's readiness row must still be the one this process reads: {stalled_body}"
+    );
+    let claimed: Value = serde_json::from_str(
+        stalled_body
+            .pointer("/node_readiness/0/snapshot_json")
+            .and_then(Value::as_str)
+            .context("health payload carries no readiness snapshot")?,
+    )?;
+    assert_eq!(
+        claimed.get("process_state").and_then(Value::as_str),
+        Some("recovering"),
+        "the restarted server must claim the row before it opens client access: {claimed}"
+    );
+    assert_eq!(
+        stalled_body
+            .pointer("/checks/runtime/ready")
+            .and_then(Value::as_bool),
+        Some(false),
+        "a restarted server must not report the killed process's readiness: {stalled_body}"
+    );
+    assert_eq!(
+        stalled_status,
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        "health must fail closed for the whole restart window: {stalled_body}"
+    );
+    let status_body = client
+        .get(format!("http://127.0.0.1:{port}/status"))
+        .send()
+        .await
+        .context("fetching /status during the restart window")?
+        .json::<Value>()
+        .await
+        .context("reading /status during the restart window")?;
+    assert_eq!(
+        status_body.get("lifecycle").and_then(Value::as_str),
+        Some("starting"),
+        "the stalled server must still report its own lifecycle as starting: {status_body}"
+    );
+    assert_eq!(
+        status_body.get("ok").and_then(Value::as_bool),
+        Some(false),
+        "/status ok shares the health definition: {status_body}"
+    );
+
+    let release = stall.clone();
+    tokio::task::spawn_blocking(move || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&release)
+            .map(|_| ())
+    })
+    .await?
+    .context("releasing the startup stall")?;
+
+    wait_for_runtime_ready(&graphql_url(port), &node_did, Duration::from_secs(30)).await?;
+    let ready = client
+        .get(&healthz_url)
+        .send()
+        .await
+        .context("fetching /healthz after readiness")?;
+    let ready_status = ready.status();
+    let ready_body = ready
+        .json::<Value>()
+        .await
+        .context("reading /healthz after readiness")?;
+    assert_eq!(
+        ready_status,
+        reqwest::StatusCode::OK,
+        "the restarted server must report healthy once its own runtime publishes: {ready_body}"
+    );
+    assert_eq!(
+        ready_body.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "{ready_body}"
+    );
+
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut serve = serve;
+        serve.child.kill()?;
+        serve.child.wait()?;
+        Ok(())
+    })
+    .await??;
+    Ok(())
+}

@@ -36,12 +36,14 @@ fn source_projection_is_sorted_and_unavailability_wins() {
                 dispatcher_present: true,
                 unavailable_reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
                 startup_demoted: false,
+                effective_inference: None,
             },
             AgentReadinessSourceEntry {
                 agent_did: "a".to_string(),
                 dispatcher_present: true,
                 unavailable_reason: None,
                 startup_demoted: false,
+                effective_inference: None,
             },
         ],
     )
@@ -56,6 +58,7 @@ fn ready_snapshot_does_not_expire_without_semantic_changes() {
         agent_did: "a".to_string(),
         state: AgentReadinessState::Ready,
         reason: None,
+        effective_inference: None,
     }]);
     let row = readiness_row("did:test:node", serde_json::to_string(&snapshot).unwrap());
     let projection = project_node_readiness(Some(&row), "did:test:node", ["a"], Some("a"));
@@ -76,11 +79,13 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         agent_did: "a".to_string(),
         state: AgentReadinessState::Ready,
         reason: None,
+        effective_inference: None,
     };
     let unavailable = AgentReadinessEntry {
         agent_did: "b".to_string(),
         state: AgentReadinessState::Unavailable,
         reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
+        effective_inference: None,
     };
     let canonical = readiness_row(
         "did:test:node",
@@ -107,6 +112,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
             agent_did: "a".to_string(),
             state: AgentReadinessState::Unavailable,
             reason: None,
+            effective_inference: None,
         }]),
     ];
     for snapshot in malformed_snapshots {
@@ -287,10 +293,10 @@ where
 
 #[test]
 fn generated_agent_readiness_cases_drive_the_production_projector() {
-    use crate::row::{
-        project_node_readiness, project_node_readiness_source, AgentReadinessSourceEntry,
-        NodeReadinessProcessState, NodeReadinessRow, ProjectedAgentReadiness,
-        NODE_READINESS_FORMAT_VERSION,
+    use crate::node_readiness::{
+        project_node_readiness_source, project_node_readiness_with_storage,
+        AgentReadinessSourceEntry, NodeReadinessProcessState, NodeReadinessRow,
+        ProjectedAgentReadiness, RuntimeStorageObservation, NODE_READINESS_FORMAT_VERSION,
     };
 
     let cases = gents_lean_vocab::lean_client_agent_readiness_cases();
@@ -304,6 +310,8 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
         let selected_assigned = case.runnable || case.unavailable || case.startup_demoted;
         let default_agent_did = if selected_assigned { "20" } else { "10" };
         let sources = vec![AgentReadinessSourceEntry {
+            effective_inference: None,
+
             agent_did: default_agent_did.to_string(),
             dispatcher_present: if selected_assigned {
                 case.runnable
@@ -337,11 +345,13 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
             },
             updated_at: "2026-08-28T00:00:00Z".to_string(),
         };
-        let projection = project_node_readiness(
+        let storage = RuntimeStorageObservation::from_unavailable(case.storage_unavailable);
+        let projection = project_node_readiness_with_storage(
             case.observation_present.then_some(&row),
             "did:test:lean-readiness",
             ["20"],
             Some("20"),
+            storage,
         );
         let projected = projection
             .agents
@@ -350,11 +360,12 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
         for timestamp in ["1970-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
             let mut aged_row = row.clone();
             aged_row.updated_at = timestamp.to_string();
-            let aged = project_node_readiness(
+            let aged = project_node_readiness_with_storage(
                 case.observation_present.then_some(&aged_row),
                 "did:test:lean-readiness",
                 ["20"],
                 Some("20"),
+                storage,
             );
             assert_eq!(aged.agents, projection.agents, "{}: {timestamp}", case.name);
             assert_eq!(
@@ -374,7 +385,7 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
         };
         assert_eq!(state, case.expected_state, "{} state", case.name);
         assert_eq!(reason, case.expected_reason, "{} reason", case.name);
-        if case.observation_kind == "observed" {
+        if case.observation_kind == "observed" && !case.storage_unavailable {
             assert_eq!(
                 state == "ready",
                 case.expected_runtime_admissible,

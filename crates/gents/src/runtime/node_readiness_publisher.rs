@@ -8,6 +8,7 @@ use gents_protocol::row::{
     project_node_readiness_source, AgentReadinessSourceEntry, AgentReadinessUnavailableReason,
     NodeReadinessProcessState, NodeReadinessSnapshot,
 };
+
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -78,8 +79,17 @@ pub(crate) struct NodeReadinessPublisherOwner {
 }
 
 const MAX_PERSIST_ATTEMPTS: usize = 5;
-const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
+const MIN_PERSIST_ATTEMPT_TIMEOUT_MS: u64 = 250;
+const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(MIN_PERSIST_ATTEMPT_TIMEOUT_MS);
 const PRODUCTION_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+const PRODUCTION_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+pub(crate) const PRODUCTION_COMMAND_TIMEOUT: Duration = Duration::from_millis(
+    (PRODUCTION_PERSIST_ATTEMPT_TIMEOUT.as_secs() + PRODUCTION_RETRY_DELAY.as_secs())
+        * 1000
+        * MAX_PERSIST_ATTEMPTS as u64
+        + MIN_PERSIST_ATTEMPT_TIMEOUT_MS,
+);
 
 #[async_trait::async_trait]
 pub(crate) trait NodeReadinessWriter: Send + Sync {
@@ -193,7 +203,7 @@ impl NodeReadinessPublisherHandle {
         Self::start_with_writer_and_timeout(
             Arc::new(DefraNodeReadinessWriter { node }),
             node_did,
-            Duration::from_secs(1),
+            PRODUCTION_RETRY_DELAY,
             Some(PRODUCTION_PERSIST_ATTEMPT_TIMEOUT),
         )
     }
@@ -223,7 +233,7 @@ impl NodeReadinessPublisherHandle {
         Self::start_with_writer_and_timeout(
             Arc::new(DefraNodeReadinessWriter { node }),
             node_did,
-            Duration::from_secs(1),
+            PRODUCTION_RETRY_DELAY,
             None,
         )
     }
@@ -311,6 +321,10 @@ impl NodeReadinessPublisherHandle {
                         .get(&agent_did)
                         .map(|unavailable| unavailable.public_reason),
                     startup_demoted: false,
+                    effective_inference: snapshot
+                        .agents
+                        .get(&agent_did)
+                        .map(|agent| agent.effective_inference()),
                 };
                 (agent_did, entry)
             })
@@ -508,6 +522,7 @@ async fn run_publisher(
                                 AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                             ),
                             startup_demoted: false,
+                            effective_inference: None,
                         },
                     )]),
                     slot_generations: BTreeMap::new(),
@@ -844,6 +859,67 @@ fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
     }
 }
 
+pub(crate) async fn claim_node_readiness_for_new_process(
+    node: &std::sync::Arc<defra_node::Node>,
+    node_did: &str,
+) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::node_readiness as readiness_fields, Filter, Input, Update,
+    };
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "readiness claim DID does not match the configured node identity"
+    );
+    let actor = identity::Did::new(node_did)?;
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let updated_at = Utc::now().to_rfc3339();
+    access
+        .transact_write("readiness.claim", |txn| {
+            let actor = &actor;
+            let updated_at = &updated_at;
+            Box::pin(async move {
+                let Some(row) =
+                    gents_store::config_client::node_readiness::observe_published_readiness(
+                        txn, actor,
+                    )
+                    .await?
+                else {
+                    return Ok::<_, anyhow::Error>(());
+                };
+                let Ok(mut snapshot) =
+                    gents_protocol::node_readiness::decode_node_readiness_snapshot(&row, node_did)
+                else {
+                    return Ok(());
+                };
+                if matches!(
+                    snapshot.process_state,
+                    NodeReadinessProcessState::Shutdown | NodeReadinessProcessState::Recovering
+                ) {
+                    return Ok(());
+                }
+                tracing::info!(
+                    node_did,
+                    claimed_process_state = snapshot.process_state.as_str(),
+                    "claiming the readiness row a previous process left behind"
+                );
+                snapshot.process_state = NodeReadinessProcessState::Recovering;
+                let snapshot_json = serde_json::to_string(&snapshot)?;
+                let update = Update::matching(
+                    Filter::eq(readiness_fields::NODE_DID, node_did),
+                    Input::new()
+                        .set(readiness_fields::SNAPSHOT_JSON, snapshot_json.as_str())
+                        .set(readiness_fields::UPDATED_AT, updated_at.as_str()),
+                )
+                .render();
+                let response = txn.run(&update).await?;
+                gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeReadiness")
+                    .context("readiness document disappeared while claiming")?;
+                Ok(())
+            })
+        })
+        .await
+}
+
 pub(crate) async fn upsert_node_readiness(
     node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
@@ -1033,6 +1109,8 @@ mod candidate_conformance {
                     entries: BTreeMap::from([(
                         "agent".into(),
                         AgentReadinessSourceEntry {
+                            effective_inference: None,
+
                             agent_did: "agent".into(),
                             dispatcher_present: false,
                             unavailable_reason: Some(

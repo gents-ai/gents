@@ -1,6 +1,33 @@
 use super::*;
 use anyhow::Context;
 
+fn executed_inference_input_fields(
+    executed: Option<&gents_protocol::row::ExecutedInferenceSettings>,
+) -> Result<String> {
+    let Some(executed) = executed else {
+        return Ok(String::new());
+    };
+    let nullable = gents_protocol::graphql::nullable_string_field;
+    let generation = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(
+        executed.runtime_generation,
+    )?)?;
+    Ok([
+        nullable("executed_model_name", Some(executed.model_name.as_str())),
+        nullable(
+            "executed_reasoning_effort",
+            executed.reasoning_effort.as_deref(),
+        ),
+        nullable("executed_service_tier", executed.service_tier.as_deref()),
+        nullable(
+            "executed_inference_profile_id",
+            executed.inference_profile_id.as_deref(),
+        ),
+        format!("executed_runtime_generation: {generation}"),
+    ]
+    .join(",\n                        ")
+        + ",")
+}
+
 pub struct DurableClaimReceipt {
     pub request: AgentRequest,
     request_commit_cid: String,
@@ -977,6 +1004,8 @@ impl RequestLifecycle {
             escape_graphql_string(&execution_lease_expires_at.to_rfc3339());
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
+        let executed_inference_fields =
+            executed_inference_input_fields(self.executed_inference.as_ref())?;
         let execution_origin = self.execution_origin.as_str();
         let request_fields = gents_protocol::row::AGENT_REQUEST_FIELDS;
 
@@ -1024,6 +1053,7 @@ impl RequestLifecycle {
                         execution_generation: "{escaped_execution_generation}",
                         execution_lease_expires_at: "{escaped_execution_lease_expires_at}",
                         execution_lease_secs: {lease_secs},
+                        {executed_inference_fields}
                         {budget_field}
                         {background_completion_snapshot_fields}
                         deadline: "{escaped_deadline}"
@@ -1113,4 +1143,37 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+}
+
+#[cfg(test)]
+#[test]
+fn the_executed_binding_round_trips_through_defradb_mutation_parser() {
+    for generation in [Some(4), None] {
+        let binding = gents_protocol::row::ExecutedInferenceSettings {
+            model_name: "m\", lifecycle_state: \"completed".to_owned(),
+            reasoning_effort: None,
+            service_tier: None,
+            inference_profile_id: Some("profile\n\"x".to_owned()),
+            runtime_generation: generation,
+        };
+        let fields = executed_inference_input_fields(Some(&binding)).unwrap();
+        let mutation = format!("mutation {{ update_AgentRequest(docID: \"fixture\", input: {{ {fields} }}) {{ _docID }} }}");
+        let parsed = ::query::parse_mutations(&mutation).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&parsed[0].update_input).unwrap(),
+            serde_json::json!({
+                "executed_model_name": binding.model_name,
+                "executed_reasoning_effort": null,
+                "executed_service_tier": null,
+                "executed_inference_profile_id": binding.inference_profile_id,
+                "executed_runtime_generation": generation,
+            })
+        );
+    }
+    let fields = executed_inference_input_fields(None).unwrap();
+    let mutation = format!("mutation {{ update_AgentRequest(docID: \"fixture\", input: {{ {fields} }}) {{ _docID }} }}");
+    assert!(::query::parse_mutations(&mutation).unwrap()[0]
+        .update_input
+        .is_empty());
 }

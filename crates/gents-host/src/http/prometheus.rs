@@ -8,6 +8,7 @@ use gents_protocol::row::{
     decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
     ProjectedNodeReadinessSummary,
 };
+
 use gents_protocol::usage::{TokenUsageColumns, TokenUsageSummary};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -2049,6 +2050,7 @@ mod tests {
                         agent_did: "default".to_string(),
                         state: AgentReadinessState::Ready,
                         reason: None,
+                        effective_inference: None,
                     },
                     AgentReadinessEntry {
                         agent_did: "offline".to_string(),
@@ -2056,6 +2058,7 @@ mod tests {
                         reason: Some(
                             AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
                         ),
+                        effective_inference: None,
                     },
                 ],
             })

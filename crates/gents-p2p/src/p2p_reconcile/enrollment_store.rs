@@ -421,6 +421,7 @@ impl GraphqlEnrollmentStore {
             "renewal transport identity mismatch"
         );
         let issuer = super::enrollment_offer::EnrollmentOfferIssuer::new(
+            self.node.clone(),
             self.identity.clone(),
             p2p,
             intent.network_id.clone(),
@@ -736,6 +737,13 @@ impl GraphqlEnrollmentStore {
             });
         }
         let pending = projection.pending_for_decision(request_id)?;
+
+        if kind == WireDecisionKind::Approved {
+            let offer = decode_offer(&pending.request.offer_token)?;
+            super::enrollment_candidate::verify_offer_live_schema(&self.node, &offer)
+                .await
+                .context("checking invitation schema before approval")?;
+        }
 
         let mut decided_at = self.verify_live_candidate(&pending.request).await?;
         let lease = match operator_lease {

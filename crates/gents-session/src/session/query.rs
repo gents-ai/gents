@@ -192,7 +192,7 @@ pub async fn load_session_agent_selection(
     actor: &::identity::Did,
     node_did: &str,
     session_id: &str,
-    requester_did: Option<&str>,
+    requester: Option<Option<&str>>,
 ) -> Result<Option<String>> {
     Ok(
         gents_store::config_client::ConfigAccess::transact_local_readonly(
@@ -200,14 +200,20 @@ pub async fn load_session_agent_selection(
             Some(actor.clone()),
             "session.agent_selection",
             |txn| {
-                Box::pin(
-                    gents_store::config_client::agent_session::load_agent_session_row_in_txn(
-                        txn,
-                        node_did,
-                        session_id,
-                        requester_did,
-                    ),
-                )
+                Box::pin(async move {
+                    match requester {
+                    Some(requester_did) => {
+                        gents_store::config_client::agent_session::load_agent_session_row_in_txn(
+                            txn, node_did, session_id, requester_did,
+                        ).await
+                    }
+                    None => {
+                        gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                            txn, node_did, session_id,
+                        ).await
+                    }
+                }
+                })
             },
         )
         .await?

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::goal::{
-    session_token_usage, seed_goal_from_access, CreateGoalForSessionError,
+    seed_goal_from_access, session_token_usage, CreateGoalForSessionError,
     CreateGoalForSessionOutcome,
 };
 use crate::{
@@ -503,6 +503,8 @@ async fn publish_node_readiness_for_agent(
         router_generation: 1,
         default_agent_did: agent_did.to_string(),
         agents: vec![AgentReadinessEntry {
+            effective_inference: None,
+
             agent_did: agent_did.to_string(),
             state: if behavior.is_some() {
                 AgentReadinessState::Unavailable

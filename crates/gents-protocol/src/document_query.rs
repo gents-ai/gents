@@ -1153,6 +1153,27 @@ mod tests {
     }
 
     #[test]
+    fn multi_field_order_round_trips_through_defradb_parser() {
+        let rendered = Query::select(Selection::new().field(request::REQUEST_ID))
+            .order_by(request::CREATED_AT, Direction::Desc)
+            .order_by(request::DOC_ID, Direction::Asc)
+            .render();
+        let parsed = query::parse_query(&rendered.document).unwrap();
+        let order = parsed[0].order_by.as_ref().unwrap();
+        assert_eq!(order.conditions.len(), 2);
+        assert_eq!(order.conditions[0].fields, vec![request::CREATED_AT.name()]);
+        assert_eq!(order.conditions[1].fields, vec![request::DOC_ID.name()]);
+        assert_eq!(
+            order.conditions[0].direction,
+            query::mapper::OrderDirection::Desc
+        );
+        assert_eq!(
+            order.conditions[1].direction,
+            query::mapper::OrderDirection::Asc
+        );
+    }
+
+    #[test]
     fn a_repeated_field_keeps_an_explicit_conjunction() {
         let rendered = Query::select(Selection::doc_id())
             .filter(Filter::ge(request::CREATED_AT, "a"))

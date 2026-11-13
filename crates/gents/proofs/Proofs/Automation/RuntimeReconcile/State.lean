@@ -1,9 +1,28 @@
 import Proofs.Shared.Basic
 import Proofs.Automation.Process
+import Proofs.Documents.Configuration
+import Proofs.Session.PromptAssembly.ServiceTier
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
 abbrev Generation := Nat
+
+/-- The inference settings one generation binds to one agent.
+
+`Configuration.SelectedModel` is the backend, model and effort produced by the
+only legal selection path; the service tier is owned separately by
+`PromptAssembly.ServiceTier`, because its legality is a provider capability
+rather than a selection field. Joining them here keeps a single settings
+vocabulary: the tier is not redeclared, and the selection does not gain a tier
+field whose capability rule would then have to be restated in two places.
+
+The claim stores this execution evidence on AgentRequest, using the existing
+`delivered_requests` resource and AgentSession parent. Its create/read/update/delete
+grants are unchanged; no new resource or permission is introduced. -/
+structure EffectiveSettings where
+  selected : Configuration.SelectedModel
+  tier : Option PromptAssembly.ServiceTier.Tier
+  deriving DecidableEq, Repr
 
 inductive ReconcilePhase where
   | idle
@@ -182,11 +201,20 @@ structure RuntimeState where
   requestSession : RequestId → SessionId
   requestAgent : RequestId → AgentDid
   sessionAgent : SessionId → Option AgentDid
+  /-- The settings a generation's slot holds for an agent. A slot is built once
+  per generation and keeps one immutable resolved configuration for its whole
+  life, so this is a property of the generation, not of any request. -/
+  generationSettings : Generation → AgentDid → Option EffectiveSettings
+  /-- The settings a request's execution is bound to, recorded when the router
+  hands the request to a slot. `none` is first class and means not yet bound:
+  the request has no effective settings and will bind at its own dispatch. -/
+  requestSettings : RequestId → Option EffectiveSettings
 
 namespace RuntimeState
 
 /-- Router observations are actor-scoped. No visible session may mean absent,
-unavailable or unauthorized; the router waits rather than inferring a new binding. -/
+unavailable or unauthorized; the router waits within the bound of
+`sessionSelectionDisposition` rather than inferring a new binding. -/
 inductive SessionSelection where
   | unavailable | matched | mismatched
   deriving DecidableEq, Repr
@@ -204,17 +232,57 @@ theorem visible_foreign_session_is_rejected (requested bound : AgentDid)
     sessionSelection requested (some bound) = .mismatched := by
   simp [sessionSelection, different]
 
+/-- What the router does with one session-selection observation, given how many
+consecutive unavailable observations it has made for the same request, this one
+included.
+
+External premises that justify terminalizing rather than waiting forever:
+DefraDB document ACP filters unreadable rows without an error, so an
+unavailable observation cannot be distinguished from an absent session;
+sessions are node-local documents (P2P carries discovery and enrollment only),
+so repeated local invisibility is not a replication race; and a request left
+pending is re-served at every request-watcher cooldown, so an unbounded wait is
+an unbounded retry that never progresses.
+
+Only `unavailable` is bounded. A failed read is not an observation and must not
+advance the count: `Enrollment.AgentRequestAdmissionDisposition` allows only an
+authoritative negative to terminalize a durable request. -/
+inductive SessionSelectionDisposition where
+  | claim | wait | reject
+  deriving DecidableEq, Repr
+
+def sessionSelectionDisposition
+    (selection : SessionSelection) (attempts bound : Nat) : SessionSelectionDisposition :=
+  match selection with
+  | .matched => .claim
+  | .mismatched => .reject
+  | .unavailable => if bound ≤ attempts then .reject else .wait
+
+theorem unavailable_waits_below_bound {attempts bound : Nat} (below : attempts < bound) :
+    sessionSelectionDisposition .unavailable attempts bound = .wait := by
+  simp [sessionSelectionDisposition, Nat.not_le.mpr below]
+
+theorem unavailable_rejects_at_bound {attempts bound : Nat} (reached : bound ≤ attempts) :
+    sessionSelectionDisposition .unavailable attempts bound = .reject := by
+  simp [sessionSelectionDisposition, reached]
+
+theorem matched_never_rejects (attempts bound : Nat) :
+    sessionSelectionDisposition .matched attempts bound = .claim := rfl
+
+theorem mismatched_rejects_immediately (attempts bound : Nat) :
+    sessionSelectionDisposition .mismatched attempts bound = .reject := rfl
+
 /-- What a request's own Agent can read of its session when the router first
 observes the request: the session's bound Agent if the producer published the
 session with the request, nothing otherwise.
 
 Decision (#3670, scheduled fires never ran): because the router waits on an
-absent session (`missing_session_selection_waits`) instead of binding one, every
+absent session for a bounded number of observations instead of binding one, every
 producer of a runtime request (Task fires, manual Task runs) publishes the
 request's session, bound to the request's Agent and owned by it, in the
 request's own transaction. The claim projection then only updates that
 session. A producer that left the session to the claim would leave its request
-pending forever (`unpublished_session_never_routes`). -/
+unroutable (`unpublished_session_never_routes`). -/
 def materializedSessionVisible (publishedWithRequest : Bool) (requested : AgentDid) :
     Option AgentDid :=
   if publishedWithRequest then some requested else none
@@ -384,6 +452,7 @@ inductive ClientAgentReadiness where
   | unknownProcess
   | unknownStale
   | unknownAbsent
+  | unknownStorageUnavailable
   deriving DecidableEq, Repr
 
 namespace ClientAgentReadiness
@@ -392,7 +461,8 @@ def stateString : ClientAgentReadiness → String
   | .ready => "ready"
   | .unavailableRuntime _ | .unavailableStartup => "unavailable"
   | .unknownMissing | .unknownMalformed | .unknownVersion
-  | .unknownProcess | .unknownStale | .unknownAbsent => "unknown"
+  | .unknownProcess | .unknownStale | .unknownAbsent
+  | .unknownStorageUnavailable => "unknown"
 
 def reasonCode : ClientAgentReadiness → Option String
   | .ready => none
@@ -404,12 +474,27 @@ def reasonCode : ClientAgentReadiness → Option String
   | .unknownProcess => some "process_not_ready"
   | .unknownStale => some "router_generation_stale"
   | .unknownAbsent => some "agent_not_assigned"
+  | .unknownStorageUnavailable => some "storage_unavailable"
 
+/-- External premise (Regolith `WriteLatch`, a `OnceCell` with no clear path):
+once a write-ahead log append fails, every later write of this storage engine
+fails with the retained error kind until the process reopens the store. The
+durable readiness row is itself such a write, so the fault it reports cannot be
+recorded in that row; `storageUnavailable` is a process-local observation the
+reader joins with whatever the (now frozen) row still says. -/
 inductive ClientNodeObservation where
   | missing
   | malformed
   | unsupportedVersion
+  | storageUnavailable
   | observed (process : ProcessState) (state : RuntimeState)
+
+/-- The reader joins the process-local storage fault with the durable row: a
+fault dominates every row observation, including a row that still reads ready. -/
+def ClientNodeObservation.joinStorageFault
+    (storageUnavailable : Bool) (observation : ClientNodeObservation) :
+    ClientNodeObservation :=
+  if storageUnavailable then .storageUnavailable else observation
 
 def project
     (observation : ClientNodeObservation)
@@ -419,6 +504,7 @@ def project
   | .missing => .unknownMissing
   | .malformed => .unknownMalformed
   | .unsupportedVersion => .unknownVersion
+  | .storageUnavailable => .unknownStorageUnavailable
   | .observed process s =>
       if !decide process.acceptsWork then
         .unknownProcess
@@ -433,6 +519,29 @@ def project
         .ready
       else
         .unknownAbsent
+
+/-- A storage fault never projects ready: the runtime that cannot write its
+readiness row must not keep reporting readiness from the stale row. -/
+theorem storage_unavailable_never_ready
+    {agentDid : AgentDid}
+    {reason : AgentUnavailableReason} :
+    project .storageUnavailable agentDid reason ≠ .ready := by
+  simp [project]
+
+/-- The fault is not derivable from the durable row: joining it closes every
+observation, including one whose row would otherwise project ready. -/
+theorem joined_storage_fault_never_ready
+    {observation : ClientNodeObservation}
+    {agentDid : AgentDid}
+    {reason : AgentUnavailableReason} :
+    project (observation.joinStorageFault true) agentDid reason ≠ .ready := by
+  simp [ClientNodeObservation.joinStorageFault, project]
+
+/-- Without a process-local fault the reader projects the durable row unchanged. -/
+theorem join_without_storage_fault
+    {observation : ClientNodeObservation} :
+    observation.joinStorageFault false = observation := by
+  simp [ClientNodeObservation.joinStorageFault]
 
 theorem ready_sound
     {process : ProcessState}
@@ -479,6 +588,24 @@ theorem missing_or_stale_never_ready
     rcases hStale with hZero | hGeneration
     · cases process <;> simp [project, ProcessState.acceptsWork, hZero]
     · cases process <;> simp [project, ProcessState.acceptsWork, hGeneration]
+
+/-- A process that has just claimed the durable readiness row is never observed
+as client-ready, whatever picture its predecessor left behind. This is what
+makes a row written by a dead process unobservable without stamping process
+identity on it: the claim rewrites the only field the projection checks first.
+External premise: a runtime killed without shutdown leaves its last durable
+`process_state` in place, the store publishes no liveness signal, and document
+age is not a connectivity lease, so the successor's claim is the only fact that
+distinguishes the two processes. -/
+theorem claimed_process_is_never_client_ready
+    {pre post : ProcessState}
+    {s : RuntimeState}
+    {agentDid : AgentDid}
+    {reason : AgentUnavailableReason}
+    (hClaim : ProcessState.step? pre .restartClaim = some post) :
+    project (.observed post s) agentDid reason ≠ .ready := by
+  cases pre <;> simp [ProcessState.step?] at hClaim <;> subst hClaim <;>
+    simp [project, ProcessState.acceptsWork]
 
 theorem unavailable_wins_overlap
     {process : ProcessState}
@@ -570,7 +697,22 @@ def bootState (resolved : ResolvedSnapshot) : RuntimeState :=
   , requestSession := fun _ => 0
   , requestAgent := fun _ => resolved.defaultAgent
   , sessionAgent := fun _ => none
+  , generationSettings := fun _ _ => none
+  , requestSettings := fun _ => none
   }
+
+/-- No unaccepted request carries settings. This is what forbids a projection
+from presenting an agent's configured selection as a pending or queued
+request's effective settings: until the request is accepted the model has no
+such fact to report. -/
+def settingsOnlyWhenAccepted (s : RuntimeState) : Prop :=
+  ∀ rid, rid ∉ s.accepted → s.requestSettings rid = none
+
+theorem bootState_settingsOnlyWhenAccepted
+    (resolved : ResolvedSnapshot) :
+    (bootState resolved).settingsOnlyWhenAccepted := by
+  intro _ _
+  rfl
 
 theorem bootState_coherent
     {resolved : ResolvedSnapshot}

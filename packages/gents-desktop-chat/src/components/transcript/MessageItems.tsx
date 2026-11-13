@@ -106,7 +106,7 @@ export function UserMessageItem({
     item.origin.kind === "backgroundCompletion"
   )
     return item.origin.notification ? (
-      <RuntimeBackgroundItem item={item} />
+      <RuntimeBackgroundItem item={item} origin={item.origin} />
     ) : null;
   const content = normalizeTranscriptText(item.content);
   const received =

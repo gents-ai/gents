@@ -10,3 +10,4 @@ pub mod shutdown;
 pub mod startup_readiness;
 pub mod startup_recovery;
 pub(crate) mod status;
+pub mod storage_fault;

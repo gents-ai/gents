@@ -19,7 +19,7 @@ pub async fn session_snapshot(
     let TranscriptReadScope {
         operator_access,
         requester_scope,
-    } = transcript_read_scope(core, &session_id, node_did.as_deref().unwrap_or_default())?;
+    } = transcript_read_scope(core, &session_id, node_did.as_deref().unwrap_or_default()).await?;
     let page_read = gents_desktop_core::client::load_session_transcript_page_on(
         &operator_access,
         &session_id,
@@ -266,7 +266,7 @@ struct TranscriptReadScope {
     requester_scope: Option<String>,
 }
 
-fn transcript_read_scope(
+async fn transcript_read_scope(
     core: &gents_desktop_core::client::ClientCore,
     session_id: &str,
     node_did: &str,
@@ -276,11 +276,32 @@ fn transcript_read_scope(
         .map(gents_store::config_client::ConfigAccess::Graphql)
         .ok_or_else(|| BridgeError::untyped("Connect to the runtime to read this session."))?;
     let store = core.stores().snapshot(node_did);
-    let requester_scope = store
+    let requester_scope = match store
         .sessions
         .iter()
         .find(|row| row.session_id == session_id && row.node_did == node_did)
-        .and_then(|session| session.requester_did.clone());
+    {
+        Some(session) => session.requester_did.clone(),
+        None => operator_access
+            .transact_readonly("session.transcript_scope", |txn| {
+                Box::pin(async move {
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                        txn, node_did, session_id,
+                    )
+                    .await
+                })
+            })
+            .await
+            .map_err(BridgeError::classify_transport_error)?
+            .ok_or_else(|| {
+                BridgeError::new(
+                    BridgeErrorCode::ProjectionPending,
+                    "This chat's transcript scope is not available yet. Reopen it after the runtime responds.",
+                )
+            })?
+            .session
+            .requester_did,
+    };
     Ok(TranscriptReadScope {
         operator_access,
         requester_scope,
@@ -296,7 +317,7 @@ pub async fn message_attachments(
     if let Some(reason) = core.session_unreadable_reason(node_did) {
         return Err(BridgeError::untyped(reason));
     }
-    let scope = transcript_read_scope(core, session_id, node_did)?;
+    let scope = transcript_read_scope(core, session_id, node_did).await?;
     let access = scope.operator_access;
     let view_scope = match &scope.requester_scope {
         Some(requester_did) => gents_session::views::transcript::Scope::Session(
@@ -369,7 +390,7 @@ pub async fn session_rows(
     let TranscriptReadScope {
         operator_access,
         requester_scope,
-    } = transcript_read_scope(core, &session_id, &node_did)?;
+    } = transcript_read_scope(core, &session_id, &node_did).await?;
     let read = |window: TranscriptWindow, limit: Option<usize>| {
         let operator_access = operator_access.clone();
         let requester_scope = requester_scope.clone();
@@ -504,7 +525,7 @@ pub async fn session_context_details(
     if core.session_unreadable_reason(&request.node_did).is_some() {
         return Ok(None);
     }
-    let scope = transcript_read_scope(core, &request.session_id, &request.node_did)?;
+    let scope = transcript_read_scope(core, &request.session_id, &request.node_did).await?;
     crate::snapshot::load_session_context_details(
         core,
         &scope.operator_access,

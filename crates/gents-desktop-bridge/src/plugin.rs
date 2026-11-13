@@ -126,6 +126,7 @@ where
             tauri_commands::peers::desktop_peer_rename,
             tauri_commands::peers::desktop_ended_access_dismiss,
             tauri_commands::peers::desktop_peer_enroll_status,
+            tauri_commands::peers::desktop_peer_enroll_invite,
             tauri_commands::workspace::desktop_workspace_list,
             tauri_commands::lifecycle::desktop_client_snapshot,
             tauri_commands::lifecycle::desktop_set_selected_node,

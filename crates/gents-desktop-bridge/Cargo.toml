@@ -87,7 +87,7 @@ tauri-plugin = { version = "2", features = ["build"], optional = true }
 
 [dev-dependencies]
 gents-automation = { workspace = true, features = ["test-fixtures"] }
-gents = { path = "../gents", features = ["test-home-guard"] }
+gents = { path = "../gents", features = ["test-fixtures"] }
 crypto.workspace = true
 identity.workspace = true
 syn = { version = "2", features = ["full"] }

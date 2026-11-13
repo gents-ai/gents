@@ -36,7 +36,7 @@ pub use plugin_build::{run_plugin_build, PluginBuildOutcome, PLUGIN_BUILD_COMMAN
 pub mod session_history;
 mod title_audit_usage;
 pub use title_audit_usage::load_parent_inclusive_budget_usage;
-pub use title_audit_usage::load_session_goal_usage;
+pub use title_audit_usage::{load_session_goal_usage, session_goal_usage_from_rows};
 pub use title_audit_usage::{register_lifecycle_reads, SESSION_TOKEN_USAGE};
 pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod session_message;

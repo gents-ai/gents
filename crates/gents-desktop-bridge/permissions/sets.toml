@@ -139,6 +139,7 @@ identifier = "fleet-admin"
 description = "Authenticated peer enrollment, removal and rename, and ended access"
 permissions = [
   "allow-desktop-peer-enroll-status",
+  "allow-desktop-peer-enroll-invite",
   "allow-desktop-peer-remove",
   "allow-desktop-peer-rename",
   "allow-desktop-ended-access-dismiss",

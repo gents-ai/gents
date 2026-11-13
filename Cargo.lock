@@ -4405,6 +4405,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "ts-rs",
  "uuid",
 ]
@@ -4620,6 +4621,7 @@ dependencies = [
  "portable-pty",
  "rapidhash",
  "reqwest 0.12.28",
+ "security-framework",
  "serde",
  "serde_json",
  "tempfile",

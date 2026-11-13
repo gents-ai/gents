@@ -91,6 +91,7 @@ async fn publish_node_readiness_for_agent(
         AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
         NODE_READINESS_FORMAT_VERSION,
     };
+
     let snapshot = NodeReadinessSnapshot {
         format_version: NODE_READINESS_FORMAT_VERSION,
         process_state,
@@ -105,6 +106,7 @@ async fn publish_node_readiness_for_agent(
                 AgentReadinessState::Ready
             },
             reason: behavior,
+            effective_inference: None,
         }],
     };
     let did = gents_store::graphql::escape_graphql_string(db.node_identity.did());

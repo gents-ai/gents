@@ -10,3 +10,7 @@ mod plugin_job_support;
 mod plugin_job_surface;
 #[path = "e2e_background/session_message_turn_limit.rs"]
 mod session_message_turn_limit;
+
+#[cfg(unix)]
+#[path = "e2e_background/runtime_shutdown.rs"]
+mod runtime_shutdown;

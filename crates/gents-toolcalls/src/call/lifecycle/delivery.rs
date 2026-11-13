@@ -22,6 +22,10 @@ pub(crate) use output_append::ToolOutputBinding;
 pub use output_append::{append_tool_output_at, ToolOutputAppendRejection};
 
 #[cfg(test)]
+mod output_append_bounded_tests;
+#[cfg(test)]
+mod output_append_scaling;
+#[cfg(test)]
 mod plugin_writes_failed_tests;
 #[cfg(test)]
 mod spawned_background_tests;

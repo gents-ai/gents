@@ -513,6 +513,7 @@ impl From<AgentReadinessUnknownReason> for AgentReadinessUnknownReasonView {
             AgentReadinessUnknownReason::ProcessNotReady => Self::ProcessNotReady,
             AgentReadinessUnknownReason::RouterGenerationStale => Self::RouterGenerationStale,
             AgentReadinessUnknownReason::AgentNotAssigned => Self::AgentNotAssigned,
+            AgentReadinessUnknownReason::StorageUnavailable => Self::StorageUnavailable,
         }
     }
 }

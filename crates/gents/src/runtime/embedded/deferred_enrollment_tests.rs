@@ -113,6 +113,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         owner_node_did: "did:test:server".into(),
         profile: "profile".into(),
         schema_fingerprint: "schema".into(),
+        live_schema_digest: format!("sha256:{}", "a".repeat(64)),
         issued_at: "2026-01-01T00:00:00Z".into(),
         expires_at: "2027-01-01T00:00:00Z".into(),
         admin_sig: Vec::new(),

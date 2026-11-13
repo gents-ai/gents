@@ -391,7 +391,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
         }
     };
 
-    for valid_for_secs in [0, 3601] {
+    for valid_for_secs in [0, 86401] {
         let refused = Tool::call(
             &server_tool,
             serde_json::from_value(
@@ -402,7 +402,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
         .await
         .unwrap_err()
         .to_string();
-        assert!(refused.contains("between 1 and 3600 seconds"), "{refused}");
+        assert!(refused.contains("between 1 and 86400 seconds"), "{refused}");
     }
     let offer = call(
         &server_tool,

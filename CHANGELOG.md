@@ -15,6 +15,32 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## 1.0.0-rc2 - 2026-11-10
 
+- Desktop: a relaunch after the first run reaches the app again instead of
+  stopping at "Startup paused · The background node could not be checked". The
+  readiness check now reads the local Node's status with the key that set that
+  home up, which is the one the Node admits as its administrator; enrolling the
+  desktop's own key never made it one (#3645).
+- A restarting server now claims the readiness its home's previous process
+  left behind, demoting that row's process state before it opens client
+  access. A runtime killed without shutdown leaves `process_state: ready` at
+  the old generation and the row carries no process identity, so until now
+  the next server reported its dead predecessor as ready. `/healthz` and
+  `/status` `ok` now report unhealthy, and `/healthz` returns 503, for the
+  whole restart window that previously answered 200; `gents_node_readiness_*`
+  metrics, `/fleet/slots` and the desktop readiness view report the same
+  unknown `process_not_ready` state for that window. External probes and
+  alerts built on `ready == 1` will trip on every restart until the new
+  runtime publishes its own readiness. The predecessor's generations and
+  agent entries stay readable for diagnosis (#3643).
+- Auxiliary requests route again. The router selected a request's session
+  under the request's own requester DID, but a title audit's or access
+  review's requester is the selected Agent, not the client that opened the
+  session, so every client-opened session's title request stayed pending and
+  the request watcher re-served it after each cooldown without progress.
+  Sessions now receive generated titles, a request whose session stays
+  unreadable is failed with a reason after three routing attempts instead of
+  being retried indefinitely, and a title audit whose session row is not
+  readable is logged instead of silently counting as already titled (#3657).
 - Breaking: a home created by v1.0.0-rc1 or v1.0.0-rc0 is not opened,
   converted or migrated. Starting on one stops before any write and says to
   back it up or delete it and run `gents`; see
@@ -252,7 +278,38 @@ source consistency checks, not a separate runtime compatibility version.
   Grok, is named when `gents` opens and otherwise ignored; delete it to stop the
   notice. Codex as a model provider, including `accounts login codex`, is
   unchanged.
+- `get_goal` reads the session's requests once and writes a Goal revision
+  only when the charged total or the active-time accrual actually changes.
+  Its database work no longer grows with the number of earlier Goal checks
+  in the session. Token accounting, including a paused Goal's, is unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
+- Shutting the runtime down stops the background processes it started. A
+  process a turn started with `spawn_process` kept running after `gents
+  server` exited; teardown now cancels each live execution and terminates its
+  process group, or its Job Object on Windows, escalating past an ignored
+  `SIGTERM`, while the node is still open so each one settles its own tool
+  call. A child that put itself in its own session escapes any process-group
+  scheme, and a server that is killed outright still leaves its processes to
+  the next start's recovery sweep.
+- A node that ran out of disk kept reporting itself ready. Its storage stops
+  accepting writes until the process is restarted, and the readiness row health
+  is read from is one of the writes it refuses, so the row froze on the last
+  healthy snapshot. The runtime now keeps that fault in the process and
+  `/healthz` and `/status` report it: unhealthy, with a `storage` check that
+  says to free disk space and restart the node with the same history folder.
+  Shutdown no longer reports the unwritable store as a teardown failure and is
+  bounded as a whole, so the restart can take the home. Nothing is reset and no
+  message is resent: a send whose outcome is unknown keeps its identity and is
+  re-checked after the restart.
+- Each chat chooses its own permissions. An approval mode and the commands it
+  remembers were shared by every chat on the same agent and folder; each chat
+  now keeps its own, beside an agent and folder default that still governs any
+  chat that has not chosen. A selection made before this release is that
+  default, so every chat keeps the mode, reviewer and allowed folders it had
+  until one picks its own, and the desktop shows which chat a choice applies
+  to. Work a chat delegates to another agent opens a chat of its own, so it
+  follows the default rather than the chat that started it; raise the default
+  if delegated work needs more.
 - Stopping the native service waits for the runtime's own shutdown instead of
   about a second, so a stop that succeeds no longer reports `native supervisor
   did not confirm that the Gents job unloaded or became inactive`. Stop node in

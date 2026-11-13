@@ -29,6 +29,8 @@ use super::{
 
 pub use apply_txn::ConfigApplyTxn;
 pub use cursor::ConfigCursor;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use fault_injection::{count_statements, StatementCounts};
 pub use gate::LocalConfigAccess;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use fault_injection::NativeOperationObservation;
@@ -116,6 +118,6 @@ mod stream_waiter_conformance;
 mod variable_tests;
 
 #[cfg(test)]
-mod relationship_tests;
-#[cfg(test)]
 mod pushdown_tests;
+#[cfg(test)]
+mod relationship_tests;

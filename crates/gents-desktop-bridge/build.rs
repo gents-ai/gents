@@ -59,6 +59,7 @@ const COMMANDS: &[&str] = &[
     "desktop_peer_rename",
     "desktop_ended_access_dismiss",
     "desktop_peer_enroll_status",
+    "desktop_peer_enroll_invite",
     "desktop_workspace_list",
     "desktop_client_snapshot",
     "desktop_set_selected_node",

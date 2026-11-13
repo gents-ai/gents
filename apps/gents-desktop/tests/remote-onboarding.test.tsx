@@ -51,22 +51,26 @@ function snapshot(
 }
 
 describe("remote onboarding", () => {
-  it("sends the requester's chosen name with the access request", async () => {
+  it("accepts an invitation and includes the requester name", async () => {
     const app = testApp({ snapshot: snapshot([]), supportsManagedServer: false });
     const enroll = vi
       .spyOn(app.actions, "requestStatusEnrollment")
       .mockResolvedValue(request);
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
+    const invite = `gents://invite/${"a".repeat(150)}`;
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
-      "https://my-node.example:8787",
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
+      invite,
     );
     await userEvent.type(
       screen.getByRole("textbox", { name: "Your name (optional)" }),
       "Ivan",
     );
     await userEvent.click(screen.getByRole("button", { name: "Request access" }));
-    expect(enroll).toHaveBeenCalledWith("https://my-node.example:8787", "Ivan");
+    expect(enroll).toHaveBeenCalledWith(invite, "Ivan");
+    expect(
+      await screen.findByRole("heading", { name: "Waiting for access" }),
+    ).toBeVisible();
   });
 
   it("waits for approval and the requested secure route, then completes directly on that node", async () => {
@@ -79,7 +83,7 @@ describe("remote onboarding", () => {
     renderIn(app, <SetupScreen onDone={onDone} />);
     expect(screen.queryByText("Local node")).not.toBeInTheDocument();
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
       "https://my-node.example:8787{enter}",
     );
     expect(enroll).toHaveBeenCalledWith("https://my-node.example:8787");
@@ -187,7 +191,7 @@ describe("remote onboarding", () => {
     );
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
       "https://my-node.example:8787",
     );
     await userEvent.click(screen.getByRole("button", { name: "Request access" }));
@@ -207,7 +211,7 @@ describe("remote onboarding", () => {
     const onDone = vi.fn();
     renderIn(app, <SetupScreen onDone={onDone} />);
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
       "https://my-node.example:8787",
     );
     await userEvent.click(screen.getByRole("button", { name: "Request access" }));
@@ -232,7 +236,7 @@ describe("remote onboarding", () => {
     );
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Server address" }),
+      screen.getByRole("textbox", { name: "Invitation or server address" }),
       "https://other.example",
     );
     await userEvent.click(screen.getByRole("button", { name: "Request access" }));

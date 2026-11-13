@@ -3,6 +3,7 @@ import Lean
 import Mathlib.Data.Finset.Sort
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Conformance.Family
+
 import Proofs.Conformance.Functions.Automation
 
 namespace Conformance.ContractCases
@@ -199,7 +200,8 @@ def clientAgentReadinessCase
     (process : ProcessState)
     (activeGeneration routerGeneration : Generation)
     (runnable unavailable startupDemoted : Bool)
-    (runtimeUnavailableReason : RuntimeState.AgentUnavailableReason := .backendTemporarilyUnavailable) :
+    (runtimeUnavailableReason : RuntimeState.AgentUnavailableReason := .backendTemporarilyUnavailable)
+    (storageUnavailable : Bool := false) :
     ClientAgentReadinessCase :=
   let runnableSet : Finset AgentDid := if runnable then {20} else ∅
   let unavailableSet : Finset AgentDid := if unavailable then {20} else ∅
@@ -218,12 +220,13 @@ def clientAgentReadinessCase
     , readyGenerations := {activeGeneration, routerGeneration}
     , liveGenerations := {activeGeneration, routerGeneration}
     , sessionAgent := Function.update runtimeBoot.sessionAgent 100 (some 20) }
-  let observation := match observationKind with
+  let rowObservation := match observationKind with
     | "observed" =>
         RuntimeState.ClientAgentReadiness.ClientNodeObservation.observed process state
     | "malformed" => .malformed
     | "unsupported_version" => .unsupportedVersion
     | _ => .missing
+  let observation := rowObservation.joinStorageFault storageUnavailable
   let projected := RuntimeState.ClientAgentReadiness.project
     observation 20 runtimeUnavailableReason
   { name
@@ -236,11 +239,18 @@ def clientAgentReadinessCase
   , unavailable
   , startupDemoted
   , runtimeUnavailableReason := runtimeUnavailableReason.code
+  , storageUnavailable
   , expectedState := projected.stateString
   , expectedReason := projected.reasonCode
   , expectedRuntimeAdmissible :=
       decide (RuntimeState.AgentAdmissible process state 20)
   }
+
+/-- The process state a restarting runtime's claim leaves on a predecessor's
+fully ready row, derived by running the model's claim rather than stated, so a
+claim that stopped demoting would flip the readiness case below. -/
+def restartClaimedProcessState : ProcessState :=
+  (ProcessState.step? .ready .restartClaim).getD .ready
 
 def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   [ clientAgentReadinessCase "runtime_ready_same_generation" "observed" .ready 4 4 true false false
@@ -267,7 +277,103 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   , clientAgentReadinessCase "invalid_inference_profile_is_unavailable" "observed" .ready 4 4 false true false .inferenceProfileInvalid
   , clientAgentReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
   , clientAgentReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
+  , clientAgentReadinessCase "restart_claim_demotes_stale_ready" "observed" restartClaimedProcessState 4 4 true false false
+  , clientAgentReadinessCase "storage_fault_closes_a_ready_row" "observed" .ready 4 4 true false false
+      (storageUnavailable := true)
+  , clientAgentReadinessCase "storage_fault_closes_a_missing_row" "missing" .ready 4 4 true false false
+      (storageUnavailable := true)
   ]
+
+/-- Settings a generation can hold, spanning an unset selection, an explicit
+effort and an explicit Fast tier. -/
+def runtimeSettingsLow : EffectiveSettings :=
+  { selected := { backendId := "backend-a", model := "model-a", effort := some .low }
+  , tier := none }
+
+def runtimeSettingsHighFast : EffectiveSettings :=
+  { selected := { backendId := "backend-a", model := "model-b", effort := some .high }
+  , tier := some .fast }
+
+def runtimeSettingsUnset : EffectiveSettings :=
+  { selected := { backendId := "backend-a", model := "model-c", effort := none }
+  , tier := none }
+
+def bindGenerationSettings
+    (s : RuntimeState) (generation : Generation) (agent : AgentDid)
+    (settings : EffectiveSettings) : RuntimeState :=
+  { s with
+    generationSettings := fun g a =>
+      if g = generation ∧ a = agent then some settings else s.generationSettings g a }
+
+/-- Generation 1 is active and observed, holding the Low selection for agent
+20; generation 2 is published and observed, holding the High/Fast selection. -/
+def runtimeSettingsGeneration1 : RuntimeState :=
+  bindGenerationSettings runtimeTwoAgents 1 20 runtimeSettingsLow
+
+def runtimeSettingsGeneration2 : RuntimeState :=
+  bindGenerationSettings
+    { runtimeSettingsGeneration1 with
+      lastResolved := runtimeResolvedB
+    , active := runtimeResolvedB.activate 2
+    , routerObservedGeneration := 2
+    , readyGenerations := {1, 2}
+    , liveGenerations := {1, 2} }
+    2 20 runtimeSettingsHighFast
+
+/-- A request dispatched under generation 1 and still running while
+generation 2 is applied. -/
+def runtimeSettingsInFlight : RuntimeState :=
+  { runtimeSettingsGeneration1 with
+    phase := .applying
+  , pendingResolved := some runtimeResolvedB
+  , accepted := {500}
+  , inFlight := {500}
+  , requestGeneration := Function.update runtimeSettingsGeneration1.requestGeneration 500 1
+  , requestSession := Function.update runtimeSettingsGeneration1.requestSession 500 100
+  , requestAgent := Function.update runtimeSettingsGeneration1.requestAgent 500 20
+  , sessionAgent := Function.update runtimeSettingsGeneration1.sessionAgent 100 (some 20)
+  , requestSettings :=
+      Function.update runtimeSettingsGeneration1.requestSettings 500 (some runtimeSettingsLow) }
+
+def runtimeEffectiveSettingsCase
+    (name actionName : String)
+    (pre : RuntimeState)
+    (action : RuntimeState.Action)
+    (trackedRequestId : RequestId) :
+    String × String × Bool × Option EffectiveSettings :=
+  match RuntimeState.step? pre action with
+  | some post => (name, actionName, true, post.requestSettings trackedRequestId)
+  | none => (name, actionName, false, pre.requestSettings trackedRequestId)
+
+/-- Each case names the settings an observer may report for the tracked
+request after the action. An illegal action leaves the request unaccepted, and
+`none` is then the whole answer: not yet bound. -/
+def runtimeEffectiveSettingsBindingCases :
+    List (String × String × Bool × Option EffectiveSettings) :=
+  [ runtimeEffectiveSettingsCase "accept_binds_the_routed_generation_settings"
+      "acceptRequest" runtimeSettingsGeneration1 (.acceptRequest .ready 100 500 20) 500
+  , runtimeEffectiveSettingsCase "accept_binds_an_unset_selection"
+      "acceptRequest" (bindGenerationSettings runtimeTwoAgents 1 20 runtimeSettingsUnset)
+      (.acceptRequest .ready 100 500 20) 500
+  , runtimeEffectiveSettingsCase "queued_successor_binds_the_newer_generation"
+      "acceptRequest" runtimeSettingsGeneration2 (.acceptRequest .ready 100 501 20) 501
+  , runtimeEffectiveSettingsCase "unaccepted_request_has_no_settings"
+      "acceptRequest" (bindGenerationSettings runtimePublishedBeforeRouter 2 20
+        runtimeSettingsHighFast)
+      (.acceptRequest .ready 100 500 20) 500
+  , runtimeEffectiveSettingsCase "agent_without_bound_settings_binds_nothing"
+      "acceptRequest" runtimeTwoAgents (.acceptRequest .ready 100 500 20) 500
+  , runtimeEffectiveSettingsCase "in_flight_settings_survive_a_newer_generation"
+      "publish" runtimeSettingsInFlight (.publish runtimeResolvedB) 500 ]
+
+theorem effective_settings_binding_cases_pinned :
+    runtimeEffectiveSettingsBindingCases.map (fun c => (c.2.2.1, c.2.2.2)) =
+      [ (true, some runtimeSettingsLow)
+      , (true, some runtimeSettingsUnset)
+      , (true, some runtimeSettingsHighFast)
+      , (false, none)
+      , (true, none)
+      , (true, some runtimeSettingsLow) ] := by native_decide
 
 deriving instance Lean.ToJson for RuntimeState.SessionSelection
 
@@ -328,3 +434,104 @@ def runtimeConfigurationAdmissionDeferral :
       retries := RuntimeState.retriesDeferred i.deferredAt i.active }
 
 end Conformance.ContractCases
+
+namespace Conformance.RuntimeSession
+
+open Lean RuntimeState
+
+deriving instance ToJson for SessionSelectionDisposition
+
+structure SelectionInput where
+  requested : Nat
+  visible : Option Nat
+  attempts : Nat
+  bound : Nat
+  deriving ToJson
+
+structure SelectionOutput where
+  selection : SessionSelection
+  disposition : SessionSelectionDisposition
+  deriving ToJson
+
+@[conformance_family]
+def selection : Family SelectionInput SelectionOutput where
+  inputs := [
+    { requested := 10, visible := none, attempts := 0, bound := 1 },
+    { requested := 10, visible := some 10, attempts := 0, bound := 1 },
+    { requested := 10, visible := some 20, attempts := 0, bound := 1 },
+    { requested := 10, visible := none, attempts := 0, bound := 3 },
+    { requested := 10, visible := none, attempts := 3, bound := 3 }
+  ]
+  model := fun i =>
+    let selected := sessionSelection i.requested i.visible
+    { selection := selected,
+      disposition := sessionSelectionDisposition selected i.attempts i.bound }
+
+end Conformance.RuntimeSession
+
+namespace Configuration
+
+deriving instance Lean.ToJson for ReasoningEffort, SelectedModel
+attribute [conformance_vocabulary] ReasoningEffort.wireName
+
+end Configuration
+
+namespace PromptAssembly.ServiceTier
+
+deriving instance Lean.ToJson for Tier
+attribute [conformance_vocabulary] Tier.configName
+
+end PromptAssembly.ServiceTier
+
+deriving instance Lean.ToJson for EffectiveSettings
+
+namespace Conformance.RuntimeEffectiveSettings
+
+open Conformance.ContractCases
+
+inductive Scenario where
+  | generationOne | unsetSelection | newGeneration | awaitingRouter
+  | noGenerationSettings | retiredGeneration
+  deriving Lean.ToJson
+
+structure BindingInput where
+  scenario : Scenario
+  selected : EffectiveSettings
+  claimed : Bool
+  runtimeGeneration : Nat
+  deriving Lean.ToJson
+
+def observe (input : BindingInput) : Option EffectiveSettings :=
+  let (pre, action, rid) := match input.scenario with
+    | .generationOne | .unsetSelection =>
+        (bindGenerationSettings runtimeTwoAgents 1 20 input.selected,
+          RuntimeState.Action.acceptRequest .ready 100 500 20, 500)
+    | .newGeneration =>
+        (bindGenerationSettings runtimeSettingsGeneration2 2 20 input.selected,
+          RuntimeState.Action.acceptRequest .ready 100 501 20, 501)
+    | .awaitingRouter =>
+        (bindGenerationSettings runtimePublishedBeforeRouter 2 20 input.selected,
+          RuntimeState.Action.acceptRequest .ready 100 500 20, 500)
+    | .noGenerationSettings =>
+        (runtimeTwoAgents, RuntimeState.Action.acceptRequest .ready 100 500 20, 500)
+    | .retiredGeneration =>
+        ({ runtimeSettingsInFlight with
+            requestSettings := Function.update runtimeSettingsInFlight.requestSettings 500
+              (some input.selected) }, RuntimeState.Action.publish runtimeResolvedB, 500)
+  match RuntimeState.step? pre action with
+  | some post => post.requestSettings rid
+  | none => pre.requestSettings rid
+
+@[conformance_family]
+def binding : Family BindingInput (Option EffectiveSettings) where
+  inputs := [
+    ⟨.generationOne, runtimeSettingsLow, true, 1⟩,
+    ⟨.unsetSelection, runtimeSettingsUnset, true, 1⟩,
+    ⟨.newGeneration, runtimeSettingsHighFast, true, 2⟩,
+    ⟨.awaitingRouter, runtimeSettingsHighFast, false, 2⟩,
+    ⟨.noGenerationSettings, runtimeSettingsUnset, false, 1⟩,
+    ⟨.retiredGeneration, runtimeSettingsLow, true, 1⟩
+  ]
+  model := observe
+
+end Conformance.RuntimeEffectiveSettings

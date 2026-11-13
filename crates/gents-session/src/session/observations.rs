@@ -782,12 +782,19 @@ pub async fn load_recent_titles_for_agent(
         .collect())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratedTitleNeed {
+    Needed,
+    AlreadyTitled,
+    SessionUnreadable,
+}
+
 pub async fn session_needs_generated_title(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
-) -> Result<bool> {
+) -> Result<GeneratedTitleNeed> {
     let Some(row) = access
         .transact_readonly("session.needs_generated_title", |txn| {
             Box::pin(load_agent_session_row_in_txn(
@@ -799,16 +806,21 @@ pub async fn session_needs_generated_title(
         })
         .await?
     else {
-        return Ok(false);
+        return Ok(GeneratedTitleNeed::SessionUnreadable);
     };
     let session = row.session;
     validate_agent_session(&session)?;
 
     Ok(match session.title.as_ref() {
-        None => true,
+        None => GeneratedTitleNeed::Needed,
         Some(title) => {
-            title.source == gents_protocol::session::SessionTitleSource::Placeholder
+            if title.source == gents_protocol::session::SessionTitleSource::Placeholder
                 || title.text.trim().is_empty()
+            {
+                GeneratedTitleNeed::Needed
+            } else {
+                GeneratedTitleNeed::AlreadyTitled
+            }
         }
     })
 }

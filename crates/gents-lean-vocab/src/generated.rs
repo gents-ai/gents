@@ -2082,6 +2082,7 @@ pub struct LeanClaudeTaggedReplayRow {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LeanClientAgentReadinessCase {
     pub name: String,
     pub observation_present: bool,
@@ -2096,6 +2097,7 @@ pub struct LeanClientAgentReadinessCase {
     pub expected_state: String,
     pub expected_reason: Option<String>,
     pub expected_runtime_admissible: bool,
+    pub storage_unavailable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

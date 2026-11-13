@@ -90,8 +90,8 @@ pub(crate) use observations::{
 pub use observations::{apply_title_in_txn, rename_session_on};
 pub use observations::{
     derive_session_preview, refresh_session_request_observation_in_txn,
-    session_needs_generated_title, update_session_title_with_source, SessionRequestRefresh,
-    REFUSAL_PROJECTION_EVENT_TARGET,
+    session_needs_generated_title, update_session_title_with_source, GeneratedTitleNeed,
+    SessionRequestRefresh, REFUSAL_PROJECTION_EVENT_TARGET,
 };
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 #[cfg(test)]
@@ -106,10 +106,13 @@ pub(crate) use output::reader::load_canonical_payload_in_txn;
 pub(crate) use output::reader::load_canonical_payload_with_access;
 pub use output::reader::load_source_rows_in_txn;
 pub use output::reader::{load_canonical_message, load_canonical_message_from_node};
+pub use output::reader::{load_output_segment_in_txn, load_source_shapes_in_txn};
 pub use output::replay_request::validate_canonical_replay_boundary;
 pub use output::replay_tags::resolve_canonical_replay_tags_on;
 pub use output::CanonicalOutputReadError;
 pub use output::CanonicalReplayScope;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use output::{count_source_payload_bytes, count_source_rows_decoded};
 pub use output::{
     reader::load_canonical_message_in_txn, reader::load_request_headers_in_txn,
     reader::TxnCanonicalReader,
@@ -190,3 +193,6 @@ mod revoke_follows_grant_tests;
 mod user_title_tests;
 
 pub use sessions::stage_session_relationships_in_txn;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) use output::record_source_read;

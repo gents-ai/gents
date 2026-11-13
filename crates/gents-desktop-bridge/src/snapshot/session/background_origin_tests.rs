@@ -10,38 +10,24 @@ use gents_store::config_client::ConfigAccess;
 
 #[tokio::test]
 async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
-    use gents_store::identity::NodeIdentity as _;
-    let home = tempfile::tempdir().unwrap();
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
-            .unwrap();
-    let amy = identity.did().to_owned();
-    let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
-    let agent = binding.agent_did.clone();
-    let node = std::sync::Arc::new(
-        gents::defra_node::Node::builder()
-            .with_node_identity_did(&amy)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
-    let access = ConfigAccess::local(node.clone());
-    for mutation in [
-        format!(
-            r#"mutation {{ create_Agent(input: {{node_did:"{amy}", agent_did:"{agent}", creation_nonce:"{}", inference_profile_id:"profile", enabled:true}}) {{ _docID }} }}"#,
-            binding.creation_nonce
-        ),
-        format!(
+    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+        "background-origin",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let amy = db.node_identity.did().to_owned();
+    let agent = binding.agent_did;
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(&amy).unwrap());
+    ConfigAccess::write_local(
+        &node,
+        "test.background_origin",
+        &format!(
             r#"mutation {{ create_AgentSession(input: {{node_did:"{amy}", agent_did:"{agent}", session_id:"origin", created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }} }}"#
         ),
-    ] {
-        ConfigAccess::write_local(&node, "test.background_origin", &mutation)
-            .await
-            .unwrap();
-    }
+    )
+    .await
+    .unwrap();
     let mut requests = Vec::new();
     for (id, input) in [
         (
@@ -142,7 +128,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
                 .zip([(success, true), (failure, true), (wake, false)])
         {
             assert!(matches!(item, RenderedTimelineItem::AutomatedInput {
-                origin: RequestOriginView::BackgroundCompletion { notification: observed },
+                origin: RequestOriginView::BackgroundCompletion { notification: observed, .. },
                 content: Some(content),
                 ..
             } if content == expected && *observed == notification));

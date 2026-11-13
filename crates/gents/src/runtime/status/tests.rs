@@ -259,6 +259,11 @@ fn status_test_request(request_id: &str) -> gents_protocol::row::AgentRequest {
         workspace_authority: None,
         workspace_owner_node_did: None,
         workspace_seal_hash: None,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
     }
 }
 
@@ -329,13 +334,29 @@ async fn fetch_node_readiness_row(
     serde_json::from_value(value).expect("decode NodeReadiness row")
 }
 
+async fn read_node_readiness_row(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+) -> gents_protocol::node_readiness::NodeReadinessRow {
+    let row = fetch_node_readiness_row(node, node_did).await;
+    gents_protocol::node_readiness::NodeReadinessRow {
+        node_did: node_did.to_owned(),
+        snapshot_json: row.snapshot_json,
+        updated_at: row.updated_at,
+    }
+}
+
 #[tokio::test]
 async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     let db = test_node().await;
     let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap();
 
-    let (first_owner, first) = RuntimeStatusHandle::start(node.clone(), node_did);
+    let (first_owner, first) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did,
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     first.initialize_startup("general").await.unwrap();
     first
         .set_process_state_durable(ProcessLifecycleState::Ready)
@@ -353,7 +374,11 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     );
     first_owner.close().await.unwrap();
 
-    let (second_owner, second) = RuntimeStatusHandle::start(node.clone(), node_did);
+    let (second_owner, second) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did,
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     second.initialize_startup("general").await.unwrap();
     let restarted = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
         &fetch_node_readiness_row(&node, node_did)
@@ -369,6 +394,101 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     second_owner.close().await.unwrap();
 }
 
+fn status_test_snapshot(
+    generation: u64,
+    dispatcher: mpsc::Sender<gents_protocol::row::AgentRequest>,
+) -> ActiveRuntimeSnapshot {
+    ActiveRuntimeSnapshot {
+        generation,
+        node: None,
+        local_did: String::new(),
+        default_agent_did: "general".to_string(),
+        agents: RapidHashMap::new(),
+        tool_configs: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::from_iter([("general".to_string(), dispatcher)]),
+        agent_executor_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
+        agent_executor_queue_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
+    }
+}
+
+#[tokio::test]
+async fn startup_claim_demotes_a_killed_process_ready_row_before_any_runtime_work() {
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let case = gents_lean_vocab::lean_client_agent_readiness_cases()
+        .iter()
+        .find(|case| case.name == "restart_claim_demotes_stale_ready")
+        .expect("modeled restart claim case");
+    let (dispatcher, _requests) = mpsc::channel(1);
+
+    let (killed_owner, killed) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did.clone(),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
+    killed.initialize_startup("general").await.unwrap();
+    killed
+        .publish_startup_snapshot(&status_test_snapshot(case.active_generation, dispatcher))
+        .await
+        .unwrap();
+    killed
+        .publish_router_generation(case.router_generation)
+        .await
+        .unwrap();
+    killed
+        .set_process_state_durable(ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    drop(killed_owner);
+    drop(killed);
+
+    let row = read_node_readiness_row(&node, &node_did).await;
+    assert!(
+        !matches!(
+            gents_protocol::node_readiness::project_node_readiness_summary(Some(&row), &node_did),
+            gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Unknown(_)
+        ),
+        "the killed process must leave a row every reader still projects as current"
+    );
+
+    crate::runtime::startup_readiness::claim_startup_readiness(&node, &node_did)
+        .await
+        .unwrap();
+
+    let claimed = read_node_readiness_row(&node, &node_did).await;
+    assert_eq!(
+        gents_protocol::node_readiness::project_node_readiness_summary(Some(&claimed), &node_did),
+        gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Unknown(
+            serde_json::from_value(serde_json::json!(case.expected_reason))
+                .expect("modeled unknown reason")
+        ),
+        "a claimed row must be unobservable to every reader of the canonical projection"
+    );
+    let snapshot =
+        gents_protocol::node_readiness::decode_node_readiness_snapshot(&claimed, &node_did)
+            .unwrap();
+    assert_eq!(snapshot.process_state.as_str(), case.process_state);
+    assert_eq!(snapshot.active_generation, case.active_generation);
+    assert_eq!(snapshot.router_generation, case.router_generation);
+    assert_eq!(snapshot.default_agent_did, "general");
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .any(|entry| entry.agent_did == "general"),
+        "the claim keeps the predecessor's agent picture readable for diagnosis: {snapshot:?}"
+    );
+}
+
 fn rust_process_transition_action(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
         ("uninitialized", "recovering") => Some("startupRecover"),
@@ -376,6 +496,7 @@ fn rust_process_transition_action(from: &str, to: &str) -> Option<&'static str> 
         ("recovering", "ready") => Some("recoveryComplete"),
         ("ready", "shuttingDown") => Some("beginShutdown"),
         ("shuttingDown", "shutdown") => Some("finishShutdown"),
+        (from, "recovering") if from != "shutdown" => Some("restartClaim"),
         _ => None,
     }
 }
@@ -395,7 +516,11 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
     let db = test_node().await;
     let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap().to_owned();
-    let (owner, status) = RuntimeStatusHandle::start(node.clone(), node_did.clone());
+    let (owner, status) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did.clone(),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     status.readiness().initialize("general").await.unwrap();
     let action = case
         .action
@@ -427,6 +552,31 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
             status
                 .set_process_state(ProcessLifecycleState::Shutdown)
                 .await;
+        }
+        "restartClaim" => {
+            match case.from.as_str() {
+                "recovering" => {
+                    status
+                        .set_process_state(ProcessLifecycleState::Recovering)
+                        .await;
+                }
+                "ready" => {
+                    status.set_process_state(ProcessLifecycleState::Ready).await;
+                }
+                "shuttingDown" => {
+                    status.set_process_state(ProcessLifecycleState::Ready).await;
+                    status
+                        .set_process_state(ProcessLifecycleState::ShuttingDown)
+                        .await;
+                }
+                other => panic!(
+                    "generated Process transition {} claims from unsupported state {other:?}",
+                    case.name
+                ),
+            }
+            crate::runtime::startup_readiness::claim_startup_readiness(&node, &node_did)
+                .await
+                .unwrap();
         }
         other => panic!(
             "generated Process transition {} has unsupported action {other:?}",
@@ -502,8 +652,12 @@ async fn generated_process_transition_cases_match_runtime_status_policy() {
         }
     }
 
-    assert_eq!(legal_count, 5);
-    assert_eq!(illegal_count, 20);
+    assert!(legal_count > 0);
+    assert!(illegal_count > 0);
+    assert_eq!(
+        legal_count + illegal_count,
+        lean_process_transition_cases().len()
+    );
 }
 
 #[tokio::test]
@@ -795,4 +949,108 @@ async fn goal_settled_uses_live_runtime_status_cases() {
         };
         assert_eq!(actual, case.expected, "{case:?}");
     }
+}
+
+#[tokio::test]
+async fn storage_full_readiness_write_is_retained_as_a_process_local_fault() {
+    use gents_protocol::node_readiness::{
+        project_node_readiness_summary, project_node_readiness_summary_with_storage,
+        AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState as ProcessState,
+        NodeReadinessRow as ReadinessRow, NodeReadinessSnapshot, ProjectedNodeReadinessSummary,
+        RuntimeStorageObservation, NODE_READINESS_FORMAT_VERSION,
+    };
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("native transaction")]
+    struct NativeTransaction(#[source] storage::corekv::Error);
+
+    struct StorageFullWriter;
+
+    #[async_trait::async_trait]
+    impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for StorageFullWriter {
+        async fn upsert(
+            &self,
+            _node_did: &str,
+            _snapshot: &gents_protocol::row::NodeReadinessSnapshot,
+            _updated_at: &str,
+        ) -> anyhow::Result<()> {
+            Err(anyhow::Error::new(NativeTransaction(
+                storage::corekv::Error::from(std::io::Error::new(
+                    std::io::ErrorKind::StorageFull,
+                    "write-ahead log left in an unknown state: No space left on device (os error 28)",
+                )),
+            )))
+        }
+    }
+
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let (owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        node_did.clone(),
+        Arc::new(StorageFullWriter),
+        std::time::Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
+
+    assert!(!status.storage_fault().is_unavailable());
+    let error = status
+        .initialize_startup("did:test:agent")
+        .await
+        .expect_err("a latched store cannot persist readiness");
+    assert!(
+        gents_store::graphql::is_storage_full(error.as_ref()),
+        "{}",
+        gents_protocol::error_chain::ErrorChain(error.as_ref()),
+    );
+    assert!(
+        status.storage_fault().is_unavailable(),
+        "the write that cannot be persisted must still be observable"
+    );
+
+    let stale_ready = ReadinessRow {
+        node_did: node_did.clone(),
+        snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+            format_version: NODE_READINESS_FORMAT_VERSION,
+            process_state: ProcessState::Ready,
+            active_generation: 1,
+            router_generation: 1,
+            default_agent_did: "did:test:agent".to_string(),
+            agents: vec![AgentReadinessEntry {
+                effective_inference: None,
+
+                agent_did: "did:test:agent".to_string(),
+                state: AgentReadinessState::Ready,
+                reason: None,
+            }],
+        })
+        .unwrap(),
+        updated_at: "2026-11-12T00:00:00Z".to_string(),
+    };
+    assert!(
+        matches!(
+            project_node_readiness_summary(Some(&stale_ready), &node_did),
+            ProjectedNodeReadinessSummary::Observed(_)
+        ),
+        "the durable row alone cannot carry the fault"
+    );
+    assert_eq!(
+        project_node_readiness_summary_with_storage(
+            Some(&stale_ready),
+            &node_did,
+            status.storage_fault().observation(),
+        ),
+        ProjectedNodeReadinessSummary::Unknown(
+            gents_protocol::row::AgentReadinessUnknownReason::StorageUnavailable
+        ),
+        "the reader must join the process-local fault with the frozen row"
+    );
+    assert_eq!(
+        status.storage_fault().observation(),
+        RuntimeStorageObservation::Unavailable
+    );
+
+    owner.close().await.ok();
+    node.shutdown().await.unwrap();
 }

@@ -73,6 +73,7 @@ fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> Runtim
         node_did,
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     runtime_status
 }
@@ -214,6 +215,11 @@ fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
         workspace_authority: None,
         workspace_owner_node_did: None,
         workspace_seal_hash: None,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
     }
 }
 
@@ -1067,6 +1073,338 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_flight() {
+    use gents_documents::inference_defaults::ReasoningEffort;
+    use gents_inference::resolved::ServiceTier;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    struct Settings {
+        model_name: &'static str,
+        reasoning_effort: Option<ReasoningEffort>,
+        service_tier: Option<ServiceTier>,
+    }
+    const ORIGINAL: Settings = Settings {
+        model_name: "model-a",
+        reasoning_effort: Some(ReasoningEffort::Low),
+        service_tier: None,
+    };
+    let changes = [
+        (
+            "model",
+            Settings {
+                model_name: "model-b",
+                ..ORIGINAL
+            },
+        ),
+        (
+            "effort",
+            Settings {
+                reasoning_effort: Some(ReasoningEffort::High),
+                ..ORIGINAL
+            },
+        ),
+        (
+            "service_tier",
+            Settings {
+                service_tier: Some(ServiceTier::Fast),
+                ..ORIGINAL
+            },
+        ),
+    ];
+
+    for (changed, switched_settings) in changes {
+        let db = test_node().await;
+        let node = db.node.clone();
+        let node_did = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        let runtime_status = runtime_status_handle(&node, node_did);
+
+        let apply = |agent_config: &mut ResolvedAgent, settings: Settings| {
+            agent_config.model_name = settings.model_name.to_string();
+            agent_config.sampling.reasoning_effort = settings.reasoning_effort;
+            agent_config.service_tier = settings.service_tier;
+        };
+        let mut agent_config = PendingAgent::new("general")
+            .build_with_identity_for_test(test_identity(&format!("settings-{changed}")));
+        let agent_did = agent_config.agent.agent_did.clone();
+        Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-a".to_string());
+        apply(Arc::make_mut(&mut agent_config.agent), ORIGINAL);
+        let mut switched = agent_config.clone();
+        apply(Arc::make_mut(&mut switched.agent), switched_settings);
+
+        let runtime_node = stub_runtime_node();
+        let initial_snapshot = snapshot_for_agents_with_node(
+            &node,
+            &agent_did,
+            vec![agent_config],
+            runtime_node.clone(),
+        )
+        .await;
+        let switched_snapshot =
+            snapshot_for_agents_with_node(&node, &agent_did, vec![switched], runtime_node).await;
+
+        type Observed = (String, u64, gents_protocol::row::ExecutedInferenceSettings);
+        let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Observed>();
+        let (held_tx, mut held_rx) = mpsc::unbounded_channel::<String>();
+        let release = Arc::new(Notify::new());
+        let runner = {
+            let release = release.clone();
+            move |agent_config: AgentWithTools,
+                  _tool_surface: Arc<ToolSurface>,
+                  request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                  _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+                  generation: u64,
+                  mut shutdown: watch::Receiver<bool>| {
+                let (done_tx, held_tx, release) =
+                    (done_tx.clone(), held_tx.clone(), release.clone());
+                async move {
+                    loop {
+                        let request = tokio::select! {
+                            _ = shutdown.changed() => return Ok(()),
+                            message = async {
+                                let mut receiver = request_rx.lock().await;
+                                receiver.recv().await
+                            } => match message {
+                                Some(request) => request,
+                                None => return Ok(()),
+                            },
+                        };
+                        if request.request_id == "held" {
+                            let _ = held_tx.send(request.request_id.clone());
+                            release.notified().await;
+                        }
+                        let _ = done_tx.send((
+                            request.request_id,
+                            generation,
+                            agent_config.agent.executed_inference(generation),
+                        ));
+                    }
+                }
+            }
+        };
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let supervisor = GenerationSupervisor::bootstrap(
+            initial_snapshot,
+            gents_inference::admission::AdmissionRegistry::new(node.clone()),
+            crate::runtime::agent::retry::RetryPolicy {
+                max_retries: 3,
+                base_delay_ms: 5,
+                max_delay_ms: 25,
+            },
+            runner,
+            runtime_status,
+            shutdown_rx.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        let initial = supervisor.current_snapshot();
+        let mut held = background_child_request(0, &agent_did);
+        held.request_id = "held".to_string();
+        initial.dispatchers[&agent_did].send(held).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), held_rx.recv())
+            .await
+            .expect("the old slot claims the first request")
+            .unwrap();
+
+        let (active_tx, mut active_rx) = watch::channel(initial.clone());
+        let (proposal_tx, proposal_rx) = mpsc::channel(4);
+        let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+        proposal_tx.send(switched_snapshot).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), active_rx.changed())
+            .await
+            .expect("a settings change publishes a generation while a call is in flight")
+            .unwrap();
+        let updated = active_rx.borrow().clone();
+        drop(initial);
+
+        let mut queued = background_child_request(1, &agent_did);
+        queued.request_id = "queued".to_string();
+        updated.dispatchers[&agent_did].send(queued).await.unwrap();
+        let next = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+            .await
+            .expect("the queued request runs on the new slot")
+            .unwrap();
+        assert_eq!(next.0, "queued");
+        assert_eq!(next.1, updated.generation);
+        assert_eq!(next.2.model_name, switched_settings.model_name);
+        assert_eq!(
+            next.2.reasoning_effort.as_deref(),
+            switched_settings
+                .reasoning_effort
+                .map(ReasoningEffort::as_str)
+        );
+        assert_eq!(
+            next.2.service_tier.as_deref(),
+            switched_settings.service_tier.map(ServiceTier::as_str)
+        );
+        assert_eq!(next.2.runtime_generation, Some(updated.generation));
+
+        release.notify_one();
+        let drained = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+            .await
+            .expect("the call in flight finishes on the retired slot")
+            .unwrap();
+        assert_eq!(drained.0, "held");
+        assert_ne!(drained.1, updated.generation);
+        assert_eq!(drained.2.model_name, ORIGINAL.model_name);
+        assert_eq!(
+            drained.2.reasoning_effort.as_deref(),
+            ORIGINAL.reasoning_effort.map(ReasoningEffort::as_str),
+            "the call in flight keeps the effort it was dispatched with"
+        );
+        assert_eq!(
+            drained.2.service_tier.as_deref(),
+            ORIGINAL.service_tier.map(ServiceTier::as_str),
+            "the call in flight keeps the tier it was dispatched with"
+        );
+        assert_ne!(drained.2.runtime_generation, Some(updated.generation));
+
+        let _ = shutdown_tx.send(true);
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("supervisor should stop on shutdown")
+            .unwrap()
+            .unwrap();
+        node.shutdown().await.unwrap();
+    }
+}
+
+#[derive(Default)]
+struct CapturingReadinessWriter(
+    StdMutex<Vec<gents_protocol::node_readiness::NodeReadinessSnapshot>>,
+);
+
+#[async_trait::async_trait]
+impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for CapturingReadinessWriter {
+    async fn upsert(
+        &self,
+        _node_did: &str,
+        snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
+        _updated_at: &str,
+    ) -> Result<()> {
+        self.0.lock().unwrap().push(snapshot.clone());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn published_readiness_carries_the_generations_effective_inference() {
+    use gents_documents::inference_defaults::ReasoningEffort;
+    use gents_inference::resolved::ServiceTier;
+    use gents_protocol::node_readiness::{
+        NodeReadinessRow, ReasoningEffortBinding, ServiceTierBinding,
+    };
+
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity")
+        .to_owned();
+    let writer = Arc::new(CapturingReadinessWriter::default());
+    let (owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        &node_did,
+        writer.clone(),
+        Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
+
+    let mut agent_config = PendingAgent::new("general")
+        .build_with_identity_for_test(test_identity("readiness-effective-inference"));
+    let agent_did = agent_config.agent.agent_did.clone();
+    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-a".to_string());
+    Arc::make_mut(&mut agent_config.agent).model_name = "model-a".to_string();
+    Arc::make_mut(&mut agent_config.agent)
+        .sampling
+        .reasoning_effort = Some(ReasoningEffort::Low);
+    Arc::make_mut(&mut agent_config.agent).service_tier = Some(ServiceTier::Fast);
+    Arc::make_mut(&mut agent_config.agent).profile_id = Some("profile-a".to_string());
+    let snapshot =
+        snapshot_for_agents_with_node(&node, &agent_did, vec![agent_config], stub_runtime_node())
+            .await;
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        snapshot,
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
+        crate::runtime::agent::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        |_agent_config, _tool_surface, _request_rx, _capacity, _generation, _shutdown| async {
+            Ok(())
+        },
+        runtime_status.clone(),
+        shutdown_rx,
+        None,
+    )
+    .await
+    .unwrap();
+    let active = supervisor.current_snapshot();
+    runtime_status
+        .readiness()
+        .initialize(&agent_did)
+        .await
+        .unwrap();
+    runtime_status
+        .readiness()
+        .publish_snapshot(active.as_ref())
+        .await
+        .unwrap();
+
+    let published = writer
+        .0
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .expect("the publisher wrote a snapshot");
+    let row = NodeReadinessRow {
+        node_did: node_did.clone(),
+        snapshot_json: serde_json::to_string(&published).unwrap(),
+        updated_at: "2026-01-01T00:00:00Z".to_string(),
+    };
+    let decoded = gents_protocol::node_readiness::decode_node_readiness_snapshot(&row, &node_did)
+        .expect("the runtime writes a snapshot its own decoder accepts");
+    let entry = decoded
+        .agents
+        .iter()
+        .find(|entry| entry.agent_did == agent_did)
+        .expect("the staged agent is published");
+    let effective = entry
+        .effective_inference
+        .as_ref()
+        .expect("a ready agent publishes the settings its slot will bind");
+    assert_eq!(effective.model_name, "model-a");
+    assert_eq!(effective.backend_id.as_deref(), Some("backend-a"));
+    assert_eq!(effective.profile_id.as_deref(), Some("profile-a"));
+    assert_eq!(effective.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(
+        effective.service_tier,
+        ServiceTierBinding::Selected {
+            tier: "fast".to_string()
+        }
+    );
+    assert_eq!(
+        effective.reasoning_effort_dispatch,
+        ReasoningEffortBinding::Sent {
+            effort: "low".to_string()
+        }
+    );
+    assert_eq!(decoded.active_generation, active.generation);
+
+    let _ = shutdown_tx.send(true);
+    drop(supervisor);
+    owner.close().await.unwrap();
+    node.shutdown().await.unwrap();
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct RuntimeStatusRow {
     reconcile_phase: String,
@@ -1531,6 +1869,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
             .expect("fixture node has an identity"),
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
@@ -1602,6 +1941,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
             .expect("fixture node has an identity"),
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let runner = move |_agent: AgentWithTools,
@@ -1698,6 +2038,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         "did:test:source-failure-rollback",
         writer,
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     runtime_status.initialize_startup(&agent_did).await.unwrap();
     let slot_failure_policy = Arc::new(PublisherBackedSlotFailurePolicy {
@@ -1836,6 +2177,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
             release: source_release.clone(),
         }),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let lineage = AgentLineage::provision("closed-watch");
     let agent_did = lineage.binding.agent_did.clone();

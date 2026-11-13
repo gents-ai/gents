@@ -119,6 +119,7 @@ pub use task_fire::{
     TaskGoalFireRecoveryDecision, TaskGoalFireRecoveryDisposition, TaskGoalRequestBinding,
 };
 pub use tool_context::load_goal_tool_context;
+pub(crate) use tool_context::load_goal_tool_context_with_usage;
 pub(crate) use tool_context::same_goal_assignment;
 pub use transition::{
     decide_model_goal_create, goal_continuation_materialization_step, goal_creation_fingerprint,
@@ -129,6 +130,7 @@ pub use transition::{
 pub(crate) use usage::session_token_usage_breakdown_in_txn;
 use usage::session_token_usage_in_txn;
 pub use usage::{refresh_goal_usage_from_access, session_token_usage};
+pub(crate) use usage::{refresh_goal_usage_observed, GoalUsageObservation};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use write::seed_goal_from_access;
 pub use write::{delete_goal_from_access, delete_goals_for_session_from_access};

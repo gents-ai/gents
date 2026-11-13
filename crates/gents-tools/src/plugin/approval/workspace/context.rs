@@ -25,6 +25,7 @@ pub type Reviewer = Arc<
 pub struct Context {
     home: PathBuf,
     workspace: WorkspaceKey,
+    session_id: Option<String>,
     review_history: Arc<Mutex<History>>,
     review_gate: Arc<tokio::sync::Mutex<()>>,
     reviewer: Option<Reviewer>,
@@ -34,6 +35,11 @@ impl Context {
     pub fn with_reviewer(mut self, reviewer: Reviewer) -> Self {
         self.reviewer = Some(reviewer);
         self
+    }
+
+    fn governs(&self, key: &WorkspaceKey) -> bool {
+        key.base() == self.workspace
+            && (key.session_id.is_none() || key.session_id == self.session_id)
     }
 }
 
@@ -49,6 +55,7 @@ pub fn for_request(
     requester_did: Option<&str>,
     agent_did: &str,
     workspace: Option<&Path>,
+    session_id: Option<&str>,
 ) -> Result<Option<Context>> {
     let (Some(home), Some(requester), Some(workspace)) = (home, requester_did, workspace) else {
         return Ok(None);
@@ -57,6 +64,10 @@ pub fn for_request(
     Ok(Some(Context {
         home,
         workspace: WorkspaceKey::canonical(node_did, requester, agent_did, workspace)?,
+        session_id: session_id
+            .map(str::trim)
+            .filter(|session_id| !session_id.is_empty())
+            .map(ToOwned::to_owned),
         review_history: Arc::default(),
         review_gate: Arc::default(),
         reviewer: None,
@@ -73,7 +84,7 @@ pub(super) async fn resolve_review(
     let Some(context) = CURRENT.try_with(Clone::clone).ok().flatten() else {
         return Ok(Route::Deny);
     };
-    if context.workspace != decision.binding.scope.workspace {
+    if !context.governs(&decision.binding.scope.workspace) {
         return Ok(Route::Deny);
     }
     if decision.route != Route::Review {
@@ -125,7 +136,7 @@ pub(super) fn review_route(
     CURRENT
         .try_with(|context| {
             context.as_ref().map(|context| {
-                if context.workspace != input.current.workspace {
+                if !context.governs(&input.current.workspace) {
                     return super::Route::Deny;
                 }
                 let mut history = context
@@ -180,11 +191,28 @@ pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
         home.canonicalize().context("resolving the approval home")? == context.home,
         "the plugin and request have different approval homes"
     );
-    let settings = super::get(&context.home, &context.workspace)?;
+    let settings = super::resolve(
+        &context.home,
+        &context.workspace,
+        context.session_id.as_deref(),
+    )?;
     if settings.is_some() {
         gents_pack::plugin::allowed::canonical_target(&context.workspace.path, Some(true))?;
     }
     Ok(settings)
+}
+
+pub(super) fn governing_settings(
+    home: &Path,
+    key: &WorkspaceKey,
+) -> Result<Option<super::Settings>> {
+    if CURRENT
+        .try_with(|context| context.is_some())
+        .unwrap_or(false)
+    {
+        return settings(home);
+    }
+    super::entry(home, key)
 }
 
 #[cfg(test)]
@@ -206,6 +234,7 @@ mod tests {
             Some("requester"),
             "agent",
             Some(first.path()),
+            Some("chat"),
         )?;
         let expected = context.clone();
         scope(context, async move {
@@ -214,6 +243,15 @@ mod tests {
                 let expected = expected.as_ref().unwrap();
                 assert_eq!(observed.home, expected.home);
                 assert_eq!(observed.workspace, expected.workspace);
+                assert_eq!(observed.session_id, expected.session_id);
+                assert!(observed.governs(&observed.workspace));
+                assert!(observed.governs(&observed.workspace.with_session(Some("chat")).unwrap()));
+                assert!(!observed.governs(
+                    &observed
+                        .workspace
+                        .with_session(Some("another-chat"))
+                        .unwrap()
+                ));
                 assert!(Arc::ptr_eq(
                     &observed.review_history,
                     &expected.review_history
@@ -238,18 +276,26 @@ mod tests {
             Some("requester"),
             "agent",
             Some(second.path()),
+            None,
         )?
         .unwrap();
         assert_eq!(other.workspace.path, second.path().canonicalize()?);
-        assert!(
-            for_request(Some(home.path()), "node", Some("requester"), "agent", None,)?.is_none()
-        );
+        assert!(for_request(
+            Some(home.path()),
+            "node",
+            Some("requester"),
+            "agent",
+            None,
+            None,
+        )?
+        .is_none());
         assert!(for_request(
             Some(&home.path().join("uninitialized")),
             "node",
             Some("requester"),
             "agent",
             Some(first.path()),
+            None,
         )
         .is_err());
         Ok(())
@@ -268,6 +314,7 @@ mod tests {
                 Some("requester"),
                 "agent",
                 Some(workspace.path()),
+                None,
             )
         };
         let first = context()?.unwrap();

@@ -1,5 +1,6 @@
 use super::*;
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::session_token_usage::SessionTokenUsage;
 
 pub struct GoalToolContext {
     pub request: AgentRequestRow,
@@ -19,6 +20,21 @@ impl GoalToolContext {
             RequestAssignmentObservation::Unknown => false,
             RequestAssignmentObservation::Assigned(_) => self.can_write(),
         }
+    }
+
+    pub(crate) fn observe_current(&mut self, current: Option<GoalDocument>) {
+        self.current = current;
+    }
+
+    pub(crate) fn observed_goal(&self) -> Option<&GoalDocument> {
+        let RequestAssignmentObservation::Assigned(assigned) = &self.assignment else {
+            return None;
+        };
+        Some(if self.can_write() {
+            self.current.as_ref().unwrap_or(assigned)
+        } else {
+            assigned
+        })
     }
 }
 
@@ -47,6 +63,38 @@ pub async fn load_goal_tool_context(
         .await
 }
 
+pub(crate) async fn load_goal_tool_context_with_usage(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    session: &str,
+    request_id: &str,
+    request_doc_id: Option<&str>,
+) -> Result<(GoalToolContext, Option<SessionTokenUsage>)> {
+    let doc = request_doc_id.context("Goal tool caller has no physical request identity")?;
+    access
+        .transact_readonly("goal.tool_context", |txn| {
+            Box::pin(async move {
+                let (context, assignments) =
+                    observe_goal_tool_context_in_txn(txn, owner, session, request_id, doc).await?;
+                let usage = if context.can_write() {
+                    Some(
+                        gents_tools::native::session_goal_usage_from_rows(
+                            txn,
+                            owner,
+                            assignments.session_rows(),
+                        )
+                        .await
+                        .context("summing goal inference usage")?,
+                    )
+                } else {
+                    None
+                };
+                Ok((context, usage))
+            })
+        })
+        .await
+}
+
 pub(super) async fn load_goal_tool_context_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
@@ -54,13 +102,30 @@ pub(super) async fn load_goal_tool_context_in_txn(
     request_id: &str,
     request_doc_id: &str,
 ) -> Result<GoalToolContext> {
+    Ok(
+        observe_goal_tool_context_in_txn(txn, owner, session, request_id, request_doc_id)
+            .await?
+            .0,
+    )
+}
+
+async fn observe_goal_tool_context_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    session: &str,
+    request_id: &str,
+    request_doc_id: &str,
+) -> Result<(
+    GoalToolContext,
+    super::request_assignment::RequestAssignments,
+)> {
     let assignments =
         super::request_assignment::load_request_assignments_in_txn(txn, owner, session).await?;
     let (request, assignment) = assignments.observe_physical_request(request_doc_id, request_id)?;
-    let current = load_canonical_goal_in_txn(txn, owner, session).await?;
-    Ok(GoalToolContext {
+    let context = GoalToolContext {
         request: request.clone(),
         assignment,
-        current,
-    })
+        current: load_canonical_goal_in_txn(txn, owner, session).await?,
+    };
+    Ok((context, assignments))
 }

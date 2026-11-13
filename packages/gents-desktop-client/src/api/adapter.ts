@@ -62,10 +62,23 @@ export function createDesktopApiAdapter(
       }),
     dismissEndedAccess: (nodeDid) =>
       invokeDesktop("desktop_ended_access_dismiss", { nodeDid }),
-    requestStatusEnrollment: (serverAddress, candidateName) =>
-      invokeDesktop("desktop_peer_enroll_status", {
-        request: { serverAddress, ...(candidateName ? { candidateName } : {}) },
-      }),
+    requestStatusEnrollment: (serverAddress, candidateName) => {
+      const value = serverAddress.trim();
+      if (
+        value.startsWith("gents://invite/") ||
+        /^[1-9A-HJ-NP-Za-km-z]{100,}$/.test(value)
+      ) {
+        return invokeDesktop("desktop_peer_enroll_invite", {
+          request: { invite: value, candidateName: candidateName ?? null },
+        });
+      }
+      return invokeDesktop("desktop_peer_enroll_status", {
+        request: {
+          serverAddress: value,
+          ...(candidateName ? { candidateName } : {}),
+        },
+      });
+    },
     listWorkspace: (subpath) =>
       invokeDesktop("desktop_workspace_list", {
         subpath: subpath ?? null,

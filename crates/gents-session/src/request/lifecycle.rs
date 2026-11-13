@@ -592,6 +592,7 @@ pub struct RequestLifecycle {
     folded_selection: Vec<queue::FoldedInput>,
     natural_finish_allowed: bool,
     resumed_from_backend: bool,
+    executed_inference: Option<gents_protocol::row::ExecutedInferenceSettings>,
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -709,6 +710,18 @@ impl RequestLifecycle {
 
     pub fn folded_selection(&self) -> &[queue::FoldedInput] {
         &self.folded_selection
+    }
+
+    pub fn set_executed_inference(
+        &mut self,
+        executed: gents_protocol::row::ExecutedInferenceSettings,
+    ) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "bind execution settings before claim"
+        );
+        self.executed_inference = Some(executed);
     }
 
     /// Configuration supplied by the runtime, never by request input; only

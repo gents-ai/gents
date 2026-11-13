@@ -220,6 +220,7 @@ pub struct Gents {
     health_checker_options: HealthCheckerOptions,
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
+    storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
     startup_build_failure_observer:
@@ -317,6 +318,7 @@ impl Gents {
             health_checker_options: options.health_checker_options,
             backend_prober_options: options.backend_prober_options,
             backend_health,
+            storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
             runtime_snapshot_observer: options.runtime_snapshot_observer,
             startup_build_failure_observer: options.startup_build_failure_observer,
@@ -358,6 +360,10 @@ impl Gents {
 
     pub fn backend_health(&self) -> BackendHealthMap {
         self.backend_health.clone()
+    }
+
+    pub fn storage_fault(&self) -> crate::runtime::storage_fault::StorageFaultObservation {
+        self.storage_fault.clone()
     }
 
     pub fn agents(&self) -> &[AgentWithTools] {

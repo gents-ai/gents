@@ -27,6 +27,20 @@ pub fn prevent_keychain_prompts(_prevent: bool) -> Result<Option<std::convert::I
     Ok(None)
 }
 
+/// macOS holds the interaction policy process-wide until this guard is dropped.
+pub struct KeychainPromptProhibition {
+    #[cfg(target_os = "macos")]
+    _guard: Option<security_framework::os::macos::keychain::KeychainUserInteractionLock>,
+    #[cfg(not(target_os = "macos"))]
+    _guard: Option<std::convert::Infallible>,
+}
+
+pub fn prevent_keychain_prompts_guard() -> Result<KeychainPromptProhibition> {
+    Ok(KeychainPromptProhibition {
+        _guard: prevent_keychain_prompts(true)?,
+    })
+}
+
 /// Embedded DefraDB runtimes need a usable descriptor budget when launched
 /// from GUI terminals with a low inherited soft limit. Raise only this process
 /// limit, retaining the hard limit and system policy.

@@ -836,6 +836,7 @@ impl RequestLifecycle {
             folded_selection: Vec::new(),
             natural_finish_allowed: false,
             resumed_from_backend: false,
+            executed_inference: None,
             execution_lease_duration_secs:
                 gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         }
@@ -963,6 +964,11 @@ impl RequestLifecycle {
             execution_generation: None,
             execution_lease_expires_at: None,
             execution_lease_secs: None,
+            executed_model_name: None,
+            executed_reasoning_effort: None,
+            executed_service_tier: None,
+            executed_inference_profile_id: None,
+            executed_runtime_generation: None,
             request_hop: 0,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,

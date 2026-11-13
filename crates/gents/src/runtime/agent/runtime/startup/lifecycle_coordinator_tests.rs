@@ -58,6 +58,7 @@ async fn generated_startup_admission_opens_only_after_a_durable_ready() {
             "did:test:startup-ready",
             writer.clone(),
             std::time::Duration::from_millis(1),
+            crate::runtime::storage_fault::StorageFaultObservation::new(),
         );
         status.initialize_startup("general").await.unwrap();
         let gate = super::super::router::RuntimeAdmissionGate::closed();

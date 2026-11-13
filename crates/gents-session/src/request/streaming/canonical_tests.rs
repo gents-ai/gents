@@ -1902,3 +1902,96 @@ async fn dirty_native_flush_completes_before_the_turn_barrier_or_is_recovered_af
         drop(path);
     }
 }
+
+#[tokio::test]
+async fn provider_flush_preserves_output_and_replay_identity() {
+    use gents_protocol::output::{
+        OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
+    };
+    const CHUNK: &str = "0123456789abcdef";
+    let (node, path, lifecycle, _writer) = fixture("provider-flush-bounded").await;
+    let access = fixture_access(&node, &lifecycle);
+    let generation = lifecycle.execution_generation().unwrap().to_owned();
+    let started = chrono::Utc::now();
+    let flush = |ordinal: u32| {
+        let request = lifecycle.request();
+        OutputSegment {
+            node_did: request.node_did.clone(),
+            requester_did: request.requester_did.clone(),
+            session_id: request.session_id.clone(),
+            request_doc_id: request.doc_id.clone(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: generation.clone(),
+            },
+            ordinal: Some(ordinal),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: u32::try_from(CHUNK.len()).unwrap(),
+                declaration: (ordinal == 0).then_some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Text,
+                }),
+            }],
+            payload: CHUNK.to_owned(),
+            close: None,
+            created_at: (started + chrono::Duration::milliseconds(i64::from(ordinal)))
+                .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+        }
+    };
+
+    let mut last_doc_id = String::new();
+    for ordinal in 0..80u32 {
+        let prepared = flush(ordinal);
+        let appended = super::canonical::append_provider_segment_at_with_access(
+            &access,
+            &generation,
+            &prepared,
+            chrono::Utc::now(),
+        )
+        .await;
+        last_doc_id = appended.unwrap();
+    }
+
+    let replayed = super::canonical::append_provider_segment_at_with_access(
+        &access,
+        &generation,
+        &flush(79),
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        replayed, last_doc_id,
+        "an immutable flush replayed returns its recorded identity"
+    );
+    let source = gents_protocol::output::OutputSource::ProviderTurn {
+        scope: "inference.1".parse().unwrap(),
+        turn_index: 0,
+        attempt: 0,
+    };
+    let rows = fixture_query(
+        &access,
+        &gents_protocol::output::rows::source_output_segments_query(
+            &lifecycle.request().doc_id,
+            &source,
+        )
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        rows.data.as_ref().unwrap()["AgentOutputSegment"]
+            .as_array()
+            .map(Vec::len),
+        Some(80),
+        "a replayed flush writes no second row"
+    );
+
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
+}

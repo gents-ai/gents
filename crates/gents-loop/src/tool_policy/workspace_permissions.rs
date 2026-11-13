@@ -102,6 +102,20 @@ where
         .is_some_and(|grant| grant.scope == input.current && grant.action == input.action)
 }
 
+pub fn resolve<'a, E, K, F>(
+    entries: &'a [E],
+    session: Option<&K>,
+    default: &K,
+    key: F,
+) -> Option<&'a E>
+where
+    K: PartialEq,
+    F: for<'b> Fn(&'b E) -> &'b K,
+{
+    let find = |wanted: &K| entries.iter().find(|entry| key(entry) == wanted);
+    session.and_then(find).or_else(|| find(default))
+}
+
 pub fn approval_scope_matches<W>(available: &[Scope<W>], expected: &Scope<W>) -> bool
 where
     W: PartialEq,
@@ -332,6 +346,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn generated_workspace_permission_resolution_cases() {
+        use gents_lean_vocab::families::workspace_permission_resolution_selection::Result;
+        gents_lean_vocab::families::workspace_permission_resolution_selection::replay::<Mode>(
+            |input| {
+                let entries: Vec<_> = input
+                    .entries
+                    .iter()
+                    .map(|entry| ((entry.key.workspace, entry.key.session), entry.clone()))
+                    .collect();
+                let session = input
+                    .session
+                    .map(|session| (input.workspace, Some(session)));
+                let default = (input.workspace, None);
+                let resolved = resolve(&entries, session.as_ref(), &default, |entry| &entry.0)
+                    .map(|entry| entry.1.clone());
+                let admits = resolved
+                    .as_ref()
+                    .map(|entry| (entry.key.workspace, entry.key.session))
+                    == Some((input.bound.workspace, input.bound.session));
+                Result { resolved, admits }
+            },
+        );
     }
 
     #[test]

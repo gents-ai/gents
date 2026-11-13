@@ -799,6 +799,8 @@ impl ConfigApplyTxn<'_> {
         if !variables.is_object() {
             return Err(ConfigClientError::VariablesNotObject);
         }
+        #[cfg(any(test, feature = "test-fixtures"))]
+        super::fault_injection::record_statement(self.operation, document);
         if self.has_pack_interpreter() {
             graphql::ensure_query_document(document)?;
             if let TxnBackend::Http { endpoint, .. } = &self.backend {

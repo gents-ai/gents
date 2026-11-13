@@ -67,6 +67,7 @@ pub enum AgentReadinessUnknownReasonView {
     ProcessNotReady,
     RouterGenerationStale,
     AgentNotAssigned,
+    StorageUnavailable,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]

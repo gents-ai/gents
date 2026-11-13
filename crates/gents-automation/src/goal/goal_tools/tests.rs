@@ -8,6 +8,7 @@ use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 use serde_json::json;
 
 mod goal_context;
+mod goal_latency;
 
 #[tokio::test]
 async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifecycle() {

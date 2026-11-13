@@ -9,6 +9,7 @@ use gents_protocol::row::{
     project_node_readiness_summary, AgentReadinessState, AgentRequestRow, NodeReadinessRow,
     ProjectedNodeReadinessSummary,
 };
+
 use gents_toolcalls::call::lifecycle::deadline_is_expired;
 use serde::{Deserialize, Serialize};
 
@@ -541,6 +542,7 @@ mod tests {
         AgentReadinessEntry, NodeReadinessProcessState, NodeReadinessSnapshot,
         NODE_READINESS_FORMAT_VERSION,
     };
+
     use serde_json::json;
 
     fn empty_request_row() -> AgentRequestRow {
@@ -567,6 +569,7 @@ mod tests {
                         agent_did: agent_did.to_string(),
                         state: AgentReadinessState::Ready,
                         reason: None,
+                        effective_inference: None,
                     })
                     .collect(),
             })

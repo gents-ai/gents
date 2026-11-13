@@ -4,6 +4,7 @@ use gents_automation::triggers::engine::TriggerSource as _;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequest, AgentRequestRow};
+
 use gents_session::request::lifecycle::test_support::{
     expire_observed_execution, output_segment_snapshot, request_row,
 };
@@ -380,6 +381,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             dispatcher_present: true,
             unavailable_reason: None,
             startup_demoted: false,
+            effective_inference: None,
         }],
     )
     .unwrap();

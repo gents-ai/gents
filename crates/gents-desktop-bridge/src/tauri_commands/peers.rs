@@ -6,7 +6,8 @@ use super::emit_config_update_and_snapshot;
 use crate::commands::{remove_peer, rename_peer};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    DesktopClientSnapshot, EnrollmentRequestView, EnrollmentStatusRequest, PeerRemoveResponse,
+    DesktopClientSnapshot, EnrollmentInviteRequest, EnrollmentRequestView, EnrollmentStatusRequest,
+    PeerRemoveResponse,
 };
 
 #[tauri::command]
@@ -18,6 +19,17 @@ pub async fn desktop_peer_enroll_status(
         return Err(BridgeError::untyped("desktop client is not running"));
     };
     crate::commands::request_status_enrollment(&core, request).await
+}
+
+#[tauri::command]
+pub async fn desktop_peer_enroll_invite(
+    request: EnrollmentInviteRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<EnrollmentRequestView, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+    crate::commands::request_invite_enrollment(&core, request).await
 }
 
 #[tauri::command]

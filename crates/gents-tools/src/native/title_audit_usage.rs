@@ -253,8 +253,25 @@ pub async fn load_session_goal_usage(
             .clone(),
     )
     .context("decoding goal usage AgentRequest rows")?;
+    session_goal_usage_from_rows(txn, node_did, &requests).await
+}
+
+pub async fn session_goal_usage_from_rows(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    rows: &[AgentRequestRow],
+) -> Result<gents_protocol::session_token_usage::SessionTokenUsage> {
+    let requests: Vec<&AgentRequestRow> = rows
+        .iter()
+        .filter(|request| {
+            matches!(
+                request.purpose,
+                Some(RequestPurpose::Normal) | Some(RequestPurpose::AccessReview)
+            )
+        })
+        .collect();
     let mut by_doc = BTreeMap::new();
-    for request in &requests {
+    for request in requests.iter().copied() {
         let doc = nonempty(request.doc_id.as_deref(), "goal physical request")?;
         anyhow::ensure!(
             by_doc.insert(doc, request).is_none(),
@@ -262,7 +279,7 @@ pub async fn load_session_goal_usage(
         );
     }
     let mut request_ids = BTreeMap::new();
-    for request in &requests {
+    for request in requests.iter().copied() {
         if request.purpose == Some(RequestPurpose::AccessReview) {
             let parent_doc = nonempty(
                 request.caused_by_parent_request_doc_id.as_deref(),
