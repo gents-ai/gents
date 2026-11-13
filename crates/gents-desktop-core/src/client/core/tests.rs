@@ -497,24 +497,21 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
-    let options = ClientCoreOptions {
+    super::supervisor::FirstRepairCycle {
+        bus: core.node().event_bus().as_ref(),
+        p2p: &p2p,
+        sync_state: &owner,
+        remote_admin_actor: &Arc::new(core.node_identity().clone()),
+        route_manager: &route_manager,
         install_replicators_on_bootstrap: true,
-        ..ClientCoreOptions::local_only()
-    };
-    let (statuses, errors) = super::bootstrap::bootstrap_saved_peers(
-        &core.node_arc(),
-        &p2p,
-        &owner.records(),
-        &options,
-        core.node_identity(),
-        &route_manager,
-        &mut || {},
-    )
+        force_repair: false,
+    }
+    .run()
     .await;
-    assert!(errors.is_empty());
+    let statuses = owner.snapshot().peers;
     assert_eq!(statuses.len(), 1);
     assert!(!statuses[0].dial_succeeded);
-    assert!(statuses[0].pairing.is_empty());
+    assert!(statuses[0].last_error.is_none());
     assert!(statuses[0].routes.is_empty());
     assert!(recording.connect_calls().is_empty());
     assert!(recording.add_replicator_calls().is_empty());
@@ -639,7 +636,6 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         addr: record.addr.clone(),
         dial_succeeded: true,
         last_error: None,
-        pairing: Vec::new(),
         routes: Vec::new(),
     });
     assert!(core
@@ -737,7 +733,6 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
             addr: record.addr.clone(),
             dial_succeeded: false,
             last_error: Some("peer Workshop Bay dial failed".to_string()),
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -774,7 +769,6 @@ async fn failed_redial_clears_stale_configured_peer_connectivity() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -813,7 +807,6 @@ async fn repair_saved_graphql_peer_leaves_replicator_installation_to_route_manag
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -852,7 +845,6 @@ async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
     )
@@ -882,7 +874,6 @@ async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
     )
@@ -1129,6 +1120,46 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
 }
 
 #[tokio::test]
+async fn startup_observes_runtimes_without_waiting_for_saved_peer_dials() {
+    use crate::client::paths::DesktopPaths;
+
+    const NODE: &str = "did:test:unreachable-runtime";
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().join("client"));
+    paths.ensure_root_dirs().await.unwrap();
+    let mut directory = PeerDirectory::open_writer(paths.peer_directory_path())
+        .await
+        .unwrap();
+    let mut peer = PeerRecord::new(
+        "Unreachable",
+        "127.0.0.1:9/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+        NODE,
+    );
+    peer.graphql = Some("http://127.0.0.1:9/api/v0/graphql".into());
+    directory.upsert(peer).await.unwrap();
+    drop(directory);
+
+    let core = tokio::time::timeout(
+        BOOTSTRAP_OPERATION_TIMEOUT / 4,
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()),
+    )
+    .await
+    .expect("startup does not wait for the saved peer's dial")
+    .expect("client core");
+    let core = Arc::new(core);
+    assert_eq!(
+        tokio::time::timeout(
+            BOOTSTRAP_OPERATION_TIMEOUT / 4,
+            core.reconnect_runtime_now(NODE)
+        )
+        .await
+        .expect("the observer answers while the dial is still retrying"),
+        Some(crate::client::RuntimeConnectionStatus::Disconnected)
+    );
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
 async fn bootstrap_connect_waits_for_the_peer_connection_event() {
     use events::Bus;
 
@@ -1344,9 +1375,10 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         }))?,
     )
     .await?;
-    core.save_agent(&serde_json::from_value(
-        runtime.agent_value(&agent, "profile"),
-    )?)
+    core.save_agent(
+        &serde_json::from_value(runtime.agent_value(&agent, "profile"))?,
+        None,
+    )
     .await?;
     let session_doc = runtime
         .agent_session(&agent, "terminal-page", core.node_identity.did())

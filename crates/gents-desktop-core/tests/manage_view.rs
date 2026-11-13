@@ -88,7 +88,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
         "inference_profile_id": "profile-amy",
         "tags": ["managed"]
     }))?;
-    core.save_agent(&agent).await?;
+    core.save_agent(&agent, None).await?;
     core.set_default_agent(node_did, amy_default).await?;
 
     let task: Task = serde_json::from_value(json!({

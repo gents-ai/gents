@@ -17,6 +17,9 @@ pub struct InstalledPackView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<gents_pack::pack::PackSource>,
     pub latest: Option<String>,
     pub outdated: Option<bool>,
     pub error: Option<String>,

@@ -15,7 +15,7 @@ pub use gents_protocol::row::RetiredKey;
 
 mod persistence;
 
-pub use persistence::write_tools_document;
+pub use persistence::{write_tools_document, write_tools_document_in_txn, ToolsWriteError};
 
 /// Tool capabilities, execution policies, and dependencies referenced by a context.
 /// Groups are embedded in this document and share its ownership. Missing groups

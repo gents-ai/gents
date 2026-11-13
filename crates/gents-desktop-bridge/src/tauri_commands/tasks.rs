@@ -29,7 +29,7 @@ where
 
     save_task_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -48,7 +48,7 @@ where
 
     save_schedule_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -69,7 +69,7 @@ where
 
     let result = run_schedule_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     let _ = app.emit(
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
@@ -92,7 +92,7 @@ where
 
     save_trigger_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -113,7 +113,7 @@ where
 
     let result = run_task_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     let _ = app.emit(
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
@@ -135,7 +135,7 @@ where
     };
     save_event_source_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -153,6 +153,6 @@ where
     };
     delete_event_source_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }

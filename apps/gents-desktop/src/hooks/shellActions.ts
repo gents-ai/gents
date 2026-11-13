@@ -12,6 +12,7 @@ import { createPeerActions } from "./peerActions";
 import { createSelectionActions } from "./selectionActions";
 import { createTaskActions } from "./taskActions";
 import { selection } from "./selectionStore";
+import type { SendAttachmentStore } from "./sendAttachments";
 import type { createSessionReads } from "./sessionReads";
 import type { ShellProjection, ShellStores } from "./shellProjection";
 
@@ -26,6 +27,7 @@ type ShellActionParams = {
     ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   };
   reportFailure: (message: string) => void;
+  sendAttachments: SendAttachmentStore;
 };
 
 export function createShellActions({
@@ -35,6 +37,7 @@ export function createShellActions({
   reads,
   client: { refreshSnapshot, mutateSnapshot, ensureDesktopClientStarted },
   reportFailure,
+  sendAttachments,
 }: ShellActionParams) {
   const route = createSelectionActions({ stores });
   return {
@@ -53,6 +56,7 @@ export function createShellActions({
       stores,
       refreshSnapshot,
       reportFailure,
+      sendAttachments,
     }),
     clearMailboxCause: () => selection.releaseMailboxRoute(stores.selection),
     ...createPeerActions({
@@ -79,6 +83,7 @@ export function createShellActions({
       refreshSession: reads.refreshSession,
       refreshSnapshot,
       reportFailure,
+      sendAttachments,
     }),
     captureComposeIntent: () => selection.captureIntent(stores.selection),
     acceptsComposeIntent: (captured: number) =>

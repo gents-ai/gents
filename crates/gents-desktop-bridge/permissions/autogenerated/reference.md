@@ -9,6 +9,7 @@ Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)
 - `allow-desktop-client-start`
 - `allow-desktop-client-shutdown`
 - `allow-desktop-set-selected-node`
+- `allow-desktop-node-reconnect`
 - `allow-desktop-app-quit`
 
 ## Permission Table
@@ -1193,6 +1194,58 @@ Denies the desktop_job_control command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-job-view`
+
+</td>
+<td>
+
+Enables the desktop_job_view command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-job-view`
+
+</td>
+<td>
+
+Denies the desktop_job_view command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-jobs-list`
+
+</td>
+<td>
+
+Enables the desktop_jobs_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-jobs-list`
+
+</td>
+<td>
+
+Denies the desktop_jobs_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-join-history-read`
 
 </td>
@@ -1765,6 +1818,32 @@ Denies the desktop_node_config_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-node-reconnect`
+
+</td>
+<td>
+
+Enables the desktop_node_reconnect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-node-reconnect`
+
+</td>
+<td>
+
+Denies the desktop_node_reconnect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-observer-metrics`
 
 </td>
@@ -2278,32 +2357,6 @@ Enables the desktop_peer_rename command without any pre-configured scope.
 <td>
 
 Denies the desktop_peer_rename command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-peer-status-fetch`
-
-</td>
-<td>
-
-Enables the desktop_peer_status_fetch command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-peer-status-fetch`
-
-</td>
-<td>
-
-Denies the desktop_peer_status_fetch command without any pre-configured scope.
 
 </td>
 </tr>
@@ -3837,7 +3890,7 @@ Aggregate snapshot, observer metrics
 </td>
 <td>
 
-Client start/shutdown, selected-agent, and application quit
+Client start/shutdown, selected-agent, runtime reconnect, and application quit
 
 </td>
 </tr>
@@ -3941,7 +3994,7 @@ Request retry
 </td>
 <td>
 
-Peer status (by saved id)
+Node addresses, routes and enrollment requests in the client snapshot
 
 </td>
 </tr>
@@ -4071,7 +4124,7 @@ Authenticated peer enrollment, removal and rename, and ended access
 </td>
 <td>
 
-Operations snapshot, health, session provenance, MCP probe
+Operations snapshot, health, session provenance, MCP probe, workflow runs
 
 </td>
 </tr>

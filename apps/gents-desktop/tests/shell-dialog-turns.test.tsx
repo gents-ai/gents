@@ -125,7 +125,8 @@ import { AppProvider } from "../src/ui/app/AppContext";
 const healthy: SyncHealthView = {
   state: "healthy",
   lastError: null,
-  connectedPeerCount: 1,
+  runtimeCount: 1,
+  connectedRuntimeCount: 1,
   activationErrorCount: 0,
   cause: null,
   nextAction: null,
@@ -198,8 +199,8 @@ describe("shell dialogs take turns (#1778)", () => {
     const user = userEvent.setup();
     render(<Harness />);
 
-    await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
-    expect(screen.getByRole("dialog", { name: "Sync details" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Show connection details/ }));
+    expect(screen.getByRole("dialog", { name: "Connection details" })).toBeVisible();
 
     await user.click(screen.getByTestId("context-meter"));
     expect(dialogs().length).toBeLessThanOrEqual(1);

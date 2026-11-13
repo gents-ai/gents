@@ -17,6 +17,7 @@ import { reconcileSelection } from "../src/hooks/selectionReconcile";
 import { createSelectionActions } from "../src/hooks/selectionActions";
 import { createSelectionStore, useSelection } from "../src/hooks/selectionStore";
 import { createChatActions } from "../src/hooks/chatActions";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 const initialDeployment = {
   nodeDid: "agent",
@@ -68,6 +69,7 @@ function useHarness(
       refreshSession: async () => null,
       refreshSnapshot: async () => {},
       reportFailure: vi.fn(),
+      sendAttachments: memorySendAttachments(),
     }),
   }));
   useState(() => reconcileSelection(stores, actions.selectNode));

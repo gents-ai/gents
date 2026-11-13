@@ -50,6 +50,7 @@ import type {
   TriggerView,
 } from "@source-inc/gents-desktop-client";
 import type { JobControlOutcome } from "@source-inc/gents-desktop-client/generated/JobControlOutcome";
+import type { JobView } from "@source-inc/gents-desktop-client/generated/JobView";
 import type { RequestOutcomeView } from "@source-inc/gents-desktop-client/generated/RequestOutcomeView";
 import type { MessageReconstructionView } from "@source-inc/gents-desktop-client/generated/MessageReconstructionView";
 import type { SessionContextView } from "@source-inc/gents-desktop-client/generated/SessionContextView";
@@ -520,6 +521,148 @@ function backgroundItems(): RenderedTimelineItem[] {
   ];
 }
 
+const WORKFLOW_ROW = "doc-workflow-review";
+const WORKFLOW_PRIOR_ROW = "doc-workflow-review-prior";
+const WORKFLOW_STARTED_MS = Date.parse("2026-06-17T00:00:00.000Z");
+
+export function harnessWorkflowRuns(): JobView[] {
+  const pin = {
+    script_id: "a1b2c3d4e5f60718",
+    origin: "installed" as const,
+    engine_digest: "sha256:engine",
+    plugin_ref: "gents/review",
+    agent_budget: 4,
+    cwd: "~/src/gents",
+    chain_root_doc_id: WORKFLOW_PRIOR_ROW,
+  };
+  const scope: JobView["scope"] = {
+    session_id: "session-intro",
+    request_id: "request-intro",
+    node_did: NODE_DID,
+    requester_did: null,
+  };
+  return [
+    {
+      address: "session-intro:call-workflow-review",
+      row_doc_id: WORKFLOW_ROW,
+      session_id: "session-intro",
+      tool_call_id: "call-workflow-review",
+      scope,
+      handle: "review",
+      state: "running",
+      outcome: null,
+      pin: { ...pin, resume_of: WORKFLOW_PRIOR_ROW },
+      progress: harnessWorkflowProgress(),
+      children: [
+        {
+          slot: "verify",
+          attempt: 1,
+          session_id: "session-workflow-verify",
+          request_id: "request-workflow-verify",
+          state: "completed",
+          title: "Run the checks",
+          usage: { input: 9_000, output: 3_400, total: 12_400 },
+          duration_ms: 95_000,
+          target: "general",
+        },
+        {
+          slot: "review",
+          attempt: 1,
+          session_id: "session-workflow-review",
+          request_id: "request-workflow-review",
+          state: "live",
+          title: "Review the diff",
+          usage: { input: 30_000, output: 1_200, total: 31_200 },
+          duration_ms: 212_000,
+          target: "general",
+        },
+      ],
+      created_at: WORKFLOW_STARTED_MS,
+      adopted_at: WORKFLOW_STARTED_MS,
+      completed_at: null,
+    },
+    {
+      address: "session-intro:call-workflow-review-prior",
+      row_doc_id: WORKFLOW_PRIOR_ROW,
+      session_id: "session-intro",
+      tool_call_id: "call-workflow-review-prior",
+      scope,
+      handle: "review",
+      state: "failed",
+      outcome: {
+        code: "plugin_job_budget",
+        message: "The run spent its agent budget.",
+      },
+      pin: { ...pin, resume_of: null },
+      progress: harnessWorkflowProgress({
+        state: "running",
+        last_event: "agent 4 failed",
+        budget: { total: 4, spent: 4, remaining: 0 },
+      }),
+      children: [],
+      created_at: WORKFLOW_STARTED_MS - 3_600_000,
+      adopted_at: WORKFLOW_STARTED_MS - 3_600_000,
+      completed_at: WORKFLOW_STARTED_MS - 3_000_000,
+    },
+  ];
+}
+
+function harnessWorkflowProgress(
+  over: Partial<NonNullable<JobView["progress"]>> = {},
+): NonNullable<JobView["progress"]> {
+  return {
+    title: "Review the diff",
+    state: "running",
+    phases: [
+      { title: "plan", state: "done" },
+      { title: "review", state: "active" },
+      { title: "report", state: "pending" },
+    ],
+    active: [
+      {
+        slot: "review",
+        title: "Review the diff",
+        session_id: "session-workflow-review",
+      },
+    ],
+    spawned: 2,
+    budget: { total: 4, spent: 2, remaining: 2 },
+    last_event: "agent 2 started",
+    observed_terminal_children: 1,
+    revision: 3,
+    ...over,
+  };
+}
+
+function workflowItems(): RenderedTimelineItem[] {
+  return [
+    {
+      kind: "toolGroup" as const,
+      itemKey: "workflow-tools",
+      messageSequence: 2,
+      tools: [
+        {
+          itemKey: "workflow-review",
+          toolName: "workflow",
+          statusKind: "running",
+          requestId: "request-intro",
+          toolCallId: "call-workflow-review",
+          toolCallDocId: WORKFLOW_ROW,
+          nodeDid: NODE_DID,
+          awaitMode: "background",
+          startedAt: STARTED_AT,
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
+          presentation: { kind: "generic", input: null, output: null },
+          jobProgress: harnessWorkflowProgress(),
+          jobHandle: "review",
+          jobState: "running",
+          jobOrigin: "installed",
+        } as unknown as RenderedToolCallView,
+      ],
+    },
+  ];
+}
+
 function harnessAssistantItem(
   item: Omit<
     Extract<RenderedTimelineItem, { kind: "assistantMessage" }>,
@@ -553,11 +696,12 @@ export type DesktopUiHarnessScenario =
   | "active-turn"
   | "coding"
   | "mobile-performance"
-  | "sync-offline"
+  | "discovery-offline"
   | "storage-recovery"
   | "days"
   | "automated-inputs"
   | "background"
+  | "workflows"
   | "notices"
   | "startup-port-in-use"
   | SharingScenario;
@@ -1013,8 +1157,8 @@ export function createDesktopUiHarness(
     };
   }
   let p2pStatus: "healthy" | "degraded" | "wedged" =
-    scenario === "sync-offline" ? "wedged" : "healthy";
-  let syncHealth: SyncHealthView = initialSyncHealth(scenario);
+    scenario === "discovery-offline" ? "wedged" : "healthy";
+  let syncHealth: SyncHealthView = initialSyncHealth();
   let enrollmentRequests: EnrollmentRequestView[] = [];
   let updateEvents = 0;
   let storeVersion = 1;
@@ -1121,6 +1265,7 @@ export function createDesktopUiHarness(
       ...(scenario === "days" ? dayItems() : []),
       ...(scenario === "automated-inputs" ? automatedInputItems() : []),
       ...(scenario === "background" ? backgroundItems() : []),
+      ...(scenario === "workflows" ? workflowItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -1309,6 +1454,30 @@ export function createDesktopUiHarness(
       context: harnessSessionContext(),
       timelineItems: [],
     });
+  }
+  if (scenario === "workflows") {
+    for (const [sessionId, agentDid, title] of [
+      ["session-workflow-review", "ops", "Review the diff"],
+      ["session-workflow-verify", DEFAULT_AGENT_DID, "Run the checks"],
+    ] as const)
+      sessions.set(sessionId, {
+        sessionId,
+        nodeDid: NODE_DID,
+        agentDid,
+        title,
+        previewText: "",
+        status: "active",
+        turnState: sessionId === "session-workflow-review" ? "running" : "completed",
+        latestRequestId: `request-${sessionId}`,
+        goal: verifiedNoGoal(sessionId),
+        retryEligibility: { eligible: false, denialReason: null },
+        latestRequestOutcome: null,
+        pendingTurn: null,
+        queuedTurns: [],
+        foldedInputs: [],
+        context: harnessSessionContext(),
+        timelineItems: [],
+      });
   }
   if (scenario === "notices") {
     /* sessions holding each notice the app draws: a failed turn, one that
@@ -1749,7 +1918,7 @@ export function createDesktopUiHarness(
     const visibleDeployment = {
       ...deployment,
       dialSucceeded: p2pStatus === "healthy",
-      chatSafe: p2pStatus === "healthy",
+      runtimeConnection: p2pStatus === "healthy" ? "connected" : "disconnected",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
     if (
@@ -2374,14 +2543,6 @@ export function createDesktopUiHarness(
             timestamp: STARTED_AT,
           },
         ],
-      };
-    },
-    async fetchPeerStatus() {
-      return {
-        label: "Bombadil UI Agent",
-        nodeDid: NODE_DID,
-        addr: "/ip4/127.0.0.1/tcp/9292",
-        graphql: "http://127.0.0.1:9181/api/v0/graphql",
       };
     },
     async requestStatusEnrollment() {
@@ -3833,6 +3994,26 @@ export function createDesktopUiHarness(
       };
       return outcome;
     },
+    async listJobs({ nodeDid, states, plugin, sessionId }) {
+      if (nodeDid !== NODE_DID || scenario !== "workflows") return [];
+      return harnessWorkflowRuns().filter(
+        (run) =>
+          (!states?.length || states.includes(run.state)) &&
+          (!plugin || run.pin.plugin_ref === plugin) &&
+          (!sessionId || run.session_id === sessionId),
+      );
+    },
+    async getJobView(request) {
+      const runs = scenario === "workflows" ? harnessWorkflowRuns() : [];
+      const run = runs.find((candidate) =>
+        request.rowDocId
+          ? candidate.row_doc_id === request.rowDocId
+          : candidate.address === request.address,
+      );
+      if (!run || request.nodeDid !== NODE_DID)
+        throw new Error("This run is not visible on the node yet.");
+      return run;
+    },
     async processControl() {
       throw new Error("Process control is unavailable in this fixture.");
     },
@@ -4673,22 +4854,12 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
   return rows.map((row, i) => (i === index ? next : row));
 }
 
-function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
-  if (scenario === "sync-offline") {
-    return {
-      state: "blocked",
-      lastError: "fixture transport unavailable",
-      connectedPeerCount: 0,
-      activationErrorCount: 0,
-      cause: "discovery_offline",
-      nextAction: "check_network",
-    };
-  }
-
+function initialSyncHealth(): SyncHealthView {
   return {
     state: "healthy",
     lastError: null,
-    connectedPeerCount: 1,
+    runtimeCount: 1,
+    connectedRuntimeCount: 1,
     activationErrorCount: 0,
     cause: null,
     nextAction: null,
@@ -4716,12 +4887,13 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "active-turn":
     case "coding":
     case "mobile-performance":
-    case "sync-offline":
+    case "discovery-offline":
     case "storage-recovery":
     case "startup-port-in-use":
     case "days":
     case "automated-inputs":
     case "background":
+    case "workflows":
     case "notices":
       return value;
     default:

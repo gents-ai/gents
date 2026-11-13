@@ -30,6 +30,7 @@ pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) ->
 pub(crate) async fn upsert_agent_with_publication_on(
     access: &ConfigAccess,
     document: &AgentDocument,
+    context_patch: Option<&gents_protocol::operations::agent::AgentContextPatch>,
     observer: std::sync::Arc<dyn gents_store::config_client::AgentPublicationObserver>,
 ) -> Result<()> {
     use gents::operations::agent::{observe, put_in_txn};
@@ -57,6 +58,7 @@ pub(crate) async fn upsert_agent_with_publication_on(
                     admission,
                     document,
                     Some(binding.clone()),
+                    context_patch,
                     ceiling,
                 )
                 .await

@@ -213,8 +213,38 @@ pub async fn put_in_txn(
     admission: &ObservedAdmission,
     agent: &Agent,
     identity_binding: Option<AgentIdentityBinding>,
+    context_patch: Option<&gents_protocol::operations::agent::AgentContextPatch>,
     ceiling: &SelfConfigProcessCeiling,
 ) -> Result<AgentReceipt, AgentOperationError> {
+    if let Some(patch) = context_patch {
+        if agent.context_id.as_deref() != Some(patch.context_id.as_str()) {
+            return Err(AgentOperationError::ContextPatchMismatch);
+        }
+        let changes = patch
+            .changes
+            .iter()
+            .map(|(field, value)| (field.clone(), Some(value.clone())))
+            .collect();
+        gents_documents::operations::write::write_in_txn(
+            txn,
+            &gents_documents::operations::write::DocumentWrite {
+                target: gents_documents::patch::SelfConfigTarget::AgentContext,
+                owner,
+                id: &patch.context_id,
+                mode: gents_protocol::operations::document::WriteMode::Update,
+                patch: &changes,
+                node_binding: None,
+            },
+            &|_| Ok(()),
+            &gents_inference::resolved::ProviderProfilePolicy,
+            true,
+        )
+        .await
+        .map_err(|error| {
+            error.finish(gents_protocol::operations::document::DocumentOperationError::Passthrough)
+        })
+        .map_err(|error| AgentOperationError::Passthrough(Box::new(error)))?;
+    }
     gents_tools::builtin::self_config::apply_agent_in_txn(
         txn,
         owner,

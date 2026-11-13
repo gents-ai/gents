@@ -101,7 +101,8 @@ export type SearchSources = {
     /** the node's saved portrait, if it has one */
     avatar: string | null;
     place: string;
-    offline: boolean;
+
+    connection: string | null;
     current?: boolean;
     last?: boolean;
   }[];
@@ -149,7 +150,7 @@ export function searchEntries(src: SearchSources): SearchEntry[] {
         },
         `node:${n.nodeDid}`,
         n.name,
-        [n.place, n.offline && "Offline"].filter(Boolean).join(" · "),
+        [n.place, n.connection].filter(Boolean).join(" · "),
         [n.place],
       ),
     ),

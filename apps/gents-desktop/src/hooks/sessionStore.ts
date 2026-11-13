@@ -13,6 +13,7 @@ import {
   type SessionGoalRead,
 } from "@source-inc/gents-desktop-client";
 import type { SessionLoadState } from "../lib/loadingStatus";
+import { equal } from "./fleetStore";
 
 export type SessionFacts = {
   rowsRevision: number;
@@ -97,12 +98,50 @@ export function writeSession(
   });
 }
 
+export function writeSessionRead(
+  store: SessionStore,
+  session: DesktopSessionSnapshot,
+  read: SessionGoalRead,
+) {
+  store.setState((state) =>
+    session === state.session
+      ? state
+      : {
+          ...state,
+          session,
+          facts: factsOf(state, session),
+          goal: foldSessionGoalRead(state.goal, read),
+        },
+  );
+}
+
+export function writeSessionRecent(
+  store: SessionStore,
+  session: DesktopSessionSnapshot,
+  goal: HeldSessionGoal | null,
+) {
+  store.setState((state) =>
+    session === state.session
+      ? state
+      : { ...state, session, facts: factsOf(state, session), goal },
+  );
+}
+
+export function keepSelectedSession(
+  store: SessionStore,
+  sessionId: string | null,
+  nodeDid: string | null,
+) {
+  writeSession(store, (held) => heldFor(held, sessionId, nodeDid));
+}
+
 /** Folds one Goal read of the selected session into what the store holds. */
 export function writeSessionGoalRead(store: SessionStore, read: SessionGoalRead) {
   store.setState((state) => ({ goal: foldSessionGoalRead(state.goal, read) }));
 }
 
 export function writeSessionLoad(store: SessionStore, load: SessionLoadState) {
+  if (equal(store.getState().load, load)) return;
   store.setState({ load });
 }
 
@@ -168,6 +207,19 @@ function factsOf(
   };
 }
 
+export function sessionHoldsRequest(state: SessionState, requestId: string): boolean {
+  const session = state.session;
+  if (!session) return false;
+  return (
+    session.latestRequestId === requestId ||
+    session.pendingTurn?.requestId === requestId ||
+    state.facts.userRequestIds.has(requestId) ||
+    session.queuedTurns.some((turn) => turn.requestId === requestId) ||
+    (session.pendingQueue ?? []).some((entry) => entry.requestId === requestId) ||
+    session.foldedInputs.some((folded) => folded.requestId === requestId)
+  );
+}
+
 export function holdsRequest(
   state: SessionState,
   sent: { sessionId: string; requestId: string; latestWhenSent: string | null },
@@ -176,11 +228,7 @@ export function holdsRequest(
   if (session?.sessionId !== sent.sessionId) return false;
   const latest = session.latestRequestId;
   return (
-    latest === sent.requestId ||
-    state.facts.userRequestIds.has(sent.requestId) ||
-    session.queuedTurns.some((turn) => turn.requestId === sent.requestId) ||
-    (session.pendingQueue ?? []).some((entry) => entry.requestId === sent.requestId) ||
-    session.foldedInputs.some((folded) => folded.requestId === sent.requestId) ||
+    sessionHoldsRequest(state, sent.requestId) ||
     (latest !== null && latest !== sent.latestWhenSent)
   );
 }

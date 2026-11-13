@@ -100,7 +100,8 @@ describe("ClientShell presentation agreement", () => {
               : projectSyncOperationalStatus({
                   ...contractCase.sync!,
                   lastError: null,
-                  connectedPeerCount: 0,
+                  runtimeCount: 1,
+                  connectedRuntimeCount: 0,
                   activationErrorCount: 0,
                 });
       expect(actual.kind, contractCase.name).toBe(contractCase.expected_kind);

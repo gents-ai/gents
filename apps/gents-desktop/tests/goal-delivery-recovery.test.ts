@@ -15,6 +15,7 @@ import { selection } from "../src/hooks/selectionStore";
 import { writeSessionGoalRead } from "../src/hooks/sessionStore";
 import { admittingProjection, shellStores } from "./shell-fixture";
 import { appliedGoalResult as result } from "./goal-delivery-fixture";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 const observed = (observation: SessionGoalView): SessionGoalState => ({
   kind: "observed",
@@ -119,6 +120,7 @@ function fixture(
       refreshSession: refresh,
       refreshSnapshot: vi.fn(),
       reportFailure: report,
+      sendAttachments: memorySendAttachments(),
     });
   return {
     stores,

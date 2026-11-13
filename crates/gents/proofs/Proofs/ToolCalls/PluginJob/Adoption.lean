@@ -77,6 +77,42 @@ def splitAddress (a : String) : Option (String × String) :=
   | ':' :: s => some (String.mk s.reverse, String.mk t.reverse)
   | _ => none
 
+inductive ReadSelector where
+  | address (sessionId toolCallId : String)
+  | row (rowDocId : String)
+  deriving DecidableEq, Repr
+
+inductive ReadSelectorError | invalidAddress | invalidSelector
+  deriving DecidableEq, Repr
+
+def nonemptyReadName : Option String → Option String
+  | some "" => none
+  | value => value
+
+def selectRead (address row : Option String) : Except ReadSelectorError ReadSelector :=
+  match nonemptyReadName address, nonemptyReadName row with
+  | some address, none =>
+    match splitAddress address with
+    | some (sessionId, toolCallId) => .ok (.address sessionId toolCallId)
+    | none => .error .invalidAddress
+  | none, some row => .ok (.row row)
+  | _, _ => .error .invalidSelector
+
+def allReadStates : List JobState :=
+  [.running, .paused, .awaitingUser, .completed, .failed, .cancelled, .timedOut]
+
+def readStates : Option (List JobState) → List JobState
+  | none | some [] => allReadStates
+  | some states => states
+
+theorem read_states_default : readStates none = readStates (some []) := rfl
+
+theorem read_selector_refuses_both (address row : String)
+    (ha : nonemptyReadName (some address) = some address)
+    (hr : nonemptyReadName (some row) = some row) :
+    selectRead (some address) (some row) = .error .invalidSelector := by
+  simp [selectRead, ha, hr]
+
 private theorem step0_terminal_admitted {ctx : StepContext} {job job' : Job} {out : StepOutput}
     {g : GuestPin} (hpin : job.pin = none) (hg : out.pin = some g)
     (hne : ∀ e, out ≠ .effects e) (h : admitStep ctx job out = .ok job') :

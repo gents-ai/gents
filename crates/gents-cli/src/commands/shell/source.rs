@@ -14,7 +14,7 @@ use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };
 use gents_protocol::operations::request::{
-    MessageSendInput, RequestInterruptInput, RequestOperationError, RequestReceipt,
+    MessageSendInput, RequestInterruptInput, RequestReceipt,
 };
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -2116,7 +2116,7 @@ impl Source {
         let request = crate::request_helpers::request_ref(&self.principal, &turn);
         let input = RequestInterruptInput { request };
         match gents::operations::request::interrupt(&work.access(), input).await {
-            Ok(_) | Err(RequestOperationError::InterruptTerminal { .. }) => {}
+            Ok(_) => {}
             Err(error) => {
                 let failure = crate::operation_failure::OperationFailure::from(error);
                 return self.tell(Update::Notice(failure.to_string()));

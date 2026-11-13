@@ -18,6 +18,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import { shellStores } from "./shell-fixture";
 import { pendingUserTurn, userMessage } from "./timeline-fixture";
 import { composerText } from "./composer-field";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock("../src/ui/screens/Markdown", () => ({
@@ -225,6 +226,7 @@ describe("forkBeforeMessage", () => {
       refreshSession: async () => null,
       refreshSnapshot,
       reportFailure,
+      sendAttachments: memorySendAttachments(),
     });
     return { actions, stores, reportFailure, refreshSnapshot };
   }

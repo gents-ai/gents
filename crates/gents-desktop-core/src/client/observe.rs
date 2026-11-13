@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents_store::config_client::ConfigAccess;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
@@ -21,8 +21,9 @@ pub use projection_store::{
     RuntimeConnectionStatus, StoreProjectionRevision, StoreUpdateNotice,
 };
 
-/// `RuntimeConnectionObservation.snapshotRetryDelayMs`.
-const SNAPSHOT_RETRY_DELAY: Duration = Duration::from_millis(250);
+fn snapshot_retry_delay(failures: u32) -> Duration {
+    remote::reconnect_delay(failures)
+}
 
 /// `ObserverResync.Settlement` of a finished snapshot load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +56,7 @@ impl Settlement {
 struct Queue {
     pending: BTreeSet<String>,
     retry_at: BTreeMap<String, Instant>,
+    failures: BTreeMap<String, u32>,
     /// The source generation whose every root is armed, per node. A replaced
     /// source has a new generation, so it is unarmed until its own notice.
     armed: BTreeMap<String, u64>,
@@ -167,19 +169,25 @@ impl Queue {
             && self.armed.get(node) == Some(&generation)
     }
 
-    /// `ObserverResync.settle`.
     fn settle(&mut self, node: &str, settlement: Settlement, now: Instant) {
         match settlement {
-            Settlement::Published => {}
+            Settlement::Published => {
+                self.failures.remove(node);
+            }
             Settlement::Superseded => {
+                self.failures.remove(node);
                 self.pending.insert(node.to_owned());
             }
             Settlement::TransportFailed => {
+                let failures = self.failures.get(node).copied().unwrap_or_default();
                 self.pending.insert(node.to_owned());
                 self.retry_at
-                    .insert(node.to_owned(), now + SNAPSHOT_RETRY_DELAY);
+                    .insert(node.to_owned(), now + snapshot_retry_delay(failures));
+                self.failures
+                    .insert(node.to_owned(), failures.saturating_add(1));
             }
             Settlement::Refused => {
+                self.failures.remove(node);
                 self.pending.remove(node);
                 self.retry_at.remove(node);
                 self.armed.remove(node);
@@ -187,10 +195,18 @@ impl Queue {
         }
     }
 
+    fn retry_now(&mut self, node: &str) {
+        self.armed.remove(node);
+        self.retry_at.remove(node);
+        self.failures
+            .insert(node.to_owned(), remote::RETRY_NOW_COUNT);
+    }
+
     /// A node no longer configured.
     fn forget(&mut self, node: &str) {
         self.pending.remove(node);
         self.retry_at.remove(node);
+        self.failures.remove(node);
         self.armed.remove(node);
     }
 }
@@ -199,16 +215,91 @@ fn resync_retry_ready(retry_not_before: Option<Instant>, now: Instant) -> bool {
     retry_not_before.is_none_or(|deadline| now >= deadline)
 }
 
+struct RetryNow {
+    node: Option<String>,
+    settled: Option<oneshot::Sender<Option<RuntimeConnectionStatus>>>,
+}
+
+fn settles_retry(event: RuntimeConnectionEvent) -> bool {
+    matches!(
+        event,
+        RuntimeConnectionEvent::SnapshotSucceeded
+            | RuntimeConnectionEvent::TransportFailed
+            | RuntimeConnectionEvent::Refused
+            | RuntimeConnectionEvent::EndpointMissing
+    )
+}
+
+#[derive(Default)]
+struct RetryWaiters(BTreeMap<String, Vec<oneshot::Sender<Option<RuntimeConnectionStatus>>>>);
+
+impl RetryWaiters {
+    fn settle(&mut self, node: &str, stores: &ObservedStores) {
+        for waiter in self.0.remove(node).into_iter().flatten() {
+            let _ = waiter.send(stores.runtime_connection(node));
+        }
+    }
+
+    fn settle_unobserved(&mut self, sources: &remote::Sources, stores: &ObservedStores) {
+        let gone: Vec<_> = self
+            .0
+            .keys()
+            .filter(|node| !sources.entries.contains_key(*node))
+            .cloned()
+            .collect();
+        for node in gone {
+            self.settle(&node, stores);
+        }
+    }
+}
+
+fn apply_retry_now(
+    queue: &mut Queue,
+    sources: &mut remote::Sources,
+    stores: &ObservedStores,
+    node: &str,
+    now: Instant,
+) -> bool {
+    if stores.runtime_connection(node) == Some(RuntimeConnectionStatus::Connected)
+        || !sources.retry_now(node, now)
+    {
+        return false;
+    }
+    queue.retry_now(node);
+    stores.ensure(node).observe_request_event();
+    true
+}
+
 pub struct ObserverHandle {
     stop_tx: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
     metrics: Arc<ObserverMetrics>,
+    retries: mpsc::UnboundedSender<RetryNow>,
 }
 
 impl ObserverHandle {
     pub async fn shutdown(self) {
         let _ = self.stop_tx.send(true);
         let _ = self.task.await;
+    }
+
+    pub fn retry_now(
+        &self,
+        node: &str,
+    ) -> impl std::future::Future<Output = Option<RuntimeConnectionStatus>> + Send + 'static {
+        let (settled, answer) = oneshot::channel();
+        let _ = self.retries.send(RetryNow {
+            node: Some(node.to_owned()),
+            settled: Some(settled),
+        });
+        async move { answer.await.ok().flatten() }
+    }
+
+    pub fn retry_all_now(&self) {
+        let _ = self.retries.send(RetryNow {
+            node: None,
+            settled: None,
+        });
     }
 
     pub fn metrics_snapshot(&self) -> ObserverMetricsSnapshot {
@@ -335,11 +426,13 @@ pub fn spawn_observer(
     let mut resync_requests = stores.subscribe_resync_requests();
     let mut peer_updates = configured_peers.subscribe();
     let (notices, mut notice_rx) = mpsc::unbounded_channel();
+    let (retries, mut retry_rx) = mpsc::unbounded_channel::<RetryNow>();
 
     let task = tokio::spawn(async move {
         let mut sources = remote::Sources::default();
         let mut loads = Loads::default();
         let mut queue = Queue::default();
+        let mut waiters = RetryWaiters::default();
         sources.reconcile(
             &configured_peers.records(),
             &capability,
@@ -371,6 +464,29 @@ pub fn spawn_observer(
                         queue.forget(node);
                     }
                     loads.cancel_stale(&sources);
+                    waiters.settle_unobserved(&sources, &stores);
+                }
+                retry = retry_rx.recv() => {
+                    let Some(RetryNow { node, settled }) = retry else { break; };
+                    let now = Instant::now();
+                    let nodes: Vec<_> = match &node {
+                        Some(node) => vec![node.clone()],
+                        None => sources.entries.keys().cloned().collect(),
+                    };
+                    let mut restarted = false;
+                    for node in &nodes {
+                        if apply_retry_now(&mut queue, &mut sources, &stores, node, now) {
+                            loads.cancel(node);
+                            restarted = true;
+                        }
+                    }
+                    if let (Some(node), Some(settled)) = (node, settled) {
+                        if restarted {
+                            waiters.0.entry(node).or_default().push(settled);
+                        } else {
+                            let _ = settled.send(stores.runtime_connection(&node));
+                        }
+                    }
                 }
                 notice = notice_rx.recv() => {
                     let Some(notice) = notice else { break; };
@@ -379,6 +495,9 @@ pub fn spawn_observer(
                             &notice.node, generation, notice.event, &metrics_for_task);
                         if applied.is_some_and(SourceNotice::aborts_load) {
                             loads.cancel(&notice.node);
+                        }
+                        if settles_retry(notice.event) {
+                            waiters.settle(&notice.node, &stores);
                         }
                     }
                 }
@@ -393,6 +512,7 @@ pub fn spawn_observer(
                             if let Some(node) = loads.forget(error.id()) {
                                 tracing::warn!(node_did = %node, error = %error, "runtime snapshot task failed");
                                 queue.settle(&node, Settlement::TransportFailed, Instant::now());
+                                waiters.settle(&node, &stores);
                             }
                             continue;
                         }
@@ -426,6 +546,9 @@ pub fn spawn_observer(
                     };
                     apply_settlement(&mut queue, &mut sources, &stores, &node, settlement,
                         Instant::now(), &metrics_for_task);
+                    if settlement.connection_event().is_some_and(settles_retry) {
+                        waiters.settle(&node, &stores);
+                    }
                 }
                 _ = async {
                     if let Some(deadline) = wake {
@@ -475,6 +598,7 @@ pub fn spawn_observer(
         stop_tx,
         task,
         metrics,
+        retries,
     }
 }
 

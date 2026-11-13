@@ -4,7 +4,11 @@ import { useShallow } from "zustand/react/shallow";
 
 import { interruptVisible } from "../screens/activity-status";
 
-import type { MailboxItemView } from "@source-inc/gents-desktop-client";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+  type MailboxItemView,
+} from "@source-inc/gents-desktop-client";
 
 import {
   firstNode,
@@ -21,6 +25,7 @@ import { recentFolders, sessionFolder } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
 import { configIsRead, isLocalNode } from "../lib/firstRun";
+import { connectionLine } from "../lib/nodeConnection";
 import { isWorkingNode, workingNode } from "../lib/nodes";
 import {
   defaultScope,
@@ -74,7 +79,10 @@ export function useNodeConfigReadOnly(node: NodeView): string | null {
     state.snapshot ? configIsRead(state.snapshot, node.nodeDid) : false,
   );
   if (isLocalNode(node, homeDid) || read) return null;
-  return `Read-only here: change ${node.node.displayName ?? node.label}'s settings on that machine.`;
+  const name = node.node.displayName ?? node.label;
+  if (runtimeConnectionBlocksAdmission(node.runtimeConnection))
+    return `Read-only here: ${connectionLine(name, projectRuntimeConnectionStatus(node.runtimeConnection))}.`;
+  return `Read-only here: change ${name}'s settings on that machine.`;
 }
 
 export function useSelectedNodeMailboxItem(

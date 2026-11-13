@@ -52,6 +52,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_open_external_url", { url }),
     setSelectedNode: (nodeDid) =>
       invokeDesktop("desktop_set_selected_node", { nodeDid }),
+    reconnectNode: (nodeDid) =>
+      invokeDesktop("desktop_node_reconnect", { nodeDid }),
     removePeer: (peerId) => invokeDesktop("desktop_peer_remove", { peerId }),
     renamePeer: (peerId, label) =>
       invokeDesktop("desktop_peer_rename", {
@@ -60,10 +62,6 @@ export function createDesktopApiAdapter(
       }),
     dismissEndedAccess: (nodeDid) =>
       invokeDesktop("desktop_ended_access_dismiss", { nodeDid }),
-    fetchPeerStatus: (peerId) =>
-      invokeDesktop("desktop_peer_status_fetch", {
-        request: { peerId },
-      }),
     requestStatusEnrollment: (serverAddress, candidateName) =>
       invokeDesktop("desktop_peer_enroll_status", {
         request: { serverAddress, ...(candidateName ? { candidateName } : {}) },
@@ -161,7 +159,8 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_default_agent_set", {
         request,
       }),
-    provisionAgentIdentity: (nodeDid) => invokeDesktop("desktop_agent_identity_provision", { nodeDid }),
+    provisionAgentIdentity: (nodeDid) =>
+      invokeDesktop("desktop_agent_identity_provision", { nodeDid }),
     saveAgentConfig: (request) =>
       invokeDesktop("desktop_agent_save", {
         request,
@@ -304,6 +303,8 @@ export function createDesktopApiAdapter(
     backgroundTool: (request) =>
       invokeDesktop("desktop_background_tool", { request }),
     jobControl: (request) => invokeDesktop("desktop_job_control", { request }),
+    listJobs: (request) => invokeDesktop("desktop_jobs_list", request),
+    getJobView: (request) => invokeDesktop("desktop_job_view", request),
     processControl: (request) =>
       invokeDesktop("desktop_process_control", { request }),
   };

@@ -43,6 +43,7 @@ const HISTORY_LIMIT: usize = 32;
 
 /// Portable description of how an operator obtained a pack archive.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PackSource {
     Local {
@@ -1767,38 +1768,36 @@ pub struct InstalledPack {
     pub coordinate: String,
     pub version: String,
     pub digest: String,
+    pub source: Option<PackSource>,
+}
+
+fn installed_pack_row(row: crate::views::InstalledPackRow) -> Result<InstalledPack> {
+    let required = |value: Option<String>, field: &str| {
+        value.with_context(|| {
+            format!(
+                "installation record {} has a missing or malformed {field} field",
+                row.doc_id
+            )
+        })
+    };
+    Ok(InstalledPack {
+        coordinate: required(row.coordinate, "coordinate")?,
+        version: required(row.version, "version")?,
+        digest: required(row.digest, "digest")?,
+        source: row.source,
+    })
 }
 
 pub async fn list_installed_packs(
     access: &ConfigAccess,
     owner: &str,
 ) -> Result<Vec<InstalledPack>> {
-    use gents_protocol::document_query::{
-        fields::pack_installation as fields, Direction, Filter, Query, Selection,
-    };
-    let query = Query::select(
-        Selection::doc_id()
-            .field(fields::COORDINATE)
-            .field(fields::VERSION)
-            .field(fields::DIGEST)
-            .field(fields::PLUGIN_STORE),
-    )
-    .filter(Filter::eq(fields::NODE_DID, owner))
-    .order_by(fields::COORDINATE, Direction::Asc)
-    .render();
-    let response = access.read(&query).await?;
-    response["data"][RECORD]
-        .as_array()
-        .context("reading the pack installation records")?
-        .iter()
-        .filter(|row| !is_plugin_store_row(row))
-        .map(|row| {
-            Ok(InstalledPack {
-                coordinate: required_record_field_str(row, "coordinate")?.to_owned(),
-                version: required_record_field_str(row, "version")?.to_owned(),
-                digest: required_record_field_str(row, "digest")?.to_owned(),
-            })
-        })
+    access
+        .read_view(&crate::views::InstalledPacks::new(owner))
+        .await?
+        .into_iter()
+        .filter(|row| row.plugin_store != Some(true))
+        .map(installed_pack_row)
         .collect()
 }
 
@@ -1807,37 +1806,17 @@ pub async fn read_installed_pack(
     owner: &str,
     coordinate: &str,
 ) -> Result<Option<InstalledPack>> {
-    use gents_protocol::document_query::{
-        fields::pack_installation as fields, Filter, Query, Selection,
-    };
-    let query = Query::select(
-        Selection::doc_id()
-            .field(fields::COORDINATE)
-            .field(fields::VERSION)
-            .field(fields::DIGEST)
-            .field(fields::PLUGIN_STORE),
-    )
-    .filter(Filter::eq(fields::NODE_DID, owner))
-    .filter(Filter::eq(fields::COORDINATE, coordinate))
-    .limit(2)
-    .render();
-    let response = access.read(&query).await?;
-    let rows = response["data"][RECORD]
-        .as_array()
-        .context("reading the pack installation records")?;
+    let rows = access
+        .read_view(&crate::views::InstalledPacks::new(owner).coordinate(coordinate))
+        .await?;
     anyhow::ensure!(
         rows.len() <= 1,
         "{coordinate} has more than one installation record for its owner"
     );
-    rows.first()
-        .filter(|row| !is_plugin_store_row(row))
-        .map(|row| {
-            Ok(InstalledPack {
-                coordinate: required_record_field_str(row, "coordinate")?.to_owned(),
-                version: required_record_field_str(row, "version")?.to_owned(),
-                digest: required_record_field_str(row, "digest")?.to_owned(),
-            })
-        })
+    rows.into_iter()
+        .next()
+        .filter(|row| row.plugin_store != Some(true))
+        .map(installed_pack_row)
         .transpose()
 }
 
@@ -1893,6 +1872,7 @@ pub async fn installed_packs(
                     coordinate: record.coordinate,
                     version: record.version,
                     digest: record.digest,
+                    source: record.source,
                 },
             );
         }

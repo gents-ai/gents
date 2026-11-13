@@ -9,7 +9,8 @@ import { createChatDelivery } from "./chatDelivery";
 import { loadChatDrafts, removeChatDraft, type ChatDraft } from "./chatDrafts";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
-import { writeSession } from "./sessionStore";
+import { keepSelectedSession } from "./sessionStore";
+import type { SendAttachmentStore } from "./sendAttachments";
 import type { ShellStores } from "./shellProjection";
 
 type MailboxActionParams = {
@@ -17,6 +18,7 @@ type MailboxActionParams = {
   stores: ShellStores;
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
+  sendAttachments: SendAttachmentStore;
 };
 
 export function createMailboxActions({
@@ -24,9 +26,10 @@ export function createMailboxActions({
   stores,
   refreshSnapshot,
   reportFailure,
+  sendAttachments,
 }: MailboxActionParams) {
   const store = stores.selection;
-  const delivery = createChatDelivery(api, stores);
+  const delivery = createChatDelivery(api, stores, sendAttachments);
   async function openMailboxItem(
     itemId: string,
     nodeDid?: string | null,
@@ -42,7 +45,8 @@ export function createMailboxActions({
         agentDid: item.targetAgentDid,
         sessionId: item.sessionId ?? null,
       });
-      writeSession(stores.session, null);
+      const selected = store.getState();
+      keepSelectedSession(stores.session, selected.sessionId, selected.nodeDid);
       return item;
     } catch (error) {
       if (!selection.acceptsIntent(store, captured)) return null;

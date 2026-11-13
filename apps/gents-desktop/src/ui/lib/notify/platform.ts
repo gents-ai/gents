@@ -10,6 +10,10 @@ import { IN_DESKTOP, IS_MAC } from "@/screens/shortcutKeys";
 
 export type NotifyPermission = "granted" | "denied" | "default";
 
+export const SYSTEM_BLOCKED = IS_MAC
+  ? "Notifications are turned off for Gents. To allow them, open System Settings, choose Notifications, then Gents, and turn on Allow notifications."
+  : "Notifications are turned off for Gents. To allow them, turn them on for Gents in your system's notification settings.";
+
 export type Notice = {
   title: string;
   body?: string;
@@ -130,3 +134,9 @@ export const notifyPlatform: NotifyPlatform = IN_DESKTOP
   : typeof Notification === "function"
     ? browser
     : none;
+
+export async function systemBlocks(
+  platform: Pick<NotifyPlatform, "permission"> = notifyPlatform,
+): Promise<boolean> {
+  return (await platform.permission()) === "denied";
+}

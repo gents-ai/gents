@@ -879,12 +879,54 @@ theorem flapping_runtime_backs_off (connected : Option Nat)
   have := reconnect_delay_monotone_le 5 n hn
   exact Nat.lt_of_lt_of_le (by decide) this
 
-/-- A snapshot whose read failed for a transport reason, or whose result
-raced a newer store write, is retried after this delay while its source stays
-armed. It is not a reconnect: the streams are still armed. -/
-def snapshotRetryDelayMs : Nat := 250
+/-- How long a snapshot whose read failed for a transport reason waits before
+it is read again while its source stays armed, given the node's consecutive
+failed reads before this one (`snapshotFailuresAfter`). It is not a reconnect:
+the streams are still armed. It waits on the reconnect schedule: a runtime
+whose subscriptions stay up while every read fails would otherwise be read four
+times a second for as long as it lasts, and shown as reconnecting on each read. -/
+def snapshotRetryDelayMs (failures : Nat) : Nat := reconnectDelayMs failures
 
-theorem snapshot_retry_positive : 0 < snapshotRetryDelayMs := by decide
+/-- The node's consecutive failed reads after a read that ended with
+`outcome`. A read the runtime answered restarts the count, whether it published
+or a newer publication superseded it; so does a refusal, whose source
+reconnects on its own count (`reconnects`). -/
+def snapshotFailuresAfter (failures : Nat) : SnapshotOutcome → Nat
+  | .unreachable => failures + 1
+  | .succeeded | .refused => 0
+
+theorem snapshot_retry_positive (failures : Nat) : 0 < snapshotRetryDelayMs failures :=
+  reconnect_delay_positive failures
+
+theorem first_snapshot_retries_wait_250ms :
+    (List.range 5).map snapshotRetryDelayMs = [250, 250, 250, 250, 250] := by decide
+
+/-- A runtime whose every read fails is read again at most once per cap from
+the twelfth consecutive failure on. -/
+theorem failing_reads_back_off (failures : Nat) (h : 11 ≤ failures) :
+    snapshotRetryDelayMs failures = reconnectCapMs :=
+  reconnect_delay_reaches_the_cap failures h
+
+theorem answered_read_restarts_the_retry_schedule (failures : Nat) :
+    snapshotRetryDelayMs (snapshotFailuresAfter failures .succeeded) = reconnectBaseMs := by
+  show reconnectDelayMs 0 = reconnectBaseMs
+  decide
+
+/-- The reconnect count and the failed-read count a node that is not
+connected has after the user asks to reconnect it now (try again, a status
+check, the window shown again, a runtime this desktop just started). Its source
+restarts at once at the same endpoint, as a due reconnect restarts it, and its
+read retry timer is cleared (`ObserverResync.retryNow`). The counts start over:
+the request is the user's evidence that the runtime may be back, which is what
+the backoff waits for, and a runtime still down is redialed after
+`reconnectBaseMs` and backs off again. A connected node keeps its source and
+counts. -/
+def retryNowCount : Nat := 0
+
+theorem retry_now_starts_the_schedules_over :
+    reconnectDelayMs retryNowCount = reconnectBaseMs ∧
+      snapshotRetryDelayMs retryNowCount = reconnectBaseMs := by
+  decide
 
 /-- Half the locally minted bearer lifetime (60s): how long the source keeps
 an armed subscription set before it re-authenticates by arming a replacement. -/
@@ -1148,6 +1190,24 @@ def settle (n : Slot) : Settlement → Slot
 /-- A refusal the stream reports settles the slot as a refused load does. -/
 def streamRefused (n : Slot) : Slot := settle n .refused
 
+/-- Whether a reconnect the user asked for restarts the node's source: only
+while the node is not connected. Callers ask without checking the status
+themselves (the window shown again asks for every node); a connected source
+is the runtime answering, and restarting it would only drop its subscriptions
+and its running load. -/
+def retryNowRestarts (n : Slot) : Bool := n.status != .connected
+
+/-- The user asked to reconnect the node now
+(`RuntimeConnectionObservation.retryNowCount`). A node that is not connected
+has its source restarted at the same endpoint as a due reconnect restarts it:
+the running load is aborted and the slot is unarmed until the new source arms,
+and the shown status is kept (an outage stays `disconnected` until the runtime
+answers). The retry timer is cleared, so the re-arm's load starts at once. A
+connected node is left as it is (`retryNowRestarts`). -/
+def retryNow (n : Slot) : Slot :=
+  if retryNowRestarts n then { n with waiting := false, loading := false, armed := false }
+  else n
+
 /-- What the user sees for a node, and why it is not stuck. -/
 inductive Presentation where
   /-- Rows are being loaded, a load is queued, or the source is arming. -/
@@ -1237,6 +1297,24 @@ theorem stream_refused_owned (n : Slot) (h : Owned n) : Owned (streamRefused n) 
 
 theorem timer_owned (n : Slot) (h : Owned n) : Owned (timer n) := by
   cases n; simp_all [Owned, timer]
+
+theorem retry_now_owned (n : Slot) (h : Owned n) : Owned (retryNow n) := by
+  unfold retryNow
+  split
+  · cases n; simp_all [Owned]
+  · exact h
+
+/-- A reconnect the user asked for never waits out a retry timer: the new
+source's arm starts its load at once, and the status shown meanwhile is kept. -/
+theorem retry_now_loads_on_arm (n : Slot) (h : n.status ≠ .connected) :
+    startable (armed (retryNow n)) = true ∧ (retryNow n).status = n.status := by
+  simp [retryNow, retryNowRestarts, h, startable, armed]
+
+/-- Asking to reconnect a connected node changes nothing: its source, its
+running load and its retry state stay as they are. -/
+theorem retry_now_leaves_connected (n : Slot) (h : n.status = .connected) :
+    retryNow n = n := by
+  simp [retryNow, retryNowRestarts, h]
 
 /-- A dropped stream keeps a queued load from starting until the source
 re-arms; the re-arm queues it and it starts unless the retry timer is due. -/

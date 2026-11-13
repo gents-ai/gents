@@ -1,10 +1,14 @@
 use anyhow::{Context, Result};
 use gents_protocol::operations::request::{
-    MessageSendInput, ReissueKind, ReissueReceipt, RequestRef, RequestReissueInput,
+    MessageSendBody, MessageSendInput, MessageSendRoute, ReissueKind, ReissueReceipt, RequestRef,
+    RequestReissueInput,
 };
 use gents_protocol::row::AgentRequestRow;
 
-use super::{ensure_peer_chat_ready, find_request_in_scope, observe_submitted_request, ClientCore};
+use super::{
+    acknowledge_submitted_request, ensure_peer_chat_ready, find_request_in_scope,
+    observe_submitted_request, ClientCore,
+};
 use crate::client::mutations::SubmittedRequest;
 use crate::error::request_operation_failure;
 
@@ -50,28 +54,45 @@ impl ClientCore {
     /// `input.request_id` is the identity the client picked, and a retry with
     /// the same identity is the same request.
     pub async fn send_message(&self, input: MessageSendInput) -> Result<SubmittedRequest> {
-        let node_did = input.node_did.trim().to_owned();
+        let (route, body) = input.into_parts();
+        self.send_message_with(route, std::future::ready(Ok(body)))
+            .await
+    }
+
+    pub async fn send_message_with<M>(
+        &self,
+        route: MessageSendRoute,
+        message: M,
+    ) -> Result<SubmittedRequest>
+    where
+        M: std::future::Future<Output = Result<MessageSendBody>>,
+    {
+        let node_did = route.node_did.trim().to_owned();
         let peer_record = self.peer_record_for_chat_write(&node_did)?;
         ensure_peer_chat_ready(&node_did, peer_record.as_ref())?;
-        crate::local_runtime::ensure_request_input_supported(peer_record.as_ref(), &input.input)
-            .await?;
         let (signer, _, _) = self
             .request_authority(&node_did, peer_record.as_ref())
             .await?;
         let access = self.session_queue_access(&node_did)?;
-        match gents::operations::request::send(&access, signer.as_ref(), input).await {
+        let message = async {
+            let body = message
+                .await
+                .map_err(gents_protocol::operations::request::RequestOperationError::passthrough)?;
+            crate::local_runtime::ensure_request_input_supported(peer_record.as_ref(), &body.input)
+                .await
+                .map_err(gents_protocol::operations::request::RequestOperationError::passthrough)?;
+            Ok(body)
+        };
+        match gents::operations::request::send_with(&access, signer.as_ref(), route, message).await
+        {
             Ok(receipt) => {
-                let result = observe_submitted_request(
-                    &self.stores.ensure(&node_did),
-                    SubmittedRequest {
-                        request_id: receipt.request_id,
-                        session_id: receipt.session_id,
-                        node_did: receipt.node_did,
-                        agent_did: receipt.agent_did,
-                    },
-                    self.refresh_node(&node_did),
-                )
-                .await;
+                let result = SubmittedRequest {
+                    request_id: receipt.request_id,
+                    session_id: receipt.session_id,
+                    node_did: receipt.node_did,
+                    agent_did: receipt.agent_did,
+                };
+                acknowledge_submitted_request(&self.stores.ensure(&node_did), &result);
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

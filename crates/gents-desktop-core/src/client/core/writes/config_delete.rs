@@ -19,7 +19,7 @@ impl ClientCore {
 
         match result {
             Ok(()) => {
-                let refresh_result = self.refresh_config_source(source_node_did).await;
+                let refresh_result = self.refresh_node(source_node_did).await;
                 complete_confirmed_delete(
                     self.stores.ensure(source_node_did).as_ref(),
                     &self.last_mutation_error,
@@ -264,7 +264,7 @@ impl ClientCore {
     ) -> Result<()> {
         match result {
             Ok(()) => {
-                let refresh_result = self.refresh_config_source(source_node_did).await;
+                let refresh_result = self.refresh_node(source_node_did).await;
                 complete_confirmed_delete(
                     self.stores.ensure(source_node_did).as_ref(),
                     &self.last_mutation_error,
@@ -289,7 +289,7 @@ fn prune_deleted_skill_rows(rows: &mut ClientStoreRows, node_did: &str, skill_id
 fn complete_confirmed_delete(
     store: &ObservedStore,
     last_mutation_error: &StdRwLock<Option<String>>,
-    refresh_result: Result<u64>,
+    refresh_result: Result<crate::client::StoreRefresh>,
     action_label: &str,
     action: &str,
     row_id: &str,

@@ -201,4 +201,22 @@ def publishIfCases : Family PublishIfInput PublishIfOutput where
       replayApplied := expectationsHold after scope (expectedFn i.expected)
       afterReplay := contents i.observe replay.desired }
 
+structure AgentContextInput where
+  agentValid : Bool
+  contextValid : Bool
+  deriving ToJson
+
+@[conformance_family]
+def atomicAgentContext : Family AgentContextInput Bool where
+  inputs := [false, true].flatMap fun agentValid =>
+    [false, true].map fun contextValid => { agentValid, contextValid }
+  model := fun i =>
+    let candidate := manifestOf (
+      [row .agent "agent" [⟨.agentContext, "context", "did:owner"⟩,
+        ⟨.inferenceProfile, "profile", "did:owner"⟩],
+       row .agentContext "context" [⟨.tools, "tools", "did:owner"⟩]] ++
+      (if i.agentValid then [row .inferenceProfile "profile"] else []) ++
+      (if i.contextValid then [row .tools "tools"] else []))
+    candidate.referencesClosed
+
 end ApplyReconcile.ContractCases

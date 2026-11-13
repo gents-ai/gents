@@ -56,7 +56,8 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
             cause: null,
             nextAction: null,
             lastError: null,
-            connectedPeerCount: 1,
+            runtimeCount: 1,
+            connectedRuntimeCount: 1,
             activationErrorCount: 0,
           },
           enrollmentRequests: [],
@@ -193,8 +194,9 @@ describe("desktop startup screen", () => {
       expect(screen.getByTestId("setup-screen")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
+
     await waitFor(() => {
-      expect(managedServerStatus).toHaveBeenCalledTimes(2);
+      expect(managedServerStatus).toHaveBeenCalledTimes(3);
     });
   });
 

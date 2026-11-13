@@ -1,4 +1,6 @@
+import { turnKey, type SentTurn } from "../../hooks/sentTurns";
 import type {
+  AttachmentView,
   RenderedTimelineItem,
   RequestLifecycleState,
 } from "@source-inc/gents-desktop-client";
@@ -177,28 +179,15 @@ export function drawKeys(
   return next;
 }
 
-const requestOf = (item: RenderedTimelineItem): string | null => {
+export const requestOf = (item: RenderedTimelineItem): string | null => {
   if (item.kind === "pendingUserTurn") return item.requestId;
   if (item.kind === "userMessage")
     return item.inputRequestId ?? (item.ownsTurn ? (item.requestId ?? null) : null);
   return null;
 };
 
-/** The key a person's message is drawn under, from the request it made:
-    the same for the app's own copy, the saved row and a folded input. */
-export const turnKey = (requestId: string) => `turn:${requestId}`;
-
-export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
 export type FoldedInput = { requestId: string; foldedIntoRequestId: string };
 
-/**
- * The turn the view goes to after a send from here, by key, or null while
- * there is none: the newest send whose turn has begun. A message sent
- * with nothing running begins as it is drawn; one queued behind a running
- * turn has begun when the session makes it the latest request, or lists
- * it folded into one. Messages folded into the same request begin
- * together, so the view goes to the first of them.
- */
 export function sentTurnKey(
   sent: readonly SentTurn[],
   sessionId: string | null,
@@ -218,7 +207,7 @@ export function sentTurnKey(
   const into = foldedInto(newest);
   const first =
     into === null ? newest : begun.find((turn) => foldedInto(turn) === into)!;
-  return turnKey(first.requestId);
+  return first.taken ? null : turnKey(first.requestId);
 }
 
 export const drawKey = (keys: DrawKeys, item: RenderedTimelineItem): string => {
@@ -234,6 +223,7 @@ export type LocalTurn = {
   sessionId: string;
   requestId: string;
   content: string;
+  attachments?: AttachmentView[] | null;
   selectedSkillIds: string[];
   lifecycleState: RequestLifecycleState | null;
   createdAt: string | null;
@@ -254,38 +244,42 @@ export function lingerSentTurn(
 const settledness = (item: RenderedTimelineItem) =>
   item.kind === "userMessage" ? 2 : item.itemKey.startsWith("local:") ? 0 : 1;
 
-/** The rows drawn for sent messages: one per message, the most settled of
-    whatever stands for it, the app's own copy drawn before any live reply.
-    A message queued behind a running turn waits in the tray instead. */
 export function withSentTurns(
   items: RenderedTimelineItem[],
   local: LocalTurn | null,
   sessionId: string | null,
   queued = false,
+  kept: readonly RenderedTimelineItem[] = [],
 ): RenderedTimelineItem[] {
-  const shown =
+  const copies: RenderedTimelineItem[] = [...kept];
+  if (
     local &&
     !queued &&
     local.sessionId === sessionId &&
     !items.some((i) => requestOf(i) === local.requestId)
-      ? (() => {
-          const copy: RenderedTimelineItem = {
-            kind: "pendingUserTurn",
-            itemKey: `local:${local.requestId}`,
-            requestId: local.requestId,
-            content: local.content,
-            selectedSkillIds: local.selectedSkillIds,
-            lifecycleState: local.lifecycleState,
-            foldedIntoRequestId: null,
-            origin: null,
-            createdAt: local.createdAt,
-          };
-          const tailAt = items.findIndex((i) => i.kind === "liveAssistant");
-          return tailAt < 0
-            ? [...items, copy]
-            : [...items.slice(0, tailAt), copy, ...items.slice(tailAt)];
-        })()
-      : items;
+  )
+    copies.push({
+      kind: "pendingUserTurn",
+      itemKey: `local:${local.requestId}`,
+      requestId: local.requestId,
+      content: local.content,
+      attachments: local.attachments,
+      selectedSkillIds: local.selectedSkillIds,
+      lifecycleState: local.lifecycleState,
+      foldedIntoRequestId: null,
+      origin: null,
+      createdAt: local.createdAt,
+    });
+  const sentAt = (item: RenderedTimelineItem) =>
+    (item.kind === "pendingUserTurn" && item.createdAt && Date.parse(item.createdAt)) ||
+    0;
+  copies.sort((a, b) => sentAt(a) - sentAt(b));
+  const tailAt = items.findIndex((i) => i.kind === "liveAssistant");
+  const shown = !copies.length
+    ? items
+    : tailAt < 0
+      ? [...items, ...copies]
+      : [...items.slice(0, tailAt), ...copies, ...items.slice(tailAt)];
   const best = new Map<string, RenderedTimelineItem>();
   for (const item of shown) {
     const request = requestOf(item);

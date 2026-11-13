@@ -249,7 +249,7 @@ async fn live_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Result<()
         let access = core.operator_access(&node_did)?;
         publish(&access, vec![(Collection::Tools, serde_json::to_value(&tools)?), (Collection::AgentContext, serde_json::to_value(&context)?)]).await?;
         agent.context_id = Some(context.context_id.clone());
-        core.save_agent(&agent).await?;
+        core.save_agent(&agent, None).await?;
         let runtime_identity = identity_from_init(&init)?;
         let runtime_endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
             &graphql, &node_did,

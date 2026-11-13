@@ -65,14 +65,6 @@ pub struct ManagedServerResetRequest {
     pub disposition: Option<crate::types::HomeResetDisposition>,
 }
 
-/// Fetch peer runtime status by saved peer id only; read grants never accept
-/// arbitrary addresses (SSRF).
-#[derive(Debug, Clone, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerStatusFetchRequest {
-    pub peer_id: String,
-}
-
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrollmentStatusRequest {
@@ -204,6 +196,12 @@ pub struct DefaultAgentSetRequest {
 #[serde(deny_unknown_fields)]
 pub struct AgentSaveRequest {
     pub document: gents_documents::Agent,
+    #[serde(default)]
+    #[ts(
+        optional,
+        type = "{ contextId: string; changes: Partial<Omit<import(\"./AgentContext.js\").AgentContext, \"node_did\" | \"context_id\">> }"
+    )]
+    pub context_patch: Option<gents_protocol::operations::agent::AgentContextPatch>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

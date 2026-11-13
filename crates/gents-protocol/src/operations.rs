@@ -7,6 +7,7 @@ pub mod document;
 pub mod goal;
 pub mod inference;
 pub mod install_repair;
+pub mod job;
 pub mod mailbox;
 pub mod mcp_service;
 pub mod p2p;

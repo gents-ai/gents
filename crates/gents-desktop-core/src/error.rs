@@ -13,14 +13,6 @@ pub enum BridgeErrorCode {
     StorageFull,
     /// The read could not publish against the current observation fence.
     ProjectionPending,
-    /// The selected session's node has not returned its canonical row; the
-    /// local request is written and the pairing to `endpoint` replicates.
-    SessionDelivering,
-    /// As `SessionDelivering`, but the pairing to `endpoint` is down.
-    SessionNotConnected,
-    /// The node at `endpoint` claimed the request; its session row has not
-    /// replicated back yet.
-    SessionAccepted,
     /// A verified runtime Goal-control rejection, never transport or message classification.
     GoalControlRejected,
     /// DefraDB explicitly rejected the authenticated operation.
@@ -49,9 +41,6 @@ impl BridgeErrorCode {
             Self::RuntimeKeyAccess => "runtimeKeyAccess",
             Self::StorageFull => "storageFull",
             Self::ProjectionPending => "projectionPending",
-            Self::SessionDelivering => "sessionDelivering",
-            Self::SessionNotConnected => "sessionNotConnected",
-            Self::SessionAccepted => "sessionAccepted",
             Self::GoalControlRejected => "goalControlRejected",
             Self::PermissionDenied => "permissionDenied",
             Self::NotFound => "notFound",
@@ -73,9 +62,6 @@ impl BridgeErrorCode {
         matches!(
             self,
             Self::ProjectionPending
-                | Self::SessionDelivering
-                | Self::SessionNotConnected
-                | Self::SessionAccepted
                 | Self::ClientStartFailed
                 | Self::EndpointUnreachable
                 | Self::Backend
@@ -217,7 +203,7 @@ impl BridgeError {
         let transport = gents_store::config_client::TransactionFailure::config_client_error(&error)
             .and_then(gents_store::config_client::ConfigClientError::transport_error)
             .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
-        let message = error.to_string();
+        let message = gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string();
         let Some(transport) = transport else {
             return Self::untyped(message);
         };
@@ -327,7 +313,6 @@ pub fn request_operation_failure(
         | E::RetryBudgetExhausted { .. }
         | E::ReissueDeadlineClosed { .. }
         | E::ReissueNotLatest { .. }
-        | E::InterruptTerminal { .. }
         | E::IdentityConflict { .. }
         | E::ConflictingActiveRequests { .. }
         | E::NodeUnavailable { .. }
@@ -399,7 +384,7 @@ pub fn session_operation_failure(
 /// An owner's failure an operation passed through, kept in the `source()`
 /// chain so the transport classifiers reach it.
 #[derive(Debug)]
-struct OperationCause(Box<dyn std::error::Error + Send + Sync>);
+pub(crate) struct OperationCause(pub(crate) Box<dyn std::error::Error + Send + Sync>);
 
 impl std::fmt::Display for OperationCause {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -508,6 +493,14 @@ impl From<&str> for BridgeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unclassified_errors_keep_their_whole_cause_chain() {
+        let error = anyhow::anyhow!("schedule_id is required").context("saving Schedule");
+        let bridge = BridgeError::classify_transport_error(error);
+        assert_eq!(bridge.code, BridgeErrorCode::Unknown);
+        assert_eq!(bridge.message, "saving Schedule: schedule_id is required");
+    }
 
     #[test]
     fn explicit_database_denial_is_nonretryable_without_inferring_hidden_documents() {

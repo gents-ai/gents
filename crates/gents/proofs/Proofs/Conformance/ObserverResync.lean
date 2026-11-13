@@ -110,6 +110,10 @@ def step (m : Machine) (op : Op) : Machine × Option Json :=
       (dropRead (withSlot m n (streamRefused slot)) n, none)
   | "publish" => ((reloadNode m (beginRead (m.pubs n)) n (snapshot n)).2, none)
   | "timer" => (withSlot m n (timer slot), none)
+  | "retry_now" =>
+      if retryNowRestarts slot then
+        (dropRead (withSlot (onStore m n requestEvent) n (retryNow slot)) n, none)
+      else (m, none)
   | "finish" =>
       match slot.loading, m.reads n with
       | true, some read =>

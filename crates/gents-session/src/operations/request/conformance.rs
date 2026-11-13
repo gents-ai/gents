@@ -30,3 +30,10 @@ fn delivery_resolution_matches_lean() {
         |i: &DeliveryInput<DeliveryChoice>| i.choice.resolve(),
     );
 }
+
+#[test]
+fn interrupt_settled_matches_lean() {
+    gents_lean_vocab::families::session_operations_interrupt_settled::replay(|i| {
+        super::interrupt_settled(i.terminal, i.interrupted)
+    });
+}

@@ -15,6 +15,7 @@ import type {
 import { selection } from "../src/hooks/selectionStore";
 import { admittingProjection, historyOf, shellStores } from "./shell-fixture";
 import { deferred } from "./deferred";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 function fixture(
   send: () => Promise<unknown>,
@@ -50,6 +51,7 @@ function fixture(
     stores,
     project: () =>
       admittingProjection("coding", blocked ? "Agent is unavailable" : undefined),
+    sendAttachments: memorySendAttachments(),
   });
   return {
     actions,

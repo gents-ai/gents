@@ -62,5 +62,5 @@ where
     let node_did = item_node(&state, window.label(), &request)?;
     dismiss_mailbox(running_core(&state)?.as_ref(), &node_did, &request.item_id)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
