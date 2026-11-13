@@ -702,30 +702,6 @@ async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_argu
 }
 
 #[tokio::test]
-async fn non_job_result_with_writes_commits_atomically_with_the_foreground_terminal() {
-    let step = step0(
-        json!({
-            "result": {"answer": 42},
-            "writes": [{"op": "insert", "collection": "Plain", "fields": {"body": "x"}}],
-        }),
-        Options {
-            data: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    let answer = step.call(r#"{"argv": ["status"]}"#).await;
-    assert_eq!(answer, json!({"answer": 42}));
-    let row = step.row().await;
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    assert_eq!(row["await_mode"], "foreground", "{row}");
-    assert!(row["job_pin"].is_null(), "{row}");
-    assert!(!row["plugin_execution_receipt"].is_null(), "{row}");
-    assert_eq!(step.bodies().await, ["x"]);
-    step.finish().await;
-}
-
-#[tokio::test]
 async fn pinless_effects_are_refused_with_policy_denied() {
     let step = step0(json!({"effects": {}}), Options::default()).await;
     let answer = step.call(r#"{"argv": ["run"]}"#).await;
@@ -1292,46 +1268,6 @@ async fn resume_of_a_missing_row_names_the_cause_and_the_next_call() {
 }
 
 #[tokio::test]
-async fn duplicate_handle_is_suffixed_and_the_scratch_path_is_unchanged() {
-    let output = json!({"effects": {
-        "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
-        "scratch": [{"name": "a.txt", "content": "x"}],
-    }});
-    let step = step0(
-        output,
-        Options {
-            cwd: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    step.call_as("call-1", ARGS).await;
-    step.call_as("call-2", ARGS).await;
-    let handles = [
-        step.pin_of(&step.row_of("call-1").await).await.handle,
-        step.pin_of(&step.row_of("call-2").await).await.handle,
-    ];
-    assert_eq!(handles, ["h", "h-2"]);
-    let runs = step
-        .cwd
-        .as_ref()
-        .unwrap()
-        .path()
-        .join(".gents/workflows/runs");
-    for call in ["call-1", "call-2"] {
-        assert_eq!(
-            std::fs::read_to_string(runs.join(call).join("a.txt")).unwrap(),
-            "x"
-        );
-    }
-    for handle in handles {
-        assert!(!runs.join(&handle).exists(), "{handle}");
-    }
-    step.finish().await;
-}
-
-#[tokio::test]
 async fn adoption_writes_no_execution_receipt() {
     let step = step0(adopting(), Options::default()).await;
     step.call(ARGS).await;
@@ -1664,33 +1600,6 @@ async fn non_job_pause_ends_an_own_running_job_completed_paused() {
     step.finish().await;
 }
 
-#[tokio::test]
-async fn calling_row_of_a_control_answer_is_never_adopted() {
-    let step = step0(adopting(), idle()).await;
-    let (job, _) = step.running_job().await;
-    step.reinstall(&controlling(&[(&job, "stop")]));
-    step.call_as("call-2", ARGS).await;
-    let row = step.row_of("call-2").await;
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    assert_eq!(row["await_mode"], "foreground", "{row}");
-    assert!(row["job_pin"].is_null(), "{row}");
-    step.finish().await;
-}
-
-#[tokio::test]
-async fn an_unauthorized_later_entry_kills_nothing() {
-    let step = step0(adopting(), idle()).await;
-    let (job, child) = step.running_job().await;
-    let other = step.other_plugin_job("call-2").await;
-    step.reinstall(&controlling(&[(&job, "stop"), (&other, "stop")]));
-    let answer = step.call_as("call-3", ARGS).await;
-    assert_eq!(answer["code"], "plugin_job_policy_denied", "{answer}");
-    failed(&step.row_of("call-3").await, "policyDenied");
-    assert_eq!(step.state_of("call-1").await, "running");
-    assert!(!step.interrupted(&child).await);
-    step.finish().await;
-}
-
 /// How the runtime Node shows its hop cap to a later step whose Agent cannot
 /// see that Node.
 #[derive(Clone, Copy, Debug)]
@@ -1808,24 +1717,204 @@ impl Step0 {
     }
 }
 
+impl Step0 {
+    async fn child_requests(&self, root: &str, slot: &str) -> usize {
+        let key = gents_store::graphql::escape_graphql_string(&job_spawn_key(root, slot, 0));
+        let response = self
+            .access()
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{key}" }} }}) {{ _docID }} }}"#,
+            ))
+            .await
+            .unwrap();
+        response["data"]["AgentRequest"].as_array().unwrap().len()
+    }
+}
+
+#[tokio::test]
+async fn non_job_step0_answers_settle_the_calling_row_as_the_lean_model_says() {
+    use gents_lean_vocab::families::plugin_job_dispatch_non_job::Step0Observed;
+
+    for case in gents_lean_vocab::families::plugin_job_dispatch_non_job::cases() {
+        let input = &case.input;
+        let result = json!({"answer": 42});
+        let first = if input.control.is_empty() {
+            let mut answer = json!({"result": result});
+            if input.writes > 0 {
+                answer["writes"] = (0..input.writes)
+                    .map(|index| {
+                        json!({"op": "insert", "collection": "Plain", "fields": {"body": format!("x-{index}")}})
+                    })
+                    .collect();
+            }
+            answer
+        } else {
+            adopting()
+        };
+        let step = step0(
+            first,
+            Options {
+                data: input.writes > 0,
+                later: Later::Idle,
+                ..Default::default()
+            },
+        )
+        .await;
+        let mut own = None;
+        let mut call = "call-1";
+        let mut guest_result = result;
+        if !input.control.is_empty() {
+            let (job, child) = step.running_job().await;
+            let mut entries = Vec::new();
+            call = "call-2";
+            for entry in &input.control {
+                let row = match entry.target.as_str() {
+                    "own" => job.clone(),
+                    "foreign" => {
+                        call = "call-3";
+                        step.other_plugin_job("call-2").await
+                    }
+                    other => panic!("unknown control target {other}"),
+                };
+                entries.push((row, entry.kind.clone()));
+            }
+            let entries = entries
+                .iter()
+                .map(|(row, kind)| (row.as_str(), kind.as_str()))
+                .collect::<Vec<_>>();
+            let answer = controlling(&entries);
+            guest_result = answer["result"].clone();
+            step.reinstall(&answer);
+            own = Some(child);
+        }
+        let answer = step.call_as(call, ARGS).await;
+        let row = step.row_of(call).await;
+        let code = answer
+            .get("code")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let answered = if answer == guest_result {
+            "result"
+        } else if code.is_some() {
+            "refusal"
+        } else {
+            panic!("step 0 answered neither its result nor a refusal: {answer}")
+        };
+        let (own_job_state, own_child_interrupted) = match &own {
+            Some(child) => (
+                Some(step.state_of("call-1").await),
+                Some(step.interrupted(child).await),
+            ),
+            None => (None, None),
+        };
+        case.check(Step0Observed {
+            answered: answered.to_owned(),
+            code,
+            failure_class: row["tool_failure_class"].as_str().map(str::to_owned),
+            state: row["lifecycle_state"].as_str().unwrap().to_owned(),
+            await_mode: row["await_mode"].as_str().unwrap().to_owned(),
+            pinned: !row["job_pin"].is_null(),
+            receipt: !row["plugin_execution_receipt"].is_null(),
+            committed_writes: u64::try_from(step.bodies().await.len()).unwrap(),
+            own_job_state,
+            own_child_interrupted,
+        });
+        step.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn step0_adoptions_suffix_handles_and_keep_scratch_by_call_as_the_lean_model_says() {
+    use gents_lean_vocab::families::plugin_job_dispatch_adoptions::Adopted;
+    use gents_lean_vocab::families::plugin_job_dispatch_adoptions::ScratchFile;
+
+    for case in gents_lean_vocab::families::plugin_job_dispatch_adoptions::cases() {
+        let input = &case.input;
+        let output = json!({"effects": {
+            "pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": input.handle},
+            "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
+            "scratch": [{"name": input.scratch_name, "content": input.scratch_content}],
+        }});
+        let step = step0(
+            output,
+            Options {
+                cwd: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        for call in &input.call_ids {
+            step.call_as(call, ARGS).await;
+        }
+        let mut handles = Vec::new();
+        for call in &input.call_ids {
+            handles.push(step.pin_of(&step.row_of(call).await).await.handle);
+        }
+        let runs = step
+            .cwd
+            .as_ref()
+            .unwrap()
+            .path()
+            .join(".gents/workflows/runs");
+        let mut scratch_files = Vec::new();
+        let mut dirs = std::fs::read_dir(&runs)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        dirs.sort();
+        for dir in dirs {
+            let mut files = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            files.sort();
+            for file in files {
+                let relative = file
+                    .strip_prefix(step.cwd.as_ref().unwrap().path())
+                    .unwrap();
+                scratch_files.push(ScratchFile {
+                    path: format!("./{}", relative.to_str().unwrap()),
+                    content: std::fs::read_to_string(&file).unwrap(),
+                });
+            }
+        }
+        let handle_dirs = handles
+            .iter()
+            .filter(|handle| runs.join(handle).exists())
+            .cloned()
+            .collect();
+        case.check(Adopted {
+            handles,
+            scratch_files,
+            handle_dirs,
+        });
+        step.finish().await;
+    }
+}
+
 /// A later step reads the runtime Node's hop cap as the runtime: the Agent's
 /// own Node visibility is not an unset cap, and a Node the runtime cannot read
 /// bounds every spawn at hop 0.
 #[tokio::test]
-async fn later_step_hop_cap_ignores_agent_node_visibility_and_fails_closed() {
-    use crate::background::job::admit::Refusal;
+async fn later_steps_read_the_runtime_hop_cap_as_the_lean_model_says() {
     use crate::background::job::driver::StepOutcome;
+    use gents_lean_vocab::families::plugin_job_dispatch_later_step::LaterObserved;
 
-    for (cap, later, refused) in [
-        (NodeHopCap::Hidden(None), Later::Spawn, false),
-        (NodeHopCap::Hidden(Some(0)), Later::Spawn, true),
-        (NodeHopCap::Unreadable, Later::Spawn, true),
-        (NodeHopCap::Unreadable, Later::Idle, false),
-    ] {
+    for case in gents_lean_vocab::families::plugin_job_dispatch_later_step::cases() {
+        let input = &case.input;
+        let cap = if input.cap_readable {
+            NodeHopCap::Hidden(input.cap.map(|cap| u32::try_from(cap).unwrap()))
+        } else {
+            NodeHopCap::Unreadable
+        };
         let step = step0(
             adopting(),
             Options {
-                later,
+                later: if input.spawn {
+                    Later::Spawn
+                } else {
+                    Later::Idle
+                },
                 kicks: false,
                 ..Default::default()
             },
@@ -1833,34 +1922,34 @@ async fn later_step_hop_cap_ignores_agent_node_visibility_and_fails_closed() {
         .await;
         let answer = step.call(ARGS).await;
         assert_eq!(answer["status"], "running", "{cap:?}: {answer}");
-        let row = step.row().await;
-        let doc = row["_docID"].as_str().unwrap().to_owned();
+        let doc = step.row().await["_docID"].as_str().unwrap().to_owned();
         step.observe_node_hop_cap(cap).await;
-        let outcome = step.run_later_step(&doc).await;
-        let row = step.row().await;
-        if refused {
-            assert_eq!(
-                outcome,
-                StepOutcome::Refused(Refusal::DepthExceeded),
-                "{cap:?}"
-            );
-            assert_eq!(row["lifecycle_state"], "failed", "{cap:?}: {row}");
-            assert_eq!(
-                step.closed_output(&doc).await["code"],
-                "plugin_job_depth_exceeded",
-                "{cap:?}"
-            );
-        } else {
-            assert!(
-                !matches!(outcome, StepOutcome::Refused(_)),
-                "{cap:?}: {outcome:?}"
-            );
-            assert_eq!(row["lifecycle_state"], "running", "{cap:?}: {row}");
-            if matches!(later, Later::Spawn) {
-                let child = step.child_request(&doc, "later").await;
-                assert_eq!(child["agent_did"], step.worker.did(), "{cap:?}");
+        let code = match step.run_later_step(&doc).await {
+            StepOutcome::Refused(refusal) => {
+                let code = refusal.code().map(str::to_owned);
+                assert_eq!(
+                    step.closed_output(&doc).await["code"].as_str(),
+                    code.as_deref(),
+                    "{cap:?}"
+                );
+                code
             }
+            _ => None,
+        };
+        let row = step.row().await;
+        let spawned_later = step.child_requests(&doc, "later").await == 1;
+        if spawned_later {
+            assert_eq!(
+                step.child_request(&doc, "later").await["agent_did"],
+                step.worker.did(),
+                "{cap:?}"
+            );
         }
+        case.check(LaterObserved {
+            code,
+            row_state: row["lifecycle_state"].as_str().unwrap().to_owned(),
+            spawned_later,
+        });
         step.finish().await;
     }
 }

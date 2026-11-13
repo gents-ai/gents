@@ -406,100 +406,120 @@ async fn lost_commit_ack_recovers_the_exact_child_receipt() {
 }
 
 #[tokio::test]
-async fn cancelled_after_child_commit_recovers_relationships_in_the_actor_watcher() {
-    let mut fixture = fixture("cancelled-after-commit").await;
-    let reached = Arc::new(tokio::sync::Notify::new());
-    let mut tool = fixture.tool.clone();
-    let mut dispatch = Box::pin(ConfigApplyTxn::with_embedded_commit_ack_pause(
-        reached.clone(),
-        gents_session::session::message::commit(
-            &fixture.node,
-            &gents_automation::goal::session_message::SessionGoals,
-            &fixture.cause,
-            &mut tool,
-            fixture.plan.take().unwrap(),
-            false,
-        ),
-    ));
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        tokio::select! {
-            _ = reached.notified() => {}
-            result = &mut dispatch => panic!("dispatch returned before cancellation: {result:?}"),
-        }
-    })
-    .await
-    .expect("child publication reaches the committed acknowledgement boundary");
-    drop(dispatch);
-    let (state, children) = observed(&fixture).await;
-    assert_eq!(state, "running");
-    assert_eq!(children.len(), 1);
-    let doc = children[0]["_docID"].as_str().unwrap();
-    let child_access =
-        ConfigAccess::local_as(fixture.node.clone(), fixture.child.did().parse().unwrap());
-    assert!(child_access
-        .execute("{ AgentRequest { _docID } }")
+async fn dropped_commit_ack_recovery_matches_the_lean_model() {
+    for case in gents_lean_vocab::families::delegated_publication_recovery_watcher::cases() {
+        let mut fixture = fixture(&case.input.name).await;
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let mut tool = fixture.tool.clone();
+        let mut dispatch = Box::pin(ConfigApplyTxn::with_embedded_commit_ack_pause(
+            reached.clone(),
+            gents_session::session::message::commit(
+                &fixture.node,
+                &gents_automation::goal::session_message::SessionGoals,
+                &fixture.cause,
+                &mut tool,
+                fixture.plan.take().unwrap(),
+                false,
+            ),
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                _ = reached.notified() => {}
+                result = &mut dispatch => panic!("dispatch returned before cancellation: {result:?}"),
+            }
+        })
         .await
-        .unwrap()["data"]["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+        .expect("child publication reaches the committed acknowledgement boundary");
+        drop(dispatch);
+        let (state, children) = observed(&fixture).await;
+        let request_committed = children.len() == 1;
+        let doc = children
+            .first()
+            .and_then(|child| child["_docID"].as_str())
+            .unwrap_or_default();
+        let child_access =
+            ConfigAccess::local_as(fixture.node.clone(), fixture.child.did().parse().unwrap());
+        let child_read_before_watcher = !child_access
+            .execute("{ AgentRequest { _docID } }")
+            .await
+            .unwrap()["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty();
 
-    let watcher = gents_session::request::watcher::DefraWatcher::for_agents(
-        fixture.node.clone(),
-        fixture.runtime.did(),
-        vec![fixture.parent.clone(), fixture.child.clone()],
-    )
-    .unwrap();
-    // The child may sort before the parent; a subsequent ordinary scan sees the recovered grant.
-    let _ = watcher.pending_requests().await.unwrap();
-    let requests = watcher.pending_requests().await.unwrap();
-    let request = requests
-        .into_iter()
-        .find(|request| request.doc_id == doc)
-        .expect("child sees its published opening");
-    assert_eq!(request.agent_did, fixture.child.did());
-    assert_eq!(request.requester_did.as_deref(), Some(fixture.parent.did()));
-    let response = child_access.execute(&format!(
-        "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {} relationships_pending }} }}",
-        gents_store::graphql::escape_graphql_string(doc), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-    )).await.unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    gents_store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
-    assert_eq!(
-        row.admission_signer_did.as_deref(),
-        Some(fixture.parent.did())
-    );
-    assert_eq!(
-        response["data"]["AgentRequest"][0]["relationships_pending"],
-        false
-    );
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = AgentRequestAdmissionVerifier::new(
-        fixture.node.clone(),
-        fixture.runtime.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim(&request, fixture.child.did())
-        .await
+        let watcher = gents_session::request::watcher::DefraWatcher::for_agents(
+            fixture.node.clone(),
+            fixture.runtime.did(),
+            vec![fixture.parent.clone(), fixture.child.clone()],
+        )
         .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        fixture.node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Interactive,
-        String::new(),
-    );
-    lifecycle
-        .bind_managed_agent(fixture.child.as_ref())
-        .unwrap();
-    lifecycle.set_client_claim_admission(admission);
-    assert!(matches!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    ));
-    fixture.node.shutdown().await.unwrap();
+        let _ = watcher.pending_requests().await.unwrap();
+        let requests = watcher.pending_requests().await.unwrap();
+        let child_read_after_watcher = requests.iter().any(|request| {
+            request.doc_id == doc
+                && request.agent_did == fixture.child.did()
+                && request.requester_did.as_deref() == Some(fixture.parent.did())
+        });
+        let response = child_access
+            .execute(&format!(
+                "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ {} relationships_pending }} }}",
+                gents_store::graphql::escape_graphql_string(doc),
+                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+            ))
+            .await
+            .unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        let signed_by_parent =
+            gents_store::identity::request_receipt::verify_request_receipt_signature(&row).is_ok()
+                && row.admission_signer_did.as_deref() == Some(fixture.parent.did());
+        let relationships_pending_after_watcher = response["data"]["AgentRequest"][0]
+            ["relationships_pending"]
+            .as_bool()
+            .unwrap();
+        let request = requests
+            .into_iter()
+            .find(|request| request.doc_id == doc)
+            .expect("child sees its published opening");
+        let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+        let verifier = AgentRequestAdmissionVerifier::new(
+            fixture.node.clone(),
+            fixture.runtime.clone(),
+            authority,
+        );
+        let (request, admission) = verifier
+            .verify_fresh_for_claim(&request, fixture.child.did())
+            .await
+            .unwrap();
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            fixture.node.clone(),
+            request,
+            60,
+            ExecutionOrigin::Interactive,
+            String::new(),
+        );
+        lifecycle
+            .bind_managed_agent(fixture.child.as_ref())
+            .unwrap();
+        lifecycle.set_client_claim_admission(admission);
+        let claimed = matches!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+
+        case.check(
+            gents_lean_vocab::families::delegated_publication_recovery_watcher::RecoveryOutput {
+                request_committed,
+                tool_running: state == "running",
+                child_read_before_watcher,
+                relationships_pending_after_watcher,
+                child_read_after_watcher,
+                signed_by_parent,
+                claimed,
+            },
+        );
+        fixture.node.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]

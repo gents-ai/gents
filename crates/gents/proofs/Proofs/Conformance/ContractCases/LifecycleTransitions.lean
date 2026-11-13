@@ -1,7 +1,6 @@
 import Proofs.Session.Request
 import Proofs.Conformance.Contracts.Machines.Request
 import Proofs.Conformance.Contracts.Machines.Process
-import Proofs.Conformance.Boundaries
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
@@ -84,7 +83,7 @@ def requestTransitionCase (source target : RequestState) : LifecycleTransitionCa
   , boundary :=
       match classification with
       | .recoveryReachable =>
-          some Conformance.Contracts.boundaryRequestRecoverySweepReachableId
+          some "boundary.request.recovery-sweep-reachable"
       | _ => none
   }
 

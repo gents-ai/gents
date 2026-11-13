@@ -7,8 +7,7 @@ use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::document_query::{
-    fields::agent_request as request_fields, fields::agent_session as session_fields,
-    fields::owed_delivery as fields, Delete, Direction, Filter, Input, Query, Selection, Update,
+    fields::agent_request as request_fields, fields::owed_delivery as fields, Delete, Filter, Input, Query, Selection, Update,
 };
 use gents_protocol::owed_delivery::{
     delivery_key, OwedDeliveryRow, OwedSettlement, OwedSubject, OWED_DELIVERY_FIELDS,
@@ -17,6 +16,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::session::SessionOwnerRow;
 use gents_store::config_client::agent_session::load_agent_session_owner_in_txn;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
 use super::native::TxnHost;
@@ -521,19 +521,11 @@ async fn newest_request(
     node_did: &str,
     session_id: &str,
 ) -> anyhow::Result<Option<(Option<String>, Option<String>)>> {
+    let (session, node) = (escape_graphql_string(session_id), escape_graphql_string(node_did));
     let response = txn
-        .run(
-            &Query::select(
-                Selection::doc_id()
-                    .field(request_fields::CREATED_AT)
-                    .field(request_fields::INTERRUPT_REQUESTED_AT),
-            )
-            .filter(Filter::eq(request_fields::SESSION_ID, session_id))
-            .filter(Filter::eq(request_fields::NODE_DID, node_did))
-            .order_by(request_fields::CREATED_AT, Direction::Desc)
-            .limit(1)
-            .render(),
-        )
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{node}" }} }}, order: {{ created_at: DESC }}, limit: 1) {{ _docID created_at interrupt_requested_at }} }}"#
+        ))
         .await?;
     let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "AgentRequest");
     Ok(rows.first().map(|request| {
@@ -855,27 +847,16 @@ async fn halted_sessions(
         .transact_readonly("hooks.owed_delivery.halted_sessions", |txn| {
             let horizon = horizon.as_str();
             Box::pin(async move {
+                let (node, agent_did) = (escape_graphql_string(node_did), escape_graphql_string(agent));
                 let stopped = txn
-                    .run(
-                        &Query::select(Selection::doc_id().field(session_fields::SESSION_ID))
-                            .filter(Filter::eq(session_fields::NODE_DID, node_did))
-                            .filter(Filter::eq(session_fields::AGENT_DID, agent))
-                            .filter(Filter::not_null(session_fields::STOPPED_AT))
-                            .order_by(session_fields::STOPPED_AT, Direction::Desc)
-                            .limit(bound)
-                            .render(),
-                    )
+                    .execute(&format!(
+                        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node}" }}, agent_did: {{ _eq: "{agent_did}" }}, stopped_at: {{ _ne: null }} }}, order: {{ stopped_at: DESC }}, limit: {bound}) {{ _docID session_id }} }}"#
+                    ))
                     .await?;
                 let interrupted = txn
-                    .run(
-                        &Query::select(Selection::doc_id().field(request_fields::SESSION_ID))
-                            .filter(Filter::eq(request_fields::NODE_DID, node_did))
-                            .filter(Filter::eq(request_fields::AGENT_DID, agent))
-                            .filter(Filter::not_null(request_fields::INTERRUPT_REQUESTED_AT))
-                            .order_by(request_fields::INTERRUPT_REQUESTED_AT, Direction::Desc)
-                            .limit(bound)
-                            .render(),
-                    )
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node}" }}, agent_did: {{ _eq: "{agent_did}" }}, interrupt_requested_at: {{ _ne: null }} }}, order: {{ interrupt_requested_at: DESC }}, limit: {bound}) {{ _docID session_id }} }}"#
+                    ))
                     .await?;
                 let mut candidates: Vec<String> = Vec::new();
                 for row in

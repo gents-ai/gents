@@ -249,4 +249,24 @@ theorem caseClass_cons_rank (v : EvidenceClass) (vs : List EvidenceClass) :
 theorem caseClass_nil : caseClass [] = .scored := by
   simp [caseClass]
 
+def storedScore (kind : OutcomeKind) (reason : Option ProviderReason) (score : Option Nat) :
+    Option Nat :=
+  match classify kind reason with
+  | .notEvidence | .unknown => none
+  | _ => score
+
+inductive ReasonRecord where
+  | absent | recorded
+  deriving DecidableEq, Repr
+
+def recordedReason : Option ProviderReason → ReasonRecord
+  | none => .absent
+  | some _ => .recorded
+
+theorem a_non_evidence_verdict_stores_a_null_score (kind : OutcomeKind)
+    (reason : Option ProviderReason) (score : Option Nat)
+    (nonEvidence : classify kind reason = .notEvidence) :
+    storedScore kind reason score = none := by
+  simp [storedScore, nonEvidence]
+
 end Eval
