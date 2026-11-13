@@ -245,7 +245,7 @@ live-configurator-eval:
 test-agent-e2e: live-agent
 
 test-cli:
-	$(CARGO) test -p gents-cli $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+	$(CARGO) test -p gents-cli $(CARGO_PROFILE_FLAG) -- --nocapture
 
 .PHONY: desktop-ui desktop-ui-qa-sweep desktop-ui-unit desktop-ui-e2e desktop-ui-invariants desktop-ui-screenshots desktop-ui-fuzz desktop-ui-fuzz-long desktop-ui-agent desktop-ui-visual desktop-ui-live-e2e desktop-ui-live-e2e-real desktop-native-preflight desktop-native-dev desktop-native-build
 desktop-ui:
