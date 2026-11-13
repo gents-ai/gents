@@ -297,6 +297,17 @@ def engineerInitRelations (engineer node : String) : List Relation :=
   [⟨"nodes", node, "administrator", .actor engineer⟩,
    ⟨"agents", engineer, "config_writer", .actor engineer⟩]
 
+/-- Provisioning the Engineer of a new node: the one step every path that makes
+a node's Engineer takes (`gents init`, the desktop's setup through it, the eval
+runner's trial node and the fixtures that stand in for an initialised node), so
+a change to what the Engineer holds reaches all of them. It adds
+`engineerInitRelations` to the node's ACP state and nothing else; the node
+permission sets the Engineer holds as the default Agent are issued by the
+bootstrap (`GrantSets.receives .defaultAgent`), and the default selection is
+written with the Node. -/
+def provisionEngineer (state : State) (engineer node : String) : State :=
+  { state with relations := engineerInitRelations engineer node ++ state.relations }
+
 /-- A Node with one Agent `a`, a configuration document and a session under it;
 `admin` is its administrator, `manager` holds only `agent_manager`, `runtime`
 holds `runtime_reader`. Init has created the default selection. -/
@@ -365,8 +376,9 @@ theorem agent_manager_gives_catalog_only :
 
 /-- `catalogRelationFixture` after init publishes the Engineer and its grants. -/
 def initialisedEngineerState : State :=
-  let created := commitAgentCreation catalogRelationFixture "engineer" "user" "engineer" "node" true
-  { created with relations := engineerInitRelations "engineer" "node" ++ created.relations }
+  provisionEngineer
+    (commitAgentCreation catalogRelationFixture "engineer" "user" "engineer" "node" true)
+    "engineer" "node"
 
 /-- The Engineer as initialised holds the catalog and configures every Agent
 of its Node, the User's included; a clone it then makes holds no category,

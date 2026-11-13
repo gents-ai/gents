@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -107,7 +107,7 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
-  it("explains an unreadable saved node config and offers a retry", () => {
+  it("explains an unreadable saved node config and offers a retry", async () => {
     const app = testApp();
     renderIn(app, <StartupScreen configurationPending initConfigStatus="unreadable" />);
 
@@ -118,6 +118,64 @@ describe("desktop startup screen", () => {
       "The saved node settings could not be read. Try again to reload them.",
     );
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+
+    const served = {
+      state: "running" as const,
+      autoStart: true,
+      nodeName: "Forge",
+      nodeDid: deployment.nodeDid,
+      graphql: deployment.graphql,
+      effectiveToolCeiling: null,
+      effectiveToolRoot: null,
+      suggestedToolRoot: "/Users/test",
+      pairingReady: false,
+      approvalRequired: false,
+      runtimeBooting: false,
+      error: null,
+    };
+    let paired = false;
+    const enrollManagedServer = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("CLI client identity is unavailable"))
+      .mockImplementation(async () => {
+        paired = true;
+      });
+    const fetchDesktopSnapshot = vi.fn(async () => snapshot(true, true));
+    const terminalMade = testApp({
+      api: {
+        managedServerStatus: vi.fn(async () => ({ ...served, pairingReady: paired })),
+        enrollManagedServer,
+        fetchDesktopSnapshot,
+      },
+    });
+    const pending = renderIn(
+      terminalMade,
+      <StartupScreen configurationPending initConfigStatus="configured" />,
+    );
+    const shown = within(pending.container);
+
+    expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(
+      "Loading saved node settings",
+    );
+    const connect = await shown.findByTestId("startup-connect-desktop");
+    expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(
+      "This desktop is not connected to your node",
+    );
+
+    await userEvent.click(connect);
+    expect(await shown.findByTestId("startup-connect-error")).toHaveTextContent(
+      "Couldn’t connect this desktop: CLI client identity is unavailable",
+    );
+    expect(fetchDesktopSnapshot).not.toHaveBeenCalled();
+
+    await userEvent.click(connect);
+    await waitFor(() => expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(1));
+    expect(enrollManagedServer).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(
+        "Loading saved node settings",
+      ),
+    );
   });
 
   it("names local-agent observation instead of misreporting a configuration read", async () => {

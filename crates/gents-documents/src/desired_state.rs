@@ -26,7 +26,7 @@ use apply::confirm_removal;
 pub(crate) use apply::find_node_doc_id;
 pub use apply::{configuration_node_doc, ConfigurationNodeBinding};
 pub use apply::{
-    grant_agent_catalog, grant_node_administration, grant_selected_self_configuration,
+    grant_agent_catalog, grant_selected_self_configuration, provision_engineer,
     revoke_agent_catalog,
 };
 use gents_store::collection::Collection;

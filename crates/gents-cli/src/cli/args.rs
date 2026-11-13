@@ -316,7 +316,8 @@ pub(crate) enum DesktopCommand {
         wait_for_desktop: bool,
         #[arg(long, hide = true, requires = "wait_for_desktop")]
         desktop_pid: Option<u32>,
-        #[arg(long, hide = true, requires = "wait_for_desktop")]
+        /// Desktop app executable that checks and clears browser data; defaults to the installed Gents app.
+        #[arg(long, requires = "confirm")]
         desktop_executable: Option<PathBuf>,
     },
 }

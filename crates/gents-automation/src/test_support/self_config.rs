@@ -266,10 +266,7 @@ pub async fn signed_pack_tool(
         .transact_write("test.self_config.engineer_init_grants", |txn| {
             let node = fixture.node_did();
             let agent = fixture.agent_did();
-            Box::pin(async move {
-                gents_documents::grant_selected_self_configuration(txn, node, agent).await?;
-                gents_documents::grant_node_administration(txn, node, agent).await
-            })
+            Box::pin(async move { gents_documents::provision_engineer(txn, node, agent).await })
         })
         .await
         .expect("User grants the default Agent what init grants the Engineer");
