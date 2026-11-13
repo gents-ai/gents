@@ -1841,6 +1841,11 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     )
     .await?;
     let access = runtime_access(&node)?;
+    crate::test_support::bootstrap_signed_test_node(
+        &access,
+        node.node_identity_did().context("fixture node has no node identity")?,
+    )
+    .await;
     let owner = "did:key:outcome-owner";
     apply(&access, cyclic_configuration(owner, CODING_AGENT_DID)).await?;
     let source = |collection: &str| {

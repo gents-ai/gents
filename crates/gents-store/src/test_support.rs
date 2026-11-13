@@ -1,6 +1,13 @@
 pub mod acp_policies;
 pub mod relationships;
 
+pub fn attach_node_extensions(
+    node: &std::sync::Arc<defra_node::Node>,
+    extensions: &crate::node_extension::Extensions,
+) {
+    crate::node_extension::attach_all(node, extensions).expect("fixture extensions attach once");
+}
+
 const PIN_FIXED_KEY_HEX: &str = "4cbf8c1186d2fcb70559342fd142650a5ec5938d26a187d87e2c061b530d7be46edb79d5f548207182f7911b55709c9e4b9961c709486e5ce920e306470fe6d6";
 pub const PIN_FIXED_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
 

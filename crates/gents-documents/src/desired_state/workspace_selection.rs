@@ -219,6 +219,10 @@ mod tests {
         );
         gents_store::schema::ensure_runtime_schemas(&node).await?;
         owner_staged.serve(&node, runtime.clone());
+        gents_store::test_support::attach_node_extensions(
+            &node,
+            &gents_store::node_extension::Extensions::of(Arc::new(super::super::callback_agent_selection())),
+        );
         let context =
             defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
         for key in [creator.as_ref(), &other as &dyn NodeIdentity] {
