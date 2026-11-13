@@ -2144,9 +2144,17 @@ def caseCoverage : List CoverageEntry :=
       "plugin_resources_consents")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_job_admission_cases"
-      "PluginJobAdmissionCases")
-      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+      "family"
+      "plugin_job_admission")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_source_boundary_dispatch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_dispatch_refusal")
+      "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_job_adoption_cases"
       "PluginJobAdoptionCases")

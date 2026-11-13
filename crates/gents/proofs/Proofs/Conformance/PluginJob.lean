@@ -389,19 +389,6 @@ private def contextJson (ctx : StepContext) : Json :=
             ("prior", jobJson prior), ("root", jobJson root)]))])),
     ("resume_facts", hostFactsJson ctx.resumeFacts)]
 
-private def render (c : AdmissionCase) (wireTrace : Json := .null) : Json :=
-  let (row, kill) := settled c
-  let (code, admitted, dynamicDisabled) : Option String × Option Job × Bool := match admitStepGuarded c.ctx c.job c.out with
-    | .ok j => ((none : Option String), some j, false)
-    | .error r => (r.code, none, decide (r = Refusal.dynamicCodeDisabled))
-  Json.mkObj [("name", toJson c.name), ("context", contextJson c.ctx), ("job", jobJson c.job),
-    ("output", outputJson c.out), ("wire_trace", wireTrace),
-    ("expected", Json.mkObj [("admitted", toJson admitted.isSome), ("code", toJson code),
-      ("dynamic_code_disabled", toJson dynamicDisabled),
-      ("job", toJson (admitted.map jobJson)), ("row_state", rowStateJson row.state),
-      ("kill", toJson (kill.map fun (k, a) =>
-        Json.mkObj [("retry_key", toJson k.retryKey), ("action", toJson a.toContract)]))])]
-
 private def toolCall : ToolExecution.ToolCallContext :=
   { callId := 1, requestId := 1, state := .running, operation := .nativeCommand, deadline := 20
   , startedAt := some 1, currentTime := 5, persistence := .committed, awaitMode := .foreground }
@@ -2054,13 +2041,6 @@ theorem recovery_regressions :
       , (false, 0, 0, true, 2), (true, 1, 0, false, 2) ] := by
   native_decide
 
-private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
-  Json.mkObj [("running", toJson r.running), ("session_stopped", toJson r.sessionStopped),
-    ("terminal_children", toJson r.terminalChildren),
-    ("observed", toJson r.observed), ("live", toJson r.live), ("step_new", toJson r.stepNew),
-    ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available),
-    ("stepped", toJson r.stepped), ("step_in_flight", toJson r.stepInFlight)]
-
 deriving instance ToJson for Recovery.PluginJobRow
 
 structure RecoveryInput where
@@ -2102,11 +2082,30 @@ private def wirePlans : List (String × List String × List String) :=
   , ("target-alias", ["target-local", "target-alias"], ["target-alias"])
   , ("target-remote", ["target-local"], ["target-local"]) ]
 
+structure TraceRead where
+  sessionStopped : Bool
+  nowMillis : Nat
+  available : Bool
+  progressRevision : Nat
+  stepInFlight : Bool
+  deriving ToJson
+
+structure WireTrace where
+  spawnWires : List String
+  interruption : String
+  read : TraceRead
+  deriving ToJson
+
+structure TraceRows where
+  before : Recovery.PluginJobRow
+  after : Recovery.PluginJobRow
+  deriving ToJson
+
 /-- Each trace resolves actual wire input, intersects raw wire ceilings,
 executes admission and settlement, and projects that resulting row into the
 registered recovery owner. Availability and cancellation observations occur
 after the step, so their event order is distinct from admission's snapshot. -/
-private def wireRecoveryCases : List Json := Id.run do
+private def wireRecoveryCases : List (AdmissionCase × WireTrace × TraceRows) := Id.run do
   let mut cases := []
   for (wire, liveIds, pinnedIds) in wirePlans do
     for stopped in [false, true] do
@@ -2123,23 +2122,117 @@ private def wireRecoveryCases : List Json := Id.run do
                 ceilingAtPin := { ceiling with targets := pinnedIds } } }
             let some target := TargetResolution.resolve wireBindings wire | continue
             let out := effects [spawn "new" target]
-            let c : AdmissionCase := ⟨s!"wire_recovery_{cases.length}", ctx, job, out⟩
             for phase in [RecoveryTrace.Interruption.beforeKill, .afterKill] do
               let read : RecoveryTrace.DurableRead :=
                 ⟨stopped, if expired then 7200000 else 0, available, 2, inFlight⟩
-              let before := RecoveryTrace.afterStep ctx job out observation phase read
-              let after := RecoveryTrace.recoverAfterStep ctx job out observation phase read
-              let trace := Json.mkObj
-                [("spawn_wires", toJson [wire]),
-                 ("interruption", toJson (if phase == .beforeKill then "before_kill" else "after_kill")),
-                 ("read", Json.mkObj [("session_stopped", toJson read.sessionStopped),
-                   ("now_millis", toJson read.nowMillis), ("available", toJson read.available),
-                   ("progress_revision", toJson read.progressRevision),
-                   ("step_in_flight", toJson read.stepInFlight)]),
-                 ("before", jobRowJson before), ("after", jobRowJson after)]
-              let c := { c with name := s!"wire_recovery_{cases.length}" }
-              cases := cases ++ [render c trace]
+              let trace : WireTrace :=
+                { spawnWires := [wire]
+                  interruption := if phase == .beforeKill then "before_kill" else "after_kill"
+                  read := { sessionStopped := read.sessionStopped, nowMillis := read.nowMillis
+                            available := read.available, progressRevision := read.progressRevision
+                            stepInFlight := read.stepInFlight } }
+              let rows : TraceRows :=
+                { before := RecoveryTrace.afterStep ctx job out observation phase read
+                  after := RecoveryTrace.recoverAfterStep ctx job out observation phase read }
+              let c : AdmissionCase := ⟨s!"wire_recovery_{cases.length}", ctx, job, out⟩
+              cases := cases ++ [(c, trace, rows)]
   return cases
+
+private def admissionEntries : List (AdmissionCase × Option (WireTrace × TraceRows)) :=
+  (admissionCases ++ sourceBoundaryCases).map (fun c => (c, none)) ++
+    wireRecoveryCases.map fun (c, trace, rows) => (c, some (trace, rows))
+
+private def admissionEntry (name : String) : AdmissionCase × Option (WireTrace × TraceRows) :=
+  (admissionEntries.find? fun e => e.1.name == name).getD
+    (⟨"", context, stepZero, effects []⟩, none)
+
+private def rowStateString : RowState → String
+  | .running => "running"
+  | .completed => "completed"
+  | .failed => "failed"
+  | .cancelled => "cancelled"
+  | .timedOut => "timed_out"
+
+structure AdmissionInput where
+  name : String
+  context : Json
+  job : Json
+  output : Json
+  trace : Option WireTrace
+  deriving ToJson
+
+structure AdmissionOutput where
+  admitted : Bool
+  code : Option String
+  dynamicCodeDisabled : Bool
+  job : Option Json
+  rowState : String
+  killedRetryKeys : List String
+  recovery : Option TraceRows
+  deriving ToJson
+
+private def admissionOutput (name : String) : AdmissionOutput :=
+  let (c, trace) := admissionEntry name
+  let (row, kill) := settled c
+  let (code, admitted, dynamicDisabled) : Option String × Option Job × Bool :=
+    match admitStepGuarded c.ctx c.job c.out with
+    | .ok j => (none, some j, false)
+    | .error r => (r.code, none, decide (r = Refusal.dynamicCodeDisabled))
+  { admitted := admitted.isSome, code, dynamicCodeDisabled := dynamicDisabled
+    job := admitted.map jobJson, rowState := rowStateString row.state
+    killedRetryKeys := (kill.map fun (k, _) => k.retryKey).mergeSort fun a b => decide (a ≤ b)
+    recovery := trace.map (·.2) }
+
+/-- Lean `admitStep` and `settleStep` through the production admission owner,
+and each interrupted wire trace through the recovery projection and tick. -/
+@[conformance_family]
+def admission : Family AdmissionInput AdmissionOutput where
+  inputs := admissionEntries.map fun (c, trace) =>
+    { name := c.name, context := contextJson c.ctx, job := jobJson c.job, output := outputJson c.out
+      trace := trace.map (·.1) }
+  model := fun i => admissionOutput i.name
+
+structure SourceBoundaryInput where
+  name : String
+  argv : List String
+  script : Option String
+  deriving ToJson
+
+structure DispatchVerdict where
+  admitted : Bool
+  dynamicCodeDisabled : Bool
+  code : Option String
+  deriving ToJson
+
+private def dispatchVerdict (name : String) : DispatchVerdict :=
+  let o := admissionOutput name
+  { admitted := o.admitted, dynamicCodeDisabled := o.dynamicCodeDisabled, code := o.code }
+
+/-- A served plugin-job tool call under `policy.dynamic: off` carries only its
+call arguments, so the dispatch scenario builds the source-boundary cases whose
+row is a fresh step-0 run call. -/
+def sourceBoundaryDispatchNames : List String :=
+  [ "absent_sources_under_off", "empty_script_under_off", "nonempty_script_under_off"
+  , "whitespace_script_is_source", "inline_script_without_argv_under_off" ]
+
+@[conformance_family]
+def sourceBoundaryDispatch : Family SourceBoundaryInput DispatchVerdict where
+  inputs := (sourceBoundaryCases.filter fun c => c.name ∈ sourceBoundaryDispatchNames).map
+    fun c => { name := c.name, argv := c.job.call.argv, script := c.job.call.script }
+  model := fun i => dispatchVerdict i.name
+
+structure RefusalInput where
+  name : String
+  deriving ToJson
+
+/-- The served dispatch fixture builds a step-0 script spawn under the `check`
+policy and a call whose caller has no configured target scope. -/
+@[conformance_family]
+def dispatchRefusal : Family RefusalInput DispatchVerdict where
+  inputs := (admissionCases.filter fun c =>
+    c.name ∈ ["dynamic_check_spawn_refused", "caller_target_unconfigured_refused"]).map
+      fun c => { name := c.name }
+  model := fun i => dispatchVerdict i.name
 
 def wakeCases : List (String × ExecutionIdentity.Work × ExecutionIdentity.Work) :=
   [ ("same_agent_coalesces", ⟨"row", "selected"⟩, ⟨"row", "selected"⟩)
@@ -2166,9 +2259,5 @@ def wakes : Family WakeInput WakeOutput where
 
 example : wakes.inputs.any (fun i => (wakes.model i).outcome == .refused) = true := by
   native_decide
-
-def admissionCasesJson : String :=
-  (toJson (((admissionCases ++ sourceBoundaryCases).map fun c => render c) ++
-    wireRecoveryCases)).compress
 
 end Conformance.PluginJob

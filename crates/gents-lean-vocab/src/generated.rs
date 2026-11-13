@@ -85,10 +85,6 @@ pub fn lean_persistence_failure_policy_cases() -> &'static [LeanPersistenceFailu
     &lean_contract_snapshot().persistence_failure_policy_cases
 }
 
-pub fn lean_plugin_job_admission_cases() -> &'static [LeanPluginJobAdmissionCase] {
-    &lean_contract_snapshot().plugin_job_admission_cases
-}
-
 pub fn lean_plugin_job_adoption_cases() -> &'static [LeanPluginJobAdoptionCase] {
     &lean_contract_snapshot().plugin_job_adoption_cases
 }
@@ -1132,7 +1128,6 @@ pub struct LeanContractSnapshot {
     pub file_review_subscription_cases: Vec<LeanFileReviewSubscriptionCase>,
     pub count_carrier_cases: serde_json::Value,
     pub schema_argument_repair_cases: Vec<LeanSchemaArgumentRepairCase>,
-    pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
     pub plugin_job_adoption_cases: Vec<LeanPluginJobAdoptionCase>,
     pub plugin_job_control_cases: Vec<LeanPluginJobControlCase>,
     pub identity_publication_cases: Vec<LeanIdentityPublicationCase>,
@@ -2659,31 +2654,6 @@ pub struct LeanPluginJobAddressSplit {
     pub tool_call_id: String,
 }
 
-/// `Conformance.PluginJob.admissionCases`: one `admitStep` row, its context,
-/// job and step output as the model holds them, and the verdict
-/// `settleStep` computes from them.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobAdmissionCase {
-    pub name: String,
-    pub context: LeanPluginJobContext,
-    pub job: LeanPluginJobRow,
-    pub output: LeanPluginJobOutput,
-    pub expected: LeanPluginJobAdmissionExpected,
-    pub wire_trace: Option<LeanPluginJobWireRecoveryTrace>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobAdmissionExpected {
-    pub admitted: bool,
-    pub dynamic_code_disabled: bool,
-    pub code: Option<String>,
-    pub job: Option<LeanPluginJobRow>,
-    pub row_state: String,
-    pub kill: Vec<LeanPluginJobKill>,
-}
-
 /// `Conformance.PluginJob.adoptionCasesJson`: the step-0 adoption rows and the
 /// pure pin, handle and address rows, tagged by `kind`.
 #[derive(Debug, Deserialize)]
@@ -2854,16 +2824,6 @@ pub struct LeanPluginJobControlTarget {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPluginJobDurableRead {
-    pub session_stopped: bool,
-    pub now_millis: u64,
-    pub available: bool,
-    pub progress_revision: u64,
-    pub step_in_flight: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPluginJobExtras {
     pub writes: u32,
     pub scratch: Vec<String>,
@@ -3000,21 +2960,6 @@ pub struct LeanPluginJobProcessScope {
 pub struct LeanPluginJobReceiptDecisions {
     pub terminal_decision: String,
     pub late_decision: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobRecoveryRow {
-    pub running: bool,
-    pub session_stopped: bool,
-    pub terminal_children: u32,
-    pub observed: u32,
-    pub live: u32,
-    pub step_new: u32,
-    pub deadline_expired: bool,
-    pub available: bool,
-    pub stepped: bool,
-    pub step_in_flight: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3159,16 +3104,6 @@ pub struct LeanPluginJobToolCall {
 pub struct LeanPluginJobWireBinding {
     pub wire: String,
     pub target: LeanPluginJobTarget,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobWireRecoveryTrace {
-    pub spawn_wires: Vec<String>,
-    pub interruption: String,
-    pub read: LeanPluginJobDurableRead,
-    pub before: LeanPluginJobRecoveryRow,
-    pub after: LeanPluginJobRecoveryRow,
 }
 
 #[derive(Debug, Deserialize)]
