@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
@@ -6,11 +6,52 @@ use super::{build_query, discovery_payload, CollectionScope, DefraQueryParams};
 use gents_store::config_client::schema_introspection::{
     introspection_query, parse_collection_schema, validate_identifier,
 };
-use gents_store::config_client::ConfigRead;
+use gents_store::config_client::{ConfigClientError, ConfigRead, RerunNote, TransactionFailure};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub(super) struct CollectionDiscoveryError(String);
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum QueryCommandError {
+    #[error(transparent)]
+    Discovery(#[from] CollectionDiscoveryError),
+    #[error(transparent)]
+    Access(#[from] ConfigClientError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl QueryCommandError {
+    /// A transparent variant hides the error it wraps from `source()`, so the
+    /// erased form is the wrapped error itself, which callers that classify an
+    /// `anyhow` chain still find.
+    pub(super) fn erased(self) -> anyhow::Error {
+        match self {
+            Self::Discovery(error) => error.into(),
+            Self::Access(error) => error.into(),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+impl TransactionFailure for QueryCommandError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Other(error) => TransactionFailure::config_client_error(error),
+            Self::Discovery(_) => None,
+        }
+    }
+
+    fn rerun_requested(&self) -> Option<&RerunNote> {
+        match self {
+            Self::Access(error) => TransactionFailure::rerun_requested(error),
+            Self::Other(error) => TransactionFailure::rerun_requested(error),
+            Self::Discovery(_) => None,
+        }
+    }
+}
 
 pub(super) const COLLECTION_GUIDANCE: &str = "collection names a GraphQL type, not a datastore surface or tool. Discover names with schema collection list; inspect a surface with config datastore get SURFACE_ID";
 
@@ -134,23 +175,36 @@ pub async fn execute_command(
     args: &QueryParams,
     scope: &CollectionScope,
 ) -> Result<Value> {
+    execute_typed_command(access, args, scope)
+        .await
+        .map_err(QueryCommandError::erased)
+}
+
+pub(super) async fn execute_typed_command(
+    access: &dyn ConfigRead,
+    args: &QueryParams,
+    scope: &CollectionScope,
+) -> std::result::Result<Value, QueryCommandError> {
     let mut argv = args.argv.iter().map(String::as_str).collect::<Vec<_>>();
     if argv.last() == Some(&"--help") {
         argv.pop();
         argv.insert(0, "help");
     }
     if argv.first() == Some(&"help") {
-        ensure!(
-            args.collection.is_none() && args.options.is_empty(),
-            "help accepts argv only"
-        );
-        ensure!(argv.len() <= 2, "help accepts one command");
+        if args.collection.is_some() || !args.options.is_empty() {
+            return Err(anyhow!("help accepts argv only").into());
+        }
+        if argv.len() > 2 {
+            return Err(anyhow!("help accepts one command").into());
+        }
         return Ok(json!({"help":query_help(argv.get(1).copied())?}));
     }
-    ensure!(
-        argv.len() == 1,
-        "use argv:[fields|find|count|search|explain]; call query with {{\"argv\":[\"help\"]}}"
-    );
+    if argv.len() != 1 {
+        return Err(anyhow!(
+            "use argv:[fields|find|count|search|explain]; call query with {{\"argv\":[\"help\"]}}"
+        )
+        .into());
+    }
     let command = argv[0];
     query_help(Some(command))?;
     let collection = args.collection.as_deref().ok_or_else(|| {
@@ -175,10 +229,9 @@ pub async fn execute_command(
         _ => unreachable!(),
     };
     for key in args.options.keys() {
-        ensure!(
-            allowed.contains(&key.as_str()),
-            "unknown option {key:?}; accepted options: {allowed:?}"
-        );
+        if !allowed.contains(&key.as_str()) {
+            return Err(anyhow!("unknown option {key:?}; accepted options: {allowed:?}").into());
+        }
     }
     let schema_response = access
         .execute_read(&introspection_query(collection)?)
@@ -221,10 +274,9 @@ pub async fn execute_command(
     let selected_fields = params.fields.clone();
     if let Some(page) = &field_page {
         page.validate(&selected_fields)?;
-        ensure!(
-            !args.options.contains_key("offset") && !args.options.contains_key("order"),
-            "field_page cannot combine with row offset/order"
-        );
+        if args.options.contains_key("offset") || args.options.contains_key("order") {
+            return Err(anyhow!("field_page cannot combine with row offset/order").into());
+        }
         let exact = json!({"_docID":{"_eq":page.doc_id}});
         params.filter = Some(match params.filter.take().filter(|v| !v.is_null()) {
             Some(filter) => json!({"_and":[filter, exact]}),
@@ -264,10 +316,12 @@ pub async fn execute_command(
             .map(|v| v.as_str().context("mode must be simple or execute"))
             .transpose()?
             .unwrap_or("simple");
-        ensure!(
-            matches!(mode, "simple" | "execute"),
-            "mode must be simple or execute; call query with argv:[help,explain]"
-        );
+        if !matches!(mode, "simple" | "execute") {
+            return Err(anyhow!(
+                "mode must be simple or execute; call query with argv:[help,explain]"
+            )
+            .into());
+        }
         Some(mode)
     } else {
         None
@@ -288,14 +342,22 @@ pub async fn execute_command(
     })?;
     if let Some(mode) = mode {
         let plan = response["data"]["explain"].clone();
-        ensure!(
-            plan.is_object(),
-            "DefraDB returned no explain plan; call query with argv:[help,explain]"
-        );
-        ensure!(
-            serde_json::to_vec(&plan)?.len() <= 65536,
-            "native plan exceeds 65536 bytes; narrow the fields/filter and repeat query explain"
-        );
+        if !plan.is_object() {
+            return Err(anyhow!(
+                "DefraDB returned no explain plan; call query with argv:[help,explain]"
+            )
+            .into());
+        }
+        if serde_json::to_vec(&plan)
+            .map_err(anyhow::Error::from)?
+            .len()
+            > 65536
+        {
+            return Err(anyhow!(
+                "native plan exceeds 65536 bytes; narrow the fields/filter and repeat query explain"
+            )
+            .into());
+        }
         let mut observations = Vec::new();
         collect_plan_observations(&plan, &mut observations);
         let findings = if observations.is_empty() {
@@ -318,13 +380,17 @@ pub async fn execute_command(
         return Ok(json!({"total_count":response["data"]["COUNT"],"collection":collection}));
     }
     let mut rows = response["data"][collection].clone();
-    ensure!(rows.is_array(), "DefraDB returned no collection result");
+    if !rows.is_array() {
+        return Err(anyhow!("DefraDB returned no collection result").into());
+    }
     if let Some(page) = field_page {
         let rows = rows.as_array().unwrap();
-        ensure!(
-            rows.len() == 1,
-            "field_page document is unavailable under the resolved query filters and authorization"
-        );
+        if rows.len() != 1 {
+            return Err(anyhow!(
+                "field_page document is unavailable under the resolved query filters and authorization"
+            )
+            .into());
+        }
         return Ok(
             json!({"collection":collection,"field_page":page.read(&rows[0], &selected_fields)?}),
         );
@@ -342,7 +408,9 @@ pub async fn execute_command(
         }
     }
     let returned_count = rows.as_array().unwrap().len();
-    let total_bytes = serde_json::to_vec(&rows)?.len();
+    let total_bytes = serde_json::to_vec(&rows)
+        .map_err(anyhow::Error::from)?
+        .len();
     let truncated_fields = super::truncation_sidecar::truncated_fields(&rows);
     let truncated = super::truncate_field_strings(&mut rows);
     let mut result = json!({"results":rows,"returned_count":returned_count,"collection":collection,"truncated":truncated,"total_bytes":total_bytes});
