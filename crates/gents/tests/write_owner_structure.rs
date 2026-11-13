@@ -2023,10 +2023,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-pack/src/plugin/http_calls.rs", 1),
     // E in any_error
     ("crates/gents-pack/src/plugin/store.rs", 1),
-    // PendingInputChanged in DefraStreamWriter::try_publish_steering_message
-    ("crates/gents-session/src/request/streaming.rs", 1),
-    // ReplayEvidenceViolation in load_canonical_assistant_candidates_using
-    ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
     // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
     ("crates/gents-store/src/local/storage_backend.rs", 3),
     // GuestTrap in try_step_on; RecordError in try_step_on
@@ -2049,10 +2045,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
     // MissingReference in ConfigCommandTool::validate_saved
     ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
-    // StaleCompactionGeneration in is_stale_compaction_generation
-    ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
-    // ReplayEvidenceViolation in replay_resolution_error
-    ("crates/gents/src/turn/provider_input/replay.rs", 1),
 ];
 
 /// Owner classifiers: the functions through which an owner asks an erased
@@ -2073,6 +2065,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-eval/src/runner/freeze.rs", &["freeze_refused"]),
     ("crates/gents-eval/src/runner/mod.rs", &["provider_down"]),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
+    ("crates/gents-loop/src/loop_stream/contract.rs", &["ReplayEvidenceViolation::in_chain"]),
     ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
     ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
     ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
@@ -2082,7 +2075,9 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
     ("crates/gents-session/src/request/lifecycle/execution_lease.rs", &["ExecutionOwnershipLost::occurs_in"]),
+    ("crates/gents-session/src/request/lifecycle/queue/folding.rs", &["PendingInputChanged::occurs_in"]),
     ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),
+    ("crates/gents-session/src/session/compaction_entries.rs", &["StaleCompactionGeneration::occurs_in"]),
     ("crates/gents-session/src/session/output.rs", &["CanonicalOutputReadError::in_error"]),
     ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
