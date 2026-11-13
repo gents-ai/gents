@@ -147,6 +147,10 @@ CORE_PACK_TESTS ?= $(CORE_PACKS)
 
 .PHONY: core-packs core-packs-test
 core-packs:
+	@for pack in $(CORE_PACKS); do \
+		version="$$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' "core-packs/$$pack/manifest.json")"; \
+		test "$$version" = "$(RELEASE_VERSION)" || { echo "core-packs/$$pack/manifest.json has version $${version:-<none>}, not the workspace version $(RELEASE_VERSION); a core pack's version follows the runtime, so set its \"version\" to \"$(RELEASE_VERSION)\"" >&2; exit 1; }; \
+	done
 	@tool="$(CORE_PACK_TOOL)"; \
 	if [ -z "$$tool" ]; then $(MAKE) build-cli && tool="$(CARGO_TARGET_DIR)/$(CLI_PROFILE_DIR)/gents"; fi; \
 	tool="$$(cd "$$(dirname "$$tool")" && pwd)/$$(basename "$$tool")"; \
