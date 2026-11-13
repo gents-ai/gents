@@ -1279,7 +1279,7 @@ Model → conformance → Rust bindings:
   generated `completion_continuation_owner` cases pin that outcome.
 - **Wake coalescing** — `Proofs/Session/SessionQueue/*` queue model
   (`background_completion` source, coalesce keys, automated drain) →
-  queue-source rows in `r6_backgrounding_cases`.
+  families `contracts_r6_queue_source` and `contracts_r6_wake_admission`.
 
 ### Compaction
 

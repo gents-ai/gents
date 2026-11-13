@@ -429,9 +429,6 @@ def snapshotRecoveryCasesJson : String :=
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
     ++ "\"recovery_sweep_ids\":"
       ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
-    ++ "\"r6_backgrounding_cases\":"
-      ++ jsonArray
-        (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
 
 def snapshotPluginCasesJson : String :=
   ""
