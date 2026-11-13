@@ -2311,6 +2311,26 @@ fn fn_frame(
     }
 }
 
+/// The type a downcast to `Box<T>` asks for is `T`: a boxed `#[source]` sits
+/// on the chain as the box, so asking for the box is asking for its owner.
+fn unboxed(ty: &syn::Type) -> &syn::Type {
+    let syn::Type::Path(path) = ty else {
+        return ty;
+    };
+    let Some(segment) = path.path.segments.last() else {
+        return ty;
+    };
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return ty;
+    };
+    match (segment.ident == "Box", arguments.args.first()) {
+        (true, Some(syn::GenericArgument::Type(inner))) if arguments.args.len() == 1 => {
+            unboxed(inner)
+        }
+        _ => ty,
+    }
+}
+
 fn type_name(ty: &syn::Type) -> String {
     match ty {
         syn::Type::Path(path) => path
@@ -2736,6 +2756,7 @@ impl ClassifierVisitor<'_> {
     }
 
     fn downcast_site(&mut self, line: usize, asked: Option<&syn::Type>) {
+        let asked = asked.map(unboxed);
         let function = self.function_name();
         let (owner, adapter) = match (self.frames.last(), asked) {
             (Some(frame), Some(asked)) => (
@@ -2769,7 +2790,7 @@ impl ClassifierVisitor<'_> {
     /// it asks for is an error type, so renaming the receiver hides nothing.
     fn asks_error_type(&self, asked: Option<&syn::Type>) -> bool {
         asked.is_some_and(|asked| {
-            let name = self.asked_name(asked);
+            let name = self.asked_name(unboxed(asked));
             name.ends_with("Error") || self.declared.names.contains(&name)
         })
     }
