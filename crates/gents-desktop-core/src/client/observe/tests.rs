@@ -68,6 +68,9 @@ enum ProxyMode {
     /// Keeps every armed subscription streaming and drops every other
     /// request: the runtime's reads fail for a transport reason.
     FailingReads,
+    /// Keeps every armed subscription streaming and answers every other
+    /// request with the runtime's HTTP refusal.
+    RefusingReads,
 }
 
 type ProxyCommands =
@@ -173,7 +176,10 @@ async fn interruptible_proxy(
                         reads.abort_all();
                         while reads.join_next().await.is_some() {}
                     }
-                    if !matches!(next, ProxyMode::Online | ProxyMode::FailingReads) {
+                    if !matches!(
+                        next,
+                        ProxyMode::Online | ProxyMode::FailingReads | ProxyMode::RefusingReads
+                    ) {
                         subscriptions.abort_all();
                         while subscriptions.join_next().await.is_some() {}
                     }
@@ -198,10 +204,10 @@ async fn interruptible_proxy(
                         ProxyMode::Online => {
                             reads.spawn(forward(client, single_request(head), upstream));
                         }
-                        ProxyMode::FailingReads if subscription => {
+                        ProxyMode::FailingReads | ProxyMode::RefusingReads if subscription => {
                             subscriptions.spawn(forward(client, head, upstream));
                         }
-                        ProxyMode::Refusing => {
+                        ProxyMode::Refusing | ProxyMode::RefusingReads => {
                             reads.spawn(async move {
                                 use tokio::io::AsyncWriteExt;
                                 if read_request_body(&mut client, &head).await.is_ok() {
@@ -886,6 +892,66 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
 
     set_proxy_mode(&fixture.proxy_commands, ProxyMode::Online).await;
     wait_for_name(&store, Some("regranted")).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
+    handle.shutdown().await;
+    fixture.stop().await;
+}
+
+/// Lean `failed_snapshot_reconnects_iff_refused`: a snapshot read the runtime
+/// refuses while every subscription stays armed names the refusal and ends
+/// the source, which reconnects on the backoff instead of retrying the read.
+#[tokio::test]
+async fn refused_snapshot_read_reconnects_the_source() {
+    let fixture = ObservedRuntime::start().await;
+    let configured =
+        ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let store = ObservedStores::new();
+    let handle = spawn_observer(
+        store.clone(),
+        configured,
+        fixture.client.client_signing_capability().unwrap(),
+    );
+    wait_for_name(&store, Some("remote")).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
+    let before = handle.metrics_snapshot();
+
+    set_proxy_mode(&fixture.proxy_commands, ProxyMode::RefusingReads).await;
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.physical);
+    fixture
+        .access
+        .write(
+            "test.observer.read_refused",
+            &format!("mutation {{ update_Node(docID: \"{physical}\", input: {{display_name: \"after read refusal\"}}) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Refused,
+    )
+    .await;
+    let mut changes = store.subscribe();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while handle.metrics_snapshot().reconnects < before.reconnects + 2 {
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("a refused read reconnects the source");
+
+    set_proxy_mode(&fixture.proxy_commands, ProxyMode::Online).await;
+    wait_for_name(&store, Some("after read refusal")).await;
     wait_for_connection(
         &store,
         &fixture.runtime_did,

@@ -115,6 +115,9 @@ mod receipt_owner_tests;
 mod stream_waiter_conformance;
 
 #[cfg(test)]
+mod access_classification_tests;
+
+#[cfg(test)]
 mod variable_tests;
 
 #[cfg(test)]
