@@ -29,9 +29,10 @@ fn path_text(path: &std::path::Path) -> Result<&str> {
     })
 }
 
-fn operator_access(graphql: &str) -> Result<ConfigAccess> {
+async fn operator_access(graphql: &str) -> Result<ConfigAccess> {
     Ok(ConfigAccess::Graphql(
-        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)?
+        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)
+            .await?
             .with_client_signed_agent_creates(),
     ))
 }
@@ -88,10 +89,12 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
         },
         reader_agents: args.reader_agents,
     };
-    let receipt =
-        gents_tools::surface::publish_workspace_root(&operator_access(&args.graphql)?, &input)
-            .await
-            .map_err(refused(WorkspaceRootVerb::Publish))?;
+    let receipt = gents_tools::surface::publish_workspace_root(
+        &operator_access(&args.graphql).await?,
+        &input,
+    )
+    .await
+    .map_err(refused(WorkspaceRootVerb::Publish))?;
     print_json(&json!({
         "doc_id": receipt.doc_id,
         "root_path": receipt.root_path,

@@ -122,7 +122,7 @@ pub async fn grant_managed_client_enrollment(
     node_did: &str,
     client_did: &str,
 ) -> Result<bool> {
-    let endpoint = crate::home_state::home_graphql_endpoint(home, graphql)?;
+    let endpoint = crate::home_state::home_graphql_endpoint(home, graphql).await?;
     Ok(crate::enrollment_admin::grant_verified_client(
         home,
         endpoint,
@@ -143,7 +143,7 @@ pub async fn admit_managed_client_enrollment(
     node_did: &str,
     client_did: &str,
 ) -> Result<bool> {
-    let endpoint = crate::home_state::home_graphql_endpoint(home, graphql)?;
+    let endpoint = crate::home_state::home_graphql_endpoint(home, graphql).await?;
     Ok(crate::enrollment_admin::approve_verified_client(
         home,
         endpoint,
@@ -168,7 +168,7 @@ pub async fn admit_managed_enrollment(
     request_id: &str,
     lease_seconds: u64,
 ) -> Result<ManagedEnrollmentDecisionOutcome> {
-    let owner = crate::home_state::home_graphql_endpoint(home, graphql)?;
+    let owner = crate::home_state::home_graphql_endpoint(home, graphql).await?;
     admit_managed_enrollment_as(home, owner, request_id, lease_seconds).await
 }
 

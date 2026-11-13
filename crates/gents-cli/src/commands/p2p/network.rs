@@ -35,7 +35,8 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
     let graphql = gents_service::home_state::resolve_graphql_endpoint(
         args.graphql.as_deref(),
         args.home.as_deref(),
-    )?;
+    )
+    .await?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let status = load_live_http_p2p_status(Some(&home_dir), &graphql).await;
@@ -93,7 +94,8 @@ pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
     let graphql = gents_service::home_state::resolve_graphql_endpoint(
         args.graphql.as_deref(),
         args.home.as_deref(),
-    )?;
+    )
+    .await?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let status = load_live_http_p2p_status(Some(&home_dir), &graphql).await;

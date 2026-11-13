@@ -309,7 +309,8 @@ async fn ready_node_with(
                     let graphql = gents_service::home_state::resolve_graphql_endpoint(
                         Some(&graphql),
                         Some(&choice.home),
-                    )?;
+                    )
+                    .await?;
                     return Ok((choice.home, config, graphql, home_flag));
                 }
                 RepairOutcome::NeedsSetup => {

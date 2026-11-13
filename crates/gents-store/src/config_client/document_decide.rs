@@ -14,8 +14,8 @@ pub struct DocumentAccessQuestion<'a> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentDecideError {
-    #[error(transparent)]
-    Authorize(ConfigClientError),
+    #[error("{0}")]
+    Authorize(#[source] ConfigClientError),
     #[error("requesting DefraDB ACP decision: {0}")]
     Request(#[source] reqwest::Error),
     #[error("reading DefraDB ACP decision response: {0}")]

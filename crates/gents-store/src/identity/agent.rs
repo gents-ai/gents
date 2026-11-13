@@ -38,7 +38,7 @@ pub enum AgentProvisionError {
     AuthorizationUnavailable,
     #[error(transparent)]
     Identity(#[from] IdentityError),
-    #[error(transparent)]
+    #[error("{0}")]
     Access(#[from] crate::config_client::ConfigClientError),
 }
 
@@ -109,7 +109,7 @@ pub enum AgentAdmissionObservationError {
     NodeMismatch,
     #[error(transparent)]
     Identity(#[from] IdentityError),
-    #[error(transparent)]
+    #[error("{0}")]
     Access(#[from] crate::config_client::ConfigClientError),
 }
 

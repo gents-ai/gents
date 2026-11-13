@@ -12,7 +12,7 @@ use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
 pub enum ViewError {
     #[error("reading a view requires an explicit actor")]
     ActorRequired,
-    #[error(transparent)]
+    #[error("{0}")]
     Execute(#[from] ConfigClientError),
     #[error("view response has no data object")]
     InvalidResponse,

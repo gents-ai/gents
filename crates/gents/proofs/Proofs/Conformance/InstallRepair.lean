@@ -76,6 +76,16 @@ def clientIdentities : Conformance.Family ClientIdentityObservation ClientIdenti
   inputs := (List.range 8).map fun n => ⟨bit n 0, bit n 1, bit n 2⟩
   model := clientIdentityAction
 
+private def setups : List HomeSetup :=
+  [⟨false, false⟩, ⟨true, false⟩, ⟨true, true⟩]
+
+@[conformance_family]
+def clientCommands : Conformance.Family ClientCommand ClientIdentityAction where
+  inputs := [HomeSelection.flag, .env, .remembered, .fallback].flatMap fun selection =>
+    [false, true].flatMap fun keyPresent => setups.flatMap fun selected =>
+      [⟨false, false⟩, ⟨true, false⟩].map fun other => ⟨selection, keyPresent, selected, other⟩
+  model := commandIdentityAction
+
 @[conformance_family]
 def clientBindings : Conformance.Family ClientObservation ClientBinding where
   inputs := (List.range 128).map fun n =>
