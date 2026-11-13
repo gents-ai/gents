@@ -595,7 +595,7 @@ async fn read_inference_setup_state_from(
 mod tests {
     use super::*;
     use crate::client::{ClientStore, DesktopPaths, PrincipalIdentity};
-    use serde_json::{json, Value};
+    use serde_json::json;
     use wiremock::{
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
@@ -731,72 +731,49 @@ mod tests {
 
     #[tokio::test]
     async fn inference_metadata_requires_complete_scoped_configuration() {
+        use gents_store::test_support::wire_database::WireDatabase;
+
         let node = "did:runtime";
-        let data = json!({
-            "nodes": [{"node_did": node}], "agents": [], "inference_profiles": [],
-            "inference_backends": [], "backend_observations": []
-        });
-        for (name, payload, accepted) in [
-            ("complete", data.clone(), true),
+        let row = || json!({"_docID": "node", "node_did": node});
+        for (name, rows, accepted) in [
+            ("complete", json!({"Node": [row()]}), true),
             (
-                "missing node",
-                {
-                    let mut data = data.clone();
-                    data["nodes"] = json!([]);
-                    data
-                },
-                false,
+                "omitted backends",
+                json!({"Node": [row()], "InferenceBackendMetadata": null}),
+                true,
             ),
-            (
-                "duplicate node",
-                {
-                    let mut data = data.clone();
-                    data["nodes"] = json!([{"node_did":node},{"node_did":node}]);
-                    data
-                },
-                false,
-            ),
+            ("missing node", json!({}), false),
+            ("omitted node", json!({"Node": null}), false),
+            ("duplicate node", json!({"Node": [row(), row()]}), false),
             (
                 "malformed agent",
-                {
-                    let mut data = data.clone();
-                    data["agents"] = json!([{"agent_did":"incomplete"}]);
-                    data
-                },
-                false,
-            ),
-            (
-                "missing root",
-                {
-                    let mut data = data.clone();
-                    data.as_object_mut().unwrap().remove("inference_backends");
-                    data
-                },
+                json!({"Node": [row()], "Agent": [{"agent_did": "incomplete"}]}),
                 false,
             ),
         ] {
-            let server = MockServer::start().await;
-            Mock::given(method("POST"))
-                .and(path("/api/v0/graphql"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": payload})))
-                .expect(1)
-                .mount(&server)
-                .await;
-            let access = gents_store::config_client::ConfigAccess::graphql(format!(
-                "{}/api/v0/graphql",
-                server.uri()
-            ));
+            let read = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let database = WireDatabase::spawn(rows, {
+                let read = read.clone();
+                std::sync::Arc::new(move |collection| {
+                    read.lock().unwrap().push(collection);
+                    Box::pin(async { Ok(()) })
+                })
+            })
+            .await;
+            let access = gents_store::config_client::ConfigAccess::Graphql(database.reader());
             assert_eq!(
                 load_inference_setup_state(&access, node).await.is_ok(),
                 accepted,
                 "{name}"
             );
-            let request: Value =
-                serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
-            let query = request["query"].as_str().unwrap();
-            assert!(query.contains("inference_backends:"));
-            assert!(!query.contains("requests:"));
-            assert!(!query.contains("sessions:"));
+            let read = read.lock().unwrap();
+            assert!(read.iter().any(|collection| collection == "Node"));
+            assert!(read
+                .iter()
+                .any(|collection| collection == "InferenceBackendMetadata"));
+            assert!(!read
+                .iter()
+                .any(|collection| collection == "AgentRequest" || collection == "AgentSession"));
         }
     }
 

@@ -925,9 +925,7 @@ pub async fn artifact_alternate_owner(
     use gents_store::identity::NodeIdentity;
     // The local Agent signs every alternate request; an owner mismatch is
     // the request naming a workspace owner other than the workspace's own.
-    let identity =
-        gents_store::identity::KeyIdentity::load_or_create(fx._dir.path().join("agent.key"), None)
-            .unwrap();
+    let identity = gents_store::test_support::held_runtime_identity(fx._db.node_identity.did());
     let did = identity.did();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(

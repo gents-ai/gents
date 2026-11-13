@@ -1348,7 +1348,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
     )
     .await?;
     core.save_agent(
-        &serde_json::from_value(runtime.agent_value(&agent, "profile"))?,
+        &serde_json::from_value(runtime.agent_value_for_create(&agent, "profile").await)?,
         None,
     )
     .await?;
@@ -1439,10 +1439,8 @@ async fn direct_refresh_distinguishes_published_from_superseded_reads() -> anyho
 
     let tmp = tempfile::tempdir()?;
     let (core, runtime) = served_core_without_observer(&tmp).await?;
-    let mut proxy = GatedRuntimeProxy::start(runtime.graphql(), |body| {
-        body.contains("query DesktopSnapshot")
-    })
-    .await;
+    let mut proxy =
+        GatedRuntimeProxy::start(runtime.graphql(), GatedRuntimeProxy::node_snapshot).await;
     core.add_local_standard_peer_route_for_test(
         "Served Runtime",
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",

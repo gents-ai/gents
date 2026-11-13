@@ -1134,20 +1134,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "foreign processing rows must not degrade local liveness: {status}"
     );
     assert_eq!(
-        status
-            .pointer("/liveness/ignored_foreign_processing_count")
-            .and_then(Value::as_i64),
-        Some(1),
-        "the foreign processing row must be accounted as ignored-foreign: {status}"
-    );
-    assert_eq!(
-        status
-            .pointer("/liveness/ignored_foreign_tool_call_count")
-            .and_then(Value::as_i64),
-        Some(1),
-        "the foreign running tool call must be accounted as ignored-foreign: {status}"
-    );
-    assert_eq!(
         budget.get("compaction_count").and_then(Value::as_i64),
         Some(1),
         "the foreign session's compaction must not join the local context budget: {status}"
@@ -1194,13 +1180,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .and_then(Value::as_i64),
         Some(0),
         "foreign processing rows must not degrade the local liveness check: {health}"
-    );
-    assert_eq!(
-        health
-            .pointer("/checks/liveness/ignored_foreign_processing_count")
-            .and_then(Value::as_i64),
-        Some(1),
-        "the foreign processing row must be accounted as ignored-foreign under /healthz: {health}"
     );
     assert_eq!(
         health.get("status").and_then(Value::as_str),

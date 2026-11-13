@@ -1,5 +1,6 @@
 pub mod acp_policies;
 pub mod relationships;
+pub mod wire_database;
 
 pub fn attach_node_extensions(
     node: &std::sync::Arc<defra_node::Node>,

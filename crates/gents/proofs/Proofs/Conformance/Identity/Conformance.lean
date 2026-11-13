@@ -2115,12 +2115,12 @@ def json : Json := Json.mkObj
    ("pairing_overlay_cases", toJson
       ([false, true].flatMap fun revoked =>
         let state := if revoked then apply Configuration.agentPairingFixture
-          (.revoke ⟨"configuration", "overlay", "parent", .object "nodes" "node"⟩)
+          (.revoke ⟨"application_pairings", "overlay", "parent", .object "nodes" "node"⟩)
           else Configuration.agentPairingFixture
         ["user", "runtime", "agent", "sibling", "outsider"].flatMap fun actor =>
           ["read", "update"].map fun permission => Json.mkObj
             [("revoked", toJson revoked), ("actor", toJson actor), ("permission", toJson permission),
-             ("expected", toJson (Household.allowed 5 state actor "configuration" "overlay" permission))])),
+             ("expected", toJson (Household.allowed 5 state actor "application_pairings" "overlay" permission))])),
    ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
       checks withReader ++ [actionJson withReader (.grant writer)] ++ checks withWriter ++
       [actionJson withWriter (.revoke writer)] ++ checks withoutWriter ++

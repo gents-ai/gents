@@ -31,12 +31,17 @@ failures = []
 
 
 def run(folder, request, timeout=900):
-    """One plugin call; (exit code, stdout, stderr, seconds)."""
+    """One plugin call; (exit code, stdout, stderr, seconds).
+
+    Backtraces are off: with RUST_BACKTRACE set, gents appends its own stack to a plain failure,
+    and those frames (std::panicking::catch_unwind under main) read as a crash to plain_failure.
+    A real panic still prints `panicked at`."""
     start = time.time()
     p = subprocess.run(
         [GENTS, "config", "pack", "plugin", "run", "data_tables", "--home", HOME, "--bind-dir", folder,
          "--input", json.dumps(request)],
-        capture_output=True, text=True, timeout=timeout)
+        capture_output=True, text=True, timeout=timeout,
+        env=dict(os.environ, RUST_BACKTRACE="0", RUST_LIB_BACKTRACE="0"))
     return p.returncode, p.stdout, p.stderr, time.time() - start
 
 

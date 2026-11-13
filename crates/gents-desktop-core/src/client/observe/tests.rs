@@ -1797,10 +1797,6 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
     );
 }
 
-fn desktop_snapshot(body: &str) -> bool {
-    body.contains("query DesktopSnapshot")
-}
-
 /// Every snapshot load sees runtime changes while it is in flight: one to its
 /// own node's row and one adding another node's row on the same runtime. Both
 /// arrive on the runtime's subscription as its node's events, and the reload
@@ -1814,7 +1810,8 @@ async fn request_events_during_every_snapshot_load_still_publish() {
     runtime
         .publish_node(serde_json::json!({"display_name": "before"}))
         .await;
-    let mut proxy = GatedRuntimeProxy::start(runtime.graphql(), desktop_snapshot).await;
+    let mut proxy =
+        GatedRuntimeProxy::start(runtime.graphql(), GatedRuntimeProxy::node_snapshot).await;
     let directory = tempfile::tempdir().unwrap();
     let mut peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
         .await

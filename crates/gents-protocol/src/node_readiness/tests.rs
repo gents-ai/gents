@@ -166,7 +166,9 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
 
     let with_unknown_field = readiness_row(
         "did:test:node",
-        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{"agent_did":"a","state":"ready","reason":null,"extra":true}]}"#.to_string(),
+        format!(
+            r#"{{"format_version":{NODE_READINESS_FORMAT_VERSION},"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{{"agent_did":"a","state":"ready","reason":null,"extra":true}}]}}"#
+        ),
     );
     assert_eq!(
         projected_unknown(&with_unknown_field),
@@ -174,7 +176,9 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
     );
     let with_unknown_top_level_field = readiness_row(
         "did:test:node",
-        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{"agent_did":"a","state":"ready","reason":null}],"extra":true}"#.to_string(),
+        format!(
+            r#"{{"format_version":{NODE_READINESS_FORMAT_VERSION},"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{{"agent_did":"a","state":"ready","reason":null}}],"extra":true}}"#
+        ),
     );
     assert_eq!(
         project_node_readiness_summary(Some(&with_unknown_top_level_field), "did:test:node"),

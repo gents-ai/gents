@@ -403,19 +403,13 @@ async fn publish_workspace_root(
     .unwrap()
     .with_client_signed_agent_creates();
     let access = gents_store::config_client::ConfigAccess::Graphql(endpoint.clone());
-    let nodes = access
-        .execute(&format!(
-            r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_did }} }}"#,
-            gents_store::graphql::escape_graphql_string(node_did)
-        ))
+    let agent = access
+        .read_view(&gents_documents::views::config::DefaultAgentSelectionList::new(node_did))
         .await
-        .unwrap();
-    let agent = nodes
-        .pointer("/Node/0/default_agent_did")
-        .or_else(|| nodes.pointer("/data/Node/0/default_agent_did"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| panic!("the Node names its default Agent: {nodes}"))
-        .to_owned();
+        .unwrap()
+        .into_iter()
+        .find_map(|row| row.document.default_agent_did)
+        .expect("the Node has a default Agent selection");
     gents_tools::surface::set_workspace_root_with_readers(
         &access,
         node_did,

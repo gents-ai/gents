@@ -81,7 +81,7 @@ pub(super) async fn read_menu(
         MenuId::RemoteTools => query_collection_sorted(&access, MCP_SPEC, node_did)
             .await
             .map(|documents| sections::remote_tools(&documents)),
-        MenuId::Tasks => load_task_inventory(&access, None)
+        MenuId::Tasks => load_task_inventory(&access, node_did, None)
             .await
             .map(|inventory| tasks(&inventory.tasks)),
         MenuId::Mailbox => gents_session::operations::mailbox::list(&access, &Default::default())
@@ -295,7 +295,7 @@ pub(super) async fn trigger_sources(
     access: &ConfigAccess,
     node_did: &str,
 ) -> anyhow::Result<(Vec<Value>, Sources)> {
-    let inventory = load_task_inventory(access, None).await?;
+    let inventory = load_task_inventory(access, node_did, None).await?;
     let owned = |rows: Vec<Value>| -> Vec<Value> {
         rows.into_iter()
             .filter(|row| row["node_did"] == node_did)

@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;

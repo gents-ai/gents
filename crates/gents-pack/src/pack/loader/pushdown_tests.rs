@@ -26,7 +26,7 @@ fn lsp_pack_prompt_follows_agent_context_sidecar_reference() {
         root.path().join("pack_config.json"),
         serde_json::to_vec(&serde_json::json!({
             "node":{},
-            "agents":[{"agent_did":"lsp-coder","context_id":"distinct-context","inference_profile_id":"gents:inference-slot:coder"}],
+            "agents":[{"agent_did":"lsp-coder","creation_nonce":"lsp-coder-nonce","context_id":"distinct-context","inference_profile_id":"gents:inference-slot:coder"}],
             "contexts":[{"context_id":"distinct-context","system_prompt":"./custom_assets/prompt.md"}]
         })).unwrap(),
     ).unwrap();

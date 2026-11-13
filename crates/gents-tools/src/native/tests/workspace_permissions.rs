@@ -1,5 +1,7 @@
 use super::*;
-use crate::plugin::approval::{self, workspace, Answer, Request};
+use crate::plugin::approval::{self, workspace};
+#[cfg(target_os = "macos")]
+use crate::plugin::approval::{Answer, Request};
 use gents_loop::tool::Tool;
 
 struct Fixture {
@@ -72,6 +74,7 @@ impl Fixture {
         .await
     }
 
+    #[cfg(target_os = "macos")]
     async fn question(&self) -> Request {
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
@@ -99,6 +102,7 @@ fn write_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted)
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn command_consent_precedes_execution_and_cannot_remember_a_folder() {
     let fixture = Fixture::new();
@@ -133,6 +137,7 @@ async fn command_consent_precedes_execution_and_cannot_remember_a_folder() {
         .is_empty());
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn denied_command_cannot_execute() {
     let fixture = Fixture::new();
@@ -155,6 +160,7 @@ async fn denied_command_cannot_execute() {
     assert!(!PathBuf::from(fixture.marker()).exists());
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn changed_workspace_selection_retires_the_command_without_execution() {
     let fixture = Fixture::new();
@@ -199,6 +205,7 @@ async fn full_access_preserves_the_configured_command_ceiling() {
         .is_empty());
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn cancelling_a_command_wait_removes_its_question_without_execution() {
     let fixture = Fixture::new();
@@ -217,6 +224,7 @@ async fn cancelling_a_command_wait_removes_its_question_without_execution() {
         .is_empty());
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn strict_ask_requests_consent_for_each_read_only_command() {
     let fixture = Fixture::new();
@@ -242,6 +250,7 @@ async fn strict_ask_requests_consent_for_each_read_only_command() {
     }
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn full_access_commands_do_not_prompt() {
     let fixture = Fixture::new();
@@ -259,6 +268,7 @@ async fn full_access_commands_do_not_prompt() {
         .is_empty());
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn workspace_preferences_route_commands_as_the_lean_model() {
     for case in gents_lean_vocab::families::workspace_permissions_command_consent::cases::<String>()
