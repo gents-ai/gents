@@ -938,30 +938,25 @@ async fn a_profile_edit_is_fenced_alike_through_its_agent_and_by_its_exact_id() 
 
 #[tokio::test]
 async fn modeled_job_policy_updates_follow_native_tools_authorization() {
-    let cases = &gents_lean_vocab::lean_self_config_selection_cases().job_guard_cases;
-    let native_cases: Vec<_> = cases
-        .iter()
-        .filter(|case| case.name.starts_with("native_agent_update_"))
-        .collect();
-    assert!(native_cases
-        .iter()
-        .any(|case| case.native_authorized && case.native_source_authorized));
-    assert!(native_cases.iter().any(|case| !case.native_authorized));
-    assert!(native_cases.iter().any(|case| {
-        case.native_authorized && !case.native_source_authorized && case.add_schema_tool
-    }));
-    for case in native_cases {
-        let fixture = gents_automation::test_support::self_config_fixture(&case.name).await;
+    for case in gents_lean_vocab::families::contracts_self_config_job_guard_native::cases() {
+        let candidate_integrations =
+            serde_json::to_value(&case.input.candidate_integrations).expect("integrations encode");
+        let stored_integrations = case
+            .input
+            .stored_integrations
+            .as_ref()
+            .map(|stored| serde_json::to_value(stored).expect("integrations encode"));
+        let fixture = gents_automation::test_support::self_config_fixture(&case.input.name).await;
         let tools_id = format!("{}:tools", fixture.agent_did());
         let node_did = fixture.node_did().to_owned();
         fixture
             .update_signed_configuration(
                 gents_store::collection::Collection::Tools,
                 &tools_id,
-                json!({"integrations": case.stored_integrations}),
+                json!({"integrations": stored_integrations}),
             )
             .await;
-        if case.native_authorized {
+        if case.input.native_authorized {
             fixture.grant_selected_configuration().await;
         }
         let (doc_id, before) = fixture
@@ -1007,9 +1002,9 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
         .unwrap();
         assert_eq!(
             decisions == [defra_node::DocumentAccessDecision::Allowed],
-            case.native_authorized,
+            case.input.native_authorized,
             "{}: native Tools update",
-            case.name
+            case.input.name
         );
         assert!(!fixture
             .db
@@ -1020,9 +1015,9 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             .unwrap());
         let mut patch = vec![(
             "integrations".into(),
-            Some(case.candidate_integrations.clone()),
+            Some(candidate_integrations.clone()),
         )];
-        if case.add_schema_tool {
+        if case.input.add_schema_tool {
             let mut built_ins = before
                 .get("built_ins")
                 .filter(|value| value.is_object())
@@ -1034,10 +1029,9 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
         }
         let core = fixture.core();
         let result = core.apply(tools_request(&core, patch)).await;
-        assert_eq!(result.is_ok(), case.accepted, "{}: {result:?}", case.name);
-        if let Err(error) = result {
-            if !case.native_authorized {
-                let denied = gents_protocol::error_chain::find_map_source(&error, |cause| {
+        if let Err(error) = &result {
+            if !case.input.native_authorized {
+                let denied = gents_protocol::error_chain::find_map_source(error, |cause| {
                     cause
                     .downcast_ref::<gents_store::config_client::ConfigClientError>()
                     .map(|error| {
@@ -1046,7 +1040,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
                             || matches!(error, gents_store::config_client::ConfigClientError::ConfigurationMutationNotApplied { .. })
                     })
                 });
-                assert_eq!(denied, Some(true), "{}: {error:#}", case.name);
+                assert_eq!(denied, Some(true), "{}: {error:#}", case.input.name);
             }
         }
         let (_, after) = fixture
@@ -1067,18 +1061,18 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             .await
             .unwrap()
             .expect("selected Tools remains visible");
-        let expected = if case.accepted {
-            &case.candidate_integrations["plugins"][0]["job"]["policy"]["dynamic"]
+        let expected = if result.is_ok() {
+            &candidate_integrations["plugins"][0]["job"]["policy"]["dynamic"]
         } else {
             &before["integrations"]["plugins"][0]["job"]["policy"]["dynamic"]
         };
         assert_eq!(
             &after["integrations"]["plugins"][0]["job"]["policy"]["dynamic"], expected,
             "{}",
-            case.name
+            case.input.name
         );
-        if case.add_schema_tool {
-            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.name);
+        if case.input.add_schema_tool {
+            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.input.name);
             assert!(!fixture
                 .db
                 .node
@@ -1090,6 +1084,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
                 .await
                 .unwrap());
         }
+        case.check(result.is_ok());
         fixture.db.node.shutdown().await.unwrap();
     }
 }

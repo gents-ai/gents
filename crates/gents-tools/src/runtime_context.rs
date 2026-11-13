@@ -202,21 +202,3 @@ where
     .await
 }
 
-#[cfg(test)]
-mod invocation_correlation_tests {
-    #[test]
-    fn invocation_correlation_matches_lean() {
-        let snapshot = gents_lean_vocab::lean_contract_snapshot();
-        assert_eq!(snapshot.invocation_correlation_cases.len(), 16);
-        for case in &snapshot.invocation_correlation_cases {
-            assert_eq!(
-                gents_loop::tool_call_lifecycle::runtime::invocation_correlation(
-                    case.request.as_deref(),
-                    case.supplied.as_deref(),
-                ),
-                case.expected.as_deref(),
-                "{case:?}"
-            );
-        }
-    }
-}

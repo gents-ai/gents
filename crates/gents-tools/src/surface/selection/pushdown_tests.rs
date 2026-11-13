@@ -1,19 +1,13 @@
-use gents_lean_vocab::lean_goal_capability_resolution_cases;
-
 #[test]
-fn generated_goal_capability_resolution_matches_rust_decoder() {
-    let cases = lean_goal_capability_resolution_cases();
-    assert_eq!(cases.len(), 4, "goal capability resolution matrix drifted");
-    for case in cases {
-        let (goal_tools, goal_creation) = crate::surface::resolve_goal_capabilities(
-            case.explicit_goal_tools,
-            case.explicit_goal_create,
+fn goal_capability_resolution_matches_the_lean_model() {
+    gents_lean_vocab::families::contracts_goal_capability_resolution::replay(|i| {
+        let (goal_tools, goal_create) = crate::surface::resolve_goal_capabilities(
+            i.explicit_goal_tools,
+            i.explicit_goal_create,
         );
-        assert_eq!(
-            (goal_tools, goal_creation),
-            (case.expected_goal_tools, case.expected_goal_create),
-            "Lean capability resolution case {}",
-            case.name
-        );
-    }
+        gents_lean_vocab::families::contracts_goal_capability_resolution::GoalCapabilityResolutionOutput {
+            goal_tools,
+            goal_create,
+        }
+    });
 }

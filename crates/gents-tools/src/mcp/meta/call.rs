@@ -384,7 +384,7 @@ mod tests {
 
     use crate::mcp::health::{HealthStatus, ServiceHealth, ServiceHealthMap};
     use crate::mcp::pool::McpPool;
-    use gents_lean_vocab::{lean_tool_preflight_cases, LeanToolPreflightCase};
+    use gents_lean_vocab::families::contracts_tool_preflight as preflight;
 
     fn search_schema() -> Map<String, Value> {
         json!({
@@ -402,22 +402,18 @@ mod tests {
 
     #[tokio::test]
     async fn generated_tool_preflight_cases_match_health_and_schema_gates() {
-        for case in lean_tool_preflight_cases() {
-            let actual = actual_preflight_contract(case).await;
-            assert_eq!(
-                actual.0, case.decision,
-                "Lean ToolExecution preflight case {} must match Rust dispatch decision",
-                case.name
-            );
-            assert_eq!(
-                actual.1, case.failure_class,
-                "Lean ToolExecution preflight case {} must match Rust failure class",
-                case.name
-            );
+        for case in gents_lean_vocab::families::contracts_tool_preflight::cases::<String, String>() {
+            let (decision, failure_class) = actual_preflight_contract(&case.input).await;
+            case.check(preflight::ToolPreflightOutput {
+                decision,
+                failure_class,
+            });
         }
     }
 
-    async fn actual_preflight_contract(case: &LeanToolPreflightCase) -> (String, Option<String>) {
+    async fn actual_preflight_contract(
+        case: &preflight::ToolPreflightInput<String, String>,
+    ) -> (String, Option<String>) {
         let health_map = ServiceHealthMap::new();
         health_map
             .set_for_test(

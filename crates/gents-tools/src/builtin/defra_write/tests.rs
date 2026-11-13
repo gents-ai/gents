@@ -61,18 +61,16 @@ fn write_confirmation_matches_modeled_result() {
 
 #[test]
 fn native_input_admission_matches_lean() {
-    let cases = gents_lean_vocab::lean_write_input_cases();
-    assert_eq!(cases.len(), 256);
-    for case in cases {
-        let base = match case["expected"].as_str().unwrap() {
+    gents_lean_vocab::families::contracts_write_input::replay::<String>(|case| {
+        let base = match case.expected.as_str() {
             "text" => "String",
             "integer" => "Int",
             "number" => "Float64",
             "boolean" => "Boolean",
             other => panic!("unknown kind {other}"),
         };
-        let schema = format!("{base}{}", if case["nullable"] == true { "" } else { "!" });
-        let value = match case["actual"].as_str() {
+        let schema = format!("{base}{}", if case.nullable { "" } else { "!" });
+        let value = match case.actual.as_deref() {
             None => None,
             Some("text") => Some(json!("measurement")),
             Some("integer") => Some(json!(86)),
@@ -83,14 +81,8 @@ fn native_input_admission_matches_lean() {
             Some("null") => Some(json!(null)),
             other => panic!("unknown kind {other:?}"),
         };
-        let result = super::input::validate_input(
-            &schema,
-            case["required"] == true,
-            case["filled"] == true,
-            value.as_ref(),
-        );
-        assert_eq!(result.is_ok(), case["accepted"] == true, "{case}");
-    }
+        super::input::validate_input(&schema, case.required, case.filled, value.as_ref()).is_ok()
+    });
 }
 
 async fn node_with_actionrequest() -> Arc<EmbeddedNode> {

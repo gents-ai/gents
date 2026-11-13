@@ -18,16 +18,13 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         assert!(!result.has_errors(), "{mutation}: {:?}", result.errors);
     }
 
-    let cases = &gents_lean_vocab::lean_contract_snapshot().artifact_admission_cases;
-    assert_eq!(cases.len(), 13);
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
-        let binding = &case["binding"];
-        let mode = CommandExecutionMode::parse(case["mode"].as_str().unwrap()).unwrap();
+    use gents_lean_vocab::families::contracts_artifact_admission::ArtifactAdmissionOutput;
+    for case in gents_lean_vocab::families::contracts_artifact_admission::cases() {
+        let name = case.input.name.as_str();
+        let binding = &serde_json::to_value(&case.input.binding).expect("binding encodes");
+        let mode = CommandExecutionMode::parse(&case.input.mode).unwrap();
         let fx = artifact_test_fixture(&[]).await;
         if name == "unsupported_platform" {
-            assert_eq!(case["expected_admitted"], false);
-            assert!(case["expected_bound_mode"].is_null());
             let error =
                 gents_session::workspace::overlay::resolve_request_workspace_overlay_on_host(
                     &fx.node,
@@ -40,6 +37,10 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
                 .await
                 .unwrap_err();
             assert!(error.to_string().contains("enforceable artifact sandbox"));
+            case.check(ArtifactAdmissionOutput {
+                admitted: false,
+                bound_mode: None,
+            });
             continue;
         }
         let alternate = artifact_alternate_owner(&fx, name, binding).await;
@@ -51,14 +52,6 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
             assert_eq!(
                 name, "wrong_owner",
                 "unexpected preclaim denial: {claim_outcome:?}"
-            );
-            assert_eq!(
-                case["expected_admitted"], false,
-                "{name}: {claim_outcome:?}"
-            );
-            assert!(
-                case["expected_bound_mode"].is_null(),
-                "{name}: {claim_outcome:?}"
             );
         }
         if name == "unsealed" {
@@ -144,18 +137,12 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         .await;
         let observed_mode = result.as_ref().ok().map(|_| effective.mode.as_str());
         assert_eq!(
-            observed_mode,
-            case["expected_bound_mode"].as_str(),
-            "{name}: {result:?}"
-        );
-        assert_eq!(
-            observed_mode == Some("artifact_write"),
-            case["expected_admitted"].as_bool().unwrap(),
-            "{name}"
-        );
-        assert_eq!(
             std::fs::read_to_string(root.join("README.md")).unwrap(),
             "sealed source\n"
         );
+        case.check(ArtifactAdmissionOutput {
+            admitted: observed_mode == Some("artifact_write"),
+            bound_mode: observed_mode.map(str::to_string),
+        });
     }
 }

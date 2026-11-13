@@ -657,8 +657,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalCreateCases")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_capability_resolution_cases"
-      "GoalCapabilityResolutionCases")
+      "family"
+      "contracts_goal_capability_resolution")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "task_goal_publication_cases"
@@ -955,24 +955,32 @@ def caseCoverage : List CoverageEntry :=
       "OptimizationCases")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "tool_policy_cases"
-      "ToolPolicyCases")
+      "family"
+      "contracts_tool_policy_composition")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
   , tagged (consumerCoverage
       "application_write_cases"
       "ApplicationWriteCases")
       "tool-policy" [Surface.agentFacing, Surface.operatorCli]
   , tagged (consumerCoverage
-      "field_read_cases"
-      "FieldReadCases")
+      "family"
+      "contracts_field_read")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "write_input_cases"
-      "WriteInputCases")
+      "family"
+      "contracts_write_input")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "invocation_correlation_cases"
-      "InvocationCorrelationCases")
+      "family"
+      "contracts_write_input_query_filter")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_write_input_plugin_fill")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_invocation_correlation")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -992,16 +1000,16 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigScopeCases")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "agent_decision_cases"
-      "AgentDecisionCases")
+      "family"
+      "contracts_self_config_agent_decision")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "agent_materialization_cases"
-      "AgentMaterializationCases")
+      "family"
+      "contracts_self_config_agent_materialization")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "sibling_tools_cases"
-      "SiblingToolsCases")
+      "family"
+      "contracts_self_config_sibling_tools")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "session_recovery_cases"
@@ -1216,20 +1224,26 @@ def caseCoverage : List CoverageEntry :=
       "request_lifecycle_operator_ui_cases"
       "RequestLifecycleOperatorUiCases")
       "request-lifecycle" [Surface.operatorUi]
-  , tagged (consumerWithFollowUp
-      "tool_preflight_cases"
-      "ToolExecutionPreflight"
-      "Generated inputs exercise the production health and schema gates. Full call_tool dispatch and typed health-denial propagation still need generated owner observations.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_tool_preflight")
       "tool-call" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "tool_retry_cases"
-      "ToolExecutionRetry"
-      "Drives the real safe-read retry after a transport failure. The remaining generated failure/idempotency matrix needs production owner consumers.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_tool_preflight_discover")
       "tool-call" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "tool_retry_cases"
-      "ToolExecutionRetry"
-      "Drives a real failed call without idempotency metadata and observes no retry or eviction. Explicit idempotency metadata and native-command cases are not exercised by this path.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_tool_retry_list_tools")
+      "tool-call" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_tool_retry_call")
+      "tool-call" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_tool_retry_unreached"
+      "model-production-gap: production has no retry classifier; the MCP pool retries a list_tools transport failure and never retries call_tool, and carries no idempotency evidence, so the other operations and failure classes have no production path.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -1411,18 +1425,21 @@ def caseCoverage : List CoverageEntry :=
       "recovery_sweep_cases"
       "RecoverySweepCases")
       "recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "artifact_mode_meet_cases"
-      "ArtifactModeMeetCases")
+  , tagged { boundaryCoverage
+      "family"
+      "contracts_artifact_admission"
+      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "artifact_admission_cases"
-      "ArtifactAdmissionCases"
+  , tagged { boundaryCoverage
+      "family"
+      "contracts_artifact_spawn_launch"
+      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
       "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox.")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "artifact_spawn_cases"
-      "ArtifactSpawnCases"
+  , tagged { boundaryCoverage
+      "family"
+      "contracts_artifact_spawn_lsp"
+      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
       "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox.")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1641,8 +1658,21 @@ def caseCoverage : List CoverageEntry :=
       "RepeatedToolFailureCases")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "self_config_selection_cases"
-      "SelfConfigSelectionCases")
+      "family"
+      "contracts_self_config_tool_flag")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_self_config_job_guard")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_self_config_job_guard_native")
+      "self-config" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_self_config_job_guard_unreached"
+      "model-production-gap: an operator Tools write bypasses the grant guard and no production scenario drives an operator write of a job block.")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_model_slot_cases"
@@ -2483,16 +2513,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "family" "event_delivery_event_source_convergence")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "mcp_health_cases"
-      "MCPHealthCases")
+      "family"
+      "contracts_mcp_health_transition")
       "mcp-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "mcp_health_cases"
-      "MCPHealthCases")
-      "mcp-health" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "mcp_health_cases"
-      "MCPHealthCases")
+      "family"
+      "contracts_mcp_health_view")
       "mcp-health" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"

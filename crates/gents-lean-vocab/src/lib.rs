@@ -244,13 +244,6 @@ pub fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileC
         .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
 }
 
-pub fn lean_tool_policy_case(name: &str) -> &'static LeanToolPolicyCase {
-    lean_tool_policy_cases()
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean tool-policy case {name:?} was not emitted"))
-}
-
 pub fn lean_session_recovery_case(name: &str) -> &'static LeanSessionRecoveryCase {
     lean_contract_snapshot()
         .session_recovery_cases
@@ -390,14 +383,6 @@ pub fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReduce
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean compaction-reducer case {name:?} was not emitted"))
-}
-
-pub fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
-    lean_contract_snapshot()
-        .tool_retry_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean tool retry case {name:?} was not emitted"))
 }
 
 pub fn lean_command_policy_case(name: &str) -> &'static LeanCommandPolicyCase {

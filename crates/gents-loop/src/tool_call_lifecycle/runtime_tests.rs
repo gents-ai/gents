@@ -434,3 +434,10 @@ async fn tool_execution_bounds_prefers_the_earlier_request_deadline() {
     assert_eq!(bounds.deadline_at, Some(request_deadline));
     assert!(!bounds.cancellation_token.is_cancelled());
 }
+
+#[test]
+fn invocation_correlation_matches_the_lean_model() {
+    gents_lean_vocab::families::contracts_invocation_correlation::replay(|i| {
+        invocation_correlation(i.request.as_deref(), i.supplied.as_deref()).map(str::to_string)
+    });
+}
