@@ -1035,7 +1035,7 @@ where
                         provider_request_id = rig_compat::observed_request_id(&raw);
                         let usage = raw.token_usage();
                         if let Some((observed, output)) = usage.as_ref().and_then(|usage| {
-                            crate::provider_usage::contract_usage_input_tokens(usage)
+                            rig_compat::contract_usage_input_tokens(usage)
                                 .map(|input| (input, usage.output_tokens))
                         }) {
                             config

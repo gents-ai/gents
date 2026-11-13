@@ -42,6 +42,38 @@ where
 {
 }
 
+/// Rig's request, error, usage and stream-event types, for provider code that
+/// reads or produces them without implementing a Rig trait. A Rig type that
+/// such code needs is added here rather than named at the call site, so this
+/// list is the whole completion surface a replacement of Rig must cover.
+pub mod completion {
+    pub use rig::completion::{CompletionError, CompletionRequest, Usage};
+    pub use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
+}
+
+/// The HTTP exchange types Rig's client hands a transport and takes back, for
+/// code that inspects or rewrites an exchange. `Request`, `Response` and
+/// `HeaderValue` are the `http` crate's. Rig's client trait, its lazy body
+/// and its provider clients are deliberately absent: a module that implements
+/// or builds them names Rig and stays on the ratchet's list.
+pub mod http {
+    pub use rig::http_client::sse::BoxedStream;
+    pub use rig::http_client::{Error, HeaderValue, Request, Response, StreamingResponse};
+}
+
+pub fn charged_usage_total(usage: rig::completion::Usage) -> u64 {
+    usage.input_tokens.saturating_add(usage.output_tokens)
+}
+
+/// [`crate::provider_usage::contract_input_tokens`] of a Rig usage report.
+pub fn contract_usage_input_tokens(usage: &rig::completion::Usage) -> Option<u64> {
+    crate::provider_usage::contract_input_tokens(
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.cache_creation_input_tokens,
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CachedInputTokensObservation {
     NotAvailable,

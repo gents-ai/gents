@@ -12,7 +12,7 @@ use gents_claude::metadata::MetadataError;
 use gents_claude::wire::WireError;
 use serde_json::Value;
 
-use rig::completion::CompletionRequest;
+use crate::rig_compat::completion::CompletionRequest;
 
 pub(crate) use history_params::stamp_history_params;
 pub use history_params::{PREVIOUS_REQUEST_ID_PARAM, RAW_TOOL_ARGUMENTS_BY_CALL_PARAM};
