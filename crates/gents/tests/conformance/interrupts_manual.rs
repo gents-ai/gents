@@ -178,26 +178,6 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
 }
 
 #[tokio::test]
-async fn interrupt_request_errors_on_unknown_request_id() {
-    let db = test_db("interrupt-unknown").await;
-    let err = gents_session::request::interrupt::interrupt_request(
-        &db.node,
-        support::managed_agent(&db).await.as_ref(),
-        "bogus-id-that-does-not-exist",
-    )
-    .await;
-    assert!(
-        err.is_err(),
-        "interrupting unknown request_id must error, got Ok"
-    );
-    let message = err.unwrap_err().to_string();
-    assert!(
-        message.contains("missing"),
-        "error must report a missing scoped request; got: {message}"
-    );
-}
-
-#[tokio::test]
 async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     let db = test_db("s7-interrupt-latch").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
@@ -485,127 +465,106 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
 }
 
 #[tokio::test]
-async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
-    let db = test_db("interrupt-drain-wakeups").await;
-    let actors = support::agent_requests::RequestActors::new(&db).await;
-    let session_id = "interrupt-drain-session";
-    let foreign = tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-drain"))
-        .await
-        .unwrap();
-    let foreign_node_did = gents_store::identity::NodeIdentity::did(&foreign).to_owned();
-    let foreign_node_did = foreign_node_did.as_str();
-    let wakeup_input = format!(
-        r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
-    );
-    let non_wakeup_input = r#"{"queue":{"source":"user","policy":"append","key":null,"queued_after_request_id":null}}"#;
-
-    let parent_doc = create_pending_queue_row(
-        &db,
-        &actors,
-        "drain-parent",
-        session_id,
-        actors.node_did(),
-        "interactive",
-        non_wakeup_input,
-    )
-    .await;
-    actors
-        .set_lifecycle_state(&parent_doc, RequestLifecycleState::Processing)
+async fn interrupt_request_follows_the_lean_drain_model() {
+    use gents_lean_vocab::families::interrupt_request_drain_drain;
+    for case in gents_lean_vocab::families::interrupt_request_drain_drain::cases::<
+        String,
+        String,
+        RequestLifecycleState,
+    >() {
+        let db = test_db("interrupt-drain-wakeups").await;
+        let actors = support::agent_requests::RequestActors::new(&db).await;
+        let session_id = "interrupt-drain-session";
+        let foreign =
+            tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-drain"))
+                .await
+                .unwrap();
+        let foreign_node_did = gents_store::identity::NodeIdentity::did(&foreign).to_owned();
+        let wakeup_input = format!(
+            r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
+        );
+        let non_wakeup_input = r#"{"queue":{"source":"user","policy":"append","key":null,"queued_after_request_id":null}}"#;
+        let parent_doc = create_pending_queue_row(
+            &db,
+            &actors,
+            "drain-parent",
+            session_id,
+            actors.node_did(),
+            "interactive",
+            non_wakeup_input,
+        )
         .await;
-
-    create_pending_queue_row(
-        &db,
-        &actors,
-        "drain-wakeup-owner",
-        session_id,
-        actors.node_did(),
-        "scheduled",
-        &wakeup_input,
-    )
-    .await;
-    create_pending_queue_row(
-        &db,
-        &actors,
-        "drain-wakeup-foreign",
-        session_id,
-        foreign_node_did,
-        "scheduled",
-        &wakeup_input,
-    )
-    .await;
-    create_pending_queue_row(
-        &db,
-        &actors,
-        "drain-wakeup-interactive",
-        session_id,
-        actors.node_did(),
-        "interactive",
-        &wakeup_input,
-    )
-    .await;
-    create_pending_queue_row(
-        &db,
-        &actors,
-        "drain-scheduled-user",
-        session_id,
-        actors.node_did(),
-        "scheduled",
-        non_wakeup_input,
-    )
-    .await;
-
-    gents_session::request::interrupt::interrupt_request(
-        &db.node,
-        actors.agent().as_ref(),
-        "drain-parent",
-    )
-    .await
-    .expect("interrupt_request should latch and drain");
-
-    let latched = actors
-        .request_row(&parent_doc, "interrupt_requested_at")
-        .await["interrupt_requested_at"]
-        .as_str()
-        .map(str::to_owned);
-    assert!(
-        latched.is_some(),
-        "interrupt_request must latch interrupt_requested_at before draining"
-    );
-
-    let drained = fetch_drain_row(&actors, "drain-wakeup-owner").await;
-    assert_eq!(
-        drained.lifecycle_state,
-        RequestLifecycleState::Interrupted,
-        "the owner's own scheduled wake-up must be drained by the interrupt owner"
-    );
-    assert_eq!(
-        drained.failure_reason.as_deref(),
-        Some("automated wake-up drained because active request was interrupted"),
-        "the drain owner must record its own reason, got {:?}",
-        drained.failure_reason
-    );
-
-    let foreign = fetch_drain_row(&actors, "drain-wakeup-foreign").await;
-    assert_eq!(foreign.node_did, foreign_node_did);
-    assert_eq!(
-        foreign.lifecycle_state,
-        RequestLifecycleState::Pending,
-        "a foreign-node replica sharing the session must never be drained by this owner"
-    );
-
-    let interactive = fetch_drain_row(&actors, "drain-wakeup-interactive").await;
-    assert_eq!(
-        interactive.lifecycle_state,
-        RequestLifecycleState::Pending,
-        "interactive-origin rows are user turns, not automated wake-ups"
-    );
-
-    let scheduled_user = fetch_drain_row(&actors, "drain-scheduled-user").await;
-    assert_eq!(
-        scheduled_user.lifecycle_state,
-        RequestLifecycleState::Pending,
-        "scheduled rows without background-completion wake input must survive the drain"
-    );
+        actors
+            .set_lifecycle_state(&parent_doc, RequestLifecycleState::Processing)
+            .await;
+        let mut request_ids = Vec::new();
+        for (index, row) in case.input.rows.iter().enumerate() {
+            let request_id = format!("drain-row-{index}");
+            create_pending_queue_row(
+                &db,
+                &actors,
+                &request_id,
+                session_id,
+                if row.foreign {
+                    foreign_node_did.as_str()
+                } else {
+                    actors.node_did()
+                },
+                if row.scheduled {
+                    "scheduled"
+                } else {
+                    "interactive"
+                },
+                if row.wake {
+                    wakeup_input.as_str()
+                } else {
+                    non_wakeup_input
+                },
+            )
+            .await;
+            request_ids.push(request_id);
+        }
+        let target = if case.input.active {
+            "drain-parent"
+        } else {
+            "bogus-id-that-does-not-exist"
+        };
+        let outcome = match gents_session::request::interrupt::interrupt_request(
+            &db.node,
+            actors.agent().as_ref(),
+            target,
+        )
+        .await
+        {
+            Ok(()) => "latched".to_owned(),
+            Err(error) if error.to_string().contains("missing") => "missing".to_owned(),
+            Err(error) => panic!("interrupt failed for an unmodeled reason: {error:#}"),
+        };
+        let latched = actors
+            .request_row(&parent_doc, "interrupt_requested_at")
+            .await["interrupt_requested_at"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty());
+        let mut rows = Vec::new();
+        for request_id in &request_ids {
+            let row = fetch_drain_row(&actors, request_id).await;
+            rows.push(interrupt_request_drain_drain::RowObservation {
+                state: row.lifecycle_state,
+                reason: row.failure_reason.map(|reason| {
+                    if reason == gents_session::request::interrupt::INTERRUPT_DRAIN_REASON {
+                        "active_interrupted".to_owned()
+                    } else {
+                        reason
+                    }
+                }),
+            });
+        }
+        case.check(interrupt_request_drain_drain::Output {
+            outcome,
+            latched,
+            rows,
+        });
+    }
 }
 
 /// The runtime root writes the queued replica for the fixture Agent and grants
@@ -664,7 +623,6 @@ struct DrainRow {
     lifecycle_state: RequestLifecycleState,
     #[serde(default)]
     failure_reason: Option<String>,
-    node_did: String,
 }
 
 async fn fetch_drain_row(
@@ -677,7 +635,6 @@ async fn fetch_drain_row(
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
                 lifecycle_state
                 failure_reason
-                node_did
             }}
         }}"#
     );

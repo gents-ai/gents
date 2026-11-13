@@ -15,8 +15,9 @@ pub(crate) use query::load_inference_configuration;
 
 pub use collection_resolver::CollectionResolver;
 pub use core::{
-    tool_file_changes_on, ChatRouteRefusal, ClientCore, ClientCoreOptions, ClientPeerStatus,
-    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
+    client_store_from_other_version, client_store_key_missing, tool_file_changes_on,
+    ChatRouteRefusal, ClientCore, ClientCoreOptions, ClientPeerStatus, ClientRouteStatus,
+    ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
     EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
     InferenceTarget, LocalHomeAccessError, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
     RefreshedRequestProjection, RetainedGoalSubmission, StoreRefresh, STUCK_THRESHOLD_ATTEMPTS,
@@ -37,8 +38,9 @@ pub use observe::{
 pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
 pub(crate) use peer_directory::PeerDirectory;
 pub use peer_directory::{
-    initialize_local_standard_peer, load_peer_records, ChatNextAction, ChatRouteCause, EndedAccess,
-    EndedAccessReason, PeerRecord,
+    initialize_local_standard_peer, load_peer_records, retire_stale_local_peers,
+    set_aside_unreadable, set_aside_unreadable_peer_directory, ChatNextAction, ChatRouteCause,
+    EndedAccess, EndedAccessReason, PeerRecord,
 };
 pub use principal_identity::PrincipalIdentity;
 pub(crate) use query::load_request_documents_on;

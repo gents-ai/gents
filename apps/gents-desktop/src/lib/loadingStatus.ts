@@ -89,7 +89,7 @@ export function projectStartupLoadingStatus(
       return {
         failed: true,
         title: "Startup paused",
-        currentLabel: "The background node could not be checked",
+        currentLabel: "Your local node couldn't start",
         managedServerState: "error",
         connectionState: "pending",
         clientState: "pending",

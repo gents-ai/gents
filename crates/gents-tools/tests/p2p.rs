@@ -167,37 +167,65 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
 }
 
 #[tokio::test]
-async fn p2p_rejects_a_foreign_actor_and_malformed_peers() {
+async fn p2p_administration_admits_as_the_lean_model() {
     let db = gents_session::test_support::test_p2p_db("engineer-p2p-owned").await;
-    let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), true);
-    let malformed = Tool::call(
-        &tool,
-        serde_json::from_value(
-            json!({"argv":["network","get"],"options":{"peer_id":"/ip4/127.0.0.1/tcp/4001"}}),
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap_err();
-    assert!(malformed.to_string().contains("invalid transport peer ID"));
-    assert!(malformed.to_string().contains("network"));
+    let (transport_peer, _) = wait_for_peer_identity(&db.node).await;
     let key_dir = tempfile::tempdir().unwrap();
-    let foreign = Arc::new(
+    let foreign: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
         gents_store::identity::KeyIdentity::load_or_create(
             key_dir.path().join("foreign.key"),
             None,
         )
         .unwrap(),
     );
-    let tool = P2pTool::new(db.node.clone(), Some(foreign), true);
-    assert!(Tool::call(
-        &tool,
-        serde_json::from_value(json!({"argv":["status"]})).unwrap()
-    )
-    .await
-    .unwrap_err()
-    .to_string()
-    .contains("running node DID"));
+    for case in gents_lean_vocab::families::p2p_administration_admit::cases::<
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let input = &case.input;
+        let identity = match input.actor.as_str() {
+            "absent" => None,
+            "node" => {
+                Some(db.node_identity.clone() as Arc<dyn gents_store::identity::NodeIdentity>)
+            }
+            "foreign" => Some(foreign.clone()),
+            other => panic!("unknown actor {other}"),
+        };
+        let tool = P2pTool::new(db.node.clone(), identity, true);
+        let peer = match input.peer.as_str() {
+            "transport_id" => transport_peer.clone(),
+            "multiaddress" => "/ip4/127.0.0.1/tcp/4001".to_owned(),
+            other => panic!("unknown peer {other}"),
+        };
+        let arguments = match input.command.as_str() {
+            "help" => json!({"argv":["help"]}),
+            "status" => json!({"argv":["status"]}),
+            "network_get" => json!({"argv":["network","get"],"options":{"peer_id":peer}}),
+            other => panic!("unknown command {other}"),
+        };
+        let outcome = match Tool::call(&tool, serde_json::from_value(arguments).unwrap()).await {
+            Ok(_) => "answered",
+            Err(error) => {
+                let text = error.to_string();
+                if text.contains("running node identity is unavailable") {
+                    "identity_unavailable"
+                } else if text.contains("requires the running node DID") {
+                    "foreign_actor"
+                } else if text.contains("invalid transport peer ID") {
+                    assert!(
+                        text.contains(r#"next call: p2p {"action":"network_list"}"#),
+                        "{text}"
+                    );
+                    "malformed_peer"
+                } else {
+                    panic!("{input:?}: {text}")
+                }
+            }
+        };
+        case.check(outcome.to_string());
+    }
 }
 
 #[tokio::test]

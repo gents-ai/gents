@@ -150,16 +150,59 @@ async fn lsp_edit_consent_is_complete_before_the_first_write() {
 }
 
 #[tokio::test]
-async fn lsp_edit_inside_the_original_workspace_does_not_request_review() {
-    let Some(fixture) = Fixture::new().await else {
-        return;
-    };
-    let path = fixture.key.path.join("lib.rs");
-    let edits = [fixture.edit(&path)];
-    let reviewer: Reviewer =
-        Arc::new(|_| panic!("a routine workspace edit must not ask for review"));
-    assert_eq!(fixture.apply(&edits, reviewer).await.unwrap(), 1);
-    assert_eq!(std::fs::read_to_string(path).unwrap(), "changed\n");
+async fn lsp_edit_consent_follows_the_lean_consent_model() {
+    for case in gents_lean_vocab::families::lsp_consent_edit::cases() {
+        let Some(fixture) = Fixture::new().await else {
+            return;
+        };
+        let paths = case
+            .input
+            .inside
+            .iter()
+            .enumerate()
+            .map(|(index, inside)| {
+                let folder = if *inside {
+                    &fixture.key.path
+                } else {
+                    &fixture.root
+                };
+                folder.join(format!("edit-{index}.rs"))
+            })
+            .collect::<Vec<_>>();
+        let edits = paths
+            .iter()
+            .map(|path| fixture.edit(path))
+            .collect::<Vec<_>>();
+        let reviews = Arc::new(AtomicUsize::new(0));
+        let deny_at = case.input.deny_at;
+        let reviewer: Reviewer = Arc::new({
+            let reviews = reviews.clone();
+            move |invocation| {
+                let index = reviews.fetch_add(1, Ordering::SeqCst) as u64;
+                Box::pin(async move { Ok(verdict(invocation, deny_at != Some(index))) })
+            }
+        });
+        let applied = match fixture.apply(&edits, reviewer).await {
+            Ok(count) => Some(count as u64),
+            Err(error) if error.to_string().contains("not approved") => None,
+            Err(error) => panic!("{:?}: {error}", case.input),
+        };
+        let written = paths
+            .iter()
+            .map(
+                |path| match std::fs::read_to_string(path).unwrap().as_str() {
+                    "changed\n" => true,
+                    "original\n" => false,
+                    other => panic!("{:?}: unexpected content {other:?}", case.input),
+                },
+            )
+            .collect();
+        case.check(gents_lean_vocab::families::lsp_consent_edit::Output {
+            reviews: reviews.load(Ordering::SeqCst) as u64,
+            applied,
+            written,
+        });
+    }
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Headless native host for Gents clients"
 
 [features]
-runtime-e2e = []
+runtime-e2e = ["gents/test-fixtures"]
 editor-e2e = ["runtime-e2e"]
 
 [[test]]

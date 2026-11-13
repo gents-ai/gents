@@ -8,10 +8,17 @@ inductive Cause where
   | client | agentNew | taskTrigger | pluginJob
   deriving BEq, Repr, ToJson
 
+/-- A verified starter link names the starting session and, separately, the
+request in it that caused this session. -/
+structure Link where
+  session : Nat
+  request : Nat
+  deriving Repr, ToJson
+
 structure Row where
   session : Nat
   cause : Cause
-  starter : Option Nat
+  starter : Option Link
   deriving Repr, ToJson
 
 structure Input where
@@ -38,12 +45,12 @@ def descend (rows : List Row) (cause : Cause) :
   | 0, session, _, parent, prompt => ⟨cause, false, session, parent, prompt⟩
   | fuel + 1, session, row, parent, prompt =>
     match subagent row.cause, row.starter with
-    | true, some next =>
-      match rows.find? (·.session == next) with
-      | none => ⟨cause, true, next, parent, some next⟩
+    | true, some link =>
+      match rows.find? (·.session == link.session) with
+      | none => ⟨cause, true, link.session, parent, some link.request⟩
       | some nextRow =>
-        let parent := if fuel == 31 && subagent nextRow.cause then some next else parent
-        descend rows cause fuel next nextRow parent (some next)
+        let parent := if fuel == 31 && subagent nextRow.cause then some link.session else parent
+        descend rows cause fuel link.session nextRow parent (some link.request)
     | _, _ => ⟨cause, false, session, parent, prompt⟩
 
 def walk (input : Input) : Observation :=

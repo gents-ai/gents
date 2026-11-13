@@ -12,6 +12,32 @@ pub struct SavedPeerView {
     pub addr: String,
     pub source: Option<String>,
     pub graphql: Option<String>,
+    /// This Mac's managed node. Once enrolled its `source` is `enrollment`,
+    /// like a remote; after its home is removed nothing else marks it local.
+    pub local: bool,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedServerRepairResult {
+    pub repaired: Vec<String>,
+    pub outcome: ManagedServerRepairOutcome,
+    pub blocker: Option<String>,
+    pub saved_peers: Vec<SavedPeerView>,
+    /// This launch retired the state of a local node whose home is gone, so
+    /// setup runs again even when remote nodes are saved. The user deleted
+    /// that folder, so it is not reported as a repair.
+    pub local_node_lost: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum ManagedServerRepairOutcome {
+    NoLocalNode,
+    Ready,
+    NeedsSetup,
+    Blocked,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -72,6 +98,10 @@ pub struct ManagedServerStatus {
     pub error: Option<String>,
     #[ts(optional = nullable)]
     pub error_code: Option<crate::error::BridgeErrorCode>,
+    /// The local node's folder, once its node stopped because the folder was
+    /// deleted; kept until a new setup writes the folder's `init.json`.
+    #[ts(optional = nullable)]
+    pub deleted_home: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

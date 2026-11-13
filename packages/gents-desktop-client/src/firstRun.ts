@@ -1,6 +1,7 @@
 import type { DeploymentView } from "./generated/DeploymentView.js";
 import type { DesktopClientSnapshot } from "./generated/DesktopClientSnapshot.js";
 import type { InferenceBackendView } from "./generated/InferenceBackendView.js";
+import type { SavedPeerView } from "./generated/SavedPeerView.js";
 
 type NodeView = Omit<DeploymentView, "sessions" | "mailboxItems">;
 
@@ -100,13 +101,22 @@ export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
 
 export type FirstRunPhase = "unknown" | "active" | "done";
 
+export function isSavedRemote(
+  peer: SavedPeerView,
+  initNodeDid?: string | null,
+): boolean {
+  return (
+    peer.source === "enrollment" &&
+    !peer.local &&
+    !isLocalNode(peer, initNodeDid)
+  );
+}
+
 export function hasSavedRemote(
   snapshot: Pick<DesktopClientSnapshot, "bootstrap">,
 ): boolean {
-  return snapshot.bootstrap.savedPeers.some(
-    (peer) =>
-      peer.source === "enrollment" &&
-      !isLocalNode(peer, snapshot.bootstrap.initNodeDid),
+  return snapshot.bootstrap.savedPeers.some((peer) =>
+    isSavedRemote(peer, snapshot.bootstrap.initNodeDid),
   );
 }
 
@@ -118,13 +128,14 @@ export function projectFirstRunPhase(
   authoritative: boolean,
   localRuntimeAllowed = true,
   remoteConfigured = false,
+  localHomeLost = false,
 ): FirstRunPhase {
   if (phase !== "unknown") return phase;
   if (!snapshotReady) return "unknown";
   if (initConfigStatus !== "absent" && initConfigStatus !== "configured")
     return "unknown";
   if (!localRuntimeAllowed || initConfigStatus === "absent")
-    return remoteConfigured ? "done" : "active";
+    return remoteConfigured && !localHomeLost ? "done" : "active";
   if (!authoritative) return "unknown";
   return needsSetup ? "active" : "done";
 }

@@ -1,18 +1,16 @@
-use super::authority::HomeIdentity;
 use super::native::service_action;
 use super::native::{native_service, run_native};
 use super::pairing::drain_managed_runtime_pairing;
 use super::port::{matching_external_server, user_status_signer};
-use super::preference::{load_preference, read_home_identity};
-use super::status::{emit_status, CrashLoopWatch};
+use super::status::emit_status;
 use crate::config::ManagedServerPolicy;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::tauri_commands::service_executable::resolve_service_executable;
 use crate::types::{HomeResetDisposition, ManagedServerResetResult};
 use gents_desktop_core::home_reset::*;
-use gents_desktop_core::preference::ReviewedHome;
 use gents_service::args::ServiceAction;
+use gents_service::repair::crash_loop::CrashLoopWatch;
 use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -66,95 +64,28 @@ pub(super) async fn plan_state_reset(
     )
 }
 
-pub(super) fn classify_binding(
-    reviewed: Option<&ReviewedHome>,
-    configured: Option<&HomeIdentity>,
-    reviewed_home: Option<&HomeIdentity>,
-    reviewed_init_present: bool,
-) -> ClientBinding {
-    let Some(reviewed) = reviewed else {
-        return ClientBinding::Unbound;
-    };
-    if configured.is_some_and(|home| home.reviewed == *reviewed) {
-        return ClientBinding::BoundToHome;
-    }
-    if configured.is_some_and(|home| home.reviewed.node_did == reviewed.node_did) {
-        return ClientBinding::Unbound;
-    }
-    match reviewed_home {
-        Some(home) if home.reviewed.node_did == reviewed.node_did => ClientBinding::Unbound,
-        Some(_) => ClientBinding::Orphaned,
-        None if reviewed_init_present => ClientBinding::Unbound,
-        None => ClientBinding::Orphaned,
-    }
-}
-
 async fn client_binding(state: &DesktopAppState) -> ClientBinding {
-    let Some(node_home) = state.policy.node_home.as_deref() else {
-        return ClientBinding::Unbound;
-    };
-    let reviewed = match load_preference(state).await {
-        Ok(stored) => stored.and_then(|stored| stored.reviewed_for),
-        Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                error = %error.message,
-                "managed-server.json is unreadable; treating the client state as unbound"
-            );
-            None
-        }
-    };
-    let Some(reviewed) = reviewed else {
-        return ClientBinding::Unbound;
-    };
-    let configured = read_home_identity(node_home).await;
-    let reviewed_path = Path::new(&reviewed.node_home);
-    let reviewed_home = read_home_identity(reviewed_path).await;
-    let Ok(reviewed_init_present) =
-        present(&gents_store::local::home::init_config_path(reviewed_path))
-    else {
-        return ClientBinding::Unbound;
-    };
-    classify_binding(
-        Some(&reviewed),
-        configured.as_ref(),
-        reviewed_home.as_ref(),
-        reviewed_init_present,
+    gents_service::repair::client::binding_from_paths(
+        &state.policy.desktop_paths,
+        state.policy.node_home.as_deref(),
     )
+    .await
+    .unwrap_or(ClientBinding::Unbound)
 }
 
 pub(in crate::tauri_commands) async fn retire_orphaned_client_state(
     state: &DesktopAppState,
-) -> Result<Option<ManagedServerResetResult>, BridgeError> {
+) -> Result<gents_protocol::operations::install_repair::RepairClientReceipt, BridgeError> {
     if state.policy.managed_server != ManagedServerPolicy::Allowed {
-        return Ok(None);
+        return Ok(Default::default());
     }
     let _lifecycle = state.managed_server_lifecycle.lock().await;
-    if client_binding(state).await != ClientBinding::Orphaned {
-        return Ok(None);
-    }
-    drain_managed_runtime_pairing(state).await;
-    let _client = crate::tauri_commands::lifecycle::exclusion::exclude_client(state).await?;
-    let user_home = resolve_user_home(dirs::home_dir())?;
-    let plan = plan_home_reset(
-        None,
-        None,
-        None,
-        &state.policy.desktop_paths,
-        &user_home,
-        ClientBinding::Orphaned,
-    )?;
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
-    let backup = plan.backup_path(&stamp)?;
-    plan.preflight(&backup)?;
-    let result = plan.retire(HomeResetDisposition::Archive, Some(&backup))?;
-    tracing::info!(
-        target: "gents_desktop::managed_server",
-        backup = ?result.backup_path,
-        retired = result.retired_paths.len(),
-        "archived desktop client state paired with a node that is no longer here"
-    );
-    Ok(Some(result))
+    super::repair::repair_client_state(
+        state,
+        &mut Vec::new(),
+        gents_protocol::operations::install_repair::RepairClientScope::Orphaned,
+    )
+    .await
 }
 
 pub(super) async fn retire_incompatible_home<R>(

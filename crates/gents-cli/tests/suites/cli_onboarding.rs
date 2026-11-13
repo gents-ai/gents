@@ -184,3 +184,52 @@ fn the_root_agent_flag_conflicts_with_subcommands() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn print_on_a_broken_explicit_folder_names_it_and_how_to_repair() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+    let folder = tempfile::tempdir()?;
+    fs::write(folder.path().join("init.json"), "{")?;
+
+    let output = run_gents(
+        user_home.path(),
+        &["--home", &folder.path().to_string_lossy(), "-p", "hi"],
+    )?;
+
+    let stderr = stderr_of(&output);
+    assert!(!output.status.success(), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("can't be loaded: its settings file (init.json) can't be read"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("in a terminal to repair it"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        folder.path().join("init.json").exists(),
+        "the folder was moved"
+    );
+    Ok(())
+}
+
+#[test]
+fn gents_home_naming_the_default_folder_is_not_explicit() -> Result<()> {
+    let user_home = tempfile::tempdir()?;
+    let home = user_home.path().join(".gents");
+    fs::create_dir(&home)?;
+    fs::write(home.join("init.json"), "{")?;
+
+    let output = Command::new(cli_bin())
+        .env("HOME", user_home.path())
+        .env("GENTS_HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env("RUST_LOG", "error")
+        .args(["-p", "hi"])
+        .output()?;
+
+    let stderr = stderr_of(&output);
+    assert!(!output.status.success(), "stderr:\n{stderr}");
+    assert!(!stderr.contains("can't be loaded"), "stderr:\n{stderr}");
+    Ok(())
+}

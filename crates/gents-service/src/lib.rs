@@ -5,6 +5,7 @@ pub mod lifecycle;
 pub mod native_service;
 pub mod network_settings;
 pub mod process_resources;
+pub mod repair;
 pub mod runtime_control;
 pub mod server_host;
 pub mod service_update;

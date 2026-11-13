@@ -1102,113 +1102,128 @@ async fn repeated_inference_scope_calls_persist_per_attempt_rows() {
     assert_reconstructed_slot_count(&rows, "backend-a", 0);
 }
 
-#[tokio::test]
-async fn scoped_scheduled_calls_are_persisted_with_scheduled_kind() {
-    let (db, signer) = test_node().await;
-    let node = db.node.clone();
-    let registry = TestRegistry::new(node.clone(), signer);
-    registry.reconcile(
-        1,
-        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
+async fn backend_call_rows(
+    node: &Arc<EmbeddedNode>,
+    signer: &gents_store::identity::ManagedAgentSigner,
+    backend_id: &str,
+    expected: usize,
+) -> Vec<Value> {
+    let mut last = Vec::new();
+    for _ in 0..100 {
+        let rows = call_rows(node, signer)
+            .await
+            .into_iter()
+            .filter(|row| row.get("backend_id").and_then(Value::as_str) == Some(backend_id))
+            .collect::<Vec<_>>();
+        if rows.len() >= expected {
+            return rows;
+        }
+        last = rows;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!(
+        "timed out waiting for {expected} InferenceCall rows of {backend_id}, last rows={last:?}"
     );
-    let context = test_context(&registry, "req-scheduled", "backend-a").await;
+}
 
-    scope_request(context, async {
-        scope_call(CallKind::Scheduled, 1, async {
-            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
-            permit.finish_success(None).await.unwrap();
-        })
-        .await;
-    })
-    .await;
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let rows = call_rows(&node, &registry.signer).await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["call_kind"], "scheduled");
-    assert_eq!(rows[0]["call_state"], "completed");
-    assert_reconstructed_slot_count(&rows, "backend-a", 0);
+fn row_text(row: &Value, field: &str) -> String {
+    row[field]
+        .as_str()
+        .unwrap_or_else(|| panic!("InferenceCall row must include {field}: {row:?}"))
+        .to_owned()
 }
 
 #[tokio::test]
-async fn compaction_calls_share_backend_capacity_with_inference_calls() {
+async fn call_kinds_share_backend_capacity_and_persist_their_kind() {
     let (db, signer) = test_node().await;
     let node = db.node.clone();
-    let registry = TestRegistry::new(node.clone(), signer);
-    registry.reconcile(
-        1,
-        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
-    );
-    let inference_context = test_context(&registry, "req-compaction", "backend-a").await;
-    let compaction_context = inference_context.clone();
-
-    scope_request(inference_context, async {
-        let mut inference = registry.acquire_current_call_for_test().await.unwrap();
-        let compaction_registry = registry.clone();
-        let compaction = tokio::spawn(async move {
-            scope_request(compaction_context, async move {
-                scope_call(CallKind::Compaction, 1, async {
-                    let mut permit = compaction_registry
-                        .acquire_current_call_for_test()
-                        .await
-                        .unwrap();
-                    permit.finish_success(None).await.unwrap();
+    for (index, case) in
+        gents_lean_vocab::families::inference_dropped_permit_kinds_calls::cases::<String>()
+            .into_iter()
+            .enumerate()
+    {
+        let backend_id = format!("backend-kinds-{index}");
+        let registry = TestRegistry::new(node.clone(), signer.clone());
+        registry.reconcile(
+            1,
+            &RapidHashMap::from_iter([(
+                backend_id.clone(),
+                config(
+                    &backend_id,
+                    usize::try_from(case.input.capacity).unwrap(),
+                    usize::try_from(case.input.queue_depth).unwrap(),
+                ),
+            )]),
+        );
+        let context = test_context(&registry, &format!("req-kinds-{index}"), &backend_id).await;
+        let mut releases = Vec::new();
+        let mut calls = Vec::new();
+        for (position, kind) in case.input.kinds.iter().enumerate() {
+            let kind = match kind.as_str() {
+                "inference" => CallKind::Inference,
+                "compaction" => CallKind::Compaction,
+                "scheduled" => CallKind::Scheduled,
+                "one_off" => CallKind::OneOff,
+                other => panic!("unmodelled call kind {other}"),
+            };
+            let (release, finish) = tokio::sync::oneshot::channel::<()>();
+            releases.push(release);
+            let call_registry = registry.clone();
+            let call_context = context.clone();
+            calls.push(tokio::spawn(async move {
+                scope_request(call_context, async move {
+                    scope_call(kind, 1, async move {
+                        let mut permit =
+                            call_registry.acquire_current_call_for_test().await.unwrap();
+                        finish.await.unwrap();
+                        permit.finish_success(None).await.unwrap();
+                    })
+                    .await;
                 })
                 .await;
-            })
-            .await;
-        });
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let rows = call_rows(&node, &registry.signer).await;
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0]["call_kind"], "inference");
-        assert_eq!(rows[0]["call_state"], "running");
-        assert_eq!(rows[1]["call_kind"], "compaction");
-        assert_eq!(rows[1]["call_state"], "queued");
-        assert_reconstructed_slot_count(&rows, "backend-a", 1);
-
-        inference.finish_success(None).await.unwrap();
-        drop(inference);
-        compaction.await.unwrap();
-    })
-    .await;
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let rows = call_rows(&node, &registry.signer).await;
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["call_state"], "completed");
-    assert_eq!(rows[1]["call_state"], "completed");
-    assert_eq!(rows[1]["queue_depth_at_enqueue"], 1);
-    assert_reconstructed_slot_count(&rows, "backend-a", 0);
-}
-
-#[tokio::test]
-async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
-    let (db, signer) = test_node().await;
-    let node = db.node.clone();
-    let registry = TestRegistry::new(node.clone(), signer);
-    registry.reconcile(
-        1,
-        &RapidHashMap::from_iter([("backend-a".to_string(), config("backend-a", 1, 1))]),
-    );
-    let context = test_context(&registry, "req-oneoff", "backend-a").await;
-
-    scope_request(context, async {
-        scope_call(CallKind::OneOff, 1, async {
-            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
-            permit.finish_success(None).await.unwrap();
-        })
-        .await;
-    })
-    .await;
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let rows = call_rows(&node, &registry.signer).await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["call_kind"], "oneoff");
-    assert_eq!(rows[0]["call_state"], "completed");
-    assert_reconstructed_slot_count(&rows, "backend-a", 0);
+            }));
+            backend_call_rows(&node, &registry.signer, &backend_id, position + 1).await;
+        }
+        let held =
+            backend_call_rows(&node, &registry.signer, &backend_id, case.input.kinds.len()).await;
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for call in calls {
+            call.await.unwrap();
+        }
+        registry.drop_cleanup_idle().await;
+        let finished =
+            backend_call_rows(&node, &registry.signer, &backend_id, case.input.kinds.len()).await;
+        case.check(
+            gents_lean_vocab::families::inference_dropped_permit_kinds_calls::CallsOutput {
+                held: held
+                    .iter()
+                    .map(|row| gents_lean_vocab::families::inference_dropped_permit_kinds_calls::HeldRow {
+                        kind: row_text(row, "call_kind"),
+                        call_state: row_text(row, "call_state"),
+                    })
+                    .collect(),
+                slots_while_held: u64::try_from(running_slot_count_for_backend(&held, &backend_id))
+                    .unwrap(),
+                finished: finished
+                    .iter()
+                    .map(|row| gents_lean_vocab::families::inference_dropped_permit_kinds_calls::FinishedRow {
+                        kind: row_text(row, "call_kind"),
+                        call_state: row_text(row, "call_state"),
+                        queue_depth_at_enqueue: row["queue_depth_at_enqueue"]
+                            .as_u64()
+                            .expect("queue_depth_at_enqueue"),
+                    })
+                    .collect(),
+                slots_after_finish: u64::try_from(running_slot_count_for_backend(
+                    &finished,
+                    &backend_id,
+                ))
+                .unwrap(),
+            },
+        );
+    }
 }
 
 #[tokio::test]

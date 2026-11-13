@@ -12,7 +12,8 @@ use crate::state::ManagedServerState as ManagedServerRuntimeState;
 use crate::types::{ManagedServerState, ManagedServerToolCeiling};
 use gents_desktop_core::client::{ClientCore, EnrollmentRequestResult};
 use gents_desktop_core::home_reset::*;
-use gents_desktop_core::preference::{ReviewedHome, MANAGED_SERVER_CONFIG};
+use gents_desktop_core::preference::MANAGED_SERVER_CONFIG;
+use gents_service::repair::crash_loop::{CrashLoopWatch, JobSample};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +23,7 @@ mod crash_loop;
 mod orchestration;
 mod pairing;
 mod readiness;
+mod repair;
 mod reset;
 mod reset_store;
 mod startup_readiness;
@@ -36,9 +38,11 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
-fn lineage_refusal(data_path: PathBuf) -> gents_store::local::storage_backend::IncompatibleStore {
-    gents_store::local::storage_backend::IncompatibleStore {
-        kind: gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage,
+fn lineage_refusal(
+    data_path: PathBuf,
+) -> gents_protocol::operations::install_repair::IncompatibleStore {
+    gents_protocol::operations::install_repair::IncompatibleStore {
+        kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::UnknownLineage,
         data_path,
     }
 }
@@ -90,6 +94,7 @@ fn ready_status(node_did: &str) -> ManagedServerStatus {
         runtime_booting: false,
         error: None,
         error_code: None,
+        deleted_home: None,
     }
 }
 

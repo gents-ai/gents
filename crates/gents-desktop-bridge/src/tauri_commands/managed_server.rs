@@ -5,6 +5,7 @@ pub(super) mod pairing;
 mod port;
 mod preference;
 mod readiness;
+pub(super) mod repair;
 pub(super) mod reset;
 mod start;
 pub(crate) mod start_wait;
@@ -15,9 +16,10 @@ use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    AgentWorkspaceRootSelectRequest, HomeResetDisposition, ManagedServerResetRequest,
-    ManagedServerResetResult, ManagedServerRestartRequest, ManagedServerRootValidation,
-    ManagedServerRootValidationRequest, ManagedServerStartRequest, ManagedServerStatus,
+    AgentWorkspaceRootSelectRequest, HomeResetDisposition, ManagedServerRepairResult,
+    ManagedServerResetRequest, ManagedServerResetResult, ManagedServerRestartRequest,
+    ManagedServerRootValidation, ManagedServerRootValidationRequest, ManagedServerStartRequest,
+    ManagedServerStatus,
 };
 use authority::{
     runtime_tool_ceiling, validate_ready_runtime, validate_tool_root, EffectiveManagedAuthority,
@@ -151,6 +153,17 @@ where
     };
     let _lifecycle = lock_lifecycle_superseding_start(&state).await;
     retire_incompatible_home(&app, &state, confirmation, disposition, full_reset).await
+}
+
+#[tauri::command]
+pub async fn desktop_managed_server_repair<R>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopAppState>,
+) -> Result<ManagedServerRepairResult, BridgeError>
+where
+    R: Runtime,
+{
+    repair::repair_managed_server(&app, &state).await
 }
 
 #[tauri::command]
@@ -302,46 +315,6 @@ fn ensure_app_not_quitting(state: &DesktopAppState) -> Result<(), BridgeError> {
             "The desktop is quitting. Wait for the local node to stop before starting it again.",
         ));
     }
-    Ok(())
-}
-
-pub(crate) async fn start_configured_managed_server<R>(
-    app: &AppHandle<R>,
-    state: &DesktopAppState,
-) -> Result<(), BridgeError>
-where
-    R: Runtime,
-{
-    if state.policy.managed_server != ManagedServerPolicy::Allowed
-        || state.policy.node_home.is_none()
-    {
-        return Ok(());
-    }
-    let lifecycle = state.managed_server_lifecycle.lock().await;
-    if state.app_exit.is_quitting() {
-        return Ok(());
-    }
-    let Some(stored) = load_bound_preference(state).await? else {
-        return Ok(());
-    };
-    if stored.reviewed_for.is_none() || stored.node_name.trim().is_empty() {
-        return Ok(());
-    }
-    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
-    if !native.installed || native.running || native.is_active_or_transitioning() {
-        return Ok(());
-    }
-    start_managed_server(
-        app,
-        ManagedServerStartRequest {
-            node_name: stored.node_name,
-            tool_ceiling: None,
-            tool_root: None,
-        },
-        state,
-        lifecycle,
-    )
-    .await?;
     Ok(())
 }
 

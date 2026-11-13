@@ -345,7 +345,7 @@ impl ProcessRecorder {
     }
 
     #[cfg(windows)]
-    pub(crate) fn with_failed_job_owner(
+    pub fn with_failed_job_owner(
         mut self,
         retain: impl Fn(Arc<super::process::FailedJobOwner>) + Send + Sync + 'static,
         release: impl Fn() + Send + Sync + 'static,

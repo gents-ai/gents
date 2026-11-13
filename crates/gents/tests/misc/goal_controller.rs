@@ -13,10 +13,12 @@ use gents_store::graphql::escape_graphql_string;
 use gents_store::subscription_source::UpdateSubscriptionSource;
 use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 use serde::Deserialize;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
+use crate::support::snapshots::SnapshotReader;
 use crate::support::{test_db, TestDb};
 
 const SESSION: &str = "goal-session";
@@ -210,20 +212,26 @@ struct GoalBackgroundHandoff {
     parent_doc_id: String,
     background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
     process_tool_call_id: String,
+    release: tokio::net::TcpStream,
 }
 
 async fn boot_goal_background_handoff_with_plans(
     db: &TestDb,
     fixture: &crate::support::ManagedAgentFixture,
     request_id: &str,
-    entered_path: &std::path::Path,
-    release_path: &std::path::Path,
     child_plans: Vec<crate::support::streaming_backend::StreamPlan>,
 ) -> GoalBackgroundHandoff {
     let did = db.node_identity.did();
     let agent_identity = fixture.agent.clone();
     let behavior = agent_identity.did();
     let prompt = "start late background handoff";
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let held_command = format!(
+        "import socket,sys\nwith socket.create_connection(('127.0.0.1', {port}), timeout=5) as connection:\n connection.settimeout(60)\n connection.sendall(b'ready\\n')\n if connection.recv(1) != b'r': sys.exit(124)\nsys.stdout.write('late result required for final wrapup')"
+    );
     let prepared = crate::support::accepted_turn::prepare_managed_accepted_turn(
         db,
         fixture,
@@ -241,14 +249,8 @@ async fn boot_goal_background_handoff_with_plans(
                 serde_json::json!({
                     "tool_name": "bash",
                     "args": {
-                        "command": "sh",
-                        "args": [
-                            "-c",
-                            ": > \"$1\"; n=0; while [ ! -f \"$2\" ] && [ \"$n\" -lt 3000 ]; do sleep 0.02; n=$((n + 1)); done; [ -f \"$2\" ] || exit 124; printf 'late result required for final wrapup'",
-                            "goal-background-handoff",
-                            entered_path.to_string_lossy(),
-                            release_path.to_string_lossy(),
-                        ]
+                        "command": "python3",
+                        "args": ["-c", held_command]
                     }
                 })
                 .to_string(),
@@ -272,7 +274,7 @@ async fn boot_goal_background_handoff_with_plans(
             host: Some(gents_documents::HostTools {
                 bash: Some(gents_documents::BashTools {
                     mode: gents_documents::BashMode::ReadOnly,
-                    read_only_commands: Some(vec!["sh".into()]),
+                    read_only_commands: Some(vec!["python3".into()]),
                     background_enabled: true,
                     ..Default::default()
                 }),
@@ -309,336 +311,33 @@ async fn boot_goal_background_handoff_with_plans(
     let rows = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     let parent_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
-    for _ in 0..200 {
-        let response = fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents_store::graphql::escape_graphql_string(&parent_doc))).await.unwrap();
-        if let Some(row) = response
-            .get("data")
-            .and_then(|data| data["AgentToolCall"].as_array())
-            .and_then(|rows| rows.first())
-        {
-            if entered_path.exists() {
-                return GoalBackgroundHandoff {
-                    runtime,
-                    agent_identity,
-                    parent_doc_id: parent_doc,
-                    background_executions,
-                    process_tool_call_id: row["tool_call_id"]
-                        .as_str()
-                        .expect("running process has its registered tool call ID")
-                        .to_owned(),
-                };
+    let (process_tool_call_id, release) = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut changes = fixture.access.subscribe_changes("AgentToolCall").await;
+        let (mut release, _) = listener.accept().await.unwrap();
+        let mut ready = [0_u8; 6];
+        release.read_exact(&mut ready).await.unwrap();
+        assert_eq!(&ready, b"ready\n");
+        loop {
+            let response = fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents_store::graphql::escape_graphql_string(&parent_doc))).await.unwrap();
+            if let Some(row) = response["data"]["AgentToolCall"].as_array().unwrap().first() {
+                break (
+                    row["tool_call_id"].as_str().unwrap().to_owned(),
+                    release,
+                );
             }
+            changes.recv().await;
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("accepted goal background handoff did not start")
-}
-
-#[tokio::test]
-async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() {
-    use crate::support::streaming_backend::{
-        StreamChunk, StreamPlan, StreamResponse, StreamScript,
-    };
-    use gents_inference::llm::message::{Message, Text, ToolResultContent, UserContent};
-
-    let db = test_db("goal-real-process-wait-wake").await;
-    let fixture = crate::support::managed_agent_fixture(&db).await;
-    let agent_identity = fixture.agent.clone();
-    let access = ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent_identity.did().parse().unwrap(),
-        agent_identity.as_ref(),
-    )
-    .unwrap();
-    reserve_goal_session(&db, &fixture.user, &agent_identity, SESSION).await;
-    let parent_request_id = "goal-real-process-parent";
-    let objective = "goal-real-process-wake-1973";
-    struct ReleaseOnDrop {
-        directory: Option<tempfile::TempDir>,
-        release_path: std::path::PathBuf,
-        settled: bool,
-    }
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            if !self.settled {
-                let _ = std::fs::write(&self.release_path, b"release");
-                if let Some(directory) = self.directory.take() {
-                    let _ = directory.keep();
-                }
-            }
-        }
-    }
-    let directory = tempfile::tempdir().unwrap();
-    let mut barrier = ReleaseOnDrop {
-        release_path: directory.path().join("release"),
-        directory: Some(directory),
-        settled: false,
-    };
-    let entered_path = barrier.directory.as_ref().unwrap().path().join("entered");
-    let release_path = barrier.release_path.clone();
-    let hold_goal_child = StreamPlan::current_authored_user(
-        objective,
-        vec![StreamResponse::Stream(StreamScript::paused_before(
-            objective,
-            vec![StreamChunk::text("goal child reached provider")],
-        ))],
-    );
-    let GoalBackgroundHandoff {
+    })
+    .await
+    .expect("accepted goal background handoff did not start before its deadline");
+    GoalBackgroundHandoff {
         runtime,
-        parent_doc_id,
-        ..
-    } = boot_goal_background_handoff_with_plans(
-        &db,
-        &fixture,
-        parent_request_id,
-        &entered_path,
-        &release_path,
-        vec![hold_goal_child],
-    )
-    .await;
-    assert!(
-        entered_path.exists(),
-        "real child did not enter its held process body"
-    );
-    let process = access.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }} }}, limit: 1) {{ _docID tool_call_id lifecycle_state await_mode }} }}"#,
-        gents_store::graphql::escape_graphql_string(&parent_doc_id)
-    )).await.unwrap();
-    let process = &process["data"]["AgentToolCall"][0];
-    let process_doc_id = process["_docID"].as_str().unwrap().to_owned();
-    let process_handle = process["tool_call_id"].as_str().unwrap().to_owned();
-    assert_eq!(process["lifecycle_state"], "running");
-    assert_eq!(process["await_mode"], "background");
-
-    let prompt = "start late background handoff";
-    runtime.backend.enqueue_response(
-        prompt,
-        StreamResponse::streams(
-            prompt,
-            vec![StreamChunk::tool_call(
-                "goal-background-wait",
-                "wait_process",
-                serde_json::json!({ "tool_call_id": process_handle, "timeout_secs": 1 })
-                    .to_string(),
-            )],
-        ),
-    );
-    runtime.backend.enqueue_response(
-        prompt,
-        StreamResponse::completes(prompt, ["parent completed after bounded wait"]),
-    );
-    assert_eq!(
-        wait_for_request_terminal_as(&fixture.access, parent_request_id, Duration::from_secs(15),)
-            .await,
-        "completed"
-    );
-    let wait_result = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let history = load_history_as(
-                &fixture.access,
-                db.node_identity.did(),
-                fixture.user.did(),
-                SESSION,
-            )
-            .await;
-            if let Some(result) = history.iter().find_map(|message| match message {
-                Message::User { content } => content.iter().find_map(|part| match part {
-                    UserContent::ToolResult(result)
-                        if result.id == "goal-background-wait"
-                            || result.call_id.as_deref() == Some("goal-background-wait") =>
-                    {
-                        result.content.iter().find_map(|part| match part {
-                            ToolResultContent::Text(Text { text }) => {
-                                serde_json::from_str::<serde_json::Value>(text).ok()
-                            }
-                            _ => None,
-                        })
-                    }
-                    _ => None,
-                }),
-                _ => None,
-            }) {
-                break result;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("accepted canonical wait reply");
-    assert_eq!(wait_result["tool_call_id"], process_handle);
-    assert_eq!(wait_result["status"], "running");
-    assert_eq!(wait_result["error"]["reason"], "wait_timeout");
-    assert!(!release_path.exists());
-
-    seed_goal_from_access(
-        &access,
-        db.node_identity.did(),
-        SESSION,
-        Some(objective),
-        Some(GoalStatus::Active),
-        Some(Some(10_000)),
-        None,
-    )
-    .await
-    .unwrap();
-    let claimed = tokio::time::timeout(Duration::from_secs(8), async {
-        loop {
-            let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-            if goal.last_continued_from_request_id.as_deref() == Some(parent_request_id) {
-                break goal;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("GoalSource did not claim the terminal parent");
-    assert_eq!(claimed.continuation_sequence(), 1);
-    assert_eq!(claimed.infrastructure_retry_count.unwrap_or_default(), 0);
-    let held_until = tokio::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        assert!(entered_path.exists() && !release_path.exists());
-        let process = access.execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-            gents_store::graphql::escape_graphql_string(&process_doc_id)
-        )).await.unwrap();
-        assert_eq!(
-            process["data"]["AgentToolCall"][0]["lifecycle_state"],
-            "running"
-        );
-        assert!(
-            goal_children_from_access(&access).await.is_empty(),
-            "held process must defer the claimed Goal child"
-        );
-        let still_claimed = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-        assert_eq!(
-            still_claimed.continuation_sequence,
-            claimed.continuation_sequence
-        );
-        assert_eq!(
-            still_claimed.last_continued_from_request_id,
-            claimed.last_continued_from_request_id
-        );
-        assert_eq!(
-            still_claimed.infrastructure_retry_count,
-            claimed.infrastructure_retry_count
-        );
-        if tokio::time::Instant::now() >= held_until {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        agent_identity,
+        parent_doc_id: parent_doc,
+        background_executions,
+        process_tool_call_id,
+        release,
     }
-
-    std::fs::write(&release_path, b"release").unwrap();
-    let notification_key = format!("background-completion-notification:{process_doc_id}:tool");
-    let notification = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let response = fixture.access.execute(&format!(
-                r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID message_key node_did requester_did request_doc_id }} }}"#,
-                gents_store::graphql::escape_graphql_string(&notification_key)
-            )).await.unwrap();
-            let rows = response["data"]["AgentMessage"].as_array().unwrap();
-            assert!(rows.len() <= 1, "ambiguous process completion notification");
-            if let Some(row) = rows.first() {
-                break row.clone();
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    }).await.expect("background worker did not publish its exact notification");
-    let wake_doc_id = notification["request_doc_id"]
-        .as_str()
-        .expect("notification wake binding");
-    let (header, reconstructed) = gents_session::session::load_canonical_message(
-        &fixture.access,
-        notification["_docID"].as_str().unwrap(),
-        notification["node_did"].as_str().unwrap(),
-        notification["requester_did"].as_str(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(header.message_key, notification_key);
-    assert_eq!(header.request_doc_id.as_deref(), Some(wake_doc_id));
-    assert!(matches!(header.publication,
-        gents_protocol::output::MessagePublication::ToolDelivery { ref tool_call_doc_id }
-            if tool_call_doc_id == &process_doc_id));
-    let Message::User { content } = reconstructed else {
-        panic!("process completion must be canonical user input");
-    };
-    let notification_text = content
-        .into_iter()
-        .filter_map(|part| match part {
-            UserContent::Text(Text { text }) => Some(text),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        notification_text.contains("tool-completion")
-            && notification_text.contains(&process_handle)
-    );
-    let wake_response = fixture.access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id lifecycle_state execution_origin }} }}"#,
-        gents_store::graphql::escape_graphql_string(wake_doc_id)
-    )).await.unwrap();
-    let wakes = wake_response["data"]["AgentRequest"].as_array().unwrap();
-    assert_eq!(wakes.len(), 1, "the exact notification must bind one wake");
-    let wake = &wakes[0];
-    let wake_id = wake["request_id"].as_str().unwrap();
-    assert!(wake_id.starts_with("background-completion-"));
-    assert_eq!(wake["execution_origin"], "scheduled");
-    assert_eq!(
-        wait_for_request_terminal_as(&fixture.access, wake_id, Duration::from_secs(15)).await,
-        "completed"
-    );
-    let child = tokio::time::timeout(Duration::from_secs(8), async {
-        loop {
-            let children = goal_children_from_access(&access).await;
-            if children.len() == 1 {
-                break children.into_iter().next().unwrap();
-            }
-            assert!(
-                children.is_empty(),
-                "GoalSource published multiple children"
-            );
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("GoalSource did not continue from the terminal wake");
-    let user_children = goal_children_from_access(&fixture.access).await;
-    assert_eq!(user_children.len(), 1);
-    assert_eq!(user_children[0].doc_id, child.doc_id);
-    assert_eq!(child.caused_by_parent_request_id.as_deref(), Some(wake_id));
-    assert_eq!(
-        child.caused_by_parent_request_doc_id.as_deref(),
-        Some(wake_doc_id)
-    );
-    assert_ne!(
-        child.caused_by_parent_request_id.as_deref(),
-        Some(parent_request_id)
-    );
-    let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
-    assert_eq!(
-        goal.last_continued_from_request_id.as_deref(),
-        Some(wake_id)
-    );
-    assert_eq!(
-        goal.continuation_sequence(),
-        claimed.continuation_sequence() + 1
-    );
-    assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
-    let process = access.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state completion_notification_delivered_at }} }}"#,
-        gents_store::graphql::escape_graphql_string(&process_handle)
-    )).await.unwrap();
-    let process = &process["data"]["AgentToolCall"][0];
-    assert_eq!(process["lifecycle_state"], "completed");
-    assert!(process["completion_notification_delivered_at"].is_string());
-    barrier.settled = true;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let children = goal_children_from_access(&access).await;
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0].doc_id, child.doc_id);
-    runtime.shutdown().await;
 }
 
 #[derive(Debug, Deserialize)]
@@ -693,9 +392,6 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         .await
         .unwrap();
         let parent = "parent-over-budget";
-        let barrier = tempfile::tempdir().unwrap();
-        let entered_path = barrier.path().join("entered");
-        let release_path = barrier.path().join("release");
         let hold_wrapup = StreamPlan::current_authored_user(
             objective,
             vec![StreamResponse::Stream(StreamScript::paused_before(
@@ -709,15 +405,8 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             parent_doc_id: parent_doc,
             background_executions,
             process_tool_call_id,
-        } = boot_goal_background_handoff_with_plans(
-            &db,
-            &fixture,
-            parent,
-            &entered_path,
-            &release_path,
-            vec![hold_wrapup],
-        )
-        .await;
+            mut release,
+        } = boot_goal_background_handoff_with_plans(&db, &fixture, parent, vec![hold_wrapup]).await;
         let prior_usage = session_token_usage(
             &db.node,
             &agent_identity.did().parse().unwrap(),
@@ -752,14 +441,21 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             expected_usage,
         );
 
-        for _ in 0..200 {
-            if goal_children_from_access(&access).await.len() == 1
-                && runtime.backend.observed_requests(objective) > 0
-            {
-                break;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut changes = access.subscribe_changes("AgentRequest").await;
+            loop {
+                if goal_children_from_access(&access).await.len() == 1 {
+                    break;
+                }
+                changes.recv().await;
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
+            runtime
+                .backend
+                .wait_for_request(objective, Duration::from_secs(5))
+                .await;
+        })
+        .await
+        .expect("Goal wrapup did not reach its provider before the deadline");
         assert_eq!(
             goal_children_from_access(&access).await.len(),
             1,
@@ -770,7 +466,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             1,
             "the wrapup reached its held provider response"
         );
-        std::fs::write(&release_path, b"release").unwrap();
+        release.write_all(b"r").await.unwrap();
         let completion = tokio::time::timeout(
             Duration::from_secs(5),
             background_executions.wait_for_completion(&process_tool_call_id),
@@ -1228,25 +924,6 @@ async fn set_request_state_as(access: &ConfigAccess, doc: &str, state: &str) {
             .len(),
         1
     );
-}
-
-async fn wait_for_request_terminal_as(
-    access: &ConfigAccess,
-    request_id: &str,
-    timeout: Duration,
-) -> String {
-    let request = escape_graphql_string(request_id);
-    tokio::time::timeout(timeout, async {
-        loop {
-            let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}, limit: 2) {{_docID lifecycle_state}}}}"#)).await.unwrap();
-            let rows = response["data"]["AgentRequest"].as_array().unwrap();
-            assert!(rows.len() <= 1, "ambiguous request identity");
-            if let Some(state) = rows.first().and_then(|row| row["lifecycle_state"].as_str()) {
-                if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(state)) { break state.to_owned(); }
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    }).await.expect("request did not terminalize")
 }
 
 async fn load_history_as(

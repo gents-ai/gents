@@ -697,10 +697,11 @@ mod tests {
             let error = create_agent(&access, owner, provision().await?, &input)
                 .await
                 .expect_err(label);
-            printed.push_str(&format!(
-                "## {label}\n{}\n",
-                named(format!("Error: {error:?}"))
-            ));
+            let report = format!("Error: {error:?}");
+            let report = report
+                .split_once("\n\nStack backtrace:")
+                .map_or(report.as_str(), |(report, _)| report);
+            printed.push_str(&format!("## {label}\n{}\n", named(report.to_owned())));
         }
         assert!(
             printed == PINNED_OUTPUT,

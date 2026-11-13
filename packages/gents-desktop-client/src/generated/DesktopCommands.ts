@@ -75,6 +75,7 @@ import type { MailboxItemObservation } from "./MailboxItemObservation.js";
 import type { MailboxItemObservationRequest } from "./MailboxItemObservationRequest.js";
 import type { MailboxItemRequest } from "./MailboxItemRequest.js";
 import type { MailboxItemView } from "./MailboxItemView.js";
+import type { ManagedServerRepairResult } from "./ManagedServerRepairResult.js";
 import type { ManagedServerResetRequest } from "./ManagedServerResetRequest.js";
 import type { ManagedServerResetResult } from "./ManagedServerResetResult.js";
 import type { ManagedServerRestartRequest } from "./ManagedServerRestartRequest.js";
@@ -215,6 +216,7 @@ export type DesktopCommands = {
   desktop_mailbox_start_request: { args: { request: MailboxItemRequest }; result: MailboxItemView };
   desktop_managed_server_enroll: { args: Record<string, never>; result: void };
   desktop_managed_server_open_login_items: { args: Record<string, never>; result: void };
+  desktop_managed_server_repair: { args: Record<string, never>; result: ManagedServerRepairResult };
   desktop_managed_server_reset: { args: { request: ManagedServerResetRequest }; result: ManagedServerResetResult };
   desktop_managed_server_restart: { args: { request: ManagedServerRestartRequest }; result: ManagedServerStatus };
   desktop_managed_server_set_auto_start: { args: { enabled: boolean }; result: ManagedServerStatus };

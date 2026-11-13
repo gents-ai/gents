@@ -140,7 +140,7 @@ async fn pick_backend(next_screen: fn()) -> Result<BackendSelection> {
 
 /// A wrong answer is not repeated back: a key pasted at this prompt must not reach scrollback
 /// a second time.
-async fn ask_choice(count: usize) -> Result<usize> {
+pub(crate) async fn ask_choice(count: usize) -> Result<usize> {
     loop {
         match parse_choice(&prompt_line("> ").await?, count) {
             Some(index) => return Ok(index),

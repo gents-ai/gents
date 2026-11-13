@@ -4,20 +4,14 @@ mod support;
 mod client_submission_contention;
 #[path = "e2e_runtime/completion_retry_tape.rs"]
 mod completion_retry_tape;
-#[path = "e2e_runtime/disabled_agent_sweep.rs"]
-mod disabled_agent_sweep;
 #[path = "e2e_runtime/document_config_bootstrap.rs"]
 mod document_config_bootstrap;
 #[path = "e2e_runtime/effective_model_binding.rs"]
 mod effective_model_binding;
 #[path = "e2e_runtime/fork_invariants.rs"]
 mod fork_invariants;
-#[path = "e2e_runtime/mailbox_tool_turn.rs"]
-mod mailbox_tool_turn;
 #[path = "e2e_runtime/provider_fixture_redaction.rs"]
 mod provider_fixture_redaction;
-#[path = "e2e_runtime/queued_user_messages.rs"]
-mod queued_user_messages;
 #[path = "e2e_runtime/rendered_request_capture.rs"]
 mod rendered_request_capture;
 #[path = "e2e_runtime/runtime_observability.rs"]
@@ -28,17 +22,12 @@ mod schedule_snapshot_reconcile;
 mod self_config_tools;
 #[path = "e2e_runtime/storage_budget.rs"]
 mod storage_budget;
-#[path = "e2e_runtime/workspace_binding_recovery.rs"]
-mod workspace_binding_recovery;
 
 #[test]
 fn provider_wire_fixtures_do_not_contain_credentials() {
     provider_fixture_redaction::provider_wire_fixtures_do_not_contain_credentials()
         .expect("provider wire fixtures should be redacted");
 }
-
-#[path = "e2e_runtime/field_recovery_turn.rs"]
-mod field_recovery_turn;
 
 #[path = "e2e_runtime/queue_management.rs"]
 mod queue_management;

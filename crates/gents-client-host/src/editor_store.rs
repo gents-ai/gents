@@ -398,8 +398,8 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
         let provider = Provider::new(home.path().to_owned(), false, native);
-        let failure = anyhow::Error::from(gents_store::local::storage_backend::IncompatibleStore {
-            kind: gents_store::local::storage_backend::IncompatibleStoreKind::ForeignVersion,
+        let failure = anyhow::Error::from(gents_protocol::operations::install_repair::IncompatibleStore {
+            kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::ForeignVersion,
             data_path: PathBuf::from("/private/retained-history"),
         })
         .context("sensitive native cause");

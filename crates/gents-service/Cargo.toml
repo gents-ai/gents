@@ -18,6 +18,7 @@ gents-session = { workspace = true }
 gents-desktop-core.workspace = true
 gents-protocol.workspace = true
 anyhow.workspace = true
+async-trait = "0.1"
 thiserror.workspace = true
 chrono.workspace = true
 clap.workspace = true
@@ -31,6 +32,7 @@ plist = "1.8"
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+semver = "1"
 sha2.workspace = true
 tempfile = "3"
 tokio.workspace = true

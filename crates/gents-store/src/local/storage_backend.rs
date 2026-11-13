@@ -1,3 +1,4 @@
+use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -11,13 +12,28 @@ pub enum StorageBackendError {
     Io(#[from] std::io::Error),
     #[error("{} has no existing database", path.display())]
     NoExistingDatabase { path: PathBuf },
+    #[error("opening {} to inspect its schema", path.display())]
+    InspectionOpen {
+        path: PathBuf,
+        #[source]
+        source: Box<defra_node::Error>,
+    },
+    #[error("inspecting the schema of {}", path.display())]
+    InspectionSchema {
+        path: PathBuf,
+        #[source]
+        source: gents_migration::Error,
+    },
 }
 
 impl StorageBackendError {
     pub fn incompatible(&self) -> Option<&IncompatibleStore> {
         match self {
             Self::Incompatible(store) => Some(store),
-            Self::Io(_) | Self::NoExistingDatabase { .. } => None,
+            Self::Io(_)
+            | Self::NoExistingDatabase { .. }
+            | Self::InspectionOpen { .. }
+            | Self::InspectionSchema { .. } => None,
         }
     }
 }
@@ -53,74 +69,6 @@ fn block_cache_size(mib: Option<&str>) -> usize {
         .filter(|mib| *mib > 0)
         .and_then(|mib| mib.checked_mul(1024 * 1024))
         .unwrap_or(DEFAULT_BLOCK_CACHE_BYTES)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IncompatibleStoreKind {
-    LegacyRocksDb,
-    LegacyLark,
-    UnsupportedOrCorrupt,
-    /// A Regolith store whose schema lineage this build does not know: it was
-    /// written by an older (or foreign) Gents build. This release has no
-    /// migration from it, so it cannot be opened.
-    UnknownLineage,
-    /// A Regolith store that descends from this build's baseline but carries
-    /// schema versions another build (for example a newer one) added.
-    ForeignVersion,
-    /// An identity key an older build wrote with group/other access. The
-    /// identity owner refuses it rather than trusting a possibly exposed
-    /// key; the home it belongs to needs a fresh start.
-    InsecureKey,
-    /// A store with no recorded at-rest key: written unencrypted by an
-    /// earlier release (or left by an interrupted initialization). Encryption
-    /// cannot be turned on in place.
-    UnencryptedStore,
-    /// An encrypted store whose recorded key is definitely gone (its Keychain
-    /// item or key file no longer exists), so its data cannot be read.
-    MissingStoreKey,
-}
-
-impl IncompatibleStoreKind {
-    pub fn is_older(self) -> bool {
-        !matches!(self, Self::ForeignVersion)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{}", describe(*kind, data_path))]
-pub struct IncompatibleStore {
-    pub kind: IncompatibleStoreKind,
-    pub data_path: PathBuf,
-}
-
-fn describe(kind: IncompatibleStoreKind, data_path: &Path) -> String {
-    let path = data_path.display();
-    match kind {
-        IncompatibleStoreKind::LegacyRocksDb => format!(
-            "{path} contains a legacy RocksDB Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
-        IncompatibleStoreKind::LegacyLark => format!(
-            "{path} contains a legacy Lark Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
-        IncompatibleStoreKind::UnsupportedOrCorrupt => format!(
-            "{path} contains an unsupported or corrupt Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
-        IncompatibleStoreKind::UnknownLineage => format!(
-            "{path} was created by an older Gents version. This release is a breaking release with no migration from it, so it cannot open that store. Back it up or delete it to start fresh, or use the release that created it to export any data you need first"
-        ),
-        IncompatibleStoreKind::InsecureKey => format!(
-            "This home's keys were created by an older Gents version with unsafe file permissions ({path} is readable by other users). This release does not load a key that may have been exposed. Back it up or delete it to start fresh with a new identity"
-        ),
-        IncompatibleStoreKind::ForeignVersion => format!(
-            "{path} was written by a different Gents version whose schema this release does not know, so it cannot open that store. Use the version that wrote it, or back it up to start fresh"
-        ),
-        IncompatibleStoreKind::UnencryptedStore => format!(
-            "{path} is not encrypted at rest: it was created by an older Gents version (or by an initialization that did not finish). This release opens only encrypted stores and cannot convert one, so re-initialize the home to start fresh (`gents init --dangerously-overwrite`), backing it up first if you need its data"
-        ),
-        IncompatibleStoreKind::MissingStoreKey => format!(
-            "{path} is encrypted, but the key this home recorded for it no longer exists (its Keychain item or key file was removed), so its data cannot be read. Re-initialize the home to start fresh (`gents init --dangerously-overwrite`)"
-        ),
-    }
 }
 
 /// Inspect the exact on-disk markers owned by the storage backend without
@@ -170,6 +118,39 @@ pub fn require_existing_store(data_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Refuses an existing store another Gents version wrote, before anything
+/// writes to it. The store is opened bare (no projector, P2P or HTTP, so
+/// nothing is served) and the migration owner's read-only validators decide.
+/// Any other failure is returned unclassified.
+pub async fn refuse_other_version_schema(
+    data_path: &Path,
+    key: Option<&crate::local::store_key::StoreKey>,
+) -> Result<()> {
+    require_existing_store(data_path)?;
+    let opened = |source| StorageBackendError::InspectionOpen {
+        path: data_path.to_path_buf(),
+        source: Box::new(source),
+    };
+    let builder = defra_node::Node::builder()
+        .data_path(data_path)
+        .with_storage_backend(defra_node::StorageBackend::Regolith)
+        .with_regolith_options(regolith_options());
+    let builder = match key {
+        Some(key) => key.encrypt(builder),
+        None => builder,
+    };
+    let node = builder.build().await.map_err(opened)?;
+    let validated = gents_migration::validate_existing_schema(&node).await;
+    node.shutdown().await.map_err(opened)?;
+    validated.map_err(|source| match incompatible_store(&source, data_path) {
+        Some(store) => StorageBackendError::Incompatible(store),
+        None => StorageBackendError::InspectionSchema {
+            path: data_path.to_path_buf(),
+            source,
+        },
+    })
+}
+
 pub fn incompatible_store(
     error: &(dyn std::error::Error + 'static),
     data_path: &Path,
@@ -198,6 +179,8 @@ pub fn incompatible_store(
                 Some(IncompatibleStoreKind::UnknownLineage)
             } else if cause.is_foreign_version() {
                 Some(IncompatibleStoreKind::ForeignVersion)
+            } else if cause.is_other_version_schema() {
+                Some(IncompatibleStoreKind::OtherVersionSchema)
             } else {
                 None
             }
@@ -573,6 +556,81 @@ mod tests {
             crate::local::backend_protection::BackendProtectionError::InvalidProvenance,
         );
         assert!(incompatible_store(tampered.as_ref(), path).is_none());
+    }
+
+    #[test]
+    fn classifies_another_versions_schema_refusals_by_type() {
+        let path = Path::new("/tmp/gents-home/data");
+        for refused in [
+            gents_migration::Error::RuntimeLocalityMismatch {
+                collection: "CompactionConfig".into(),
+            },
+            gents_migration::Error::IncompatibleIdentityPolicy {
+                collection: "NetworkEnrollmentRequest".into(),
+            },
+        ] {
+            let classified = classify_store_error(refused, path);
+            let store = incompatible_store(&classified, path).expect("typed refusal");
+            assert_eq!(store.kind, IncompatibleStoreKind::OtherVersionSchema);
+            assert!(store.kind.is_older());
+            assert!(store.to_string().contains("another Gents version"));
+        }
+    }
+
+    async fn plaintext_node(data: &Path) -> defra_node::Node {
+        crate::test_support::node_builder()
+            .data_path(data)
+            .with_storage_backend(defra_node::StorageBackend::Regolith)
+            .with_regolith_options(regolith_options())
+            .build()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_bare_inspection_refuses_another_versions_store_and_takes_this_builds() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        let node = plaintext_node(&data).await;
+        // CompactionConfig as v0.19.0 and v1.0.0-rc1 declared it.
+        node.add_collection(
+            r#"type CompactionConfig @branchable { compaction_id: String agent_did: String @index }"#,
+        )
+        .await
+        .unwrap();
+        node.shutdown().await.unwrap();
+        drop(node);
+
+        let error = refuse_other_version_schema(&data, None)
+            .await
+            .expect_err("another version's store must be refused");
+        assert_eq!(
+            error.incompatible().map(|store| store.kind),
+            Some(IncompatibleStoreKind::OtherVersionSchema)
+        );
+        let reopened = plaintext_node(&data).await;
+        assert!(reopened
+            .get_collection(gents_protocol::schemas::NODE_NAME)
+            .unwrap()
+            .is_none());
+        reopened.shutdown().await.unwrap();
+
+        let current = temp.path().join("current");
+        let node = std::sync::Arc::new(plaintext_node(&current).await);
+        crate::schema::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        node.shutdown().await.unwrap();
+        drop(node);
+        refuse_other_version_schema(&current, None).await.unwrap();
+
+        let missing = refuse_other_version_schema(&temp.path().join("absent"), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            missing,
+            StorageBackendError::NoExistingDatabase { .. }
+        ));
     }
 
     #[test]

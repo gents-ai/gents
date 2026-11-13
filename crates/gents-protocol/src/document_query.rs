@@ -670,20 +670,12 @@ where
             let order: Vec<_> = self
                 .order
                 .iter()
-                .map(|(field, direction)| format!("{field}: {}", direction.as_str()))
+                .map(|(field, direction)| format!("{{{field}: {}}}", direction.as_str()))
                 .collect();
-            if order.len() == 1 {
-                arguments.push(format!("order: {{{}}}", order[0]));
-            } else {
-                arguments.push(format!(
-                    "order: [{}]",
-                    order
-                        .iter()
-                        .map(|field| format!("{{{field}}}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
+            arguments.push(match order.as_slice() {
+                [single] => format!("order: {single}"),
+                several => format!("order: [{}]", several.join(", ")),
+            });
         }
         if let Some(limit) = self.limit {
             let reference = variables.bind("Int", Value::from(limit));

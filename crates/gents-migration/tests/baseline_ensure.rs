@@ -952,6 +952,54 @@ async fn runtime_locality_rejects_branchable_metadata_even_when_schema_cid_match
 }
 
 #[tokio::test]
+async fn existing_schema_from_another_version_is_refused_by_type_without_writing() {
+    let node = fresh_node().await;
+    gents_migration::validate_existing_schema(&node)
+        .await
+        .expect("an empty store is this build's to take");
+    let branchable = schemas::AGENT.replace("type Agent ", "type Agent @branchable ");
+    node.add_collection(&branchable).await.unwrap();
+    let error = gents_migration::validate_existing_schema(&node)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::RuntimeLocalityMismatch { ref collection } if collection == schemas::AGENT_NAME),
+        "{error}"
+    );
+    assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
+    node.shutdown().await.unwrap();
+
+    let node = fresh_node().await;
+    let directive = format!(
+        "@policy(id: \"{}\", resource: \"{}\")",
+        schemas::CLIENT_JOURNAL_POLICY_ID,
+        schemas::CLIENT_JOURNAL_POLICY_RESOURCE
+    );
+    node.add_collection(&schemas::PENDING_CHAT_SUBMISSION.replace(&directive, ""))
+        .await
+        .unwrap();
+    let error = gents_migration::validate_existing_schema(&node)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::IncompatibleIdentityPolicy { ref collection } if collection == schemas::PENDING_CHAT_SUBMISSION_NAME),
+        "{error}"
+    );
+    assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn existing_schema_this_build_wrote_is_accepted() {
+    let node = fresh_node().await;
+    ensure_migrations(&node).await.unwrap();
+    gents_migration::validate_existing_schema(&node)
+        .await
+        .unwrap();
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn unbound_client_journal_is_rejected_without_changing_data() {
     let node = fresh_node().await;
     let directive = format!(

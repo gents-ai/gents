@@ -826,20 +826,41 @@ mod bound {
     }
 
     #[tokio::test]
-    async fn a_headless_call_never_asks() {
-        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
-        let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
-        let input = serde_json::json!({ "path": fx.root.join("outside/in.json") });
-        let work = fx.root.join("work");
-        let error = executor
-            .bind_input(&fx.record, &input, &BindContext::headless(Some(&work)))
-            .await
-            .unwrap_err();
-        assert!(
-            error.contains("gents config pack plugin dirs add"),
-            "{error}"
-        );
-        assert!(approval::pending(fx.home.path()).unwrap().is_empty());
+    async fn an_uncovered_bind_routes_consent_as_the_lean_model() {
+        use gents_lean_vocab::families::plugin_host_calls_bind::UncoveredBind;
+        for case in gents_lean_vocab::families::plugin_host_calls_bind::cases() {
+            let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
+            let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
+            let input = serde_json::json!({ "path": fx.root.join("outside/in.json") });
+            let work = fx.root.join("work");
+            let operator = if case.input.interactive {
+                Some(answer(fx.home.path(), case.input.operator_allows, false).await)
+            } else {
+                None
+            };
+            let context = BindContext {
+                workdir: Some(&work),
+                session_id: None,
+                interactive: case.input.interactive,
+            };
+            let result = executor.bind_input(&fx.record, &input, &context).await;
+            let prompt = match operator {
+                Some(operator) => {
+                    tokio::time::timeout(std::time::Duration::from_secs(10), operator)
+                        .await
+                        .ok()
+                        .map(Result::unwrap)
+                }
+                None => None,
+            };
+            let error = result.as_ref().err().cloned().unwrap_or_default();
+            case.check(UncoveredBind {
+                asked: prompt.is_some() || !approval::pending(fx.home.path()).unwrap().is_empty(),
+                bound: result.is_ok_and(|bound| bound.is_some()),
+                declined_note: error.contains("the operator declined it"),
+                allow_hint: error.contains("gents config pack plugin dirs add"),
+            });
+        }
     }
 
     #[tokio::test]
@@ -1086,47 +1107,6 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_guest_trap() {
         assert_eq!(receipt.authority, None);
         assert_eq!(receipt.limits, None);
         assert_eq!(receipt.output_digest, None);
-    }
-}
-
-#[tokio::test]
-async fn receipt_hashes_host_prepared_input_and_actual_http_grant() {
-    use afterburner_core::manifold::NetAccess;
-    use sha2::{Digest, Sha256};
-    for (hosts, timeout) in [
-        (vec![], None),
-        (vec!["api.example.com".to_owned()], None),
-        (vec!["api.example.com".to_owned()], Some(60_000)),
-        (vec!["api.example.com".to_owned()], Some(1_000)),
-    ] {
-        let (home, mut record) = installed_echo();
-        let mut granted = gents_pack::plugin::Manifold::sealed();
-        granted.net = NetAccess::OutboundHttp(Some(hosts.clone()));
-        granted.http_timeout_ms = timeout;
-        record.declaration.manifold = Some(serde_json::to_value(&granted).unwrap());
-        record.granted = Some(granted);
-        store::write_record(home.path(), &record).unwrap();
-        let input = serde_json::json!({"state":"caller","http_results":{"forged":true},"value":1});
-        let call = PluginExecutor::new(Some(home.path().to_owned()))
-            .call(&record, input.clone())
-            .await
-            .unwrap();
-        let effective = if hosts.is_empty() {
-            input
-        } else {
-            serde_json::json!({"http_calls":true,"value":1})
-        };
-        let canonical = gents_session::workspace::canonical_json_string(&effective).unwrap();
-        assert_eq!(
-            call.receipt.input_digest,
-            format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
-        );
-        assert_eq!(call.outcome.output, effective);
-        let http = call.receipt.authority.unwrap().host_http;
-        assert_eq!(http.is_some(), !hosts.is_empty());
-        if let Some(http) = http {
-            assert_eq!(http.timeout_ms, Some(timeout.unwrap_or(30_000).min(30_000)));
-        }
     }
 }
 
@@ -1396,21 +1376,79 @@ mod data_calls {
     }
 
     #[tokio::test]
-    async fn data_calls_is_not_offered_to_plugins_without_data() {
-        let node = node_with(&[(NODE, "mine")]).await;
-        let call = ask(None, &node, json!([query("q", json!({"limit": 1}))])).await;
-        assert_eq!(call.outcome.verdict, PluginVerdict::Success);
-        assert!(call.outcome.output.get("data_calls").is_none());
-        assert!(call.outcome.output.get("data_results").is_none());
-
-        let (home, mut record) = installed_echo();
-        record.declaration.data = Some(declaration(&["query"]));
-        store::write_record(home.path(), &record).unwrap();
-        let call = PluginExecutor::new(Some(home.path().to_owned()))
-            .call(&record, json!({}))
-            .await
+    async fn offered_host_services_shape_the_guest_input_as_the_lean_model() {
+        use afterburner_core::manifold::NetAccess;
+        use gents_lean_vocab::families::plugin_host_calls_prepared::{GuestField, PreparedOutput};
+        use sha2::{Digest, Sha256};
+        let node = node_with(&[]).await;
+        let caller_input = json!({
+            "state": "caller",
+            "http_results": {"forged": true},
+            "data_results": {"forged": true},
+            "value": 1
+        });
+        for case in gents_lean_vocab::families::plugin_host_calls_prepared::cases::<String>() {
+            let i = &case.input;
+            let (home, mut record) = installed_echo();
+            let mut granted = gents_pack::plugin::Manifold::sealed();
+            granted.net = match i.net.as_str() {
+                "sealed" => NetAccess::None,
+                "no_hosts" => NetAccess::OutboundHttp(Some(Vec::new())),
+                "hosts" => NetAccess::OutboundHttp(Some(vec!["api.example.com".to_owned()])),
+                other => panic!("unmodelled network grant {other}"),
+            };
+            granted.http_timeout_ms = i.http_timeout_ms;
+            record.declaration.manifold = Some(serde_json::to_value(&granted).unwrap());
+            record.granted = Some(granted);
+            record.declaration.data = i.data_declared.then(|| declaration(&["query"]));
+            store::write_record(home.path(), &record).unwrap();
+            let executor = PluginExecutor::new(Some(home.path().to_owned()));
+            let call = if i.data_caller {
+                let caller = DataCaller::for_agent(node.clone(), NODE, AGENT).unwrap();
+                executor
+                    .call_with_data(&record, caller_input.clone(), caller)
+                    .await
+            } else {
+                executor.call(&record, caller_input.clone()).await
+            }
             .unwrap();
-        assert!(call.outcome.output.get("data_calls").is_none());
+            let canonical =
+                gents_session::workspace::canonical_json_string(&call.outcome.output).unwrap();
+            assert_eq!(
+                call.receipt.input_digest,
+                format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())),
+                "{:?}",
+                case.input
+            );
+            let mut guest: Vec<GuestField> = call
+                .outcome
+                .output
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| GuestField {
+                    key: key.clone(),
+                    host_set: match caller_input.get(key) {
+                        Some(original) if original == value => false,
+                        None if *value == json!(true) => true,
+                        _ => panic!(
+                            "{:?}: {key} = {value} is neither the caller's value nor a host flag",
+                            case.input
+                        ),
+                    },
+                })
+                .collect();
+            guest.sort_by(|a, b| a.key.cmp(&b.key));
+            case.check(PreparedOutput {
+                guest,
+                host_http_timeout_ms: call
+                    .receipt
+                    .authority
+                    .unwrap()
+                    .host_http
+                    .map(|http| http.timeout_ms.unwrap()),
+            });
+        }
     }
 
     #[tokio::test]

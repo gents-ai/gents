@@ -13,7 +13,8 @@ import { useApp } from "./AppContext";
 import { supportsLocalManagedServer } from "../../lib/shellPlatform";
 
 /** A client without a local init.json completes setup from its persisted
- * enrollment, independently of live route readiness after a restart. */
+ * enrollment, independently of live route readiness after a restart, unless
+ * this launch's repair retired a local node whose home is gone. */
 export function useFirstRun(generation: number, startupReady: boolean) {
   const { stores } = useApp();
   const localRuntimeAllowed = supportsLocalManagedServer();
@@ -32,6 +33,7 @@ export function useFirstRun(generation: number, startupReady: boolean) {
           initConfigStatus === "configured" &&
           snapshot !== null &&
           configIsRead(snapshot, initNodeDid),
+        localHomeLost: state.localNodeLost,
       };
     }),
   );
@@ -49,6 +51,7 @@ export function useFirstRun(generation: number, startupReady: boolean) {
       facts.authoritative,
       localRuntimeAllowed,
       facts.remoteConfigured,
+      facts.localHomeLost,
     );
   }
   if (held.generation !== generation || held.phase !== phase) {

@@ -9,6 +9,7 @@ pub(super) fn prepare(
     home: PathBuf,
     id: uuid::Uuid,
     args: ServiceUpdateArgs,
+    helper: Option<PathBuf>,
 ) -> Result<(Plan, Receipt, File)> {
     let root = home.join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME);
     private_dir(&root)?;
@@ -46,7 +47,7 @@ pub(super) fn prepare(
             submission_lock,
         ));
     }
-    let current = std::env::current_exe()?;
+    let current = helper.unwrap_or(std::env::current_exe()?);
     let config = NativeServiceConfig::new(home.clone(), current.clone())?;
     let manager = NativeServiceManager::new(config.clone())?;
     let (definition, old_executable, enabled) = manager.update_snapshot()?;

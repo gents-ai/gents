@@ -2873,14 +2873,6 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
         .context("received-decision notification closed")?;
     drop(arrivals);
 
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_client_transport_cases;
-    let expected = |name: &str| -> Result<bool> {
-        cases
-            .iter()
-            .find(|case| case.name == name)
-            .map(|case| case.allowed)
-            .with_context(|| format!("missing client transport case {name}"))
-    };
     let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
     let acp = receiver.node.document_acp();
     assert_eq!(
@@ -2888,47 +2880,66 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
             .await?,
         Some(server_did.clone())
     );
-    for (name, did, permission) in [
-        (
-            "foreign-owner-update",
-            &server_did,
-            DocumentPermission::Update,
-        ),
-        ("client-read", &client_did, DocumentPermission::Read),
-        ("client-update", &client_did, DocumentPermission::Update),
-        (
-            "user-read",
-            &identity::Did::new(user.did())?,
-            DocumentPermission::Read,
-        ),
-        (
-            "agent-read",
-            &identity::Did::new(agent.did())?,
-            DocumentPermission::Read,
-        ),
-        (
-            "outsider-read",
-            &identity::Did::new(outsider.did())?,
-            DocumentPermission::Read,
-        ),
-    ] {
-        assert_eq!(
-            acp.check_doc_access(
-                &AcpIdentity::Authenticated(did.clone()),
-                permission,
-                policy,
-                "enrollment_records",
-                &doc
-            )
-            .await?,
-            expected(name)?,
-            "{name}"
-        );
-    }
     let query = format!(
         r#"{{ NetworkEnrollmentDecision(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID request_id}} }}"#,
         escape_graphql_string(&doc)
     );
+    for case in gents_lean_vocab::families::client_transport_decision_access::cases() {
+        let did = match case.input.actor.as_str() {
+            "server" => server_did.clone(),
+            "client" => client_did.clone(),
+            "user" => identity::Did::new(user.did())?,
+            "agent" => identity::Did::new(agent.did())?,
+            "outsider" => identity::Did::new(outsider.did())?,
+            other => anyhow::bail!("unknown client transport actor {other}"),
+        };
+        let permission = match case.input.permission.as_str() {
+            "read" => DocumentPermission::Read,
+            "update" => DocumentPermission::Update,
+            other => anyhow::bail!("unknown client transport permission {other}"),
+        };
+        let allowed = acp
+            .check_doc_access(
+                &AcpIdentity::Authenticated(did),
+                permission,
+                policy,
+                "enrollment_records",
+                &doc,
+            )
+            .await?;
+        let graphql_actor = match (case.input.actor.as_str(), case.input.permission.as_str()) {
+            ("user", "read") => Some(&user),
+            ("agent", "read") => Some(&agent),
+            ("outsider", "read") => Some(&outsider),
+            _ => None,
+        };
+        let graphql_visible = match graphql_actor {
+            Some(actor) => {
+                let access = ConfigAccess::Graphql(
+                    GraphqlEndpoint::as_principal(
+                        format!("http://{address}/api/v0/graphql"),
+                        actor.did(),
+                    )
+                    .with_client_signing_capability(actor.client_signing_capability()?)?,
+                );
+                let response = access.execute(&query).await?;
+                Some(
+                    !gents_protocol::graphql::graphql_rows_from_response(
+                        &response,
+                        "NetworkEnrollmentDecision",
+                    )
+                    .is_empty(),
+                )
+            }
+            None => None,
+        };
+        case.check(
+            gents_lean_vocab::families::client_transport_decision_access::DecisionAccessOutput {
+                allowed,
+                graphql_visible,
+            },
+        );
+    }
     assert_eq!(
         gents_protocol::graphql::graphql_rows_from_response(
             &client.execute(&query).await?,
@@ -2937,26 +2948,6 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
         .len(),
         1
     );
-    for (name, actor) in [
-        ("user-read", &user),
-        ("agent-read", &agent),
-        ("outsider-read", &outsider),
-    ] {
-        let access = ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
-                .with_client_signing_capability(actor.client_signing_capability()?)?,
-        );
-        let response = access.execute(&query).await?;
-        assert_eq!(
-            !gents_protocol::graphql::graphql_rows_from_response(
-                &response,
-                "NetworkEnrollmentDecision"
-            )
-            .is_empty(),
-            expected(name)?,
-            "{name}"
-        );
-    }
     client
         .transact_write("test.client_receiver.revoke", |txn| {
             let client_did = &client_did;

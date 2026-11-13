@@ -47,22 +47,16 @@ async fn verified_receipt_cannot_authorize_a_different_opening_request() {
 
 #[test]
 fn job_creation_binding_matches_executable_model() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_job_creation_cases {
-        assert_eq!(
-            super::job_creation_matches(case.parent, case.job, case.key, case.spawn),
-            case.expected
-        );
-    }
+    gents_lean_vocab::families::causal_hop_contracts_job_creation::replay(|case| {
+        super::job_creation_matches(case.parent, case.job, case.key, case.spawn)
+    });
 }
 
 #[test]
 fn deferred_creation_matches_executable_model() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_deferred_creation_cases {
-        assert_eq!(
-            super::deferred_creation_allowed(case.kind, case.receipt, case.opening, case.cause),
-            case.expected
-        );
-    }
+    gents_lean_vocab::families::causal_hop_contracts_deferred_creation::replay(|i| {
+        super::deferred_creation_allowed(i.kind, i.receipt, i.opening, i.cause)
+    });
 }
 
 #[tokio::test]
@@ -187,8 +181,10 @@ async fn receipt_signer_matches_creation_model() {
         None,
     )
     .unwrap();
-    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_creation_signer_cases {
-        let cause = if case.agent_new {
+    use gents_lean_vocab::families::causal_hop_contracts_creation_signer as family;
+    for case in family::cases() {
+        let input = &case.input;
+        let cause = if input.agent_new {
             SessionCreationCause::AgentNew
         } else {
             SessionCreationCause::TaskTrigger
@@ -197,7 +193,7 @@ async fn receipt_signer_matches_creation_model() {
             node_did: "node".into(),
             session_id: "session".into(),
             session_doc_id: "physical".into(),
-            requester_did: case.has_requester.then(|| creator.did().to_owned()),
+            requester_did: input.has_requester.then(|| creator.did().to_owned()),
             agent_did: worker.did().into(),
             opening_request_doc_id: "opening".into(),
             cause,
@@ -205,7 +201,7 @@ async fn receipt_signer_matches_creation_model() {
             starter: None,
             signature: Vec::new(),
         };
-        let signer = match case.signer.as_str() {
+        let signer = match input.signer.as_str() {
             "creator" => &creator,
             "worker" => &worker,
             _ => &other,
@@ -217,12 +213,8 @@ async fn receipt_signer_matches_creation_model() {
             "created_at": "2026-01-01T00:00:00Z", "provenance": {"creation_receipt": receipt}
         }))
         .unwrap();
-        assert_eq!(
-            verified_creation_receipt(&session, "physical", cause).is_some(),
-            case.expected,
-            "{case:?}"
-        );
-        if case.agent_new {
+        let expected = verified_creation_receipt(&session, "physical", cause).is_some();
+        let plugin_job_expected = if input.agent_new {
             let mut job_receipt = session
                 .provenance
                 .as_ref()
@@ -234,16 +226,20 @@ async fn receipt_signer_matches_creation_model() {
             job_receipt.signature = signer.sign(&job_receipt.signing_payload()).await.unwrap();
             let mut job_session = session.clone();
             job_session.provenance.as_mut().unwrap().creation_receipt = Some(job_receipt);
-            assert_eq!(
+            Some(
                 verified_creation_receipt(
                     &job_session,
                     "physical",
-                    SessionCreationCause::PluginJob
+                    SessionCreationCause::PluginJob,
                 )
                 .is_some(),
-                case.expected,
-                "PluginJob: {case:?}"
-            );
-        }
+            )
+        } else {
+            None
+        };
+        case.check(family::CreationSignerOutput {
+            expected,
+            plugin_job_expected,
+        });
     }
 }

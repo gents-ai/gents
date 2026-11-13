@@ -290,23 +290,28 @@ mod tests {
 
     #[test]
     fn generated_command_grant_lookups() {
-        #[derive(Deserialize)]
-        struct Lookup {
-            grants: Vec<Grant<u64, u64>>,
-            expected: Grant<u64, u64>,
-            allowed: bool,
-        }
-        #[derive(Deserialize)]
-        struct Lookups {
-            workspace_command_grant_lookups: Vec<Lookup>,
-        }
-        let snapshot: Lookups = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert_eq!(snapshot.workspace_command_grant_lookups.len(), 24);
-        for case in snapshot.workspace_command_grant_lookups {
-            assert_eq!(
-                has_command_grant(&case.grants, &case.expected),
-                case.allowed
-            );
+        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_command_grant_lookups;
+        assert_eq!(cases.len(), 24);
+        for case in cases {
+            let grants: Vec<Grant<u64, u64>> = case
+                .grants
+                .iter()
+                .map(|grant| Grant {
+                    scope: Scope {
+                        workspace: grant.scope.workspace,
+                        revision: grant.scope.revision,
+                    },
+                    action: grant.action,
+                })
+                .collect();
+            let expected = Grant {
+                scope: Scope {
+                    workspace: case.expected.scope.workspace,
+                    revision: case.expected.scope.revision,
+                },
+                action: case.expected.action,
+            };
+            assert_eq!(has_command_grant(&grants, &expected), case.allowed);
         }
     }
 

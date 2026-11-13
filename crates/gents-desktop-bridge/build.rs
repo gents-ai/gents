@@ -13,6 +13,7 @@ const COMMANDS: &[&str] = &[
     "desktop_managed_server_set_auto_start",
     "desktop_managed_server_restart",
     "desktop_managed_server_reset",
+    "desktop_managed_server_repair",
     "desktop_managed_server_validate_root",
     "desktop_agent_workspace_root_select",
     "desktop_managed_server_open_login_items",

@@ -5,7 +5,7 @@ namespace Conformance.EnrollmentRenewalNotices
 
 open Lean Enrollment.RenewalNotices
 
-deriving instance Lean.ToJson for LeaseState, Observation, Trace
+deriving instance Lean.ToJson for LeaseState, Observation, Trace, Notice, Observed
 
 def observations : List Observation :=
   { active := false, sequence := 0, state := .current } ::
@@ -28,8 +28,8 @@ def traces : List Trace :=
     observations.map fun c => ({ steps := [a, b, c] } : Trace)) ++ [scenario]
 
 @[conformance_family]
-def trace : Family Trace (List (Option LeaseState)) where
+def trace : Family Trace (List Observed) where
   inputs := traces
-  model := fun t => Enrollment.RenewalNotices.notices [] t.steps
+  model := fun t => Enrollment.RenewalNotices.observeAll [] t.steps
 
 end Conformance.EnrollmentRenewalNotices

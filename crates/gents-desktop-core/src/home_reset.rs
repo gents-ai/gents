@@ -12,7 +12,8 @@ const FULL_DELETE_CONSEQUENCE: &str = "The managed home, client state and servic
 
 /// How the desktop client state relates to the managed home, as
 /// `managed-server.json`'s `reviewedFor` records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClientBinding {
     /// No reviewed home is remembered, or its home cannot be read.
     Unbound,
@@ -152,9 +153,9 @@ pub struct HomeResetPlan {
     /// client state was paired with it.
     pub runtime: Option<(
         PathBuf,
-        Option<gents_store::local::storage_backend::IncompatibleStore>,
+        Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     )>,
-    client: Option<gents_store::local::storage_backend::IncompatibleStore>,
+    client: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     /// The client state is retired because its paired node is gone.
     orphaned_client: bool,
     desktop_root: PathBuf,
@@ -349,8 +350,8 @@ pub fn present(path: &Path) -> Result<bool, BridgeError> {
 
 pub fn plan_home_reset(
     runtime_home: Option<&Path>,
-    runtime_store: Option<gents_store::local::storage_backend::IncompatibleStore>,
-    client_store: Option<gents_store::local::storage_backend::IncompatibleStore>,
+    runtime_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
+    client_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     desktop_paths: &crate::client::DesktopPaths,
     user_home: &Path,
     binding: ClientBinding,
@@ -461,8 +462,8 @@ pub fn plan_full_reset(
 
 fn plan_reset(
     runtime_home: Option<&Path>,
-    runtime_store: Option<gents_store::local::storage_backend::IncompatibleStore>,
-    client_store: Option<gents_store::local::storage_backend::IncompatibleStore>,
+    runtime_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
+    client_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     desktop_paths: &crate::client::DesktopPaths,
     user_home: &Path,
     binding: ClientBinding,
@@ -487,17 +488,17 @@ fn plan_reset(
                 "managed init marker",
             )?;
             let marked = inspect(&data)?.map(|kind| {
-                gents_store::local::storage_backend::IncompatibleStore {
+                gents_protocol::operations::install_repair::IncompatibleStore {
                     kind,
                     data_path: data.clone(),
                 }
             });
             marked
                 .or(runtime_store.map(|store| match store.kind {
-                    gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey => {
+                    gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey => {
                         store
                     }
-                    _ => gents_store::local::storage_backend::IncompatibleStore {
+                    _ => gents_protocol::operations::install_repair::IncompatibleStore {
                         data_path: data.clone(),
                         ..store
                     },
@@ -512,7 +513,7 @@ fn plan_reset(
     reject_symlink_if_present(desktop_paths.node_data_dir(), "desktop client store")?;
     let client = inspect(desktop_paths.node_data_dir())?
         .map(
-            |kind| gents_store::local::storage_backend::IncompatibleStore {
+            |kind| gents_protocol::operations::install_repair::IncompatibleStore {
                 kind,
                 data_path: desktop_paths.node_data_dir().to_path_buf(),
             },
@@ -621,7 +622,10 @@ fn plan_reset(
         let entries = if full_reset {
             canonical.client_state_entries()
         } else {
-            vec![canonical.node_data_dir().to_path_buf()]
+            vec![
+                canonical.node_data_dir().to_path_buf(),
+                canonical.retired_local_peers_path(),
+            ]
         };
         for entry in entries.into_iter().chain(std::iter::once(preference)) {
             if desktop_owned && present(&entry)? {
@@ -777,6 +781,15 @@ fn plan_reset(
 }
 
 impl HomeResetPlan {
+    /// Leaves `managed-server.json` (the reviewed host access and auto-start)
+    /// in place when only a client store is being set aside.
+    pub fn keeping_managed_server_preference(mut self) -> Self {
+        let preference = self.desktop_root.join(MANAGED_SERVER_CONFIG);
+        self.client_entries.retain(|entry| *entry != preference);
+        self.ownership_records.retain(|entry| *entry != preference);
+        self
+    }
+
     /// The desktop client state is retired with its runtime: its pairing
     /// names the runtime identity being retired.
     pub fn retires_client_state(&self) -> bool {
@@ -791,7 +804,7 @@ impl HomeResetPlan {
 
     fn refused_stores(
         &self,
-    ) -> impl Iterator<Item = &gents_store::local::storage_backend::IncompatibleStore> {
+    ) -> impl Iterator<Item = &gents_protocol::operations::install_repair::IncompatibleStore> {
         self.runtime
             .iter()
             .filter_map(|(_, store)| store.as_ref())
@@ -912,16 +925,17 @@ impl HomeResetPlan {
     }
 
     pub fn preview(&self) -> ManagedServerResetResult {
-        let view = |scope, store: &gents_store::local::storage_backend::IncompatibleStore| {
-            IncompatibleStoreView {
+        let view =
+            |scope, store: &gents_protocol::operations::install_repair::IncompatibleStore| {
+                IncompatibleStoreView {
                 scope,
                 path: store.data_path.to_string_lossy().into_owned(),
                 detail: store.to_string(),
                 older: store.kind.is_older(),
                 unsafe_key: store.kind
-                    == gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey,
+                    == gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey,
             }
-        };
+            };
         let paths = |paths: &mut dyn Iterator<Item = &PathBuf>| {
             paths
                 .map(|path| path.to_string_lossy().into_owned())
@@ -1503,6 +1517,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let (home, desktop, service) = fixture(&user);
+        write(&desktop.retired_local_peers_path(), "[]");
         let plan = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
         let preview = plan.preview();
         assert!(preview.delete_confirmation.is_some());
@@ -1519,6 +1534,7 @@ mod tests {
             "service definition"
         );
         assert!(backup.join("desktop/logs/client.log").is_file());
+        assert!(backup.join("desktop/local-peers.json").is_file());
         assert!(backup.join("home/init.json").is_file());
         assert!(home.join("other-node/init.json").is_file());
         assert!(home.join("keys/other.key").is_file());
@@ -1966,8 +1982,8 @@ mod tests {
             assert!(plan_full_reset(Some(&home), &desktop, &user, &service).is_err());
             assert!(plan_home_reset(
                 Some(&home),
-                Some(gents_store::local::storage_backend::IncompatibleStore {
-                    kind: gents_store::local::storage_backend::IncompatibleStoreKind::LegacyLark,
+                Some(gents_protocol::operations::install_repair::IncompatibleStore {
+                    kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::LegacyLark,
                     data_path: home.join("data"),
                 }),
                 None,

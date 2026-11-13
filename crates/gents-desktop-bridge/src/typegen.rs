@@ -318,6 +318,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ManagedServerStatus,
         ManagedServerRootValidation,
         ManagedServerResetResult,
+        ManagedServerRepairResult,
+        ManagedServerRepairOutcome,
         PeerRemoveResponse,
         EnrollmentRequestView,
         ToolServiceTestResult,

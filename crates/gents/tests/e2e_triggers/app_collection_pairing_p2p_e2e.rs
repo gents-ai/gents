@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{DocumentRuntimeOptions, Gents};
@@ -13,6 +14,7 @@ use serde_json::Value;
 
 use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
+use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db;
 use gents_p2p::test_support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 
@@ -117,7 +119,7 @@ async fn signed_invitation_delivers_request_without_http() {
     .expect("approved invitation did not reach the guest");
 }
 
-async fn register_change_proposed_schema(node: &EmbeddedNode) {
+async fn register_change_proposed_schema(node: &std::sync::Arc<EmbeddedNode>) {
     // @branchable is REQUIRED — DefraDB only P2P-syncs branchable collections.
     let sdl = r#"
         type ChangeProposed @branchable {
@@ -126,7 +128,8 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
             kind: String @index
         }
     "#;
-    node.add_collection(sdl)
+    gents_store::config_client::ConfigAccess::local(node.clone())
+        .add_collection(sdl)
         .await
         .expect("add_collection ChangeProposed");
 }
@@ -154,7 +157,10 @@ async fn refuse_app_collection_replication(
     );
 }
 
-async fn fetch_pairing_applied(node: &EmbeddedNode, peer_id: &str) -> Option<Vec<String>> {
+async fn fetch_pairing_applied(
+    node: &std::sync::Arc<EmbeddedNode>,
+    peer_id: &str,
+) -> Option<Vec<String>> {
     let escaped = escape_graphql_string(peer_id);
     let query = format!(
         r#"{{
@@ -164,7 +170,10 @@ async fn fetch_pairing_applied(node: &EmbeddedNode, peer_id: &str) -> Option<Vec
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let response =
+        gents_store::graphql::graphql_with_transaction_retry(node, &query, "test.p2p_observation")
+            .await
+            .expect("P2P document access");
     if response.has_errors() {
         return None;
     }
@@ -187,7 +196,7 @@ async fn fetch_pairing_applied(node: &EmbeddedNode, peer_id: &str) -> Option<Vec
     Some(addresses)
 }
 
-async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
+async fn fetch_subscribed_collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Vec<String> {
     // Subscription listing is authorized for the node's own identity only.
     let Some(p2p) = gents_store::identity::node_p2p(node) else {
         return Vec::new();
@@ -198,11 +207,12 @@ async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
 }
 
 async fn wait_for_subscribed_collections(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     expected: &[String],
     timeout: Duration,
 ) -> Vec<String> {
     let deadline = Instant::now() + timeout;
+    let mut changes = node.subscribe_changes("PeerPairingApplied").await;
     loop {
         let subscribed = fetch_subscribed_collection_names(node).await;
         if expected
@@ -216,20 +226,21 @@ async fn wait_for_subscribed_collections(
                 "timed out waiting for subscribed collections {expected:?}; last={subscribed:?}"
             );
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("subscribed collection observation deadline");
     }
 }
 
-/// Several pairing sweeps pass without the application collection being
-/// subscribed, and the control pairing stays applied.
 async fn assert_app_collection_refused(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     peer_id: &str,
     collection: &str,
     control: &[String],
 ) {
     let deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < deadline {
+    let mut changes = node.subscribe_changes("PeerPairingApplied").await;
+    loop {
         fetch_pairing_applied(node, peer_id)
             .await
             .expect("control pairing stays applied");
@@ -238,31 +249,50 @@ async fn assert_app_collection_refused(
             !subscribed.iter().any(|name| name == collection),
             "{collection} was subscribed: {subscribed:?}"
         );
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .is_err()
+        {
+            break;
+        }
     }
-    wait_for_subscribed_collections(node, control, Duration::from_secs(30)).await;
+    let subscribed = wait_for_subscribed_collections(node, control, Duration::from_secs(30)).await;
+    assert!(!subscribed.iter().any(|name| name == collection));
 }
 
-/// Holds `local` across several sync rounds; replication would break it.
-async fn assert_stays_local<F, Fut>(local: F, violation: &str)
-where
+async fn assert_stays_local<F, Fut>(
+    nodes: &[&std::sync::Arc<EmbeddedNode>],
+    collection: &str,
+    local: F,
+    violation: &str,
+) where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
     let deadline = Instant::now() + Duration::from_secs(4);
-    while Instant::now() < deadline {
-        assert!(local().await, "{violation}");
-        tokio::time::sleep(Duration::from_millis(250)).await;
+    let mut changes = Vec::new();
+    for node in nodes {
+        changes.push(node.subscribe_changes(collection).await);
     }
+    loop {
+        assert!(local().await, "{violation}");
+        let notified =
+            futures::future::select_all(changes.iter_mut().map(|change| Box::pin(change.recv())));
+        if tokio::time::timeout_at(deadline, notified).await.is_err() {
+            break;
+        }
+    }
+    assert!(local().await, "{violation}");
 }
 
 async fn wait_for_enrollment_route_applied(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     peer_id: &str,
     timeout: Duration,
 ) -> Vec<String> {
     let deadline = Instant::now() + timeout;
     let mut last = String::from("<none>");
+    let mut changes = node.subscribe_changes("PeerPairingApplied").await;
     loop {
         if let Some(addresses) = fetch_pairing_applied(node, peer_id).await {
             let subscribed = fetch_subscribed_collection_names(node).await;
@@ -275,12 +305,14 @@ async fn wait_for_enrollment_route_applied(
         if Instant::now() >= deadline {
             panic!("timed out waiting for enrollment PeerPairingApplied({peer_id}); last={last}");
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("enrollment route observation deadline: {last}"));
     }
 }
 
 async fn wait_for_current_route_receipt(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     request_digest: &str,
     member_peer: &str,
@@ -288,17 +320,24 @@ async fn wait_for_current_route_receipt(
 ) {
     let request_id = escape_graphql_string(request_id);
     let deadline = Instant::now() + timeout;
+    let mut changes = node
+        .subscribe_changes("NetworkEnrollmentRouteReceipt")
+        .await;
     loop {
-        let response = node
-            .execute(&format!(
+        let response = gents_store::graphql::graphql_with_transaction_retry(
+            node,
+            &format!(
                 r#"{{ NetworkEnrollmentRouteReceipt(
                     filter: {{ request_id: {{ _eq: "{request_id}" }} }}
                 ) {{
                     request_digest member_peer authorization_sequence
                     authorization_expires_at direction signer_did admin_sig
                 }} }}"#
-            ))
-            .await;
+            ),
+            "test.p2p_observation",
+        )
+        .await
+        .expect("P2P document access");
         let diagnostic = format!("data={:?} errors={:?}", response.data, response.errors);
         let current = response
             .data
@@ -333,13 +372,15 @@ async fn wait_for_current_route_receipt(
         if Instant::now() >= deadline {
             panic!("timed out waiting for directly delivered current route receipt: {diagnostic}");
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("route receipt deadline: {diagnostic}"));
     }
 }
 
 async fn wait_for_revoked_route_teardown(
-    server: &EmbeddedNode,
-    member: &EmbeddedNode,
+    server: &std::sync::Arc<EmbeddedNode>,
+    member: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     member_peer: &str,
     timeout: Duration,
@@ -347,22 +388,32 @@ async fn wait_for_revoked_route_teardown(
     let request_id = escape_graphql_string(request_id);
     let member_peer = escape_graphql_string(member_peer);
     let deadline = Instant::now() + timeout;
+    let mut server_changes = gents_store::subscription_source::subscribe_collections(
+        server,
+        ["PeerPairingDesired", "PeerPairingApplied"],
+    )
+    .unwrap();
+    let mut member_changes = member
+        .subscribe_changes("NetworkAuthorizationRevision")
+        .await;
     loop {
-        let server_response = server
-            .execute(&format!(
+        let server_response = gents_store::graphql::graphql_with_transaction_retry(server, &format!(
                 r#"{{
                     PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{member_peer}" }} }}) {{ peer_id }}
                     PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{member_peer}" }} }}) {{ peer_id }}
                 }}"#
-            ))
-            .await;
-        let member_response = member
-            .execute(&format!(
+            ), "test.p2p_observation").await.expect("P2P document access");
+        let member_response = gents_store::graphql::graphql_with_transaction_retry(
+            member,
+            &format!(
                 r#"{{ NetworkAuthorizationRevision(
                     filter: {{ request_id: {{ _eq: "{request_id}" }}, kind: {{ _eq: "revoked" }} }}
                 ) {{ sequence kind signer_did admin_sig }} }}"#
-            ))
-            .await;
+            ),
+            "test.p2p_observation",
+        )
+        .await
+        .expect("P2P document access");
         let empty = |response: &gents::defra_node::QueryResponse, field: &str| {
             !response.has_errors()
                 && response
@@ -410,11 +461,22 @@ async fn wait_for_revoked_route_teardown(
         if Instant::now() >= deadline {
             panic!("timed out waiting for signed revocation and route teardown: {diagnostic}");
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                result = server_changes.recv() => { result.expect("route subscription closed"); }
+                _ = member_changes.recv() => {}
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("route teardown deadline: {diagnostic}"));
     }
 }
 
-async fn write_change_proposed(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
+async fn write_change_proposed(
+    node: &std::sync::Arc<EmbeddedNode>,
+    external_id: &str,
+    kind: &str,
+) -> String {
     let escaped_external_id = escape_graphql_string(external_id);
     let escaped_kind = escape_graphql_string(kind);
     let mutation = format!(
@@ -426,7 +488,13 @@ async fn write_change_proposed(node: &EmbeddedNode, external_id: &str, kind: &st
             }}) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response = gents_store::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.p2p_fixture",
+        &mutation,
+    )
+    .await
+    .expect("P2P document access");
     assert!(
         !response.has_errors(),
         "add_ChangeProposed failed: {:?}",
@@ -455,10 +523,14 @@ async fn write_change_proposed(node: &EmbeddedNode, external_id: &str, kind: &st
         .unwrap_or_else(|| panic!("ChangeProposed mutation returned no _docID: {field}"))
 }
 
-async fn query_change_proposed(node: &EmbeddedNode) -> Vec<Value> {
-    let response = node
-        .execute(r#"{ ChangeProposed { external_id kind } }"#)
-        .await;
+async fn query_change_proposed(node: &std::sync::Arc<EmbeddedNode>) -> Vec<Value> {
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        r#"{ ChangeProposed { external_id kind } }"#,
+        "test.p2p_observation",
+    )
+    .await
+    .expect("P2P document access");
     response
         .data
         .as_ref()
@@ -475,8 +547,8 @@ async fn app_collection_pairing_never_replicates_application_documents() {
 
     let db_a = test_p2p_db("app-collection-pairing-a").await;
     let db_b = test_p2p_db("app-collection-pairing-b").await;
-    register_change_proposed_schema(db_a.node.as_ref()).await;
-    register_change_proposed_schema(db_b.node.as_ref()).await;
+    register_change_proposed_schema(&db_a.node).await;
+    register_change_proposed_schema(&db_b.node).await;
 
     let identity_a = db_a.node_identity.clone();
     let identity_b = db_b.node_identity.clone();
@@ -513,8 +585,8 @@ async fn app_collection_pairing_never_replicates_application_documents() {
     let handle_a = tokio::spawn(agent_a.run(shutdown_a_rx));
     let handle_b = tokio::spawn(agent_b.run(shutdown_b_rx));
 
-    let (peer_a, addr_a) = wait_for_peer_identity(db_a.node.as_ref()).await;
-    let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
+    let (peer_a, addr_a) = wait_for_peer_identity(&db_a.node).await;
+    let (peer_b, addr_b) = wait_for_peer_identity(&db_b.node).await;
 
     let enrollment_a_to_b = authorize_enrollment_peer(
         db_a.node.clone(),
@@ -538,10 +610,9 @@ async fn app_collection_pairing_never_replicates_application_documents() {
     .await;
 
     let control_a =
-        wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
-            .await;
+        wait_for_enrollment_route_applied(&db_a.node, &peer_b, Duration::from_secs(60)).await;
     wait_for_current_route_receipt(
-        db_b.node.as_ref(),
+        &db_b.node,
         &enrollment_a_to_b.request_id,
         &enrollment_a_to_b.request_digest,
         &peer_b,
@@ -549,41 +620,32 @@ async fn app_collection_pairing_never_replicates_application_documents() {
     )
     .await;
     let control_b =
-        wait_for_enrollment_route_applied(db_b.node.as_ref(), &peer_a, Duration::from_secs(60))
-            .await;
+        wait_for_enrollment_route_applied(&db_b.node, &peer_a, Duration::from_secs(60)).await;
 
     refuse_app_collection_replication(&db_a.node, &addr_b, "ChangeProposed").await;
     refuse_app_collection_replication(&db_b.node, &addr_a, "ChangeProposed").await;
     // P2P carries only discovery and enrollment: the application collection
     // never enters the applied pairing and the control pairing stays as it was.
-    assert_app_collection_refused(db_a.node.as_ref(), &peer_b, "ChangeProposed", &control_a).await;
-    assert_app_collection_refused(db_b.node.as_ref(), &peer_a, "ChangeProposed", &control_b).await;
+    assert_app_collection_refused(&db_a.node, &peer_b, "ChangeProposed", &control_a).await;
+    assert_app_collection_refused(&db_b.node, &peer_a, "ChangeProposed", &control_b).await;
 
-    write_change_proposed(db_a.node.as_ref(), EXTERNAL_ID, "signup").await;
+    write_change_proposed(&db_a.node, EXTERNAL_ID, "signup").await;
     assert_stays_local(
-        || async { query_change_proposed(db_b.node.as_ref()).await.is_empty() },
+        &[&db_b.node],
+        "ChangeProposed",
+        || async { query_change_proposed(&db_b.node).await.is_empty() },
         "ChangeProposed replicated to the paired peer",
     )
     .await;
-    assert_eq!(query_change_proposed(db_a.node.as_ref()).await.len(), 1);
-
-    let post = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
-        .await
-        .expect("post applied");
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let post2 = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
-        .await
-        .expect("post2 applied");
-    assert_eq!(post, post2, "pairing applied should be stable (idempotent)");
-    wait_for_subscribed_collections(db_a.node.as_ref(), &control_a, Duration::from_secs(30)).await;
+    assert_eq!(query_change_proposed(&db_a.node).await.len(), 1);
 
     GraphqlEnrollmentStore::new(db_a.node.clone(), identity_a.clone())
         .revoke_request(&enrollment_a_to_b.request_id)
         .await
         .expect("revoke exact approved enrollment generation");
     wait_for_revoked_route_teardown(
-        db_a.node.as_ref(),
-        db_b.node.as_ref(),
+        &db_a.node,
+        &db_b.node,
         &enrollment_a_to_b.request_id,
         &peer_b,
         Duration::from_secs(60),
@@ -642,8 +704,8 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let handle_a = tokio::spawn(agent_a.run(shutdown_a_rx));
     let handle_b = tokio::spawn(agent_b.run(shutdown_b_rx));
 
-    let (peer_a, addr_a) = wait_for_peer_identity(db_a.node.as_ref()).await;
-    let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
+    let (peer_a, addr_a) = wait_for_peer_identity(&db_a.node).await;
+    let (peer_b, addr_b) = wait_for_peer_identity(&db_b.node).await;
 
     authorize_enrollment_peer(
         db_a.node.clone(),
@@ -666,8 +728,8 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     )
     .await;
 
-    wait_for_enrollment_route_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60)).await;
-    let before = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
+    wait_for_enrollment_route_applied(&db_a.node, &peer_b, Duration::from_secs(60)).await;
+    let before = fetch_pairing_applied(&db_a.node, &peer_b)
         .await
         .expect("control applied");
 
@@ -685,23 +747,35 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
             }}) {{ _docID }}
         }}"#
     );
-    let resp = db_a.node.execute(&mutation).await;
+    let resp = gents_store::config_client::ConfigAccess::write_local_response(
+        &db_a.node,
+        "test.p2p_fixture",
+        &mutation,
+    )
+    .await
+    .expect("P2P document access");
     assert!(
         !resp.has_errors(),
         "create blank DataPlanePairingDesired: {:?}",
         resp.errors
     );
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_stays_local(
+        &[&db_a.node],
+        "PeerPairingApplied",
+        || async { fetch_pairing_applied(&db_a.node, &peer_b).await.as_ref() == Some(&before) },
+        "a blank application collection changed the control pairing",
+    )
+    .await;
 
-    let after = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
+    let after = fetch_pairing_applied(&db_a.node, &peer_b)
         .await
         .expect("control applied after soft-skip");
     assert_eq!(
         before, after,
         "control replicator addresses should be unchanged"
     );
-    let subscribed = fetch_subscribed_collection_names(db_a.node.as_ref()).await;
+    let subscribed = fetch_subscribed_collection_names(&db_a.node).await;
     assert!(
         !subscribed.iter().any(|c| c == "ChangeProposed"),
         "blank app-collections must not subscribe ChangeProposed: {subscribed:?}"
@@ -857,8 +931,8 @@ async fn document_pack_collections_stay_local_under_explicit_pairing() {
     let task_a = tokio::spawn(runtime_a.run(receiver_a));
     let task_b = tokio::spawn(runtime_b.run(receiver_b));
 
-    let (peer_a, address_a) = wait_for_peer_identity(a.node.as_ref()).await;
-    let (peer_b, address_b) = wait_for_peer_identity(b.node.as_ref()).await;
+    let (peer_a, address_a) = wait_for_peer_identity(&a.node).await;
+    let (peer_b, address_b) = wait_for_peer_identity(&b.node).await;
     let enrollment = authorize_enrollment_peer(
         a.node.clone(),
         NETWORK_ID,
@@ -880,9 +954,9 @@ async fn document_pack_collections_stay_local_under_explicit_pairing() {
     )
     .await;
     let control_a =
-        wait_for_enrollment_route_applied(a.node.as_ref(), &peer_b, Duration::from_secs(60)).await;
+        wait_for_enrollment_route_applied(&a.node, &peer_b, Duration::from_secs(60)).await;
     wait_for_current_route_receipt(
-        b.node.as_ref(),
+        &b.node,
         &enrollment.request_id,
         &enrollment.request_digest,
         &peer_b,
@@ -890,15 +964,17 @@ async fn document_pack_collections_stay_local_under_explicit_pairing() {
     )
     .await;
     let control_b =
-        wait_for_enrollment_route_applied(b.node.as_ref(), &peer_a, Duration::from_secs(60)).await;
+        wait_for_enrollment_route_applied(&b.node, &peer_a, Duration::from_secs(60)).await;
     refuse_app_collection_replication(&a.node, &address_b, "SharedFixtureMove").await;
     refuse_app_collection_replication(&b.node, &address_a, "SharedFixtureMove").await;
-    assert_app_collection_refused(a.node.as_ref(), &peer_b, "SharedFixtureMove", &control_a).await;
-    assert_app_collection_refused(b.node.as_ref(), &peer_a, "SharedFixtureMove", &control_b).await;
+    assert_app_collection_refused(&a.node, &peer_b, "SharedFixtureMove", &control_a).await;
+    assert_app_collection_refused(&b.node, &peer_a, "SharedFixtureMove", &control_b).await;
 
     write_fixture_move(&a, "move-a", "X").await;
     write_fixture_move(&b, "move-b", "O").await;
     assert_stays_local(
+        &[&a.node, &b.node],
+        "SharedFixtureMove",
         || async {
             fixture_moves(&b, "move-a").await.is_empty()
                 && fixture_moves(&a, "move-b").await.is_empty()

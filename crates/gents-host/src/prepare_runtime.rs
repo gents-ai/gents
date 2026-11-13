@@ -22,7 +22,7 @@ use crate::args::{P2pTransportArg, PrepareRuntimeArgs};
 use gents_service::home_state::load_initialized_home_identity;
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::read_runtime_state;
-use gents_service::runtime_control::{control, refusal, PreparationFailure};
+use gents_service::runtime_control::{control, refusal, ControlFailure};
 use gents_service::state::StoredInitConfig;
 use gents_service::state::StoredRuntimeState;
 
@@ -41,9 +41,12 @@ fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
     {
         RuntimePreparationRefusal::KeyAccess
     } else {
-        error
-            .downcast_ref::<PreparationFailure>()
-            .map_or(RuntimePreparationRefusal::Failed, |failure| failure.reason)
+        gents_protocol::error_chain::find_map_source(error.as_ref(), |source| {
+            source
+                .downcast_ref::<ControlFailure>()
+                .and_then(ControlFailure::reason)
+        })
+        .unwrap_or(RuntimePreparationRefusal::Failed)
     }
 }
 
@@ -117,12 +120,12 @@ async fn prepare_inner(
         tokio::task::spawn_blocking(move || -> Result<()> {
             let manager = gents_service::native_service::NativeServiceManager::new(gents_service::native_service::NativeServiceConfig::new(check_home.clone(), std::env::current_exe()?)?)?;
             if let Some(id) = manager.pending_update()? {
-                return Err(refusal(RuntimePreparationRefusal::StartupBusy, format!("Managed update {id} is pending; inspect service update-status --home {} {id} before selecting another package.", check_home.display())));
+                return Err(anyhow::Error::from(refusal(RuntimePreparationRefusal::StartupBusy, format!("Managed update {id} is pending; inspect service update-status --home {} {id} before selecting another package.", check_home.display()))));
             }
             if manager.definition_owned_by_home()? && manager.has_managed_executable()? {
                 let selected = manager.installed_executable_path()?;
                 if gents_service::service_update::executable_digest(&selected)? != check_build {
-                    return Err(refusal(RuntimePreparationRefusal::Unsupported, "The node has an explicitly selected managed-update executable. Use that package or an explicit managed update; this package will not replace it automatically."));
+                    return Err(anyhow::Error::from(refusal(RuntimePreparationRefusal::Unsupported, "The node has an explicitly selected managed-update executable. Use that package or an explicit managed update; this package will not replace it automatically.")));
                 }
             }
             Ok(())
@@ -134,10 +137,10 @@ async fn prepare_inner(
     )
     .await
     .map_err(|_| {
-        refusal(
+        anyhow::Error::from(refusal(
             RuntimePreparationRefusal::StartupBusy,
             "Another runtime preparation is still in progress. Retry after it finishes.",
-        )
+        ))
     })??;
     let (mut config, state) = tokio::task::spawn_blocking({
         let home = home.clone();
@@ -160,10 +163,10 @@ async fn prepare_inner(
             "none" => P2pTransportArg::None,
             "iroh" => P2pTransportArg::Iroh,
             _ => {
-                return Err(refusal(
+                return Err(anyhow::Error::from(refusal(
                     RuntimePreparationRefusal::Unsupported,
                     "The recorded runtime uses an unsupported transport.",
-                ))
+                )))
             }
         };
         let endpoint = local_endpoint(&state.graphql)?;
@@ -178,19 +181,19 @@ async fn prepare_inner(
         if let Some(observation) = observation {
             if observation.build == build && !observation.retiring && requested_root.is_none() {
                 if observation.lifecycle != ServeLifecycle::Ready {
-                    return Err(refusal(
+                    return Err(anyhow::Error::from(refusal(
                         RuntimePreparationRefusal::Starting,
                         "The matching runtime is still starting. Retry when it is ready.",
-                    ));
+                    )));
                 }
                 if !current_capabilities()
                     .iter()
                     .all(|(name, version)| observation.capabilities.get(name) == Some(version))
                 {
-                    return Err(refusal(
+                    return Err(anyhow::Error::from(refusal(
                         RuntimePreparationRefusal::Unsupported,
                         "The running runtime does not expose this package's required capabilities.",
-                    ));
+                    )));
                 }
                 return emit(RuntimePreparationResult::Ready {
                     outcome: RuntimePreparationOutcome::Reused,
@@ -210,26 +213,26 @@ async fn prepare_inner(
                 if requested_root.is_some() {
                     let status = crate::readiness::fetch_local_operator_status(&authorization, CONTROL_TIMEOUT)
                         .await
-                        .map_err(|error| refusal(
+                        .map_err(|error| anyhow::Error::from(refusal(
                             RuntimePreparationRefusal::Unavailable,
                             format!("Could not confirm the running runtime's access settings: {error:#}"),
-                        ))?;
+                        )))?;
                     validate_running_authority(&status, &config)?;
                 }
                 if let Some(root) = &requested_root {
                     ensure_requested_root_published(&authorization, &config, root).await?;
                 }
                 let retired = control(&client, &endpoint, &config.node_did, RuntimeOperation::Retire { expected_build: observation.build }, Some(&authorization)).await?
-                    .ok_or_else(|| refusal(RuntimePreparationRefusal::Unavailable, "The runtime closed before retirement could be confirmed. Retry to inspect its state."))?;
+                    .ok_or_else(|| anyhow::Error::from(refusal(RuntimePreparationRefusal::Unavailable, "The runtime closed before retirement could be confirmed. Retry to inspect its state.")))?;
                 match retired.disposition {
                     RuntimeControlDisposition::Retiring | RuntimeControlDisposition::Stopping => {}
-                    RuntimeControlDisposition::Busy => return Err(refusal(RuntimePreparationRefusal::Busy, "The runtime still owns active work. Let it finish, then retry the update.")),
-                    RuntimeControlDisposition::Starting => return Err(refusal(RuntimePreparationRefusal::Starting, "The runtime is still starting. Retry when it is ready.")),
-                    _ => return Err(refusal(RuntimePreparationRefusal::Unavailable, "The observed runtime changed before retirement. Retry to inspect its state.")),
+                    RuntimeControlDisposition::Busy => return Err(anyhow::Error::from(refusal(RuntimePreparationRefusal::Busy, "The runtime still owns active work. Let it finish, then retry the update."))),
+                    RuntimeControlDisposition::Starting => return Err(anyhow::Error::from(refusal(RuntimePreparationRefusal::Starting, "The runtime is still starting. Retry when it is ready."))),
+                    _ => return Err(anyhow::Error::from(refusal(RuntimePreparationRefusal::Unavailable, "The observed runtime changed before retirement. Retry to inspect its state."))),
                 }
             }
             tokio::time::timeout(STARTUP_WAIT, gents_store::local::home::wait_for_store_release(&home, &gents_store::local::home::default_data_dir(&home)))
-                .await.map_err(|_| refusal(RuntimePreparationRefusal::StoreBusy, "The retiring runtime has not released its store. Retry after shutdown finishes."))??;
+                .await.map_err(|_| anyhow::Error::from(refusal(RuntimePreparationRefusal::StoreBusy, "The retiring runtime has not released its store. Retry after shutdown finishes.")))??;
             outcome = RuntimePreparationOutcome::Replaced;
         }
         recorded_endpoint = Some(endpoint);
@@ -241,10 +244,10 @@ async fn prepare_inner(
     .await?
     .map_err(|error| {
         if error.lock_held().is_some() {
-            refusal(
+            anyhow::Error::from(refusal(
                 RuntimePreparationRefusal::StoreBusy,
                 "Another runtime still owns this store. Its retirement has not been confirmed.",
-            )
+            ))
         } else {
             error.into()
         }
@@ -283,10 +286,10 @@ async fn prepare_inner(
     } else {
         let address = args.http_addr.unwrap_or(Ipv4Addr::LOCALHOST.into());
         if !address.is_loopback() {
-            return Err(refusal(
+            return Err(anyhow::Error::from(refusal(
                 RuntimePreparationRefusal::InvalidHome,
                 "Managed runtime preparation requires a loopback HTTP listener.",
-            ));
+            )));
         }
         let port = match args.http_port {
             Some(port) if port != 0 => port,
@@ -334,10 +337,10 @@ async fn load_runtime_identity(
         if refusal_reason(&error) == RuntimePreparationRefusal::KeyAccess {
             error.context("The recorded runtime keys need access")
         } else {
-            refusal(
+            anyhow::Error::from(refusal(
                 RuntimePreparationRefusal::Credentials,
                 format!("The runtime credentials are unavailable: {error:#}"),
-            )
+            ))
         }
     })
 }
@@ -373,10 +376,10 @@ async fn ensure_requested_root_published(
     gents_tools::surface::ensure_root_published_for_node(&access, &config.node_did, root)
         .await
         .map_err(|error| {
-            refusal(
+            anyhow::Error::from(refusal(
                 RuntimePreparationRefusal::Failed,
                 format!("The running runtime keeps its current workspace root: {error:#}"),
-            )
+            ))
         })
 }
 
@@ -396,10 +399,10 @@ fn validate_running_authority(status: &serde_json::Value, config: &StoredInitCon
             .and_then(serde_json::Value::as_array)
             .is_some_and(Vec::is_empty);
     if !matches {
-        return Err(refusal(
+        return Err(anyhow::Error::from(refusal(
             RuntimePreparationRefusal::Unavailable,
             "The running runtime's access settings differ from its saved configuration. Stop it through its owner and reconcile access before changing the workspace root.",
-        ));
+        )));
     }
     Ok(())
 }
@@ -418,24 +421,24 @@ pub fn commit_root_change(
 
 fn read_home(home: &Path) -> Result<(StoredInitConfig, Option<StoredRuntimeState>)> {
     let config = read_init_config(home)?.ok_or_else(|| {
-        refusal(
+        anyhow::Error::from(refusal(
             RuntimePreparationRefusal::NotInitialized,
             "Initialize this runtime home before preparing it.",
-        )
+        ))
     })?;
     if std::fs::canonicalize(&config.home)? != home {
-        return Err(refusal(
+        return Err(anyhow::Error::from(refusal(
             RuntimePreparationRefusal::InvalidHome,
             "The initialized runtime belongs to a different home.",
-        ));
+        )));
     }
     let state = read_runtime_state(home)?;
     if let Some(state) = &state {
         if state.node_did != config.node_did || std::fs::canonicalize(&state.home)? != home {
-            return Err(refusal(
+            return Err(anyhow::Error::from(refusal(
                 RuntimePreparationRefusal::InvalidHome,
                 "The recorded runtime does not belong to this initialized home.",
-            ));
+            )));
         }
     }
     Ok((config, state))
@@ -455,10 +458,10 @@ fn local_endpoint(raw: &str) -> Result<reqwest::Url> {
         || endpoint.query().is_some()
         || endpoint.fragment().is_some()
     {
-        return Err(refusal(
+        return Err(anyhow::Error::from(refusal(
             RuntimePreparationRefusal::InvalidHome,
             "The recorded runtime must use an unambiguous local GraphQL endpoint.",
-        ));
+        )));
     }
     Ok(endpoint)
 }

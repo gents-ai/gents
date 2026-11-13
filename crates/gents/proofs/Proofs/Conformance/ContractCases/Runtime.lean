@@ -4,6 +4,8 @@ import Mathlib.Data.Finset.Sort
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Conformance.Family
 
+import Proofs.Conformance.Functions.Automation
+
 namespace Conformance.ContractCases
 
 def runtimeResolvedA : ResolvedSnapshot :=
@@ -373,19 +375,63 @@ theorem effective_settings_binding_cases_pinned :
       , (true, none)
       , (true, some runtimeSettingsLow) ] := by native_decide
 
-def configurationAdmissionCasesJson : String :=
-  let cases : List (String × Bool × Nat × Nat) :=
-    [("visible", true, 3, 3), ("invisible_same_generation", false, 3, 3),
-     ("invisible_newer_generation", false, 3, 4), ("invisible_older_generation", false, 4, 3)]
-  let result (admission : RuntimeState.ConfigurationAdmission) : String :=
-    match admission with
-    | .claim => "claim"
-    | .awaitNewerGeneration => "await_newer_generation"
-  (Lean.toJson (cases.map fun (name, visible, deferredAt, active) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("visible", Lean.toJson visible),
-     ("deferred_at", Lean.toJson deferredAt), ("active", Lean.toJson active),
-     ("expected", Lean.toJson (result (RuntimeState.configurationAdmission visible))),
-     ("retries", Lean.toJson (RuntimeState.retriesDeferred deferredAt active))] )).compress
+deriving instance Lean.ToJson for RuntimeState.SessionSelection
+
+structure SessionSelectionInput where
+  name : String
+  requested : Nat
+  visible : Option Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def runtimeSessionSelection : Family SessionSelectionInput RuntimeState.SessionSelection where
+  inputs :=
+    [ { name := "invisible", requested := 10, visible := none }
+    , { name := "matching", requested := 10, visible := some 10 }
+    , { name := "mismatched", requested := 10, visible := some 20 } ]
+  model := fun i => RuntimeState.sessionSelection i.requested i.visible
+
+structure MaterializedSessionSelectionInput where
+  name : String
+  publishedWithRequest : Bool
+  requested : Nat
+  deriving Lean.ToJson
+
+/-- A runtime request written by the pending-request owner, routed by its own
+Agent: what the router selects when the session was (or was not) published in
+the request's transaction (`RuntimeState.materializedSessionVisible`). -/
+@[conformance_family]
+def runtimeMaterializedSessionSelection :
+    Family MaterializedSessionSelectionInput RuntimeState.SessionSelection where
+  inputs :=
+    [ { name := "materialized", publishedWithRequest := true, requested := 10 } ]
+  model := fun i =>
+    RuntimeState.sessionSelection i.requested
+      (RuntimeState.materializedSessionVisible i.publishedWithRequest i.requested)
+
+structure ConfigurationAdmissionInput where
+  name : String
+  visible : Bool
+  deferredAt : Nat
+  active : Nat
+  deriving Lean.ToJson
+
+structure ConfigurationAdmissionOutput where
+  expected : RuntimeState.ConfigurationAdmission
+  retries : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def runtimeConfigurationAdmissionDeferral :
+    Family ConfigurationAdmissionInput ConfigurationAdmissionOutput where
+  inputs :=
+    [ { name := "visible", visible := true, deferredAt := 3, active := 3 }
+    , { name := "invisible_same_generation", visible := false, deferredAt := 3, active := 3 }
+    , { name := "invisible_newer_generation", visible := false, deferredAt := 3, active := 4 }
+    , { name := "invisible_older_generation", visible := false, deferredAt := 4, active := 3 } ]
+  model := fun i =>
+    { expected := RuntimeState.configurationAdmission i.visible
+      retries := RuntimeState.retriesDeferred i.deferredAt i.active }
 
 end Conformance.ContractCases
 
@@ -393,7 +439,7 @@ namespace Conformance.RuntimeSession
 
 open Lean RuntimeState
 
-deriving instance ToJson for SessionSelection, SessionSelectionDisposition
+deriving instance ToJson for SessionSelectionDisposition
 
 structure SelectionInput where
   requested : Nat

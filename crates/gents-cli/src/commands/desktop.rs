@@ -230,21 +230,14 @@ fn notify(message: &str) {
 async fn wait_for_exit(pid: u32) -> Result<()> {
     #[cfg(unix)]
     {
-        let pid = i32::try_from(pid).context("invalid desktop process ID")?;
-        if pid <= 0 {
+        const DESKTOP_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+        if i32::try_from(pid).map_or(true, |pid| pid <= 0) {
             bail!("invalid desktop process ID");
         }
-        loop {
-            let result = unsafe { libc::kill(pid, 0) };
-            if result != 0 {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() == Some(libc::ESRCH) {
-                    return Ok(());
-                }
-                return Err(error).context("waiting for desktop process shutdown");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if !gents_service::native_service::wait_for_process_exit(pid, DESKTOP_EXIT_TIMEOUT).await {
+            bail!("desktop process {pid} did not exit");
         }
+        Ok(())
     }
     #[cfg(not(unix))]
     {

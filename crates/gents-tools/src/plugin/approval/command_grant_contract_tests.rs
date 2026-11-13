@@ -23,49 +23,22 @@ fn binding(root: &Path, value: &policy::Grant<u64, u64>) -> workspace::Binding {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct QuestionState {
-    present: bool,
-    decision: Option<bool>,
+fn grant(workspace: u64, revision: u64, action: u64) -> policy::Grant<u64, u64> {
+    policy::Grant {
+        scope: policy::Scope {
+            workspace,
+            revision,
+        },
+        action,
+    }
 }
-#[derive(Debug, Deserialize)]
-struct State {
-    question: QuestionState,
-    grants: Vec<policy::Grant<u64, u64>>,
-}
-#[derive(Debug, Deserialize)]
-struct Reuse {
-    candidate: policy::Grant<u64, u64>,
-    allowed: bool,
-}
-#[derive(Debug, Deserialize)]
-struct AnswerCase {
-    available: Vec<policy::Scope<u64>>,
-    binding: policy::Grant<u64, u64>,
-    initial: State,
-    id: String,
-    now: u64,
-    choice: Answer,
-    kind: policy::ApprovalKind,
-    supported: bool,
-    accepted: bool,
-    expected: State,
-    reuse: Vec<Reuse>,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RevokeCase {
-    previous: policy::Preference<u64>,
-    expected_revision: u64,
-    grants: Vec<policy::Grant<u64, u64>>,
-    result: RevokeResult,
-    remaining: Vec<policy::Grant<u64, u64>>,
-}
-#[derive(Deserialize)]
-struct RevokeResult {
-    accepted: bool,
-    changed: bool,
-    next: Option<policy::Preference<u64>>,
+
+fn preference(revision: u64, mode: &str, review_task: Option<u64>) -> policy::Preference<u64> {
+    policy::Preference {
+        revision,
+        mode: serde_json::from_value(serde_json::Value::String(mode.to_owned())).unwrap(),
+        review_task,
+    }
 }
 
 fn store(home: &Path, entries: &[workspace::Settings]) {
@@ -81,14 +54,22 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
     let snapshot = gents_lean_vocab::lean_contract_snapshot();
     assert_eq!(snapshot.workspace_command_grant_answers.len(), 962);
     assert_eq!(snapshot.workspace_command_grant_lookups.len(), 24);
-    for (index, value) in snapshot.workspace_command_grant_answers.iter().enumerate() {
-        let case: AnswerCase = serde_json::from_value(value.clone()).unwrap();
+    for (index, case) in snapshot.workspace_command_grant_answers.iter().enumerate() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
         assert!(case.initial.grants.is_empty());
-        let bound = binding(&root, &case.binding);
+        let binding_grant = grant(
+            case.binding.scope.workspace,
+            case.binding.scope.revision,
+            case.binding.action,
+        );
+        let bound = binding(&root, &binding_grant);
+        let kind: policy::ApprovalKind =
+            serde_json::from_value(serde_json::Value::String(case.kind.clone())).unwrap();
+        let choice: Answer =
+            serde_json::from_value(serde_json::Value::String(case.choice.clone())).unwrap();
         let entries: Vec<_> = case
             .available
             .iter()
@@ -110,7 +91,7 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
         request.expires_at_ms = 20;
         let mut wire = serde_json::to_value(&request).unwrap();
         wire["command_grant"] = case.supported.into();
-        if case.kind != policy::ApprovalKind::Command {
+        if kind != policy::ApprovalKind::Command {
             wire["binding"]["action"] = serde_json::json!({
                 "kind": "fileMutation", "tool": "write_file", "inputDigest": "fixture",
                 "path": root.join("document.txt"), "root": root, "existed": false,
@@ -136,7 +117,7 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
             .unwrap();
         }
         assert_eq!(
-            decide_with_clock(&home, &case.id, case.choice, || case.now).is_ok(),
+            decide_with_clock(&home, &case.id, choice, || case.now).is_ok(),
             case.accepted,
             "answer case {index}: {case:?}"
         );
@@ -159,8 +140,13 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
             case.expected.grants.len(),
             "answer case {index}"
         );
-        for query in case.reuse {
-            let candidate = binding(&root, &query.candidate);
+        for query in &case.reuse {
+            let candidate_grant = grant(
+                query.candidate.scope.workspace,
+                query.candidate.scope.revision,
+                query.candidate.action,
+            );
+            let candidate = binding(&root, &candidate_grant);
             assert_eq!(
                 settings
                     .as_ref()
@@ -182,12 +168,16 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
 fn generated_command_revocation_preserves_the_selected_mode() {
     let snapshot = gents_lean_vocab::lean_contract_snapshot();
     assert_eq!(snapshot.workspace_command_grant_revocations.len(), 54);
-    for value in &snapshot.workspace_command_grant_revocations {
-        let case: RevokeCase = serde_json::from_value(value.clone()).unwrap();
+    for case in &snapshot.workspace_command_grant_revocations {
+        let previous = preference(
+            case.previous.revision,
+            &case.previous.mode,
+            case.previous.review_task,
+        );
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let workspace = key(&root, 1);
-        let review_task = case.previous.review_task.map(|_| {
+        let review_task = previous.review_task.map(|_| {
             workspace::ReviewTaskSelection::for_task(&workspace::default_review_task(
                 "node", "agent",
             ))
@@ -195,8 +185,8 @@ fn generated_command_revocation_preserves_the_selected_mode() {
         let settings = workspace::Settings {
             workspace: workspace.clone(),
             selection: policy::Preference {
-                revision: case.previous.revision,
-                mode: case.previous.mode,
+                revision: previous.revision,
+                mode: previous.mode,
                 review_task: review_task.clone(),
             },
             dirs: vec![allowed::AllowedDir {
@@ -206,7 +196,11 @@ fn generated_command_revocation_preserves_the_selected_mode() {
             command_grants: case
                 .grants
                 .iter()
-                .map(|value| workspace::command_grant(&binding(&root, value)).unwrap())
+                .map(|value| {
+                    let production =
+                        grant(value.scope.workspace, value.scope.revision, value.action);
+                    workspace::command_grant(&binding(&root, &production)).unwrap()
+                })
                 .collect(),
         };
         store(&root, &[settings]);
@@ -216,7 +210,11 @@ fn generated_command_revocation_preserves_the_selected_mode() {
         let observed = workspace::resolve(&root, &workspace, None)
             .unwrap()
             .unwrap();
-        let expected = case.result.next.unwrap();
+        let expected = preference(
+            case.result.next.revision,
+            &case.result.next.mode,
+            case.result.next.review_task,
+        );
         assert_eq!(observed.selection.revision, expected.revision);
         assert_eq!(observed.selection.mode, expected.mode);
         assert_eq!(observed.selection.review_task, review_task);

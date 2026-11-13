@@ -13,3 +13,7 @@ import Proofs.Conformance.RootCandidates.ReasoningCapabilities
 import Proofs.Conformance.RootCandidates.ReadinessPersistence
 import Proofs.Conformance.RootCandidates.StartupAdmission
 import Proofs.Conformance.RootCandidates.ProviderSanitation
+import Proofs.Conformance.ToolResultThreading
+import Proofs.Conformance.RepeatedFailureIdentity
+import Proofs.Conformance.ArgumentFailure
+import Proofs.Conformance.SelfConfigToolsRoot

@@ -257,9 +257,9 @@ mod tests {
                         Cause::PluginJob => SessionCreationCause::PluginJob,
                         Cause::Client => panic!("client sessions have no receipt"),
                     },
-                    starter: row.starter.map(|session| SessionLink {
-                        scope: self::scope(session),
-                        cause_request_doc_id: session.to_string(),
+                    starter: row.starter.as_ref().map(|link| SessionLink {
+                        scope: self::scope(link.session),
+                        cause_request_doc_id: link.request.to_string(),
                     }),
                 })))
             })

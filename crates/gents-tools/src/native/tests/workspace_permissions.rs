@@ -27,6 +27,16 @@ impl Fixture {
         command: &str,
         args: &[String],
     ) -> Result<String, ToolError> {
+        self.run_with(policy, command, args, true).await
+    }
+
+    async fn run_with(
+        &self,
+        policy: CommandExecutionPolicy,
+        command: &str,
+        args: &[String],
+        interactive: bool,
+    ) -> Result<String, ToolError> {
         let context = workspace::for_request(
             Some(self.home.path()),
             "node",
@@ -46,7 +56,7 @@ impl Fixture {
         workspace::scope(
             context,
             approval::scope_interactive(
-                true,
+                interactive,
                 Tool::call(
                     &tool,
                     BashArgs {
@@ -250,19 +260,65 @@ async fn full_access_commands_do_not_prompt() {
 }
 
 #[tokio::test]
-async fn callers_without_workspace_preferences_keep_their_configured_policy() {
-    let fixture = Fixture::new();
-    let result = fixture
-        .run(write_policy(), "/bin/echo", &["approved".into()])
-        .await
-        .unwrap();
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&result).unwrap()["stdout"],
-        "approved\n"
-    );
-    assert!(approval::pending_requests(fixture.home.path())
-        .unwrap()
-        .is_empty());
+async fn workspace_preferences_route_commands_as_the_lean_model() {
+    for case in gents_lean_vocab::families::workspace_permissions_command_consent::cases::<String>()
+    {
+        let fixture = Fixture::new();
+        match case.input.preference.as_deref() {
+            None => {}
+            Some("ask") => fixture.select(workspace::Mode::Ask),
+            Some("full_access") => fixture.select(workspace::Mode::FullAccess),
+            Some("auto_review") => {
+                workspace::save_mode(
+                    fixture.home.path(),
+                    &fixture.key,
+                    0,
+                    workspace::Mode::AutoReview,
+                    Some(&workspace::ReviewTaskSelection {
+                        task_id: "review".into(),
+                        policy_digest: "digest".into(),
+                    }),
+                )
+                .unwrap();
+            }
+            Some(other) => panic!("unknown Lean workspace mode {other}"),
+        }
+        let policy = if case.input.read_only {
+            CommandExecutionPolicy::read_only(vec!["echo".into()])
+        } else {
+            write_policy()
+        };
+        let result = fixture
+            .run_with(
+                policy,
+                "/bin/echo",
+                &["approved".into()],
+                case.input.interactive,
+            )
+            .await;
+        let runs = match result {
+            Ok(output) => {
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&output).unwrap()["stdout"],
+                    "approved\n"
+                );
+                true
+            }
+            Err(ToolError::ReportedFailure {
+                class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
+                ..
+            }) => false,
+            Err(error) => panic!("{:?}: {error}", case.input),
+        };
+        case.check(
+            gents_lean_vocab::families::workspace_permissions_command_consent::ConsentOutput {
+                runs,
+                asks_person: !approval::pending_requests(fixture.home.path())
+                    .unwrap()
+                    .is_empty(),
+            },
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]

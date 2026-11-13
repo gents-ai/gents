@@ -1,38 +1,40 @@
+use gents_protocol::operations::install_repair::RepairInput;
+use gents_protocol::operations::install_repair::{
+    Blocker, HomeChoice, HomeDecision, HomeState, RepairOutcome, RepairReceipt, ServiceMove,
+};
+use gents_service::repair::ServiceProgram;
+use std::future::Future;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::CommandFactory as _;
+use gents_host::args::StoreKeyCustodyArg;
 use gents_store::config_client::GraphqlEndpoint;
-use gents_store::local::storage_backend::{IncompatibleStore, IncompatibleStoreKind};
 use tokio::runtime::Handle;
 
 use crate::cli::args::ShellArgs;
 use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
-use crate::graphql_access::graphql_endpoint_available;
-use gents_host::args::StoreKeyCustodyArg;
+use gents_service::home_state::{
+    default_home_ignoring_env, read_finished_init_config, resolve_home_dir,
+};
+
 use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };
-use gents_service::args::ServiceAction;
-use gents_service::home_state::read_finished_init_config;
-use gents_service::home_state::read_runtime_state;
-use gents_service::home_state::resolve_home_dir;
-use gents_service::native_service::NativeServiceConfig;
-use gents_service::native_service::NativeServiceManager;
-use gents_service::native_service::NativeServicePlatform;
-use gents_service::native_service::ServiceExit;
 use gents_service::state::StoredInitConfig;
+use progress::TerminalProgress;
 
+mod progress;
 mod setup;
 mod yolo;
 
 pub(crate) use yolo::default_agent;
 pub(crate) use yolo::node_readiness;
 
-const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
 /// A runtime publishes the agents it can run a little after its GraphQL answers.
 const PUBLISH_WAIT: Duration = Duration::from_secs(5);
 
@@ -57,28 +59,26 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
         eprint!("{}", Cli::command().render_help());
         std::process::exit(2);
     }
-    let home_given = args.home.take().map(crate::absolutize).transpose()?;
-    let (home, config) = ready_home(home_given.clone(), args.store_key_custody, terminal).await?;
+    ensure!(
+        args.print.is_some() || !refuses_continue_with_a_prompt(&args),
+        "{}",
+        shell_cannot_continue_with_a_prompt()
+    );
+    let (home, config, graphql, home_flag) =
+        ready_node(args.home.take(), args.store_key_custody, terminal).await?;
     let Some(message) = args.print.take() else {
         report_ignored_client_setting(&home);
-        ensure!(
-            !refuses_continue_with_a_prompt(&args),
-            "{}",
-            shell_cannot_continue_with_a_prompt()
-        );
-        let graphql = ensure_graphql(&home).await?;
-        let agent = chosen_agent(&home, &config, &args).await?;
+        let agent = chosen_agent(&home, &config, &graphql, &args).await?;
         wait_for_its_agent(&graphql, &config.node_did, agent.as_deref(), PUBLISH_WAIT).await;
         let shown =
             crate::commands::shell::open(&home, agent, args.prompt, args.continue_session, runtime)
                 .await?;
-        if let Some(hint) = continue_hint(shown.as_deref(), home_given.as_deref()) {
+        if let Some(hint) = continue_hint(shown.as_deref(), home_flag.as_deref()) {
             eprintln!("{hint}");
         }
         return Ok(());
     };
-    let graphql = ensure_graphql(&home).await?;
-    let agent = chosen_agent(&home, &config, &args).await?;
+    let agent = chosen_agent(&home, &config, &graphql, &args).await?;
     crate::commands::chat::print_reply(
         &home,
         &graphql,
@@ -96,18 +96,18 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
 async fn chosen_agent(
     home: &Path,
     config: &gents_service::state::StoredInitConfig,
+    graphql: &GraphqlEndpoint,
     args: &StartArgs,
 ) -> Result<Option<String>> {
     if args.continue_session.is_none() && !args.yolo {
         return Ok(args.agent.clone());
     }
-    let graphql = wait_for_graphql(home).await?;
     if let Some(session) = &args.continue_session {
         return Ok(Some(
-            session_agent(&graphql, &config.node_did, session).await?,
+            session_agent(graphql, &config.node_did, session).await?,
         ));
     }
-    Ok(Some(yolo::ensure_agent(home, config, &graphql).await?))
+    Ok(Some(yolo::ensure_agent(home, config, graphql).await?))
 }
 
 /// `gents config client set` once chose between the built-in shell and Codex in this file.
@@ -171,8 +171,7 @@ async fn session_agent(graphql: &GraphqlEndpoint, node_did: &str, session: &str)
 
 /// Dispatched before telemetry, so nothing writes over the shell.
 pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
-    let (home, config) = ready_home(args.home, args.store_key_custody, true).await?;
-    let graphql = ensure_graphql(&home).await?;
+    let (home, config, graphql, _) = ready_node(args.home, args.store_key_custody, true).await?;
     wait_for_its_agent(&graphql, &config.node_did, None, PUBLISH_WAIT).await;
     let shown = crate::commands::shell::open(&home, None, None, None, runtime).await?;
     if let Some(hint) = continue_hint(shown.as_deref(), None) {
@@ -181,131 +180,291 @@ pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
     Ok(())
 }
 
-/// Setup asks its questions on the terminal, so a home that needs it and has none is refused.
-async fn ready_home(
+/// Repairs what stands between this home and a running node, sets the home up
+/// when it needs it, and starts its node; also returns the `--home` that
+/// reopens that node. Setup asks its questions on the terminal, so a home that
+/// needs it and has none is refused.
+async fn ready_node(
     home: Option<PathBuf>,
     custody: Option<StoreKeyCustodyArg>,
     terminal: bool,
-) -> Result<(PathBuf, StoredInitConfig)> {
-    let home_given = home.map(crate::absolutize).transpose()?;
-    let mut home = crate::absolutize(resolve_home_dir(home_given.as_deref()))?;
-    let config = match read_finished_init_config(&home)? {
-        Some(config) => config,
-        None => {
-            ensure!(
-                terminal,
-                "{} is not set up yet; run `gents` in a terminal to set it up, then run this again",
-                crate::shell_word(&home)
-            );
-            home = setup::setup(home_given, custody).await?;
-            read_finished_init_config(&home)?.context("setup left this home uninitialized")?
-        }
-    };
-    Ok((home, config))
-}
-
-/// Starts this home's runtime when its GraphQL does not answer.
-async fn ensure_graphql(home: &Path) -> Result<GraphqlEndpoint> {
-    if let Some(graphql) = answering_graphql(home).await? {
-        return Ok(graphql);
+) -> Result<(PathBuf, StoredInitConfig, GraphqlEndpoint, Option<PathBuf>)> {
+    let mut progress = TerminalProgress::new();
+    let ready = ready_node_with(home, custody, terminal, &mut progress).await;
+    if ready.is_err() {
+        progress.finish();
     }
-    start_service(home).await?;
-    or_store_refusal(home, wait_for_graphql(home).await).await
+    ready
 }
 
-/// A service that refuses to open its home's store says why only in its own log and exits
-/// with the refusal's status. A wait that ran out on such a home reports that refusal, typed,
-/// so this process prints it and exits as the service did.
-async fn or_store_refusal<T>(home: &Path, waited: Result<T>) -> Result<T> {
-    match waited {
-        Ok(value) => Ok(value),
-        Err(error) => Err(match service_store_refusal(home).await {
-            Some(store) => anyhow::Error::new(store),
-            None => error,
-        }),
-    }
-}
-
-async fn service_store_refusal(home: &Path) -> Option<IncompatibleStore> {
-    let service_home = home.to_path_buf();
-    let exit = tokio::task::spawn_blocking(move || -> Result<Option<ServiceExit>> {
-        let executable = std::env::current_exe().context("resolving the gents executable")?;
-        NativeServiceManager::new(NativeServiceConfig::new(service_home, executable)?)?.last_exit()
-    })
-    .await
-    .ok()?
-    .ok()??;
-    store_refusal(home, &exit)
-}
-
-fn store_refusal(home: &Path, exit: &ServiceExit) -> Option<IncompatibleStore> {
-    let kind = exit.refused_store()?;
-    let data_path = match kind {
-        IncompatibleStoreKind::InsecureKey => home.join("keys"),
-        _ => gents_store::local::home::default_data_dir(home),
-    };
-    Some(IncompatibleStore { kind, data_path })
-}
-
-/// A runtime records where its GraphQL answers once it serves, and nothing tells another
-/// process when, so this bounded wait reads that record again.
-async fn wait_for_graphql(home: &Path) -> Result<GraphqlEndpoint> {
-    if let Some(graphql) = answering_graphql(home).await? {
-        return Ok(graphql);
-    }
-    eprintln!(
-        "Waiting for this home's runtime to answer (up to {} s).",
-        ENDPOINT_WAIT.as_secs()
-    );
-    let deadline = Instant::now() + ENDPOINT_WAIT;
+async fn ready_node_with(
+    home: Option<PathBuf>,
+    custody: Option<StoreKeyCustodyArg>,
+    terminal: bool,
+    progress: &mut TerminalProgress,
+) -> Result<(PathBuf, StoredInitConfig, GraphqlEndpoint, Option<PathBuf>)> {
+    let mut home_flag = home.map(crate::absolutize).transpose()?;
+    let flag = home_flag.clone();
+    let mut choice = tokio::task::spawn_blocking(move || home_choice(flag.as_deref())).await??;
+    let mut setup_home = home_flag.clone();
     loop {
-        if let Some(graphql) = answering_graphql(home).await? {
-            return Ok(graphql);
-        }
-        if Instant::now() >= deadline {
-            bail!(
-                "the runtime did not answer within {} s; it was left running, check `gents runtime service status --home {}`",
-                ENDPOINT_WAIT.as_secs(),
-                crate::shell_word(home)
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn answering_graphql(home: &Path) -> Result<Option<GraphqlEndpoint>> {
-    match read_runtime_state(home)? {
-        Some(state) if graphql_endpoint_available(&state.graphql).await => Ok(Some(
-            gents_service::home_state::resolve_graphql_endpoint(Some(&state.graphql), Some(home))?,
-        )),
-        _ => Ok(None),
-    }
-}
-
-/// Starts this home's native service, installing it first if it is not installed.
-async fn start_service(home: &Path) -> Result<()> {
-    let hint = no_service_manager_message(home);
-    let platform = NativeServicePlatform::current().map_err(|_| anyhow!("{hint}"))?;
-    let service_home = home.to_path_buf();
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let executable = std::env::current_exe().context("resolving the gents executable")?;
-        let config = NativeServiceConfig::new(service_home, executable)?;
-        let definition = config.definition_path(platform);
-        let manager = NativeServiceManager::new(config)?;
-        if !definition.is_file() {
-            gents_service::lifecycle::perform(
-                &manager,
-                &ServiceAction::Install {
-                    network: Default::default(),
-                    environment_file: None,
+        let mut set_up = false;
+        let (moved_from, older_data) = loop {
+            let report = gents_service::repair::execute(
+                RepairInput::Prepare {
+                    choice: choice.clone(),
+                    service_move: ServiceMove::AfterSetup,
                 },
-            )?;
+                &ServiceProgram::new(gents_service::repair::current_program),
+                progress,
+                None,
+            )
+            .await?;
+            match report.outcome {
+                RepairOutcome::Ready | RepairOutcome::Answering(_) => {
+                    break (report.serving_home, report.older_data)
+                }
+                RepairOutcome::NeedsSetup => {
+                    ensure!(!set_up, "setup left this home uninitialized");
+                    ensure!(terminal, "{}", not_set_up(&choice.home));
+                    progress.finish();
+                    choice = HomeChoice {
+                        home: setup::setup(setup_home.take(), custody).await?,
+                        explicit: false,
+                    };
+                    set_up = true;
+                }
+                RepairOutcome::Decide(decision) => {
+                    (choice, home_flag) = ask(decision, terminal, progress).await?;
+                    setup_home = Some(choice.home.clone());
+                }
+                RepairOutcome::Blocked(blocker) => blocked(progress, &blocker),
+            }
+        };
+        let serving_home = moved_from.clone().filter(|_| choice.explicit);
+        let mut set_up = false;
+        loop {
+            match gents_service::repair::execute(
+                RepairInput::Start {
+                    home: choice.home.clone(),
+                    serving_home: serving_home.clone(),
+                    older_data: older_data.clone(),
+                },
+                &ServiceProgram::new(gents_service::repair::current_program),
+                progress,
+                None,
+            )
+            .await?
+            .outcome
+            {
+                RepairOutcome::Ready => {
+                    anyhow::bail!("repair start did not return a runtime endpoint")
+                }
+                RepairOutcome::Answering(graphql) => {
+                    progress.finish();
+                    let config = read_finished_init_config(&choice.home)?
+                        .context("setup left this home uninitialized")?;
+                    let graphql = gents_service::home_state::resolve_graphql_endpoint(
+                        Some(&graphql),
+                        Some(&choice.home),
+                    )?;
+                    return Ok((choice.home, config, graphql, home_flag));
+                }
+                RepairOutcome::NeedsSetup => {
+                    ensure!(!set_up, "setup left this home uninitialized");
+                    ensure!(terminal, "{}", not_set_up(&choice.home));
+                    progress.finish();
+                    setup::setup(Some(choice.home.clone()), custody).await?;
+                    set_up = true;
+                }
+                RepairOutcome::Decide(decision) => {
+                    (choice, home_flag) =
+                        restore_then_ask(decision, terminal, progress, move_service_back).await?;
+                    setup_home = Some(choice.home.clone());
+                    break;
+                }
+                RepairOutcome::Blocked(blocker) => {
+                    give_back(moved_from.as_deref(), progress, move_service_back).await;
+                    blocked(progress, &blocker)
+                }
+            }
         }
-        gents_service::lifecycle::perform(&manager, &ServiceAction::Start { enable: false })?;
-        Ok(())
+    }
+}
+
+/// Asks which folder to open; with no terminal to ask in, nothing is touched.
+async fn ask(
+    decision: HomeDecision,
+    terminal: bool,
+    progress: &mut TerminalProgress,
+) -> Result<(HomeChoice, Option<PathBuf>)> {
+    ensure!(
+        terminal,
+        "{}",
+        cannot_load_without_terminal(&decision.home, decision.why)
+    );
+    progress.finish();
+    eprintln!("{}", home_question(&decision));
+    Ok(answered(
+        decision,
+        crate::interactive_backend::ask_choice(2).await?,
+    ))
+}
+
+/// `prepare` already moved the node away from the folder it was serving when
+/// `start` asks, so that folder gets its node back first: a question left
+/// unanswered (Ctrl-C, no terminal) leaves it working.
+async fn restore_then_ask(
+    decision: HomeDecision,
+    terminal: bool,
+    progress: &mut TerminalProgress,
+    move_back: for<'a> fn(
+        HomeChoice,
+        &'a mut TerminalProgress,
+    ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
+) -> Result<(HomeChoice, Option<PathBuf>)> {
+    give_back(decision.serving_home.as_deref(), progress, move_back).await;
+    ask(decision, terminal, progress).await
+}
+
+/// Moves the node back to `serving`, the folder it answered for before
+/// `prepare` moved it, so a start that does not finish leaves that node
+/// working; one line names it when it does not come back.
+async fn give_back(
+    serving: Option<&Path>,
+    progress: &mut TerminalProgress,
+    move_back: for<'a> fn(
+        HomeChoice,
+        &'a mut TerminalProgress,
+    ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
+) {
+    let Some(serving) = serving else {
+        return;
+    };
+    let choice = HomeChoice {
+        home: serving.to_path_buf(),
+        explicit: false,
+    };
+    let moved = move_back(choice, progress).await;
+    if let Some(line) = not_restarted(serving, &moved) {
+        progress.finish();
+        eprintln!("{line}");
+    }
+}
+
+/// Points the service back at `choice`'s folder and starts its node again,
+/// since it was answering there; nothing else is started, the answer decides that.
+fn move_service_back(
+    choice: HomeChoice,
+    progress: &mut TerminalProgress,
+) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + '_>> {
+    Box::pin(async move {
+        gents_service::repair::execute(
+            RepairInput::Restore { choice },
+            &ServiceProgram::new(gents_service::repair::current_program),
+            progress,
+            None,
+        )
+        .await
+        .map_err(anyhow::Error::from)
     })
-    .await?
-    .map_err(|error| anyhow!("{error:#}\n{hint}"))
+}
+
+fn not_restarted(serving: &Path, moved: &Result<RepairReceipt>) -> Option<String> {
+    let reason = match moved {
+        Ok(report) => match &report.outcome {
+            RepairOutcome::Ready | RepairOutcome::Answering(_) => return None,
+            RepairOutcome::Blocked(blocker) => blocker.to_string(),
+            RepairOutcome::NeedsSetup | RepairOutcome::Decide(_) => "it needs setup".to_string(),
+        },
+        Err(error) => format!("{error:#}"),
+    };
+    Some(format!(
+        "Your node for {} could not be restarted: {reason}",
+        serving.display()
+    ))
+}
+
+/// The folder an answer opens, and the `--home` that reopens it: none for the
+/// default folder. The repaired folder is no longer asked about.
+fn answered(decision: HomeDecision, picked: usize) -> (HomeChoice, Option<PathBuf>) {
+    let (home, flag) = match picked {
+        0 => (decision.default_home, None),
+        _ => (decision.home.clone(), Some(decision.home)),
+    };
+    (
+        HomeChoice {
+            home,
+            explicit: false,
+        },
+        flag,
+    )
+}
+
+/// `--home` or `GENTS_HOME` naming the folder `gents` opens without them is
+/// not a choice of another folder.
+fn home_choice(home_given: Option<&Path>) -> Result<HomeChoice> {
+    let home = crate::absolutize(resolve_home_dir(home_given))?;
+    let given = home_given.is_some()
+        || std::env::var_os(gents_store::local::home::GENTS_HOME_ENV)
+            .is_some_and(|value| !value.is_empty());
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let explicit = given
+        && !default_home_ignoring_env()
+            .is_ok_and(|default| canonical(&default) == canonical(&home));
+    Ok(HomeChoice { home, explicit })
+}
+
+fn not_set_up(home: &Path) -> String {
+    format!(
+        "{} is not set up yet; run `gents` in a terminal to set it up, then run this again",
+        crate::shell_word(home)
+    )
+}
+
+fn cannot_load_without_terminal(home: &Path, why: HomeState) -> String {
+    format!(
+        "{} can't be loaded: {why}. Run gents --home {} in a terminal to repair it.",
+        home.display(),
+        crate::shell_word(home)
+    )
+}
+
+fn home_question(decision: &HomeDecision) -> String {
+    format!(
+        "{home} can't be loaded: {why}.\n  1) Use your default data folder ({default})\n  2) Repair {home} (what's there is set aside, then setup runs)",
+        home = decision.home.display(),
+        why = decision.why,
+        default = decision.default_home.display()
+    )
+}
+
+fn blocked(progress: &mut TerminalProgress, blocker: &Blocker) -> ! {
+    progress.finish();
+    eprintln!("{}", blocked_line(blocker));
+    std::process::exit(exit_code(blocker));
+}
+
+/// A refused store exits with its kind's status, as `main` does.
+fn exit_code(blocker: &Blocker) -> i32 {
+    match blocker {
+        Blocker::StoreRefused { kind, .. } => {
+            gents_service::native_service::incompatible_store_exit_code(*kind)
+        }
+        _ => 1,
+    }
+}
+
+/// A newer node is running, so it is named on its own.
+fn blocked_line(blocker: &Blocker) -> String {
+    match blocker {
+        Blocker::NewerNode { .. } => blocker.to_string(),
+        _ => format!(
+            "Your local node couldn't start: {blocker}. Next: {}",
+            crate::next_call::command(blocker.next_call(), None)
+        ),
+    }
 }
 
 /// Only the NodeReadiness document a runtime publishes tells another process which agents it
@@ -357,13 +516,6 @@ pub(crate) fn wants_a_model(reason: AgentReadinessUnavailableReason) -> bool {
     )
 }
 
-fn no_service_manager_message(home: &Path) -> String {
-    format!(
-        "run `gents runtime server --home {}` in another terminal, then `gents`",
-        crate::shell_word(home)
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,55 +541,12 @@ mod tests {
     }
 
     #[test]
-    fn a_service_that_exited_refusing_the_store_is_reported_as_that_refusal() {
-        let home = Path::new("/srv/home");
-        let exit = |code| ServiceExit {
-            reason: format!("exited with code {code}"),
-            restarts: 0,
-            clean: false,
-            code: Some(code),
-        };
-
-        let older = store_refusal(
-            home,
-            &exit(gents_service::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
-        )
-        .expect("an older home");
-        assert_eq!(older.kind, IncompatibleStoreKind::UnknownLineage);
-        assert_eq!(
-            older.data_path,
-            gents_store::local::home::default_data_dir(home)
-        );
-        let error = anyhow::Error::new(older.clone());
-        assert_eq!(
-            gents_store::local::storage_backend::incompatible_store(error.as_ref(), Path::new("")),
-            Some(older)
-        );
-
-        let key = store_refusal(
-            home,
-            &exit(gents_service::native_service::INSECURE_KEY_EXIT_CODE),
-        )
-        .expect("an unsafe key");
-        assert_eq!(key.kind, IncompatibleStoreKind::InsecureKey);
-        assert_eq!(key.data_path, home.join("keys"));
-
-        assert_eq!(store_refusal(home, &exit(1)), None);
-    }
-
-    #[test]
     fn printed_commands_quote_a_home_with_spaces() {
         let home = Path::new("/srv/my home");
-        for (message, command) in [
-            (
-                no_service_manager_message(home),
-                "gents runtime server --home '/srv/my home'",
-            ),
-            (
-                ignored_client_setting_notice(&home.join("client.json")),
-                "'/srv/my home/client.json'",
-            ),
-        ] {
+        for (message, command) in [(
+            ignored_client_setting_notice(&home.join("client.json")),
+            "'/srv/my home/client.json'",
+        )] {
             assert!(message.contains(command), "{message}");
         }
     }
@@ -482,10 +591,90 @@ mod tests {
     }
 
     #[test]
-    fn no_service_manager_says_run_gents_server_then_gents() {
+    fn no_service_manager_names_the_server_help() {
+        let message = blocked_line(&Blocker::NoServiceManager {
+            home: PathBuf::from("/srv/home"),
+        });
+        assert!(message.contains("gents runtime server --help"), "{message}");
+    }
+
+    #[test]
+    fn a_node_that_does_not_come_back_is_named_in_one_line() {
+        let serving = Path::new("/Users/me/other");
+        let report = |outcome| {
+            Ok(RepairReceipt {
+                client: None,
+                repaired: Vec::new(),
+                outcome,
+                serving_home: None,
+                older_data: None,
+            })
+        };
+        assert_eq!(not_restarted(serving, &report(RepairOutcome::Ready)), None);
         assert_eq!(
-            no_service_manager_message(Path::new("/srv/home")),
-            "run `gents runtime server --home /srv/home` in another terminal, then `gents`"
+            not_restarted(serving, &report(RepairOutcome::NeedsSetup)).as_deref(),
+            Some("Your node for /Users/me/other could not be restarted: it needs setup")
+        );
+        assert_eq!(
+            not_restarted(
+                serving,
+                &report(RepairOutcome::Blocked(Blocker::OldNodeStillRunning { pid: 7 }))
+            )
+            .as_deref(),
+            Some("Your node for /Users/me/other could not be restarted: the old background node (pid 7) did not stop. Quit it, then try again.")
+        );
+        assert_eq!(
+            not_restarted(serving, &Err(anyhow::anyhow!("launchctl failed"))).as_deref(),
+            Some("Your node for /Users/me/other could not be restarted: launchctl failed")
+        );
+    }
+
+    #[test]
+    fn a_refused_store_exits_with_its_kinds_status() {
+        use gents_protocol::operations::install_repair::IncompatibleStoreKind::*;
+        let refused = |kind| Blocker::StoreRefused {
+            kind,
+            message: String::new(),
+        };
+        assert_eq!(exit_code(&refused(UnknownLineage)), 65);
+        assert_eq!(exit_code(&refused(InsecureKey)), 66);
+        assert_eq!(exit_code(&refused(ForeignVersion)), 67);
+        assert_eq!(
+            exit_code(&Blocker::KeepsExiting {
+                code: Some(65),
+                last_error: None
+            }),
+            1
+        );
+    }
+
+    #[test]
+    fn the_default_folder_answer_reopens_without_a_home_flag() {
+        let decision = HomeDecision {
+            home: PathBuf::from("/srv/work"),
+            why: HomeState::MissingStoreKey,
+            default_home: PathBuf::from("/Users/me/.gents"),
+            serving_home: Some(PathBuf::from("/Users/me/other")),
+        };
+        assert_eq!(
+            answered(decision.clone(), 0),
+            (
+                HomeChoice {
+                    home: PathBuf::from("/Users/me/.gents"),
+                    explicit: false
+                },
+                None
+            )
+        );
+        assert_eq!(
+            answered(decision, 1),
+            (
+                HomeChoice {
+                    home: PathBuf::from("/srv/work"),
+                    explicit: false
+                },
+                Some(PathBuf::from("/srv/work"))
+            )
         );
     }
 
@@ -500,6 +689,22 @@ mod tests {
             Some("Pick this up again with: gents --continue s1 --home '/srv/my home'")
         );
         assert_eq!(continue_hint(None, None), None);
+    }
+
+    #[test]
+    fn a_newer_running_node_is_not_a_node_that_could_not_start() {
+        let newer = Blocker::NewerNode {
+            running: "1.1.0".into(),
+            ours: "1.0.0-rc1".into(),
+        };
+        assert_eq!(
+            blocked_line(&newer),
+            "Your local node runs Gents 1.1.0, newer than this Gents (1.0.0-rc1). Open Gents 1.1.0 or newer, then try again."
+        );
+        assert_eq!(
+            blocked_line(&Blocker::OldNodeStillRunning { pid: 7 }),
+            "Your local node couldn't start: the old background node (pid 7) did not stop. Quit it, then try again."
+        );
     }
 
     #[test]

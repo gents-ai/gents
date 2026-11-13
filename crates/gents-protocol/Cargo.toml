@@ -30,6 +30,7 @@ reqwest = { workspace = true, optional = true }
 schemars = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+semver = { version = "1", features = ["serde"] }
 sha2 = "0.10"
 thiserror = { workspace = true }
 # Not `workspace = true`: the workspace's tokio pins `features = ["full"]`,
@@ -48,4 +49,5 @@ gents-lean-vocab.workspace = true
 query.workspace = true
 rig-core.workspace = true
 serde_json = { workspace = true }
+semver = { version = "1", features = ["serde"] }
 tokio = { workspace = true, features = ["net", "rt", "macros"] }

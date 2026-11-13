@@ -15,6 +15,7 @@ pub mod homes;
 
 pub struct Attachment {
     child: Child,
+    installation_build: Option<String>,
     input: Option<FramedWrite<ChildStdin, LengthDelimitedCodec>>,
     output: FramedRead<ChildStdout, LengthDelimitedCodec>,
 }
@@ -46,7 +47,14 @@ impl Attachment {
     }
 
     pub async fn start_with_binary(paths: &DesktopPaths, binary: &Path) -> Self {
-        let homes = homes::ProcessHomes::under(paths.root().parent().expect("client home parent"));
+        let home_root = paths
+            .root()
+            .parent()
+            .expect("client home parent")
+            .to_owned();
+        let homes = tokio::task::spawn_blocking(move || homes::ProcessHomes::under(&home_root))
+            .await
+            .expect("native process homes");
         let mut child = Command::new(binary)
             .arg("--stdio")
             .arg("--home")
@@ -62,6 +70,7 @@ impl Attachment {
         let output = FramedRead::new(child.stdout.take().unwrap(), LengthDelimitedCodec::new());
         let mut attachment = Self {
             child,
+            installation_build: None,
             input: Some(input),
             output,
         };
@@ -71,6 +80,7 @@ impl Attachment {
         let hello = attachment.next().await;
         assert_eq!(hello["kind"], "hello");
         assert_eq!(hello["version"], protocol::PROTOCOL_VERSION);
+        attachment.installation_build = hello["installationBuild"].as_str().map(str::to_owned);
         attachment
     }
 
@@ -155,6 +165,31 @@ impl Attachment {
             .await
             .expect("native attachment process exit deadline")
             .unwrap()
+    }
+
+    pub async fn retire(mut self) -> Result<()> {
+        let build = self
+            .installation_build
+            .as_ref()
+            .context("native installation does not support retirement")?;
+        self.send(json!({"kind":"retire", "id":u32::MAX, "expectedBuild":build}))
+            .await;
+        loop {
+            let response = self.next().await;
+            if response["kind"] == "response" {
+                ensure!(
+                    response["id"] == u32::MAX && response["error"].is_null(),
+                    "native retirement failed: {response}"
+                );
+                break;
+            }
+        }
+        self.wait_for_output_eof().await;
+        ensure!(
+            self.wait_for_exit().await.success(),
+            "retired attachment failed"
+        );
+        Ok(())
     }
 
     pub async fn close(mut self) {

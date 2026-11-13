@@ -655,27 +655,6 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn port_replacement_requires_address_in_use_for_the_requested_address() {
-    let addr = "127.0.0.1:20001";
-    let context = "embedded HTTP listener cannot bind to 127.0.0.1:20001; if another Gents \
-                   runtime is serving there, stop it or pass --http-port";
-
-    assert!(support::process::is_address_in_use(
-        &format!("Error: {context}\n\nCaused by:\n    Address already in use (os error 48)\n"),
-        addr
-    ));
-    assert!(!support::process::is_address_in_use(
-        &format!("Error: {context}\n\nCaused by:\n    Permission denied (os error 13)\n"),
-        addr
-    ));
-    assert!(!support::process::is_address_in_use(
-        "Error: embedded HTTP listener cannot bind to 127.0.0.1:20002\n\nCaused by:\n    \
-         Address already in use (os error 48)\n",
-        addr
-    ));
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
