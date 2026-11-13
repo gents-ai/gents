@@ -80,17 +80,27 @@ def relation (i : RelationInput) : RelationOutput :=
       { direct := false, staged := false, outcome := (selectionGrant r "unbound").name }
   | _ => { direct := false, staged := false, outcome := Outcome.denied.name }
 
+/-- Each operation's target admission, per requester. -/
 @[conformance_family]
-def relations : Family RelationInput RelationOutput where
+def targets : Family RelationInput RelationOutput where
   inputs :=
     (["user", "outsider", "agent"].map fun requester => { path := "event_cursor_rebind", requester }) ++
     [{ path := "event_cursor_outsider_writer", requester := "user" }] ++
     (["user", "outsider"].map fun requester => { path := "declared_placement_readers", requester }) ++
     [{ path := "placement_undeclared_reader", requester := "user" }] ++
-    (["forged_agent_row", "genuine_nonce_foreign_did", "duplicate_agent_row", "no_proof",
-      "derived_agent_row"].map fun path => { path, requester := "admin" }) ++
     (["user", "outsider"].map fun requester => { path := "workspace_selection", requester }) ++
     [{ path := "workspace_unbound_callback", requester := "user" }]
+  model := relation
+
+/-- The registered owner the runtime would stage as, per Agent row. A
+duplicated row is not replayed: a node's unique index refuses a second local
+row, so only a replicated merge produces one; `duplicated_row_names_no_agent`
+decides it. -/
+@[conformance_family]
+def agentRows : Family RelationInput RelationOutput where
+  inputs :=
+    ["forged_agent_row", "genuine_nonce_foreign_did", "no_proof", "derived_agent_row"].map
+      fun path => { path, requester := "admin" }
   model := relation
 
 structure PairingInput where

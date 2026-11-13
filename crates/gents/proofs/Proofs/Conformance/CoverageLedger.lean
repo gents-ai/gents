@@ -1442,7 +1442,11 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "family"
-      "owner_staged_relations")
+      "owner_staged_targets")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "owner_staged_agent_rows")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "family"
