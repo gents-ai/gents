@@ -188,7 +188,7 @@ impl DefraSessionHook {
         let mut lifecycle = match admission {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
-                match error.downcast_ref::<BackgroundSlotRefusal>() {
+                match BackgroundSlotRefusal::in_failure(&error) {
                     Some(BackgroundSlotRefusal::CapacityExceeded(admitted)) => {
                         return complete_spawn_process_failure(
                             self,

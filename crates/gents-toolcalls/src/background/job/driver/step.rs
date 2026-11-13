@@ -202,12 +202,12 @@ async fn try_step_on(
     let call = match call {
         Ok(call) => call,
         Err(error) => {
-            if crate::plugin::executor::publication_busy(&error) {
+            let busy = error.publication_busy();
+            let error = error.into_anyhow();
+            if busy {
                 return Err(error.into());
             }
-            let trapped = error
-                .chain()
-                .any(|cause| cause.downcast_ref::<GuestTrap>().is_some());
+            let trapped = GuestTrap::in_chain(&error);
             // A non-trap call error counts too: it raises no progress
             // revision, so recovery would otherwise re-step the row every sweep.
             return Err(StepError::Failed {
@@ -327,7 +327,7 @@ async fn try_step_on(
                 return Err(error.into());
             }
             if matches!(
-                error.downcast_ref::<RecordError>(),
+                RecordError::in_error(&error),
                 Some(RecordError::StaleRevision { .. })
             ) {
                 return Ok(StepOutcome::Stale);

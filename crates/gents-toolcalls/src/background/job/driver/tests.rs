@@ -1769,10 +1769,9 @@ fn attempt_of(outcome: &Result<StepOutcome>) -> &'static str {
         Ok(StepOutcome::Settled) => "settled",
         Ok(StepOutcome::Refused(Refusal::Terminal)) => "refused_terminal",
         Err(error)
-            if crate::plugin::executor::publication_busy(error)
-                || gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
-                    error.as_ref(),
-                ) =>
+            if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
+                error.as_ref(),
+            ) =>
         {
             "publication_busy"
         }
