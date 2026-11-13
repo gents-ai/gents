@@ -44,6 +44,11 @@ pub enum ServiceLifecycleReceipt {
         service: NativeServiceStatus,
         network: NetworkSettings,
     },
+    /// `removed` is false when no definition was installed at `definition`.
+    Uninstalled {
+        definition: std::path::PathBuf,
+        removed: bool,
+    },
 }
 
 impl ServiceAction {
@@ -167,7 +172,15 @@ where
                 network: NetworkSettings::read(manager.home())?,
             })
         }
-        ServiceAction::Uninstall => manager.uninstall()?,
+        ServiceAction::Uninstall => {
+            let definition = manager.definition_path();
+            let removed = definition.exists();
+            manager.uninstall()?;
+            return Ok(ServiceLifecycleReceipt::Uninstalled {
+                definition,
+                removed,
+            });
+        }
     }
     Ok(ServiceLifecycleReceipt::Done)
 }

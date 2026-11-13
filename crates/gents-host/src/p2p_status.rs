@@ -267,6 +267,7 @@ pub fn p2p_http_client() -> Result<reqwest::Client> {
     Ok(CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
+                .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT)
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .expect("building process-wide P2P HTTP client")

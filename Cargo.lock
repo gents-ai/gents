@@ -5385,6 +5385,7 @@ dependencies = [
  "gents-migration",
  "gents-p2p",
  "gents-protocol",
+ "gents-session",
  "gents-store",
  "identity",
  "libc",

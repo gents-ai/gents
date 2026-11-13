@@ -297,7 +297,7 @@ mod tests {
                 .await
                 .unwrap_err();
                 assert!(
-                    format!("{disable:#}").contains("must be enabled"),
+                    format!("{disable:#}").contains("must stay enabled"),
                     "{disable:#}"
                 );
             }

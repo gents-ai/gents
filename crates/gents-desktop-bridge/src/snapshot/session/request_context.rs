@@ -736,42 +736,65 @@ mod tests {
 
     #[tokio::test]
     async fn a_read_carries_the_summaries_of_the_markers_it_draws_only() {
-        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(|request: &wiremock::Request| {
-                request
-                    .body_json::<serde_json::Value>()
-                    .ok()
-                    .and_then(|body| body["query"].as_str().map(str::to_owned))
-                    .is_some_and(|query| {
-                        query.contains(r#"compaction_key: { _in: ["drawn"] }"#)
-                            && query.contains(r#"reduction_key: { _in: ["mid"] }"#)
-                    })
+        use gents_store::identity::NodeIdentity as _;
+        let home = tempfile::tempdir().unwrap();
+        let identity =
+            gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+                .unwrap();
+        let reader = identity.did().to_owned();
+        let node = std::sync::Arc::new(
+            gents::defra_node::Node::builder()
+                .with_node_identity_did(&reader)
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        let inputs = vec![
+            (
+                "mutation($input: CompactionEntryMutationInputArg!) { create_CompactionEntry(input: $input) { _docID } }",
+                serde_json::json!({
+                    "compaction_key": "drawn", "node_did": reader, "session_id": "session",
+                    "requester_did": reader, "summary": "## Goal\nKept.",
+                    "files_read": "[\"src/lib.rs\"]"
+                }),
+            ),
+            (
+                "mutation($input: ProviderContextReductionMutationInputArg!) { create_ProviderContextReduction(input: $input) { _docID } }",
+                serde_json::json!({
+                    "reduction_key": "mid", "node_did": reader, "session_id": "session",
+                    "requester_did": reader, "request_id": "request", "request_doc_id": "physical",
+                    "request_commit_cid": "cid", "reduction_index": 0, "turn_index": 0,
+                    "source_boundary_json": "{}", "compacted_prefix_json": "[]",
+                    "retained_suffix_json": "[]", "pair_closed": true,
+                    "checkpoint_messages_json": "[]", "replay_associations_json": "{}",
+                    "summary": "  ", "messages_compacted": 0, "original_tokens": 0,
+                    "compacted_tokens": 0, "created_at": "2026-10-30T17:01:00Z"
+                }),
+            ),
+        ];
+        ConfigAccess::transact_local_write(&node, None, "test.marker_summaries", |txn| {
+            let inputs = inputs.clone();
+            Box::pin(async move {
+                for (mutation, input) in inputs {
+                    txn.execute_with_variables(mutation, &serde_json::json!({"input": input}))
+                        .await?;
+                }
+                Ok::<_, anyhow::Error>(())
             })
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
-                    "CompactionEntry": [{"compaction_key": "drawn", "summary": "## Goal\nKept.",
-                        "files_read": "[\"src/lib.rs\"]", "files_modified": null}],
-                    "ProviderContextReduction": [{"reduction_key": "mid", "summary": "  "}]
-                }})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        })
+        .await
+        .unwrap();
+        let access = ConfigAccess::local_as(node, reader.parse().unwrap());
         let mut markers = vec![
             marker("session-compaction:drawn", 4, "2026-10-30T17:00:00Z"),
             marker("request-compaction:mid", 9, "2026-10-30T17:01:00Z"),
         ];
-        fill_marker_summaries(
-            &ConfigAccess::graphql(server.uri()),
-            "session",
-            "node",
-            Some("requester"),
-            &mut markers,
-        )
-        .await
-        .expect("marker summaries");
+        fill_marker_summaries(&access, "session", &reader, Some(&reader), &mut markers)
+            .await
+            .expect("marker summaries");
         let summaries = markers
             .iter()
             .map(|(_, item)| match item {
@@ -794,7 +817,6 @@ mod tests {
                 (None, None),
             ]
         );
-        server.verify().await;
     }
 }
 

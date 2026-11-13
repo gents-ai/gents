@@ -18,8 +18,27 @@ pub enum IncompatibleStoreKind {
 }
 
 impl IncompatibleStoreKind {
+    /// Whether starting fresh may be offered for a store refused as this
+    /// kind (Lean `StoreKeyCustody.Outcome.older`): never for one a newer or
+    /// unknown version wrote, which that version may still want.
     pub fn is_older(self) -> bool {
         !matches!(self, Self::ForeignVersion)
+    }
+
+    /// A store an earlier Gents made that this release cannot open. This
+    /// release is fresh-init only (migrations begin after 1.0), so such a
+    /// home is reported and left as it is. A key others can read, a missing
+    /// key and a damaged store are not about a version, and are named as
+    /// what they are.
+    pub fn made_by_older_version(self) -> bool {
+        matches!(
+            self,
+            Self::LegacyRocksDb
+                | Self::LegacyLark
+                | Self::UnknownLineage
+                | Self::UnencryptedStore
+                | Self::OtherVersionSchema
+        )
     }
 }
 
@@ -32,34 +51,46 @@ pub struct IncompatibleStore {
 
 fn describe(kind: IncompatibleStoreKind, data_path: &Path) -> String {
     let path = data_path.display();
+    let home = data_path.parent().unwrap_or(data_path);
+    let home_word = shell_word(home);
+    let older = |what: &str| {
+        format!(
+            "{home} was made by an older version of Gents ({what}), which this version cannot open: this release has no conversion from it. Nothing in it was changed and no background service was started for it. You can keep using it with the older Gents. To keep its data, export it first with the older Gents (`gents utils data export --help`). To start fresh with this version, move it aside yourself (`mv {home_word} {home_word}.older`), then run `gents`",
+            home = home.display()
+        )
+    };
     match kind {
-        IncompatibleStoreKind::LegacyRocksDb => format!(
-            "{path} contains a legacy RocksDB Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
-        IncompatibleStoreKind::LegacyLark => format!(
-            "{path} contains a legacy Lark Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
+        IncompatibleStoreKind::LegacyRocksDb => older("a RocksDB store"),
+        IncompatibleStoreKind::LegacyLark => older("a Lark store"),
+        IncompatibleStoreKind::UnknownLineage => older("a store without this version's lineage marker"),
+        IncompatibleStoreKind::UnencryptedStore => older("a store that is not encrypted at rest"),
+        IncompatibleStoreKind::OtherVersionSchema => older("its collections' access policies or schema differ from this version's"),
         IncompatibleStoreKind::UnsupportedOrCorrupt => format!(
-            "{path} contains an unsupported or corrupt Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first"
-        ),
-        IncompatibleStoreKind::UnknownLineage => format!(
-            "{path} was created by an older Gents version. This release is a breaking release with no migration from it, so it cannot open that store. Back it up or delete it to start fresh, or use the release that created it to export any data you need first"
+            "{path} is not a store this version can read: it may be damaged, or made by a program other than Gents. Nothing in it was changed. To set it aside and start fresh, run `gents --home {home_word}` in a terminal and choose to set it aside"
         ),
         IncompatibleStoreKind::InsecureKey => format!(
-            "This home's keys were created by an older Gents version with unsafe file permissions ({path} is readable by other users). This release does not load a key that may have been exposed. Back it up or delete it to start fresh with a new identity"
+            "{path} can be read by other users of this computer, so Gents will not load it. Nothing was changed. If you changed its permissions yourself, restore them with `chmod 600 {}`, then try again",
+            shell_word(data_path)
         ),
         IncompatibleStoreKind::ForeignVersion => format!(
-            "{path} was written by a different Gents version whose schema this release does not know, so it cannot open that store. Use the version that wrote it, or back it up to start fresh"
-        ),
-        IncompatibleStoreKind::UnencryptedStore => format!(
-            "{path} is not encrypted at rest: it was created by an older Gents version (or by an initialization that did not finish). This release opens only encrypted stores and cannot convert one, so re-initialize the home to start fresh (`gents init --dangerously-overwrite`), backing it up first if you need its data"
+            "{path} was written by a newer version of Gents, which this version does not know. Nothing in it was changed. Open it with that newer version of Gents"
         ),
         IncompatibleStoreKind::MissingStoreKey => format!(
-            "{path} is encrypted, but the key this home recorded for it no longer exists (its Keychain item or key file was removed), so its data cannot be read. Re-initialize the home to start fresh (`gents init --dangerously-overwrite`)"
+            "{path} is encrypted, but the key this home recorded for it no longer exists (its Keychain item or key file was removed), so its data cannot be read. Nothing in it was changed. To set it aside and start fresh, run `gents --home {home_word}` in a terminal and choose to set it aside"
         ),
-        IncompatibleStoreKind::OtherVersionSchema => format!(
-            "{path} was written by another Gents version whose storage layout this release cannot change in place, so it cannot open that store. Back it up or delete it to start fresh"
-        ),
+    }
+}
+
+/// A path as one shell word, quoted only when it needs it.
+fn shell_word(path: &Path) -> String {
+    let text = path.display().to_string();
+    if text
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-~+@%:,=".contains(c))
+    {
+        text
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
     }
 }
 
@@ -74,6 +105,17 @@ pub enum HomeState {
     MissingStoreKey,
     OlderStore,
     NewerStore,
+    InsecureKey,
+    CorruptStore,
+    UnfinishedSetup,
+}
+
+impl HomeState {
+    /// A home its node can serve: healthy, or an unfinished setup nobody
+    /// chose to continue or start over.
+    pub fn is_complete(self) -> bool {
+        matches!(self, Self::Healthy | Self::UnfinishedSetup)
+    }
 }
 
 impl fmt::Display for HomeState {
@@ -85,8 +127,11 @@ impl fmt::Display for HomeState {
             Self::UnreadableSettings => "its settings file (init.json) can't be read",
             Self::MissingSettings => "its settings file (init.json) is missing",
             Self::MissingStoreKey => "the key for its data is missing",
-            Self::OlderStore => "its data is from an older Gents version",
+            Self::OlderStore => "it was made by an older version of Gents",
             Self::NewerStore => "its data is from a newer Gents version",
+            Self::InsecureKey => "one of its key files can be read by other users",
+            Self::CorruptStore => "its data can't be read; it may be damaged",
+            Self::UnfinishedSetup => "its setup stopped before it installed every core pack",
         })
     }
 }
@@ -168,6 +213,9 @@ pub enum Blocker {
     ServiceServesAnotherHome {
         home: PathBuf,
         serving: PathBuf,
+        /// A port no listener held when this was observed, for a node
+        /// started by hand next to the service's.
+        free_port: Option<u16>,
     },
 }
 
@@ -243,12 +291,23 @@ impl fmt::Display for Blocker {
                 f,
                 "Your local node runs Gents {running}, newer than this Gents ({ours}). Open Gents {running} or newer, then try again."
             ),
-            Self::ServiceServesAnotherHome { home, serving } => write!(
-                f,
-                "{home} has no running node, and the background service serves {serving}, which this command leaves as it is. Start a node for {home} with `gents runtime server --home {home}`, or move the background service to it with `gents runtime service repoint --home {home}`",
-                home = home.display(),
-                serving = serving.display()
-            ),
+            Self::ServiceServesAnotherHome {
+                home,
+                serving,
+                free_port,
+            } => {
+                let port = match free_port {
+                    Some(port) => format!(" --http-port {port}"),
+                    None => " --http-port PORT".to_owned(),
+                };
+                write!(
+                    f,
+                    "{} has no running node, and the background service serves {}, which this command leaves as it is. Start a node for it next to the service's with `gents runtime server --home {home}{port}`, or move the background service to it with `gents runtime service repoint --home {home}`",
+                    home.display(),
+                    serving.display(),
+                    home = shell_word(home),
+                )
+            }
         }
     }
 }
@@ -279,6 +338,8 @@ pub enum Finding {
         from: PathBuf,
     },
     ServiceProgramMissing,
+    ServiceDefinitionMissing,
+    ServiceJobWithoutDefinition,
     BrokenHome {
         why: HomeState,
         kept_at: PathBuf,
@@ -300,7 +361,7 @@ impl fmt::Display for Finding {
             Self::ClientStoreSetAside { kept_at } => write!(f, "the desktop's local data couldn't be opened and was set aside at {}; your identity was kept", kept_at.display()),
             Self::ClientPreferenceSetAside { kept_at } => write!(f, "the desktop's previous settings were set aside at {}", kept_at.display()),
             Self::StaleNode => {
-                f.write_str("the background node was still serving a deleted or replaced folder")
+                f.write_str("the background node was serving another node's data on this folder's port")
             }
             Self::ServiceForAnotherFolder { from } => {
                 write!(f, "the background node was serving {}", from.display())
@@ -308,6 +369,12 @@ impl fmt::Display for Finding {
             Self::ServiceProgramMissing => {
                 f.write_str("the background service pointed at a copy of Gents that is gone")
             }
+            Self::ServiceJobWithoutDefinition => f.write_str(
+                "a background node was still loaded after its service definition was deleted; it was stopped",
+            ),
+            Self::ServiceDefinitionMissing => f.write_str(
+                "the background service's definition was deleted while its node ran; it was written back so the node starts at login",
+            ),
             Self::BrokenHome { why, kept_at } => {
                 write!(f, "{why}; it was set aside as {}", kept_at.display())
             }
@@ -316,7 +383,7 @@ impl fmt::Display for Finding {
                 "Gents moved your local node from version {from} to this version"
             ),
             Self::MovedToThisVersion { from: None } => {
-                f.write_str("Gents moved your local node to this version")
+                f.write_str("the background service now runs this copy of Gents")
             }
             Self::OlderDataSetAside { from, kept_at } => {
                 f.write_str("this version couldn't open the data from ")?;
@@ -389,6 +456,10 @@ pub struct RepairReceipt {
     pub outcome: RepairOutcome,
     pub serving_home: Option<PathBuf>,
     pub older_data: Option<OlderData>,
+    /// The home is used as it is although its setup did not finish; the
+    /// caller says what it lacks.
+    #[serde(default)]
+    pub unfinished_setup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,28 +468,26 @@ pub struct OlderData {
 }
 
 impl Blocker {
-    pub fn next_call(&self) -> NextCall {
+    /// The call that follows, when the message does not already name the
+    /// exact ones.
+    pub fn next_call(&self) -> Option<NextCall> {
         match self {
-            Self::NoServiceManager { .. } => NextCall::VerbHelp {
+            Self::StoreRefused { .. }
+            | Self::ServiceServesAnotherHome { .. }
+            | Self::NewerNode { .. }
+            | Self::BackgroundApprovalPending { .. } => None,
+            Self::NoServiceManager { .. } => Some(NextCall::VerbHelp {
                 resource: "server",
                 verb: "run",
-            },
-            Self::StoreRefused { .. } | Self::CannotSetAside { .. } => NextCall::VerbHelp {
-                resource: "runtime",
-                verb: "reset",
-            },
-            Self::ServiceUpdateFailed { .. } => NextCall::VerbHelp {
+            }),
+            Self::ServiceUpdateFailed { .. } => Some(NextCall::VerbHelp {
                 resource: "service",
                 verb: "update-status",
-            },
-            Self::ServiceServesAnotherHome { .. } => NextCall::VerbHelp {
-                resource: "service",
-                verb: "repoint",
-            },
-            _ => NextCall::Verb {
+            }),
+            _ => Some(NextCall::Verb {
                 resource: "node",
                 verb: "status",
-            },
+            }),
         }
     }
 }
@@ -433,6 +502,9 @@ pub enum RepairInput {
         choice: HomeChoice,
         service_move: ServiceMove,
         operation: RepairOperation,
+        /// A terminal the user can be asked on.
+        interactive: bool,
+        answer: RepairAnswer,
     },
     Start {
         home: PathBuf,
@@ -442,9 +514,16 @@ pub enum RepairInput {
     Restore {
         choice: HomeChoice,
     },
-    Refused {
-        choice: HomeChoice,
-    },
+}
+
+/// What the user answered at a terminal about a home that cannot be used as
+/// it is. Only an answer moves a home aside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairAnswer {
+    None,
+    SetAside,
+    ContinueSetup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -461,7 +540,11 @@ pub enum RepairVersion {
 pub enum RepairPlanBlocker {
     None,
     NewerVersion,
-    ExplicitHome,
+    OlderStore,
+    InsecureKey,
+    Ask,
+    Unattended,
+    UnfinishedSetup,
     Busy,
     Keychain,
     ForeignProcess,
@@ -472,7 +555,8 @@ pub enum RepairPlanBlocker {
 pub struct RepairObservation {
     pub home: HomeState,
     pub version: RepairVersion,
-    pub explicit_home: bool,
+    pub interactive: bool,
+    pub answer: RepairAnswer,
     pub busy: bool,
     pub keychain_locked: bool,
     pub foreign_process: bool,
@@ -505,13 +589,40 @@ pub struct HomeObservation {
     pub data_present: bool,
     pub keys_present: bool,
     pub missing_key_refusal: bool,
+    pub setup_unfinished: bool,
+    pub store: StoreVerdict,
+}
+
+/// What a read-only look at a home's store and keys found, before anything
+/// opens the store for writing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoreVerdict {
+    Fine,
+    Older,
+    Newer,
+    Corrupt,
+    InsecureKey,
+    MissingKey,
+}
+
+impl StoreVerdict {
+    pub fn of(kind: IncompatibleStoreKind) -> Self {
+        match kind {
+            IncompatibleStoreKind::ForeignVersion => Self::Newer,
+            IncompatibleStoreKind::InsecureKey => Self::InsecureKey,
+            IncompatibleStoreKind::MissingStoreKey => Self::MissingKey,
+            IncompatibleStoreKind::UnsupportedOrCorrupt => Self::Corrupt,
+            kind if kind.made_by_older_version() => Self::Older,
+            _ => Self::Corrupt,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RefusalObservation {
     pub fresh: bool,
     pub missing_key: bool,
-    pub explicit_home: bool,
     pub older_store: bool,
     pub newer_store: bool,
 }
@@ -521,7 +632,6 @@ pub struct RefusalObservation {
 pub enum RefusalAction {
     Ignore,
     Ask,
-    Archive,
     Block,
 }
 
@@ -557,6 +667,21 @@ pub struct RepairClientReceipt {
     pub local_peers: usize,
     pub findings: Vec<Finding>,
     pub local_node_lost: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ClientIdentityObservation {
+    pub key_present: bool,
+    pub settings_present: bool,
+    pub pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientIdentityAction {
+    Load,
+    Create,
+    Refuse,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

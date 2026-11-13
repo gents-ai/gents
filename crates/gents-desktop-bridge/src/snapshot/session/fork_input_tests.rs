@@ -190,7 +190,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
         source = fork.session_id;
     }
     let page = gents_desktop_core::client::load_session_transcript_page_on(
-        &ConfigAccess::local(node.clone()),
+        &ConfigAccess::local_as(node.clone(), amy.parse().unwrap()),
         &source,
         Some(&amy),
         None,

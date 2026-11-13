@@ -373,12 +373,15 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         }
     }
 
-    // Client-facing commands create their own principal before resolving an
-    // endpoint; runtime entry points never load this client key.
-    if matches!(
+    // Client-facing commands load their principal before resolving an endpoint,
+    // creating it only for a default home not yet set up; runtime entry points
+    // never load this client key.
+    if let Command::Status(args) = &command {
+        let home = resolve_home_dir(args.home.as_deref());
+        gents_service::home_state::client_identity_for(&home).await?;
+    } else if matches!(
         &command,
-        Command::Status(_)
-            | Command::Sessions { .. }
+        Command::Sessions { .. }
             | Command::Automation { .. }
             | Command::Config { .. }
             | Command::Runtime {
@@ -518,10 +521,24 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
             None => std::env::current_exe().context("resolving the gents executable")?,
         };
         let manager = NativeServiceManager::new(NativeServiceConfig::new(home, executable)?)?;
-        if let ServiceLifecycleReceipt::Status { service, network } =
-            gents_service::lifecycle::perform(&manager, &action)?
-        {
-            print!("{}\n{}\n", service.summary(), network.summary());
+        match gents_service::lifecycle::perform(&manager, &action)? {
+            ServiceLifecycleReceipt::Status { service, network } => {
+                print!("{}\n{}\n", service.summary(), network.summary());
+            }
+            ServiceLifecycleReceipt::Uninstalled {
+                definition,
+                removed,
+            } => {
+                for line in commands::service::uninstall_summary(
+                    manager.home(),
+                    &definition,
+                    removed,
+                    manager.config().stderr_path.as_deref(),
+                ) {
+                    println!("{line}");
+                }
+            }
+            ServiceLifecycleReceipt::Done | ServiceLifecycleReceipt::Installed(_) => {}
         }
         Ok(())
     })
@@ -592,7 +609,7 @@ async fn resolve_config_access_inner(
     if let Some(guard) = plugin_guard {
         guard.for_home(&home_dir)?;
     }
-    let client_identity = load_client_identity().await?;
+    let client_identity = gents_service::home_state::client_identity_for(&home_dir).await?;
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
         .filter(|value| !value.is_empty())

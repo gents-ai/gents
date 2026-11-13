@@ -9,28 +9,41 @@ private def bit (n k : Nat) : Bool := (n / 2 ^ k) % 2 == 1
 
 private def homes : List HomeState :=
   [.absent, .healthy, .interrupted, .unreadableSettings, .missingSettings,
-   .missingStoreKey, .olderStore, .newerStore]
+   .missingStoreKey, .olderStore, .newerStore, .insecureKey, .corruptStore, .unfinishedSetup]
 
 private def versions : List Version := [.unknown, .older, .same, .newer]
 
+private def verdicts : List StoreVerdict :=
+  [.fine, .older, .newer, .corrupt, .insecureKey, .missingKey]
+
 @[conformance_family]
 def classification : Conformance.Family HomeObservation HomeState where
-  inputs := (List.range 512).map fun n =>
-    ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4, bit n 5, bit n 6, bit n 7, bit n 8⟩
+  inputs := verdicts.flatMap fun store => (List.range 1024).map fun n =>
+    ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4, bit n 5, bit n 6, bit n 7, bit n 8, bit n 9,
+     store⟩
   model := classifyHome
 
 private def servedHomes : List (Bool × Operation) :=
   [(true, .run), (false, .repoint), (true, .repoint)]
 
+private def answers : List (Bool × Answer) :=
+  [(false, .none), (false, .setAside), (true, .none), (true, .setAside), (true, .continueSetup)]
+
 @[conformance_family]
 def plans : Conformance.Family Observation Plan where
   inputs := homes.flatMap fun home => versions.flatMap fun version =>
-    ((List.range 2048).map fun n =>
-      ⟨home, version, bit n 0, bit n 1, bit n 2, bit n 3, bit n 4,
-       bit n 5, bit n 6, bit n 7, bit n 8, bit n 9, bit n 10, false, .run⟩) ++
-    servedHomes.flatMap fun (present, operation) => (List.range 512).map fun n =>
-      ⟨home, version, bit n 0, bit n 1, bit n 2, bit n 3, bit n 4,
-       true, bit n 5, bit n 6, false, bit n 7, bit n 8, present, operation⟩
+    answers.flatMap fun (interactive, answer) =>
+      ((List.range 256).map fun n =>
+        ⟨home, version, interactive, answer, bit n 0, false, false, bit n 1, bit n 2, bit n 3,
+         bit n 4, bit n 5, bit n 6, bit n 7, false, .run⟩) ++
+      ((List.range 4).map fun n =>
+        ⟨home, version, interactive, answer, false, bit n 0, bit n 1, true, true, true,
+         true, true, false, true, false, .run⟩) ++
+      (if version == .same || version == .older then
+        servedHomes.flatMap fun (present, operation) => (List.range 32).map fun n =>
+          ⟨home, version, interactive, answer, bit n 0, false, false, true, true, bit n 1,
+           bit n 2, false, bit n 3, bit n 4, present, operation⟩
+       else [])
   model := plan
 
 @[conformance_family]
@@ -49,14 +62,19 @@ def servicePlans : Conformance.Family ServiceObservation (List ServiceStep) wher
 
 @[conformance_family]
 def refusals : Conformance.Family RefusalObservation RefusalAction where
-  inputs := (List.range 32).map fun n =>
-    ⟨bit n 0, bit n 1, bit n 2, bit n 3, bit n 4⟩
+  inputs := (List.range 16).map fun n =>
+    ⟨bit n 0, bit n 1, bit n 2, bit n 3⟩
   model := refusalAction
 
 end Conformance.InstallRepair
 
 namespace Conformance.InstallRepair
 open _root_.InstallRepair
+
+@[conformance_family]
+def clientIdentities : Conformance.Family ClientIdentityObservation ClientIdentityAction where
+  inputs := (List.range 8).map fun n => ⟨bit n 0, bit n 1, bit n 2⟩
+  model := clientIdentityAction
 
 @[conformance_family]
 def clientBindings : Conformance.Family ClientObservation ClientBinding where

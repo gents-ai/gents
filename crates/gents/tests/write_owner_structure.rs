@@ -2008,7 +2008,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
     ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
     ("crates/gents-documents/src/desired_state/plan.rs", 1),
-    ("crates/gents-store/src/config_client/retry.rs", 2),
+    ("crates/gents-store/src/config_client/retry.rs", 3),
     ("crates/gents-store/src/config_client/schema_install.rs", 2),
     ("crates/gents/src/eval/documents.rs", 3),
     ("crates/gents-eval/src/report/mod.rs", 1),

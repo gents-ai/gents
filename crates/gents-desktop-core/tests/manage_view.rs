@@ -80,14 +80,10 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
 
     let amy = core.provision_agent_identity(node_did).await?;
     let amy_default = amy.agent_did.as_str();
-    let agent: Agent = serde_json::from_value(json!({
-        "node_did": node_did,
-        "agent_did": amy_default,
-        "creation_nonce": amy.creation_nonce,
-        "display_name": "Amy Default",
-        "inference_profile_id": "profile-amy",
-        "tags": ["managed"]
-    }))?;
+    let mut agent = runtime.agent_value_for_create(&amy, "profile-amy").await;
+    agent["display_name"] = json!("Amy Default");
+    agent["tags"] = json!(["managed"]);
+    let agent: Agent = serde_json::from_value(agent)?;
     core.save_agent(&agent, None).await?;
     core.set_default_agent(node_did, amy_default).await?;
 
@@ -110,6 +106,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     }))?;
     core.save_schedule(&schedule).await?;
 
+    let mut publications = core.stores().subscribe();
     let trigger: Trigger = serde_json::from_value(json!({
         "node_did": node_did,
         "trigger_id": "trigger-amy-daily",
@@ -119,6 +116,17 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     }))?;
     core.save_trigger(&trigger).await?;
 
+    loop {
+        let snapshot = core.stores().snapshot(node_did);
+        if snapshot
+            .triggers
+            .iter()
+            .any(|row| row.node_did == node_did && row.trigger_id == "trigger-amy-daily")
+        {
+            break;
+        }
+        publications.changed().await?;
+    }
     let snapshot = core.stores().snapshot(node_did);
     assert!(snapshot
         .nodes
