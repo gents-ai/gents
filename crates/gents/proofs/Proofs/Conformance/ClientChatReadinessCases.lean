@@ -1,59 +1,91 @@
 import Proofs.Clients.ClientShell.ChatReadiness
 import Proofs.Clients.ClientShell.RoutePairing
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Functions.Clients
+
+namespace ClientChatReadiness
+
+attribute [conformance_function] causeToken nextActionToken
+
+end ClientChatReadiness
 
 namespace Conformance.ChatReadinessCases
 
-open _root_.ClientChatReadiness Conformance.Contracts
-
-private def boolJson (value : Bool) : String := if value then "true" else "false"
+open Lean _root_.ClientChatReadiness
 
 /-- Native spellings of a source. `other` is both a source-less and a manual
 record. -/
-private def sourceSpellings : Source → List String
-  | .localStandard => ["\"local-standard\""]
-  | .enrollment => ["\"enrollment\""]
-  | .other => ["null", "\"manual\""]
+private def sourceSpellings : Source → List (Option String)
+  | .localStandard => [some "local-standard"]
+  | .enrollment => [some "enrollment"]
+  | .other => [none, some "manual"]
 
-private def readinessJson : Readiness → String
-  | .ready => "null"
-  | .notReady cause => jsonString (causeToken cause)
+private def sourceOf : Option String → Source
+  | some "local-standard" => .localStandard
+  | some "enrollment" => .enrollment
+  | _ => .other
 
-private def routeFieldsJson (spelling : String) (route : Route) : String :=
-  "{\"source\":" ++ spelling ++
-  ",\"operator_endpoint\":" ++ boolJson route.operatorEndpoint ++
-  ",\"managed\":" ++ boolJson route.managed ++ "}"
+structure RouteInput where
+  source : Option String
+  operatorEndpoint : Bool
+  managed : Bool
+  deriving ToJson
 
-/-- Each route with each native spelling of its source. -/
-private def spelledRoutes (route : Option Route) : List (String × Option Route) :=
-  match route with
-  | none => [("null", none)]
-  | some r => (sourceSpellings r.source).map fun spelling => (routeFieldsJson spelling r, some r)
+structure FenceInput where
+  route : Option RouteInput
+  deriving ToJson
 
-private def fenceCaseJson (encoded : String × Option Route) : String :=
-  let (routeJson, route) := encoded
-  "{\"route\":" ++ routeJson ++ ",\"refusal\":" ++ readinessJson (chatReadiness route) ++ "}"
+structure FenceOutput where
+  refusal : Option Cause
+  deriving ToJson
 
-private def legToken : ClientRoutePairing.Leg → String
-  | .ready => "ready"
-  | .drifted => "drifted"
-  | .unavailable => "unavailable"
+/-- Each fence route with each native spelling of its source. -/
+private def fenceInputs : List FenceInput :=
+  fenceRoutes.flatMap fun
+    | none => [{ route := none }]
+    | some r => (sourceSpellings r.source).map fun source =>
+        { route := some { source := source, operatorEndpoint := r.operatorEndpoint, managed := r.managed } }
 
-private def legCaseJson (outbound inbound : ClientRoutePairing.Leg) : String :=
-  "{\"outbound\":" ++ jsonString (legToken outbound) ++
-  ",\"inbound\":" ++ jsonString (legToken inbound) ++
-  ",\"combined\":" ++ jsonOptionalBool (ClientRoutePairing.combinedLegs outbound inbound) ++ "}"
+private def fenceModel (i : FenceInput) : FenceOutput :=
+  let toRoute : RouteInput → Route := fun r =>
+    { source := sourceOf r.source, operatorEndpoint := r.operatorEndpoint, managed := r.managed }
+  { refusal := match chatReadiness (i.route.map toRoute) with
+      | .ready => none
+      | .notReady cause => some cause }
 
-private def causeJson (cause : Cause) : String :=
-  "{\"cause\":" ++ jsonString (causeToken cause) ++
-  ",\"next_action\":" ++ jsonString (nextActionToken (nextAction cause)) ++ "}"
+/-- `PeerRecord::chat_refusal` is asked of a saved record, so only the fence
+routes that hold a record; the write fence replays the route-less case. -/
+@[conformance_family]
+def savedRecord : Family FenceInput FenceOutput where
+  inputs := fenceInputs.filter (·.route.isSome)
+  model := fenceModel
 
-def casesJson : String := jsonArray ((fenceRoutes.flatMap spelledRoutes).map fenceCaseJson)
+example : chatReadiness none = .notReady .noRoute := rfl
 
-def legsJson : String :=
-  jsonArray (ClientRoutePairing.allLegs.flatMap fun outbound =>
-    ClientRoutePairing.allLegs.map (legCaseJson outbound))
+@[conformance_family]
+def writeFence : Family FenceInput FenceOutput where
+  inputs := fenceInputs
+  model := fenceModel
 
-def causesJson : String := jsonArray (allCauses.map causeJson)
+@[conformance_family]
+def writeSelection : Family FenceInput FenceOutput where
+  inputs := fenceInputs
+  model := fenceModel
+
+deriving instance ToJson for ClientRoutePairing.Leg
+
+structure LegsInput where
+  outbound : ClientRoutePairing.Leg
+  inbound : ClientRoutePairing.Leg
+  deriving ToJson
+
+structure LegsOutput where
+  combined : Option Bool
+  deriving ToJson
+
+@[conformance_family]
+def routePairingLegs : Family LegsInput LegsOutput where
+  inputs := ClientRoutePairing.allLegs.flatMap fun outbound =>
+    ClientRoutePairing.allLegs.map fun inbound => { outbound, inbound }
+  model := fun i => { combined := ClientRoutePairing.combinedLegs i.outbound i.inbound }
 
 end Conformance.ChatReadinessCases

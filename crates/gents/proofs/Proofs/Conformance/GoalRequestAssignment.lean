@@ -67,20 +67,6 @@ def inputCases : List InputCase :=
   , ⟨"captured_reference_does_not_need_session_read", ⟨some ⟨1, some 100⟩, false, false, none⟩⟩
   ]
 
-def inputCaseJson (c : InputCase) : Json :=
-  let expected := match prepareInput c.facts with
-    | .pending => Json.mkObj [("kind", toJson "pending")]
-    | .prepared reference => Json.mkObj [("kind", toJson "prepared"),
-        ("reference", reference.map referenceJson |>.getD Json.null)]
-  Json.mkObj [("name", toJson c.name),
-    ("captured", c.facts.captured.map referenceJson |>.getD Json.null),
-    ("session_readable", toJson c.facts.sessionReadable),
-    ("observation_verified", toJson c.facts.observationVerified),
-    ("observed", c.facts.observed.map referenceJson |>.getD Json.null),
-    ("expected", expected)]
-
-def inputCasesJson : String := (toJson (inputCases.map inputCaseJson)).compress
-
 example : inputCases.length = 12 := by decide
 
 def resubmissionInputJson (input : ResubmissionInput) : Json :=
@@ -336,5 +322,28 @@ example : messageInputCases.all (·.facts.owner == 1) := by decide
 example : historyCases.length = 21 := by decide
 example : (historyCases.map fun c => observeHistory c.versions c.entry).take 2 =
     [.assigned 1 100 .stopped, .assigned 1 100 .stopped] := by native_decide
+
+structure InputBindingInput where
+  name : String
+  captured : Option Reference
+  sessionReadable : Bool
+  observationVerified : Bool
+  observed : Option Reference
+  deriving ToJson
+
+structure InputBindingOutput where
+  kind : String
+  reference : Option Reference
+  deriving ToJson
+
+@[conformance_family]
+def inputBinding : Family InputBindingInput InputBindingOutput where
+  inputs := inputCases.map fun c =>
+    { name := c.name, captured := c.facts.captured, sessionReadable := c.facts.sessionReadable,
+      observationVerified := c.facts.observationVerified, observed := c.facts.observed }
+  model := fun i =>
+    match prepareInput ⟨i.captured, i.sessionReadable, i.observationVerified, i.observed⟩ with
+    | .pending => { kind := "pending", reference := none }
+    | .prepared reference => { kind := "prepared", reference }
 
 end Conformance.GoalRequestAssignmentContracts

@@ -35,77 +35,6 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-fn enrollment_authority(
-    network_id: &str,
-    admin_did: &str,
-    server_peer: &str,
-    candidate_did: &str,
-    candidate_peer: &str,
-    owner_node: &str,
-    profile: &str,
-) -> gents_p2p::p2p_reconcile::enrollment::EnrollmentRequestAuthority {
-    gents_p2p::p2p_reconcile::enrollment::EnrollmentRequestAuthority {
-        network_id: network_id.into(),
-        admin_did: admin_did.into(),
-        server_peer: server_peer.into(),
-        candidate_did: candidate_did.into(),
-        candidate_peer: candidate_peer.into(),
-        owner_node: owner_node.into(),
-        profile: profile.into(),
-    }
-}
-
-fn pending_request_cases() -> &'static [gents_lean_vocab::LeanEnrollmentPendingRequestCase] {
-    &gents_lean_vocab::lean_contract_snapshot().enrollment_pending_request_cases
-}
-
-#[test]
-fn generated_pending_request_satisfaction_matches_lean() {
-    let cases = pending_request_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(
-            gents_p2p::p2p_reconcile::enrollment::pending_request_satisfied(
-                &enrollment_authority(
-                    &case.requested.network_id,
-                    &case.requested.admin_did,
-                    &case.requested.server_peer,
-                    &case.requested.candidate_did,
-                    &case.requested.candidate_peer,
-                    &case.requested.owner_node,
-                    &case.requested.profile,
-                ),
-                &enrollment_authority(
-                    &case.current.network_id,
-                    &case.current.admin_did,
-                    &case.current.server_peer,
-                    &case.current.candidate_did,
-                    &case.current.candidate_peer,
-                    &case.current.owner_node,
-                    &case.current.profile,
-                ),
-                case.has_decision,
-                case.current_approval,
-                case.route_applied,
-            ),
-            case.expected_satisfied,
-            "{}",
-            case.name,
-        );
-        assert_eq!(
-            active_request_visible(
-                case.request_fresh,
-                case.has_decision,
-                case.current_approval,
-                case.route_applied
-            ),
-            case.expected_visible,
-            "{}",
-            case.name,
-        );
-    }
-}
-
 fn approval(server_peer: &str, owner_node_did: &str) -> ApprovedStatusEnrollment {
     ApprovedStatusEnrollment {
         network_id: "network".into(),
@@ -1412,13 +1341,6 @@ async fn activation_authentication_error_is_observed_before_peer_exists_and_clea
         Utc::now() - chrono::Duration::minutes(10),
         "expired-request",
     );
-    assert!(
-        pending_request_cases()
-            .into_iter()
-            .find(|case| case.name == "visibility_false_true_true_false")
-            .unwrap()
-            .expected_visible
-    );
     commit_test_authority(&core, &authority).await;
     let mut updates = core.sync_state.subscribe();
     reconcile_with_test_transport(&core, test_transport(&authority, false)).await;
@@ -1515,18 +1437,6 @@ async fn expired_pending_and_expired_authorization_requests_are_not_visible() {
     );
     commit_test_authority(&core, &expired).await;
     commit_enrollment_request(&core, &pending.request).await;
-    for name in [
-        "visibility_false_false_false_false",
-        "visibility_false_true_false_false",
-    ] {
-        assert!(
-            !pending_request_cases()
-                .into_iter()
-                .find(|case| case.name == name)
-                .unwrap()
-                .expected_visible
-        );
-    }
     assert!(core
         .active_status_enrollment_requests()
         .await
@@ -1566,13 +1476,6 @@ async fn expired_malformed_decision_does_not_hide_pending_request_but_fresh_fail
 
         let listed = core.active_status_enrollment_requests().await;
         if expired {
-            assert!(
-                !pending_request_cases()
-                    .into_iter()
-                    .find(|case| case.name == "visibility_false_true_false_false")
-                    .unwrap()
-                    .expected_visible
-            );
             let listed = listed.unwrap();
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].request_id, pending.request.request_id);
@@ -1784,23 +1687,19 @@ async fn revoked_enrollment_ends_the_active_request_listing() {
     Arc::new(core).shutdown().await.unwrap();
 }
 
-async fn assert_pending_visibility_matches_model(
+async fn observe_pending_listing(
     core: &ClientCore,
     request: &EnrollmentRequestRecord,
-    case_name: &str,
+    case_name: &'static str,
+    observations: &mut Vec<(&'static str, bool)>,
 ) {
-    let case = pending_request_cases()
-        .into_iter()
-        .find(|case| case.name == case_name)
-        .expect("modeled enrollment case");
     let listed = core.active_status_enrollment_requests().await.unwrap();
-    assert_eq!(
+    observations.push((
+        case_name,
         listed
             .iter()
             .any(|row| row.request_id == request.request_id),
-        !case.expected_satisfied,
-        "{case_name}: {listed:?}",
-    );
+    ));
 }
 
 async fn configure_test_enrollment_route(
@@ -1826,7 +1725,33 @@ async fn configure_test_enrollment_route(
 }
 
 #[tokio::test]
-async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision() {
+async fn pending_request_listing_matches_lean() {
+    let mut observations = Vec::new();
+    reconnected_authority_satisfies_pending_request_until_a_newer_revision(&mut observations).await;
+    pending_request_requires_the_exact_current_applied_route(&mut observations).await;
+    for case in gents_lean_vocab::families::enrollment_pending_requests_listing::cases() {
+        let listed = observations
+            .iter()
+            .filter(|(name, _)| *name == case.input.name)
+            .map(|(_, listed)| *listed)
+            .collect::<Vec<_>>();
+        assert!(!listed.is_empty(), "{:?}", case.input);
+        assert!(
+            listed.iter().all(|seen| *seen == listed[0]),
+            "{:?}: {listed:?}",
+            case.input
+        );
+        case.check(
+            gents_lean_vocab::families::enrollment_pending_requests_listing::ListingOutput {
+                listed: listed[0],
+            },
+        );
+    }
+}
+
+async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision(
+    observations: &mut Vec<(&'static str, bool)>,
+) {
     use crate::client::paths::DesktopPaths;
 
     let temp = tempfile::tempdir().unwrap();
@@ -1880,18 +1805,24 @@ async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision(
     .unwrap();
     let configured =
         configure_test_enrollment_route(&core, &authority, &authority.request.server_peer).await;
-    assert_pending_visibility_matches_model(&core, &pending.request, "route_still_reconnecting")
-        .await;
+    observe_pending_listing(
+        &core,
+        &pending.request,
+        "route_still_reconnecting",
+        observations,
+    )
+    .await;
     let ready = core
         .sync_state
         .set_pairing_ready(&configured, true)
         .await
         .unwrap()
         .unwrap();
-    assert_pending_visibility_matches_model(
+    observe_pending_listing(
         &core,
         &pending.request,
         "reconnected_route_satisfies_pending_request",
+        observations,
     )
     .await;
     assert!(core
@@ -1928,10 +1859,11 @@ async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision(
     newer.admin_sig = admin.sign(&newer.signing_payload()).unwrap();
     commit_revision(&core, &newer).await;
     assert_eq!(core.sync_state.records(), vec![ready.clone()]);
-    assert_pending_visibility_matches_model(
+    observe_pending_listing(
         &core,
         &pending.request,
         "revoked_or_expired_authorization",
+        observations,
     )
     .await;
 
@@ -1947,17 +1879,19 @@ async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision(
     revoked.admin_sig = admin.sign(&revoked.signing_payload()).unwrap();
     commit_revision(&core, &revoked).await;
     assert_eq!(core.sync_state.records(), vec![ready]);
-    assert_pending_visibility_matches_model(
+    observe_pending_listing(
         &core,
         &pending.request,
         "revoked_or_expired_authorization",
+        observations,
     )
     .await;
     Arc::new(core).shutdown().await.unwrap();
 }
 
-#[tokio::test]
-async fn pending_request_requires_the_exact_current_applied_route() {
+async fn pending_request_requires_the_exact_current_applied_route(
+    observations: &mut Vec<(&'static str, bool)>,
+) {
     use crate::client::paths::DesktopPaths;
 
     let temp = tempfile::tempdir().unwrap();
@@ -1986,8 +1920,13 @@ async fn pending_request_requires_the_exact_current_applied_route() {
         .await
         .unwrap()
         .unwrap();
-    assert_pending_visibility_matches_model(&core, &pending.request, "route_still_reconnecting")
-        .await;
+    observe_pending_listing(
+        &core,
+        &pending.request,
+        "route_still_reconnecting",
+        observations,
+    )
+    .await;
     let configured =
         configure_test_enrollment_route(&core, &authority, &authority.request.server_peer).await;
     let mut ready = core
@@ -2026,10 +1965,11 @@ async fn pending_request_requires_the_exact_current_applied_route() {
             .await
             .unwrap()
             .unwrap();
-        assert_pending_visibility_matches_model(
+        observe_pending_listing(
             &core,
             &pending.request,
             "route_still_reconnecting",
+            observations,
         )
         .await;
         ready = core
@@ -2039,10 +1979,11 @@ async fn pending_request_requires_the_exact_current_applied_route() {
             .unwrap()
             .unwrap();
     }
-    assert_pending_visibility_matches_model(
+    observe_pending_listing(
         &core,
         &pending.request,
         "reconnected_route_satisfies_pending_request",
+        observations,
     )
     .await;
     Arc::new(core).shutdown().await.unwrap();
@@ -2157,9 +2098,7 @@ async fn malformed_authority_rows_are_skipped_by_the_active_listing() {
 
 #[tokio::test]
 async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_absent_peer_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
+    for case in gents_lean_vocab::families::enrollment_pending_requests_absent_peer::cases() {
         let temp = tempfile::tempdir().unwrap();
         let core = start_unsupervised_core(temp.path().join("desktop")).await;
         let admin =
@@ -2184,7 +2123,7 @@ async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() 
             )
             .await
             .unwrap();
-        if case.managed {
+        if case.input.managed {
             record = core
                 .sync_state
                 .upsert_local_standard_peer(
@@ -2197,21 +2136,28 @@ async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() 
                 .await
                 .unwrap();
         }
-        assert_eq!(record.is_managed_runtime(), case.managed);
+        assert_eq!(record.is_managed_runtime(), case.input.managed);
         core.sync_state
-            .set_pairing_ready(&record, case.initial_ready)
+            .set_pairing_ready(&record, case.input.initial_ready)
             .await
             .unwrap()
             .expect("the enrollment record is still current");
 
         reconcile_with_test_transport(&core, test_transport(&authority, true)).await;
         let records = core.peer_records().await;
-        assert_eq!(records.len(), usize::from(case.expected_present));
+        assert!(records.len() <= 1, "{records:?}");
         if let Some(retained) = records.first() {
             assert_eq!(retained.peer_id, authority.request.server_peer);
             assert_eq!(retained.local_node_home.as_deref(), Some("/managed/home"));
-            assert_eq!(retained.pairing_ready, case.expected_ready);
         }
+        case.check(
+            gents_lean_vocab::families::enrollment_pending_requests_absent_peer::AbsentPeerOutput {
+                present: !records.is_empty(),
+                ready: records
+                    .first()
+                    .is_some_and(|retained| retained.pairing_ready),
+            },
+        );
         Arc::new(core).shutdown().await.unwrap();
     }
 }

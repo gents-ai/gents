@@ -712,12 +712,20 @@ def caseCoverage : List CoverageEntry :=
       "EnrollmentDurableProjectionCases")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "enrollment_pending_request_cases"
-      "EnrollmentPendingRequests")
+      "family"
+      "enrollment_pending_requests_satisfaction")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "enrollment_pending_requests_visibility")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "enrollment_pending_requests_listing")
       "authenticated-enrollment" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_sync_health_cases"
-      "ClientSyncHealthCases")
+      "family"
+      "client_sync_health_cases_projection")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "pending_user_turn_cases"
@@ -1175,16 +1183,28 @@ def caseCoverage : List CoverageEntry :=
       "ClientTelemetryCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_settings_cases"
-      "ClientSettingsCases")
+      "family"
+      "client_settings_revisions")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_settings_fields")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_data_publication_cases"
       "ClientDataNoticeDeliveryCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_request_patch_publication_cases"
-      "ClientRequestPatchPublicationCases")
+      "family"
+      "request_patch_publication_cases_publications")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "request_patch_publication_cases_reuse")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "request_patch_publication_cases_fresh_read")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -1199,8 +1219,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientRequestClosureCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_request_cache_identity_cases"
-      "ClientRequestCacheIdentityCases")
+      "family"
+      "client_request_cache_identity_merge")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "frontend_client_shell_cases"
@@ -1920,8 +1940,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_delivery_input_manual_task_run")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "goal_input_binding_cases"
-      "GoalInputBindingCases")
+      "family"
+      "goal_request_assignment_contracts_input_binding")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "goal_fresh_session_input_cases"

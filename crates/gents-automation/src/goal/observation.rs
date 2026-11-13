@@ -7,6 +7,8 @@ use gents_protocol::goal_control::{
 use super::*;
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod input_binding_conformance;
 use gents_protocol::session::SessionOwnerRow;
 use gents_store::config_client::agent_session::AgentSessionRowRead;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};

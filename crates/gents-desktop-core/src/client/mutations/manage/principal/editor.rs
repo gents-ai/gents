@@ -651,48 +651,42 @@ mod tests {
         );
         Ok(())
     }
-
-    #[test]
-    fn config_editor_matches_executable_lean_contract() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().client_settings_cases;
-        for case in &cases.revisions {
-            let decode = |document: u64, composite: u64| ConfigEditorRevision {
-                document_id: document.to_string(),
-                composite_cid: composite.to_string(),
-            };
-            assert_eq!(
-                revision_matches(
-                    case.expected
-                        .as_ref()
-                        .map(|value| decode(value.document, value.composite))
-                        .as_ref(),
-                    case.current
-                        .as_ref()
-                        .map(|value| decode(value.document, value.composite))
-                        .as_ref()
-                ),
-                case.matches
-            );
-        }
-        for case in &cases.fields {
-            let target = SelfConfigTarget::from_collection_name(case.collection.as_str()).unwrap();
-            assert_eq!(
-                serde_json::to_value(editable_fields(target)).unwrap(),
-                serde_json::to_value(&case.editable).unwrap()
-            );
-        }
-        for case in &cases.saved_projections {
-            assert_eq!(
-                adopt_saved_projection(case.read, case.physical, case.content),
-                case.adopt
-            );
-        }
-    }
 }
 
 #[cfg(test)]
 mod conformance {
     use super::*;
+
+    #[test]
+    fn revision_matching_matches_lean() {
+        let revision = |value: &gents_lean_vocab::families::client_settings_revisions::Revision| {
+            ConfigEditorRevision {
+                document_id: value.document.to_string(),
+                composite_cid: value.composite.to_string(),
+            }
+        };
+        gents_lean_vocab::families::client_settings_revisions::replay(|i| {
+            gents_lean_vocab::families::client_settings_revisions::RevisionOutput {
+                matches: revision_matches(
+                    i.expected.as_ref().map(revision).as_ref(),
+                    i.current.as_ref().map(revision).as_ref(),
+                ),
+            }
+        });
+    }
+
+    #[test]
+    fn editable_fields_match_lean() {
+        gents_lean_vocab::families::client_settings_fields::replay(|i| {
+            let target = SelfConfigTarget::from_collection_name(&i.collection).unwrap();
+            gents_lean_vocab::families::client_settings_fields::FieldsOutput {
+                editable: editable_fields(target)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            }
+        });
+    }
 
     #[test]
     fn saved_projection_adoption_matches_lean() {

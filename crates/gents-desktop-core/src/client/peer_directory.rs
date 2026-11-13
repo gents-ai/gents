@@ -1053,12 +1053,10 @@ pub(crate) mod tests {
 
     #[test]
     fn generated_enrollment_route_readiness_matches_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_route_readiness_cases;
-        assert!(!cases.is_empty());
         let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        for case in cases {
+        gents_lean_vocab::families::enrollment_pending_requests_route_readiness::replay(|case| {
             let mut peer = PeerRecord::base("runtime", "peer", "node");
             peer.source = case.enrollment.then(|| "enrollment".into());
             peer.pairing_ready = case.route_applied;
@@ -1074,30 +1072,29 @@ pub(crate) mod tests {
                 peer.graphql = Some("http://127.0.0.1:9191/api/v0/graphql".into());
                 peer.local_node_home = Some("/runtime".into());
             }
-            assert_eq!(
-                peer.is_enrollment_ready_at(now),
-                case.expected_ready,
-                "{}",
-                case.name
-            );
-        }
+            gents_lean_vocab::families::enrollment_pending_requests_route_readiness::RouteReadinessOutput {
+                ready: peer.is_enrollment_ready_at(now),
+            }
+        });
     }
 
     /// Materializes a Lean `ClientChatReadiness.Route` as the record the
     /// native directory holds.
     pub(crate) fn chat_case_record(
-        route: &gents_lean_vocab::LeanClientChatReadinessCaseRoute,
+        source: Option<&str>,
+        operator_endpoint: bool,
+        managed: bool,
     ) -> PeerRecord {
         let mut peer = PeerRecord::base("runtime", "peer", "did:key:runtime");
-        peer.source = route.source.clone();
-        peer.graphql = match (route.operator_endpoint, route.managed) {
+        peer.source = source.map(str::to_owned);
+        peer.graphql = match (operator_endpoint, managed) {
             (true, _) => Some("http://127.0.0.1:9191/api/v0/graphql".into()),
             (false, true) => Some("http://127.0.0.1:9191/graphql".into()),
             (false, false) => None,
         };
-        peer.local_node_home = route.managed.then(|| "/runtime/home".into());
-        assert_eq!(peer.operator_graphql().is_some(), route.operator_endpoint);
-        assert_eq!(peer.is_managed_runtime(), route.managed);
+        peer.local_node_home = managed.then(|| "/runtime/home".into());
+        assert_eq!(peer.operator_graphql().is_some(), operator_endpoint);
+        assert_eq!(peer.is_managed_runtime(), managed);
         peer
     }
 
@@ -1125,56 +1122,47 @@ pub(crate) mod tests {
         observed
     }
 
-    /// Every Lean `ClientChatReadiness` fence case as (record, refusal), each
-    /// record under every route observation.
-    pub(crate) fn chat_readiness_cases() -> Vec<(Option<PeerRecord>, Option<String>)> {
-        gents_lean_vocab::lean_contract_snapshot()
-            .client_chat_readiness_cases
-            .iter()
-            .flat_map(|case| match case.route.as_ref() {
-                None => vec![(None, case.refusal.clone())],
-                Some(route) => with_route_observations(&chat_case_record(route))
-                    .into_iter()
-                    .map(|peer| (Some(peer), case.refusal.clone()))
-                    .collect(),
-            })
-            .collect()
-    }
-
     #[test]
     fn chat_readiness_matches_lean() {
-        let cases = chat_readiness_cases();
-        assert!(cases.len() > 100, "{}", cases.len());
-        let mut sources = std::collections::BTreeSet::new();
-        for (record, refusal) in cases {
-            let Some(record) = record else {
-                assert_eq!(refusal.as_deref(), Some("no_route"));
-                continue;
-            };
-            sources.insert(record.source.clone());
-            assert_eq!(
-                record.chat_refusal().map(ChatRouteCause::token),
-                refusal.as_deref(),
-                "{record:?}"
+        for case in
+            gents_lean_vocab::families::chat_readiness_cases_saved_record::cases::<ChatRouteCause>()
+        {
+            let route = case.input.route.as_ref().expect("a saved record");
+            let record = chat_case_record(
+                route.source.as_deref(),
+                route.operator_endpoint,
+                route.managed,
             );
-            assert_eq!(record.is_chat_ready(), refusal.is_none(), "{record:?}");
+            let mut refusals = Vec::new();
+            for peer in with_route_observations(&record) {
+                let refusal = peer.chat_refusal();
+                assert_eq!(peer.is_chat_ready(), refusal.is_none(), "{peer:?}");
+                refusals.push(refusal);
+            }
+            assert!(
+                refusals.windows(2).all(|pair| pair[0] == pair[1]),
+                "{refusals:?}"
+            );
+            case.check(
+                gents_lean_vocab::families::chat_readiness_cases_saved_record::FenceOutput {
+                    refusal: refusals[0],
+                },
+            );
         }
-        assert_eq!(sources.len(), 4, "{sources:?}");
     }
 
     #[test]
-    fn chat_refusal_causes_match_lean() {
-        let causes = &gents_lean_vocab::lean_contract_snapshot().client_chat_readiness_causes;
-        let native = [
-            ChatRouteCause::NoRoute,
-            ChatRouteCause::NoEndpoint,
-            ChatRouteCause::EndpointNotAdvertised,
-        ];
-        assert_eq!(causes.len(), native.len());
-        for (case, cause) in causes.iter().zip(native) {
-            assert_eq!(case.cause, cause.token());
-            assert_eq!(case.next_action, cause.next_action().token());
-        }
+    fn chat_refusal_cause_tokens_match_lean() {
+        gents_lean_vocab::families::client_chat_readiness_cause_token::replay::<ChatRouteCause>(
+            |i| i.cause.token().to_owned(),
+        );
+    }
+
+    #[test]
+    fn chat_next_action_tokens_match_lean() {
+        gents_lean_vocab::families::client_chat_readiness_next_action_token::replay::<ChatNextAction>(
+            |i| i.next_action.token().to_owned(),
+        );
     }
 
     async fn joined(directory: &mut PeerDirectory, digest: &str, expires_at: &str) -> PeerRecord {
