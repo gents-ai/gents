@@ -48,10 +48,8 @@ impl LivenessActivityRow {
 pub struct RuntimeLivenessSnapshot {
     pub active_request_ids: Vec<String>,
     pub expired_processing_count: i64,
-    pub ignored_foreign_processing_count: i64,
     pub requests: Vec<ActiveRequest>,
     pub active_tool_calls: Vec<ActiveToolCall>,
-    pub ignored_foreign_tool_call_count: i64,
     pub active_native_executors_available: bool,
     pub active_native_executors: Vec<gents_session::exec::status::NativeExecutorStatus>,
 }
@@ -95,12 +93,6 @@ pub fn compute_request_liveness_summary(
             owns_liveness_row(local_node_did, row.node_did.as_deref().unwrap_or_default())
         })
         .count();
-    let ignored_foreign_processing_count =
-        requests.len().saturating_sub(local_request_count) as i64;
-    let ignored_foreign_tool_call_count = tool_calls
-        .iter()
-        .filter(|row| !owns_liveness_row(local_node_did, &row.node_did))
-        .count() as i64;
 
     let active_tool_calls: Vec<ActiveToolCall> = tool_calls
         .iter()
@@ -174,10 +166,8 @@ pub fn compute_request_liveness_summary(
     RuntimeLivenessSnapshot {
         active_request_ids,
         expired_processing_count,
-        ignored_foreign_processing_count,
         requests: request_views,
         active_tool_calls,
-        ignored_foreign_tool_call_count,
         active_native_executors_available: false,
         active_native_executors: Vec::new(),
     }
@@ -484,7 +474,6 @@ mod tests {
         );
 
         assert_eq!(snapshot.expired_processing_count, 1);
-        assert_eq!(snapshot.ignored_foreign_processing_count, 1);
         assert_eq!(snapshot.active_request_ids, vec!["req-local".to_string()]);
         assert_eq!(snapshot.requests.len(), 1);
         assert_eq!(snapshot.requests[0].request_id, "req-local");
@@ -505,6 +494,5 @@ mod tests {
 
         assert_eq!(snapshot.active_tool_calls.len(), 1);
         assert_eq!(snapshot.active_tool_calls[0].tool_call_id, "tc-local");
-        assert_eq!(snapshot.ignored_foreign_tool_call_count, 1);
     }
 }

@@ -11,10 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(test)]
+mod backup_conformance;
 mod execute;
 mod files;
 mod notices;
 mod recovery;
+mod repair_backups;
 mod stage;
 #[cfg(test)]
 mod tests;
@@ -474,12 +477,13 @@ pub(crate) fn begin_repair_backup(manager: &NativeServiceManager) -> Result<Opti
     )?;
     let original = manager.definition_executable(&definition)?;
     let prior_executable = if original.is_file() {
-        let saved = directory.join("prior-gents");
-        files::copy_executable(&original, &saved)?;
-        Some(saved)
+        Some(repair_backups::save_program(&root, &directory, &original)?)
     } else {
         None
     };
+    if let Err(error) = repair_backups::prune(&root, &directory, &original) {
+        tracing::warn!(error = %format!("{error:#}"), "older repair backups were not pruned");
+    }
     Ok(Some(RepairBackup {
         directory,
         config,

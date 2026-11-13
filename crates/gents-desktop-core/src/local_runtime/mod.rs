@@ -63,6 +63,7 @@ async fn runtime_http_client() -> Result<&'static reqwest::Client> {
         .get_or_try_init(|| async {
             tokio::task::spawn_blocking(|| {
                 reqwest::Client::builder()
+                    .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT)
                     .timeout(HTTP_TIMEOUT)
                     .redirect(reqwest::redirect::Policy::none())
                     .build()

@@ -34,7 +34,7 @@ class ArtifactTests(unittest.TestCase):
         return e.artifacts(self.log, self.root, self.target)
 
     def required(self):
-        return [self.event('gents', 'gents'),
+        return [self.event('gents-session', 'gents_session'),
                 self.event('gents-desktop-bridge', 'gents_desktop_bridge'),
                 self.event('gents-client-host', 'runtime', 'test'),
                 self.event('gents-cli', 'port_allocation', 'test'),
@@ -83,7 +83,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertIn('gents-client-host/runtime-e2e', command)
         self.assertIn('gents-desktop-bridge', command)
         self.assertIn('gents-cli', command)
-        self.assertIn('gents', command)
+        self.assertIn('gents-session', command)
         targets = [command[i + 1] for i, value in enumerate(command[:-1]) if value == '--test']
         self.assertEqual(targets, ['port_allocation', 'metadata', 'runtime', 'runtime_cli'])
         self.assertIn('--no-default-features', command)
@@ -145,9 +145,9 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual([call.args[0][1:] for call in run.call_args_list],
                          [[name, '--exact'] for name in e.PROCESS_TESTS])
         for call in run.call_args_list:
-            self.assertEqual(call.kwargs['cwd'], str(self.root / 'crates/gents'))
+            self.assertEqual(call.kwargs['cwd'], str(self.root / 'crates/gents-session'))
         with self.assertRaises(RuntimeError):
-            e.check_result({'role': 'process', 'name': 'gents'}, 0,
+            e.check_result({'role': 'process', 'name': 'gents_session'}, 0,
                            'test result: ok. 0 passed; 0 failed;')
 
     def test_host_phase_runs_the_cli_port_fixture_with_verified_native_binaries(self):
