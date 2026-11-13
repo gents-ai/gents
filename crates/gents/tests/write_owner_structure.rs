@@ -1225,7 +1225,7 @@ const RIG_OWNER_MODULES: &[&str] = &[
 /// Files that implement a Rig trait or build a Rig provider client, which no
 /// re-export through `rig_compat` can stand in for. The capture layer, the
 /// credential and limit-header clients, the Responses and session-tagging
-/// layers, the Codex and xAI policies and the Claude transport implement
+/// layers, the Codex policy and the Claude transport implement
 /// `HttpClientExt` or are generic over it; `claude_subscription` implements
 /// `CompletionModel` and `CompletionClient`. A row leaves when its owner
 /// exposes a native transport or model trait that one adapter in `rig_compat`
@@ -1239,7 +1239,6 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-inference/src/clients/inference_http.rs",
     "crates/gents-inference/src/auth/http.rs",
     "crates/gents-inference/src/clients/provider_http.rs",
-    "crates/gents-inference/src/clients/xai_grok.rs",
 ];
 
 #[derive(Default)]

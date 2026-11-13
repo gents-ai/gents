@@ -14,9 +14,10 @@ use super::MESSAGES_URI;
 use crate::auth::credential::BearerSource;
 use crate::clients::claude_subscription::ClaudeStreamResponse;
 use crate::llm::rig_compat::completion::{CompletionError, CompletionRequest, RawStreamingChoice};
-use crate::llm::rig_compat::http::{self as http_client, HeaderValue, Request};
+use crate::llm::rig_compat::http::{self as http_client, Request};
 use bytes::Bytes;
 use rapidhash::RapidHashSet;
+use reqwest::header::HeaderValue;
 
 use gents_claude::bedrock as bedrock_rules;
 use gents_claude::headers::{self, AgentHeaders, Auth, HeaderContext};
