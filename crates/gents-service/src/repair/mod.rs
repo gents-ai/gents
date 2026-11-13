@@ -632,6 +632,9 @@ fn finding_for(action: &ServiceAction, facts: &ServiceFacts) -> Option<Finding> 
         ServiceAction::MoveFrom { from, .. } => {
             Some(Finding::ServiceForAnotherFolder { from: from.clone() })
         }
+        ServiceAction::StopStale if facts.definition_home.is_none() => {
+            Some(Finding::ServiceJobWithoutDefinition)
+        }
         ServiceAction::StopStale if facts.home.is_complete() => Some(Finding::StaleNode),
         ServiceAction::Reinstall { .. } => Some(Finding::ServiceProgramMissing),
         ServiceAction::RewriteDefinition => Some(Finding::ServiceDefinitionMissing),

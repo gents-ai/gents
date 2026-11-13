@@ -118,10 +118,12 @@ pub fn plan_service(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
         }
     );
     let Some(definition_home) = &facts.definition_home else {
-        return if facts.job_loaded && serves_this_node {
+        return if !facts.job_loaded {
+            Vec::new()
+        } else if serves_this_node {
             vec![ServiceAction::RewriteDefinition]
         } else {
-            Vec::new()
+            vec![ServiceAction::StopStale]
         };
     };
     let complete = facts.home.is_complete();
@@ -222,7 +224,7 @@ pub async fn gather_facts(
             operation: RepairOperation::Run,
         };
         let Some(installed_home) = installed_home else {
-            facts.job_loaded = manager.job_pid()?.is_some();
+            facts.job_loaded = manager.job_loaded()?;
             return Ok((facts, None));
         };
         let owner = NativeServiceManager::new(NativeServiceConfig {

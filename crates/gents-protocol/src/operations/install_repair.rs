@@ -339,6 +339,7 @@ pub enum Finding {
     },
     ServiceProgramMissing,
     ServiceDefinitionMissing,
+    ServiceJobWithoutDefinition,
     BrokenHome {
         why: HomeState,
         kept_at: PathBuf,
@@ -368,6 +369,9 @@ impl fmt::Display for Finding {
             Self::ServiceProgramMissing => {
                 f.write_str("the background service pointed at a copy of Gents that is gone")
             }
+            Self::ServiceJobWithoutDefinition => f.write_str(
+                "a background node was still loaded after its service definition was deleted; it was stopped",
+            ),
             Self::ServiceDefinitionMissing => f.write_str(
                 "the background service's definition was deleted while its node ran; it was written back so the node starts at login",
             ),
