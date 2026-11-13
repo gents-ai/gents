@@ -71,7 +71,12 @@ async fn goal_set_value(
     let observed =
         gents_automation::operations::goal::observe_revision(access, node_did, session_id)
             .await?
-            .ok_or_else(|| failure(GoalOperationError::NoGoal(session_id.to_owned()), session_id))?;
+            .ok_or_else(|| {
+                failure(
+                    GoalOperationError::NoGoal(session_id.to_owned()),
+                    session_id,
+                )
+            })?;
     let input = GoalSetInput {
         objective: args.objective.clone(),
         token_budget: if args.clear_token_budget {

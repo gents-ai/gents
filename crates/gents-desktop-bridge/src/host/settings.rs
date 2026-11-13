@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use gents_documents::patch::{SelfConfigTarget, ALL_SELF_CONFIG_TARGETS};
-use gents_store::graphql::escape_graphql_string;
-use gents_store::config_client::ConfigAccess;
 use gents_desktop_core::client::ClientCore;
+use gents_documents::patch::{SelfConfigTarget, ALL_SELF_CONFIG_TARGETS};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use serde::Serialize;
 use ts_rs::TS;
 

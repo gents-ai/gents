@@ -149,7 +149,10 @@ async fn session_observation_traces_match_the_lean_model() {
     let requester_did = |n: u64| format!("did:test:requester-{n}");
     let agent_did = |n: u64| format!("agent-{n}");
     let request_id = |n: u64| format!("{n:08}");
-    for case in gents_lean_vocab::families::session_observation_trace::cases::<RequestLifecycleState, String>() {
+    for case in gents_lean_vocab::families::session_observation_trace::cases::<
+        RequestLifecycleState,
+        String,
+    >() {
         let node_db = gents_inference::test_support::test_db(
             "session-observation-traces-match-the-lea",
             crate::test_support::no_lifecycle_plugins(),
@@ -318,7 +321,11 @@ async fn trace_fact(
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
         .context("request row missing")?;
-    let text = |field: &str| row.get(field).and_then(serde_json::Value::as_str).map(str::to_owned);
+    let text = |field: &str| {
+        row.get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
     let requester = text("requester_did");
     load_request_facts_in_txn(
         txn,

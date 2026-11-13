@@ -716,7 +716,9 @@ impl gents_store::config_client::ConfigRead for CountingRead {
     ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
         self.queries
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.inner.execute_read_with_variables(document, variables).await
+        self.inner
+            .execute_read_with_variables(document, variables)
+            .await
     }
 }
 

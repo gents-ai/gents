@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::context::ToolError;
 
-pub use gents_loop::tool_policy::{
-    CommandExecutionMode, CommandNetworkMode, WorkspaceAuthority,
-};
+pub use gents_loop::tool_policy::{CommandExecutionMode, CommandNetworkMode, WorkspaceAuthority};
 
 #[path = "command_args.rs"]
 mod command_args;

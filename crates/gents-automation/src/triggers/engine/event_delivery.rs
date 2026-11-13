@@ -703,9 +703,7 @@ mod tests {
         }
     }
 
-    async fn shared_clock_observation(
-        members: &[i64],
-    ) -> family::ClockObservation<String, String> {
+    async fn shared_clock_observation(members: &[i64]) -> family::ClockObservation<String, String> {
         use gents_store::identity::NodeIdentity as _;
         let home = tempfile::tempdir().unwrap();
         let root =

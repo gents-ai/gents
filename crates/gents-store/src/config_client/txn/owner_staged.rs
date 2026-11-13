@@ -576,7 +576,10 @@ impl ConfigApplyTxn<'_> {
                 let Some(selection) = self.extension::<CallbackAgentSelection>() else {
                     return Ok(false);
                 };
-                Ok((selection.0)(node_did, &value).is_some_and(|agents| agents.contains(agent_did)))
+                Ok(
+                    (selection.0)(node_did, &value)
+                        .is_some_and(|agents| agents.contains(agent_did)),
+                )
             }
         }
     }
