@@ -80,17 +80,27 @@ impl TransactionFailure for Box<dyn std::error::Error + Send + Sync> {
 
 /// The first access owner in an erased error's chain. Both owners wrap each
 /// other transparently, so each is asked for its access error rather than
-/// found by `source()` alone.
+/// found by `source()` alone; a boxed `#[source]` is on the chain as the box,
+/// so the box is asked too. No other owner is asked: a variant of another
+/// owner that holds an access error exposes it as its `#[source]`
+/// (`AccessClassification.Error.exposed`), since a transparent variant would
+/// take it off the chain.
 pub(super) fn access_error_in<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a ConfigClientError> {
     gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause.downcast_ref::<ConfigClientError>().or_else(|| {
-            cause
-                .downcast_ref::<GraphqlResponseError>()?
-                .config_client_error()
-        })
+        asked::<ConfigClientError>(cause)
+            .or_else(|| asked::<Box<ConfigClientError>>(cause))
+            .or_else(|| asked::<GraphqlResponseError>(cause))
+            .or_else(|| asked::<Box<GraphqlResponseError>>(cause))
     })
+}
+
+fn asked<'a, O>(cause: &'a (dyn std::error::Error + 'static)) -> Option<&'a ConfigClientError>
+where
+    O: TransactionFailure + std::error::Error + 'static,
+{
+    cause.downcast_ref::<O>()?.config_client_error()
 }
 
 /// The first request to run again in an erased error's chain. It is found by

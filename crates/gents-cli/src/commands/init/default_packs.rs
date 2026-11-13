@@ -573,6 +573,7 @@ async fn apply(
             gents_pack::pack::plugin_wire::attach_pack_skills(
                 &access,
                 &owner,
+                home,
                 engineer,
                 coordinate,
                 source.digest(),

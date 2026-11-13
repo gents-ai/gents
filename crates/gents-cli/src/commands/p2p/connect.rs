@@ -13,7 +13,7 @@ use gents_host::p2p_status::flatten_p2p_fields;
 use gents_host::p2p_status::load_live_http_p2p_status;
 
 pub(super) async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let client =
         gents_host::p2p_status::p2p_http_client().context("building P2P connect HTTP client")?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
@@ -43,7 +43,7 @@ pub(super) async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
 }
 
 pub(super) async fn p2p_diagnose(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     let p2p = load_live_http_p2p_status(Some(&home_dir), &graphql).await;
