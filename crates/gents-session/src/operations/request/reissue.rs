@@ -11,9 +11,9 @@ use gents_store::identity::NodeIdentity;
 
 use super::{fresh_id, read, reissue_decision, rfc3339, target};
 use crate::request::lifecycle::{
-    build_signed_client_request, client_request_key, held_client_request,
-    reconcile_client_retry, send_client_request, send_client_retry, ClientRequestScope,
-    ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
+    build_signed_client_request, client_request_key, held_client_request, reconcile_client_retry,
+    send_client_request, send_client_retry, ClientRequestScope, ExecutionOrigin, RequestIdentity,
+    RequestSigner, RequestSpec, RetryLink,
 };
 
 pub(super) struct Lineage {
@@ -287,11 +287,13 @@ fn refuse(
         ReissueDecision::RefuseNotInteractive => {
             Err(RequestOperationError::ReissueNotInteractive { request_id })
         }
-        ReissueDecision::RefuseBudgetExhausted => Err(RequestOperationError::RetryBudgetExhausted {
-            request_id,
-            retry_count: lineage.retry_count - 1,
-            max_retries: lineage.max_retries,
-        }),
+        ReissueDecision::RefuseBudgetExhausted => {
+            Err(RequestOperationError::RetryBudgetExhausted {
+                request_id,
+                retry_count: lineage.retry_count - 1,
+                max_retries: lineage.max_retries,
+            })
+        }
         ReissueDecision::RefuseDeadlineClosed => {
             Err(RequestOperationError::ReissueDeadlineClosed {
                 request_id,

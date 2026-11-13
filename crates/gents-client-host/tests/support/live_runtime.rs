@@ -455,7 +455,8 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
                 ensure!(
                     retained["timelineItems"] == projection["timelineItems"],
                     "native client restart changed the durable transcript: before={}; after={}",
-                    projection["timelineItems"], retained["timelineItems"]
+                    projection["timelineItems"],
+                    retained["timelineItems"]
                 );
                 if goal || goal_steering {
                     wait_goal(

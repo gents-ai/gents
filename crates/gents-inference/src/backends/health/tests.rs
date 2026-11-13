@@ -112,87 +112,95 @@ fn generated_backend_probe_schedule_cases_match_runtime_selection() {
             .unwrap_or_else(|| panic!("schedule fixture backend id {backend_id:?}"))
     }
 
-    gents_lean_vocab::families::backend_probe_schedule_select::replay(|input: &wire::SelectInput| {
-        let mut schedule = ProbeSchedule::default();
-        schedule.select(
-            &input.known.iter().map(configuration).collect::<Vec<_>>(),
-            true,
-        );
-        let selected = schedule.select(
-            &input.current.iter().map(configuration).collect::<Vec<_>>(),
-            input.periodic,
-        );
-        let mut due = selected
-            .iter()
-            .map(|id| backend_number(id))
-            .collect::<Vec<_>>();
-        due.sort_unstable();
-        let mut observed = schedule
-            .known
-            .iter()
-            .map(|(backend_id, backend)| {
-                assert_eq!(backend_id, &backend.backend_id);
-                wire::ProbeConfiguration {
-                    backend_id: backend_number(&backend.backend_id),
-                    revision: backend
-                        .endpoint
-                        .strip_prefix("http://localhost/revision-")
-                        .and_then(|revision| revision.parse().ok())
-                        .unwrap_or_else(|| panic!("schedule fixture endpoint {}", backend.endpoint)),
-                    enabled: backend.enabled,
-                }
-            })
-            .collect::<Vec<_>>();
-        observed.sort_unstable_by_key(|configuration| configuration.backend_id);
-        wire::SelectOutput { due, observed }
-    });
+    gents_lean_vocab::families::backend_probe_schedule_select::replay(
+        |input: &wire::SelectInput| {
+            let mut schedule = ProbeSchedule::default();
+            schedule.select(
+                &input.known.iter().map(configuration).collect::<Vec<_>>(),
+                true,
+            );
+            let selected = schedule.select(
+                &input.current.iter().map(configuration).collect::<Vec<_>>(),
+                input.periodic,
+            );
+            let mut due = selected
+                .iter()
+                .map(|id| backend_number(id))
+                .collect::<Vec<_>>();
+            due.sort_unstable();
+            let mut observed = schedule
+                .known
+                .iter()
+                .map(|(backend_id, backend)| {
+                    assert_eq!(backend_id, &backend.backend_id);
+                    wire::ProbeConfiguration {
+                        backend_id: backend_number(&backend.backend_id),
+                        revision: backend
+                            .endpoint
+                            .strip_prefix("http://localhost/revision-")
+                            .and_then(|revision| revision.parse().ok())
+                            .unwrap_or_else(|| {
+                                panic!("schedule fixture endpoint {}", backend.endpoint)
+                            }),
+                        enabled: backend.enabled,
+                    }
+                })
+                .collect::<Vec<_>>();
+            observed.sort_unstable_by_key(|configuration| configuration.backend_id);
+            wire::SelectOutput { due, observed }
+        },
+    );
 }
 
 #[test]
 fn backend_fields_refine_the_modeled_probe_revision() {
     use gents_lean_vocab::families::backend_probe_schedule_field_edit as wire;
 
-    gents_lean_vocab::families::backend_probe_schedule_field_edit::replay::<String>(|input: &wire::FieldEditInput<String>| {
-        let base = backend("backend-0", "http://localhost/v1".into());
-        let mut changed = base.clone();
-        match input.field.as_str() {
-            "provider" => {
-                changed.provider_kind = crate::backends::provider::BackendProviderKind::OpenRouter
-            }
-            "wire_api" => {
-                changed.openai_wire_api = Some(gents_loop::openai_wire::OpenAiWireApi::Responses)
-            }
-            "endpoint" => changed.endpoint.push_str("/changed"),
-            "auth" => {
-                changed.auth = gents_documents::BackendAuth::ApiKey {
-                    key: "test-key".into(),
+    gents_lean_vocab::families::backend_probe_schedule_field_edit::replay::<String>(
+        |input: &wire::FieldEditInput<String>| {
+            let base = backend("backend-0", "http://localhost/v1".into());
+            let mut changed = base.clone();
+            match input.field.as_str() {
+                "provider" => {
+                    changed.provider_kind =
+                        crate::backends::provider::BackendProviderKind::OpenRouter
                 }
+                "wire_api" => {
+                    changed.openai_wire_api =
+                        Some(gents_loop::openai_wire::OpenAiWireApi::Responses)
+                }
+                "endpoint" => changed.endpoint.push_str("/changed"),
+                "auth" => {
+                    changed.auth = gents_documents::BackendAuth::ApiKey {
+                        key: "test-key".into(),
+                    }
+                }
+                "connect_timeout" => changed.connect_timeout_secs = Some(20),
+                "discovery_timeout" => changed.discovery_timeout_secs = Some(20),
+                "name" => changed.name = "Renamed".into(),
+                "tags" => changed.tags = vec!["changed".into()],
+                "capacity" => changed.max_concurrent = Some(2),
+                "queue_capacity" => changed.max_queue_depth = Some(2),
+                other => panic!("unknown modeled backend field {other:?}"),
             }
-            "connect_timeout" => changed.connect_timeout_secs = Some(20),
-            "discovery_timeout" => changed.discovery_timeout_secs = Some(20),
-            "name" => changed.name = "Renamed".into(),
-            "tags" => changed.tags = vec!["changed".into()],
-            "capacity" => changed.max_concurrent = Some(2),
-            "queue_capacity" => changed.max_queue_depth = Some(2),
-            other => panic!("unknown modeled backend field {other:?}"),
-        }
-        let mut schedule = ProbeSchedule::default();
-        schedule.select(std::slice::from_ref(&base), true);
-        let mut selected = schedule.select(std::slice::from_ref(&changed), false);
-        if input.repeated {
-            selected = schedule.select(std::slice::from_ref(&changed), false);
-        }
-        let mut due = selected
-            .iter()
-            .map(|id| {
-                id.strip_prefix("backend-")
-                    .and_then(|id| id.parse().ok())
-                    .unwrap_or_else(|| panic!("schedule fixture backend id {id:?}"))
-            })
-            .collect::<Vec<u64>>();
-        due.sort_unstable();
-        due
-    });
+            let mut schedule = ProbeSchedule::default();
+            schedule.select(std::slice::from_ref(&base), true);
+            let mut selected = schedule.select(std::slice::from_ref(&changed), false);
+            if input.repeated {
+                selected = schedule.select(std::slice::from_ref(&changed), false);
+            }
+            let mut due = selected
+                .iter()
+                .map(|id| {
+                    id.strip_prefix("backend-")
+                        .and_then(|id| id.parse().ok())
+                        .unwrap_or_else(|| panic!("schedule fixture backend id {id:?}"))
+                })
+                .collect::<Vec<u64>>();
+            due.sort_unstable();
+            due
+        },
+    );
 }
 
 struct ModelsListener {

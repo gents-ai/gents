@@ -293,9 +293,9 @@ async fn admit_backend_choice_beside_in_txn(
         None => load_inference_backend_in_txn(txn, node_did, next_backend_id).await?,
     }
     .ok_or_else(|| InferenceOperationError::Missing {
-            document: InferenceDocument::Backend,
-            id: next_backend_id.to_owned(),
-        })?;
+        document: InferenceDocument::Backend,
+        id: next_backend_id.to_owned(),
+    })?;
     let default_account = match (&next.auth, next.provider_kind.oauth_provider()) {
         (BackendAuth::NodeOAuth { .. }, Some(provider)) => {
             crate::auth::credential::provider_default_account_ref(txn, node_did, provider).await?

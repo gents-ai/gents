@@ -1974,7 +1974,10 @@ async fn driver_admission_matches_the_lean_model() {
                         })
                         .await
                         .is_some();
-                    assert_eq!(returned, body_ran, "a hold runs its body exactly when admitted");
+                    assert_eq!(
+                        returned, body_ran,
+                        "a hold runs its body exactly when admitted"
+                    );
                     (body_ran, during)
                 }
                 "release_permits" => {

@@ -233,9 +233,8 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
         f.node.shutdown().await.expect("node shutdown");
     }
     for opening in
-        gents_lean_vocab::families::goal_wake_ancestry_contracts_continuation_opening::cases::<
-            String,
-        >()
+        gents_lean_vocab::families::goal_wake_ancestry_contracts_continuation_opening::cases::<String>(
+        )
     {
         opening.check(opening_allowed.expect("the atomic publication reached the claim fence"));
     }

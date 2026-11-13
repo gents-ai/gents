@@ -772,4 +772,3 @@ async fn goal_and_claim_publication_links_match_lean() {
         node.shutdown().await.expect("node shutdown");
     }
 }
-

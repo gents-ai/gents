@@ -626,7 +626,9 @@ mod tests {
             &node, "test.scalar_filter.seed",
             r#"mutation { add_ScalarRecord(input: {text: "measurement", count: 86, measure: 0.5, enabled: false}) {_docID} }"#,
         ).await.unwrap();
-        for case in gents_lean_vocab::families::contracts_write_input_query_filter::cases::<String>() {
+        for case in
+            gents_lean_vocab::families::contracts_write_input_query_filter::cases::<String>()
+        {
             let (field, kind) = match case.input.expected.as_str() {
                 "text" => ("text", "string"),
                 "integer" => ("count", "integer"),

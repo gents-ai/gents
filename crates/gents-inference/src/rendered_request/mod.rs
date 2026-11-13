@@ -501,7 +501,10 @@ mod tests {
             ] {
                 observed.push(match decoded {
                     Ok(value) => {
-                        assert_eq!(&value, expected, "decoded value is not the captured request");
+                        assert_eq!(
+                            &value, expected,
+                            "decoded value is not the captured request"
+                        );
                         (
                             Some(value["request"].as_u64().expect("decoded request")),
                             None,

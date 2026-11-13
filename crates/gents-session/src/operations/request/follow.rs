@@ -56,8 +56,10 @@ impl<'a> Follower<'a> {
             None => scoped(
                 &self.request.node_did,
                 self.request.requester_did.as_deref(),
-                Query::select(request_selection())
-                    .filter(Filter::eq(fields::REQUEST_ID, self.current_request_id.as_str())),
+                Query::select(request_selection()).filter(Filter::eq(
+                    fields::REQUEST_ID,
+                    self.current_request_id.as_str(),
+                )),
             ),
         }
         .limit(2)

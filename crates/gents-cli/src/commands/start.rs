@@ -361,11 +361,7 @@ async fn restore_then_ask(
 /// Moves the node back to `serving`, the folder it answered for before
 /// `prepare` moved it, so a start that does not finish leaves that node
 /// working; one line names it when it does not come back.
-async fn give_back(
-    serving: Option<&Path>,
-    progress: &mut TerminalProgress,
-    move_back: MoveBack,
-) {
+async fn give_back(serving: Option<&Path>, progress: &mut TerminalProgress, move_back: MoveBack) {
     let Some(serving) = serving else {
         return;
     };

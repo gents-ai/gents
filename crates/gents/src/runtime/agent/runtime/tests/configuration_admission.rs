@@ -17,7 +17,10 @@ fn configuration_admission_and_deferral_match_lean() {
         ConfigurationAdmission,
     >(|i| {
         let mut deferred = DeferredRequests::default();
-        deferred.defer(i.deferred_at, request(Some("did:key:agent"), i.name.as_str()));
+        deferred.defer(
+            i.deferred_at,
+            request(Some("did:key:agent"), i.name.as_str()),
+        );
         gents_lean_vocab::families::contract_cases_runtime_configuration_admission_deferral::ConfigurationAdmissionOutput {
             expected: configuration_admission(i.visible),
             retries: deferred.release(i.active).is_some(),

@@ -223,11 +223,7 @@ impl DefraWatcher {
             &positions,
         );
         let rows = merged.rows;
-        let failures = merged
-            .failures
-            .into_iter()
-            .map(scan_failure)
-            .collect();
+        let failures = merged.failures.into_iter().map(scan_failure).collect();
         self.has_parked
             .store(has_parked, std::sync::atomic::Ordering::Relaxed);
         let now = chrono::Utc::now();

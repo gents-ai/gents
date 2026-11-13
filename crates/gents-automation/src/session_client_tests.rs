@@ -180,7 +180,10 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         }
         if let Some(opened_doc_id) = &opened_doc_id {
             assert_eq!(
-                &submitted.as_ref().expect("duplicate opening recovers").doc_id,
+                &submitted
+                    .as_ref()
+                    .expect("duplicate opening recovers")
+                    .doc_id,
                 opened_doc_id,
                 "{name}: a duplicate opening returns the request it opened"
             );

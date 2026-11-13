@@ -84,38 +84,40 @@ fn a_mount_does_not_follow_directory_links_or_cycles() {
 
 #[test]
 fn operator_mounts_conform_to_the_model() {
-    gents_lean_vocab::families::operator_protection_mount::replay::<String, String, String>(|input| {
-        let world = world();
-        let guarded = file(&world.gents);
-        std::fs::write(&guarded, "operator state").unwrap();
-        let work = world.root.join("work");
-        let root = if input.root_exists {
-            work.clone()
-        } else {
-            work.join("missing")
-        };
-        let paths = match input.guard.as_str() {
-            "unguarded" => Vec::new(),
-            "outside" => vec![guarded.clone()],
-            "named_within" => vec![work.join("future-state")],
-            "uninspectable" => vec![world.gents.join("invalid\0path")],
-            other => panic!("unknown mount guard: {other}"),
-        };
-        for (index, entry) in input.entries.iter().enumerate() {
-            let link = work.join(format!("sub/mount-entry-{index}"));
-            match entry.as_str() {
-                "ordinary" => std::fs::hard_link(work.join("a.txt"), link).unwrap(),
-                "shares_operator_object" => std::fs::hard_link(&guarded, link).unwrap(),
-                other => panic!("unknown mount entry: {other}"),
+    gents_lean_vocab::families::operator_protection_mount::replay::<String, String, String>(
+        |input| {
+            let world = world();
+            let guarded = file(&world.gents);
+            std::fs::write(&guarded, "operator state").unwrap();
+            let work = world.root.join("work");
+            let root = if input.root_exists {
+                work.clone()
+            } else {
+                work.join("missing")
+            };
+            let paths = match input.guard.as_str() {
+                "unguarded" => Vec::new(),
+                "outside" => vec![guarded.clone()],
+                "named_within" => vec![work.join("future-state")],
+                "uninspectable" => vec![world.gents.join("invalid\0path")],
+                other => panic!("unknown mount guard: {other}"),
+            };
+            for (index, entry) in input.entries.iter().enumerate() {
+                let link = work.join(format!("sub/mount-entry-{index}"));
+                match entry.as_str() {
+                    "ordinary" => std::fs::hard_link(work.join("a.txt"), link).unwrap(),
+                    "shares_operator_object" => std::fs::hard_link(&guarded, link).unwrap(),
+                    other => panic!("unknown mount entry: {other}"),
+                }
             }
-        }
-        let verdict = match protected::mount_contains_protected(&paths, &root) {
-            Ok(false) => "clear",
-            Ok(true) => "reserved",
-            Err(_) => "unreadable",
-        };
-        verdict.to_owned()
-    });
+            let verdict = match protected::mount_contains_protected(&paths, &root) {
+                Ok(false) => "clear",
+                Ok(true) => "reserved",
+                Err(_) => "unreadable",
+            };
+            verdict.to_owned()
+        },
+    );
 }
 
 #[test]

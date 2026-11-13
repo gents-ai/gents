@@ -1676,51 +1676,57 @@ mod tests {
             "health checker default threshold drifted; the model's K=3 rows cover it"
         );
         let starts = std::cell::RefCell::new(std::collections::BTreeSet::new());
-        gents_lean_vocab::families::contracts_mcp_health_transition::replay::<String, String>(|case| {
-            starts.borrow_mut().insert(case.start_state.clone());
-            let options = HealthCheckerOptions {
-                failure_threshold_k: case.threshold_k.try_into().unwrap(),
-                ..Default::default()
-            };
-            let start_model = ServiceModelInternal {
-                state: HealthStateInternal::parse(&case.start_state).unwrap_or_else(|_| {
-                    panic!(
-                        "Lean MCP health case {} produced unknown state {:?}",
-                        case.name, case.start_state
-                    )
-                }),
-                failure_count: case.start_count.try_into().unwrap(),
-                backoff_until: None,
-            };
-            let actual = step_service(
-                start_model,
-                probe_event_from_lean(&case.name, &case.event),
-                chrono::Utc::now(),
-                &options,
-            );
-            if let Some(model) = actual.as_ref() {
-                let owner = gents_protocol::tool_service_health::ToolServiceHealthState::parse(
-                    model.state.as_str(),
-                )
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "case {}: state outside the ToolServiceHealthState vocabulary: {error}",
-                        case.name
-                    )
-                });
-                assert_eq!(
-                    owner.project().as_str(),
-                    model.state.project().to_string(),
-                    "case {}: the owner's operator projection drifted",
-                    case.name
+        gents_lean_vocab::families::contracts_mcp_health_transition::replay::<String, String>(
+            |case| {
+                starts.borrow_mut().insert(case.start_state.clone());
+                let options = HealthCheckerOptions {
+                    failure_threshold_k: case.threshold_k.try_into().unwrap(),
+                    ..Default::default()
+                };
+                let start_model = ServiceModelInternal {
+                    state: HealthStateInternal::parse(&case.start_state).unwrap_or_else(|_| {
+                        panic!(
+                            "Lean MCP health case {} produced unknown state {:?}",
+                            case.name, case.start_state
+                        )
+                    }),
+                    failure_count: case.start_count.try_into().unwrap(),
+                    backoff_until: None,
+                };
+                let actual = step_service(
+                    start_model,
+                    probe_event_from_lean(&case.name, &case.event),
+                    chrono::Utc::now(),
+                    &options,
                 );
-            }
-            transition::McpHealthOutput {
-                next_state: actual.as_ref().map(|model| model.state.as_str().to_string()),
-                next_count: actual.as_ref().map(|model| model.failure_count as u64),
-                rust_projection: actual.as_ref().map(|model| model.state.project().to_string()),
-            }
-        });
+                if let Some(model) = actual.as_ref() {
+                    let owner = gents_protocol::tool_service_health::ToolServiceHealthState::parse(
+                        model.state.as_str(),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "case {}: state outside the ToolServiceHealthState vocabulary: {error}",
+                            case.name
+                        )
+                    });
+                    assert_eq!(
+                        owner.project().as_str(),
+                        model.state.project().to_string(),
+                        "case {}: the owner's operator projection drifted",
+                        case.name
+                    );
+                }
+                transition::McpHealthOutput {
+                    next_state: actual
+                        .as_ref()
+                        .map(|model| model.state.as_str().to_string()),
+                    next_count: actual.as_ref().map(|model| model.failure_count as u64),
+                    rust_projection: actual
+                        .as_ref()
+                        .map(|model| model.state.project().to_string()),
+                }
+            },
+        );
         let starts = starts.into_inner();
         for state in gents_protocol::tool_service_health::ToolServiceHealthState::ALL {
             assert!(
@@ -1882,10 +1888,9 @@ mod tests {
             "updated_at": created_at.to_rfc3339(),
         }))
         .expect("registry row must parse");
-        let pool =
-            McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async move {
-                Ok(ListToolsResult::default())
-            });
+        let pool = McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async move {
+            Ok(ListToolsResult::default())
+        });
         let health_map = ServiceHealthMap::new();
 
         run_health_check_cycle(
@@ -1920,10 +1925,9 @@ mod tests {
                 },
             )
             .await;
-        let pool =
-            McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async move {
-                Ok(ListToolsResult::default())
-            });
+        let pool = McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async move {
+            Ok(ListToolsResult::default())
+        });
 
         run_health_check_cycle(
             vec![registry_entry("long-gap")],
@@ -2410,8 +2414,9 @@ mod tests {
                 gents_lean_vocab::families::mcp_health_shutdown_observation::Output {
                     probes_started: started_once(
                         &probed.lock().unwrap(),
-                        &input.registry
-                            [..usize::try_from(input.failing).unwrap().min(input.registry.len())],
+                        &input.registry[..usize::try_from(input.failing)
+                            .unwrap()
+                            .min(input.registry.len())],
                     ),
                     unchanged: after == before,
                     entries: after

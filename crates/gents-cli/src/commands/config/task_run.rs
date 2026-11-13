@@ -221,7 +221,10 @@ mod tests {
             .await?;
             let mut unchanged = actual.clone();
             unchanged.goal_assignment = expected.goal_assignment.clone();
-            assert_eq!(unchanged, expected, "{case}: only the assignment is prepared");
+            assert_eq!(
+                unchanged, expected,
+                "{case}: only the assignment is prepared"
+            );
             let number = |value: &str, prefix: &str| -> u64 {
                 value.strip_prefix(prefix).unwrap().parse().unwrap()
             };

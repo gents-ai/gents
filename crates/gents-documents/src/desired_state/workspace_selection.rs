@@ -9,10 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Default)]
 pub(super) struct Capture(BTreeMap<(String, String), BTreeSet<(String, String)>>);
 
-pub(crate) fn selected_agents(
-    owner: &str,
-    callback: &Value,
-) -> Result<BTreeSet<String>> {
+pub(crate) fn selected_agents(owner: &str, callback: &Value) -> Result<BTreeSet<String>> {
     Ok(references_of(Collection::Callback, callback, owner)?
         .into_iter()
         .filter(|reference| reference.collection == Collection::Agent)
@@ -221,7 +218,9 @@ mod tests {
         owner_staged.serve(&node, runtime.clone());
         gents_store::test_support::attach_node_extensions(
             &node,
-            &gents_store::node_extension::Extensions::of(Arc::new(super::super::callback_agent_selection())),
+            &gents_store::node_extension::Extensions::of(Arc::new(
+                super::super::callback_agent_selection(),
+            )),
         );
         let context =
             defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));

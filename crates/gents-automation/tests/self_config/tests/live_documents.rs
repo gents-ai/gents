@@ -508,12 +508,16 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     // install. The owned task still finishes both, so the pin names the
     // build that is installed rather than one that never was.
     write_artifact(br#"{"build":3}"#);
-    let pause = std::sync::Arc::new(gents_tools::builtin::self_config::command::RebuildTestPause {
-        moved: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
-        finished: tokio::sync::Notify::new(),
-    });
-    *gents_tools::builtin::self_config::command::REBUILD_TEST_PAUSE.lock().unwrap() = Some(pause.clone());
+    let pause = std::sync::Arc::new(
+        gents_tools::builtin::self_config::command::RebuildTestPause {
+            moved: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+            finished: tokio::sync::Notify::new(),
+        },
+    );
+    *gents_tools::builtin::self_config::command::REBUILD_TEST_PAUSE
+        .lock()
+        .unwrap() = Some(pause.clone());
     {
         let interrupted = call(&tools, json!({"argv":["plugin","build","probe"]}));
         tokio::pin!(interrupted);
@@ -524,7 +528,9 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     }
     pause.release.notify_one();
     pause.finished.notified().await;
-    *gents_tools::builtin::self_config::command::REBUILD_TEST_PAUSE.lock().unwrap() = None;
+    *gents_tools::builtin::self_config::command::REBUILD_TEST_PAUSE
+        .lock()
+        .unwrap() = None;
     let after = ok(&tools, json!({"argv":["tools","get"]})).await;
     let pinned = after["document"]["integrations"]["plugins"][0]["digest"].clone();
     assert_ne!(pinned, second["digest"], "{after}");

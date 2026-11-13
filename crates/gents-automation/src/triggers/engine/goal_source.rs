@@ -248,7 +248,9 @@ impl GoalSource {
                     goal_id = %goal.goal_id,
                     "durable goal continuation fired at the reported reset"
                 ),
-                Ok(crate::goal::ResetResume::NotUsageLimited | crate::goal::ResetResume::Deferred) => {}
+                Ok(
+                    crate::goal::ResetResume::NotUsageLimited | crate::goal::ResetResume::Deferred,
+                ) => {}
                 Err(error) => {
                     tracing::warn!(%error, goal_id = %goal.goal_id, "goal reset resume failed")
                 }

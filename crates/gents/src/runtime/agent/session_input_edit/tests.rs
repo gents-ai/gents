@@ -676,10 +676,12 @@ async fn session_input_edit_malformed_intent_matches_lean_model() {
             fixture.agent_identity.as_ref(),
         )
         .await;
-        case.check(gents_lean_vocab::families::session_input_edit_malformed_intent::IntentOutput {
-            unanswered_selected: unanswered == vec![doc_id.clone()],
-            processing_fails: processing.is_err(),
-        });
+        case.check(
+            gents_lean_vocab::families::session_input_edit_malformed_intent::IntentOutput {
+                unanswered_selected: unanswered == vec![doc_id.clone()],
+                processing_fails: processing.is_err(),
+            },
+        );
     }
 }
 

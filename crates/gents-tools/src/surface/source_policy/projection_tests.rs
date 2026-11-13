@@ -1173,11 +1173,7 @@ async fn opening_a_store_completes_a_widened_agent_baseline() -> anyhow::Result<
         drop(nac);
         drop(store);
         txn.commit().await?;
-        let opens = node
-            .database()
-            .reconcile_document_projector()
-            .await
-            .is_ok();
+        let opens = node.database().reconcile_document_projector().await.is_ok();
         let mut installed = Vec::new();
         for permission in baseline {
             if node

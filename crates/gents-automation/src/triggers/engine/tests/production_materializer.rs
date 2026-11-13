@@ -2404,7 +2404,8 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
             let rows: Vec<gents_protocol::row::AgentRequestRow> =
                 serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
             let mut claim_owners = Vec::new();
-            for case in gents_lean_vocab::families::trigger_delivery_queue_dispatch_claims::cases() {
+            for case in gents_lean_vocab::families::trigger_delivery_queue_dispatch_claims::cases()
+            {
                 let request_id = match case.input.identity.source_doc_id.as_str() {
                     "a" => identity.request_id(),
                     "b" => queued_id.clone(),

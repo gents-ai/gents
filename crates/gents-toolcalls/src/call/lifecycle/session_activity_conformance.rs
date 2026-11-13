@@ -78,7 +78,13 @@ fn modeled_observation(
         ),
     };
     assert_eq!(
-        observation(&modeled, case.event.doc_id, request_doc_id, request_id, epoch),
+        observation(
+            &modeled,
+            case.event.doc_id,
+            request_doc_id,
+            request_id,
+            epoch
+        ),
         *value,
         "the observation carries state its modeled wire form does not"
     );
