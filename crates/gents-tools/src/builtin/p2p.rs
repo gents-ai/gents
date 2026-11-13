@@ -881,7 +881,11 @@ impl P2pTool {
                                 request: &request,
                                 expected: None,
                             },
-                            || decide(EnrollmentOperatorAction::Approve, lease),
+                            || async {
+                                decide(EnrollmentOperatorAction::Approve, lease)
+                                    .await
+                                    .map_err(anyhow::Error::reallocate_into_boxed_dyn_error_without_backtrace)
+                            },
                         )
                         .await
                         .map(|(_, decided)| decided)
