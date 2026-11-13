@@ -167,6 +167,7 @@ impl NativeFsRunner {
             environment,
             tool_name: Some(tool_name.to_string()),
             live_output: None,
+            process_recorder: None,
         })
         .await
         {

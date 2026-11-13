@@ -59,6 +59,7 @@ async fn run(
         environment: Some(environment),
         tool_name: Some("command-guard-fixture".into()),
         live_output: None,
+        process_recorder: None,
     })
     .await;
     match outcome {
