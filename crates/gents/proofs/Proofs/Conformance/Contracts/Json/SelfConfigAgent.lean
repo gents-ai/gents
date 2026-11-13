@@ -3,13 +3,14 @@ import Proofs.Conformance.Family
 import Proofs.Tools.SelfConfig.Cases
 import Proofs.Tools.SelfConfig.Selection
 import Proofs.Conformance.Contracts.Json.SelfConfig
+import Proofs.Conformance.Contracts.Json.CommandPolicy
 
 namespace Conformance.Contracts
 
 open Lean SelfConfig SelfConfig.ContractCases
 
 deriving instance ToJson for SelfConfig.ActorKind, SelfConfig.FrontEnd, SelfConfig.AgentRefusal,
-  Configuration.ReasoningEffort, CommandPolicy.NetworkMode
+  Configuration.ReasoningEffort
 
 structure AgentEntryWire where
   agentDid : String
@@ -32,12 +33,6 @@ structure CreateInputWire where
   systemPrompt : String
   inferenceProfileId : String
   cloneFrom : String
-  deriving ToJson
-
-structure PatchEntryWire where
-  field : String
-  action : String
-  value : Option String
   deriving ToJson
 
 /-- `frontEnds` lists every front end: admission never reads it
@@ -110,7 +105,7 @@ def editFieldsOf (entries : List PatchEntryWire) : AgentEditFields :=
   , enabled := (patchOpOf entries "enabled").map (· == .set "true")
   , tags := patchOpOf entries "tags" }
 
-def AgentDecisionInput.request (i : AgentDecisionInput) : AgentRequest :=
+def AgentDecisionInput.request (i : AgentDecisionInput) : SelfConfig.AgentRequest :=
   { operation := match i.operation, i.createInput, i.editPatch with
       | "create", some c, _ =>
           .create { name := c.displayName, systemPrompt := c.systemPrompt

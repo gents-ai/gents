@@ -340,6 +340,9 @@ within Lean's interpreter recursion limit. -/
 def snapshotPromptTailJson : String :=
   ""
 
+set_option maxHeartbeats 2000000 in
+/-- Every family's schema elaborates in one list term, whose definitional
+checks grow with the family count past the default heartbeat budget. -/
 def snapshotCaptureTailJson : String :=
   ""
     ++ "\"compaction_canonical_projection_cases\":"

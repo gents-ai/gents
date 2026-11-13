@@ -979,7 +979,7 @@ def controlCasesJson : String :=
 
 /-- A newly committed spawn must be visible to every subsequent kill transaction,
 even when recovery originally observed the empty pre-step row. -/
-structure TargetWire where
+structure JobTargetWire where
   node : String
   agent : String
   deriving ToJson, FromJson, Inhabited
@@ -1028,12 +1028,12 @@ structure ChildWire where
   retry_key : String
   slot : String
   attempt : Nat
-  target : TargetWire
+  target : JobTargetWire
   state : String
   messages : Nat
   deriving ToJson, FromJson, Inhabited
 
-structure CallWire where
+structure JobCallWire where
   argv : List String
   args : Option String
   script : Option String
@@ -1054,7 +1054,7 @@ structure JobWire where
   caller_cwd : String
   handle : String
   caller_hop : Nat
-  call : CallWire
+  call : JobCallWire
   root_call : Option RootCallWire
   resume : Option ResumeWire
   pin : Option PinWire
@@ -1074,7 +1074,7 @@ structure ExtrasWire where
 structure SpawnWire where
   slot : String
   attempt : Nat
-  target : TargetWire
+  target : JobTargetWire
   cwd : Option String
   deriving ToJson, FromJson, Inhabited
 

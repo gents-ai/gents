@@ -498,7 +498,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "optimization_promotion_held_transition_unreached"
       "model-production-gap: no production path withholds target update permission from a caller that may update the job, forces a stale journal compare-and-set, or fails the commit after both writes are staged.")
       "identity-permission" [Surface.runtimeInternal]
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
       "remote_delivery_recovery_unreached"
@@ -1702,19 +1701,17 @@ def caseCoverage : List CoverageEntry :=
   , tagged { boundaryCoverage
       "family"
       "contracts_artifact_admission"
-      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
+      "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox." with consumed := true }
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged { boundaryCoverage
       "family"
       "contracts_artifact_spawn_launch"
-      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
-      "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox.")
+      "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox." with consumed := true }
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged { boundaryCoverage
       "family"
       "contracts_artifact_spawn_lsp"
-      boundaryCommandPolicyHostExecutionAssumptionsId with consumed := true }
-      "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox.")
+      "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox." with consumed := true }
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

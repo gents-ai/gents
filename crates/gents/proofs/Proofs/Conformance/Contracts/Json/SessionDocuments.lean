@@ -101,7 +101,7 @@ structure LatestWire where
   state : RequestState
   deriving ToJson
 
-structure ObservationWire where
+structure SessionObservationWire where
   activity : Nat
   preview : Option String
   latest : Option LatestWire
@@ -120,7 +120,7 @@ structure DocumentWire where
   provenance : Option ProvenanceWire
   tags : List String
   title : Option TitleWire
-  observation : Option ObservationWire
+  observation : Option SessionObservationWire
   deriving ToJson
 
 def DocumentWire.ofModel (d : AgentSession.Document) : DocumentWire :=
@@ -485,7 +485,7 @@ structure CompactionWire where
   throughSequence : Nat
   deriving ToJson
 
-structure ClosureWire where
+structure HistoryClosureWire where
   docId : Nat
   session : Nat
   logical : Nat
@@ -494,7 +494,7 @@ structure ClosureWire where
 structure HistoryWire where
   messages : List MessageWire
   compactions : List CompactionWire
-  closures : List ClosureWire
+  closures : List HistoryClosureWire
   deriving ToJson
 
 def HistoryWire.ofModel (h : SessionFork.History) : HistoryWire :=

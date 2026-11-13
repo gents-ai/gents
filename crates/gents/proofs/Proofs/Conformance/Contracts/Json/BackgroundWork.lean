@@ -43,7 +43,7 @@ def r4cReadToolOutputCanonicalSourceReconstruction :
   , cases := cases
   }
 
-structure SourceWire where
+structure BackgroundSourceWire where
   kind : String
   auxiliaryKind : Option String
   scope : Option Nat
@@ -53,7 +53,7 @@ structure SourceWire where
   key : Option Nat
   deriving Lean.ToJson
 
-private def SourceWire.ofModel : CanonicalOutput.Source → SourceWire
+private def BackgroundSourceWire.ofModel : CanonicalOutput.Source → BackgroundSourceWire
   | .provider scope turn attempt => ⟨"provider", none, some scope, some turn, some attempt, none, none⟩
   | .auxiliary kind scope turn attempt =>
       ⟨"auxiliary", some (match kind with
@@ -67,7 +67,7 @@ private def SourceWire.ofModel : CanonicalOutput.Source → SourceWire
 
 structure CoordinateWire where
   request : Nat
-  source : SourceWire
+  source : BackgroundSourceWire
   deriving Lean.ToJson
 
 structure WriterWire where
@@ -145,7 +145,7 @@ structure SegmentWire where
 
 private def SegmentWire.ofModel (s : CanonicalOutput.Segment) : SegmentWire :=
   { id := s.id
-    coordinate := { request := s.coordinate.request, source := SourceWire.ofModel s.coordinate.source }
+    coordinate := { request := s.coordinate.request, source := BackgroundSourceWire.ofModel s.coordinate.source }
     writer := WriterWire.ofModel s.writer
     flush := s.flush.map fun f =>
       { ordinal := f.ordinal

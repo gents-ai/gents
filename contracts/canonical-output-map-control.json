@@ -316,7 +316,7 @@
       "SessionQueue.Action.consumeFolded"
     ],
     "generated_groups": [],
-    "fixture_status": "concrete_inputs",
+    "fixture_status": "not_exported",
     "native_owner_paths": [
       "crates/gents-session/src/request/lifecycle/claim.rs",
       "crates/gents-session/src/request/lifecycle/queue/folding.rs",

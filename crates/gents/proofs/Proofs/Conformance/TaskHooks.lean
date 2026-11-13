@@ -621,7 +621,7 @@ example : recoveryCases.all (fun c =>
     (c.observed ++ c.script.map (fun s => ({ hookId := s.hookId, result := s.result } : HookAttempt))).all fun a =>
       (CommandResultWire.ofModel a.result).toModel == a.result) := by native_decide
 
-structure AttemptWire where
+structure RecoveryAttemptWire where
   hookId : String
   result : CommandResultWire
   deriving Lean.ToJson
@@ -631,8 +631,8 @@ structure RecoveryInput where
   interruptRequested : Bool
   started : Bool
   hooks : List TaskHook
-  observed : List AttemptWire
-  script : List AttemptWire
+  observed : List RecoveryAttemptWire
+  script : List RecoveryAttemptWire
   deriving Lean.ToJson
 
 structure RecoveryOutput where

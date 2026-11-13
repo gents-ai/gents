@@ -59,7 +59,7 @@
         "RequestExecutionLease.Action.finalizeParked"
       ],
       "generated_groups": [],
-      "fixture_status": "concrete_inputs",
+      "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents-session/src/request/lifecycle/execution_lease.rs",
         "crates/gents-session/src/request/lifecycle/backend_wait.rs",
