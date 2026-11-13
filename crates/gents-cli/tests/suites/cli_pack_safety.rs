@@ -316,6 +316,7 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         spawn_server_with_env(&home, port, &[], &[("GENTS_DESKTOP_HOME", &user_home_arg)])?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home, &graphql, Duration::from_secs(30)).await?;
 
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs/job_plugin_fixture");

@@ -312,6 +312,16 @@ impl MockStreamingBackend {
         self.observed_completion_bodies().len()
     }
 
+    /// The completions issued for requests' own turns. A session-title audit
+    /// is its own auxiliary request racing the request that opened the
+    /// session, so its completion has no fixed position among them.
+    pub fn observed_turn_completion_bodies(&self) -> Vec<serde_json::Value> {
+        self.observed_completion_bodies()
+            .into_iter()
+            .filter(|body| !body_is_session_title(body))
+            .collect()
+    }
+
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
         let observed = self
             .state
@@ -535,9 +545,10 @@ impl StreamingState {
 }
 
 fn request_is_session_title(body: &str) -> bool {
-    let Ok(body) = serde_json::from_str::<serde_json::Value>(body) else {
-        return false;
-    };
+    serde_json::from_str::<serde_json::Value>(body).is_ok_and(|body| body_is_session_title(&body))
+}
+
+fn body_is_session_title(body: &serde_json::Value) -> bool {
     body.get("tools").is_none()
         && body
             .get("messages")

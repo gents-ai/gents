@@ -1397,17 +1397,10 @@ async fn initialize_runtime_home(
     .await?;
     if existing_default_agent.is_none() {
         access
-            .transact_write("init.grant_self_configuration", |txn| {
+            .transact_write("init.provision_engineer", |txn| {
                 let default_agent_did = &default_agent_did;
                 Box::pin(async move {
-                    gents_documents::grant_selected_self_configuration(
-                        txn,
-                        node_did,
-                        default_agent_did,
-                    )
-                    .await?;
-                    gents_documents::grant_node_administration(txn, node_did, default_agent_did)
-                        .await
+                    gents_documents::provision_engineer(txn, node_did, default_agent_did).await
                 })
             })
             .await?;

@@ -30,12 +30,31 @@ pub fn register_served_home(
     port: u16,
 ) -> Result<()> {
     register_node_principal(gents_home, port)?;
+    served_homes()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(port, gents_home.to_path_buf());
     let paths = cli_client_paths(user_home, envs);
     served_principals()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(port, ServedPrincipal::Pending(paths));
     Ok(())
+}
+
+fn served_homes() -> &'static Mutex<RapidHashMap<u16, std::path::PathBuf>> {
+    static HOMES: OnceLock<Mutex<RapidHashMap<u16, std::path::PathBuf>>> = OnceLock::new();
+    HOMES.get_or_init(Default::default)
+}
+
+/// The Gents home of the server a fixture spawned on this endpoint's port.
+pub fn served_home(graphql: &str) -> Option<std::path::PathBuf> {
+    let port = graphql_port(graphql)?;
+    served_homes()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&port)
+        .cloned()
 }
 
 fn served_capability(port: u16) -> Option<gents_store::config_client::ClientSigningCapability> {

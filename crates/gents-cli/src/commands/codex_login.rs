@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::args::CodexLoginArgs;
-use crate::commands::login_wait::{print_sign_in_notes, until_cancelled};
+use crate::commands::login_wait::{connect_first_sign_in, print_sign_in_notes, until_cancelled};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 use gents_service::home_state::resolve_node_did;
@@ -28,7 +28,7 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
-    let outcome = run_codex_login(
+    let mut outcome = run_codex_login(
         &access,
         &node_did,
         &CodexLoginOptions {
@@ -43,6 +43,7 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     )
     .await?;
     print_sign_in_notes(&outcome.sign_in);
+    connect_first_sign_in(&access, &node_did, &mut outcome.sign_in).await;
     print_json(&codex_login_result_json(&outcome))?;
     Ok(())
 }

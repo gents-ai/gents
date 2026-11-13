@@ -68,7 +68,7 @@ mod tests {
                 "reason": if ready {Value::Null} else {json!("backend_not_configured")}}),
             );
         }
-        json!({"data": {"NodeReadiness": [{"node_did": OWNER, "updated_at": "2026-10-16T00:00:00Z",
+        json!({"data": {"view_0": [{"node_did": OWNER, "updated_at": "2026-10-16T00:00:00Z",
             "snapshot_json": json!({"format_version": gents_protocol::row::NODE_READINESS_FORMAT_VERSION,
                 "process_state": "ready", "active_generation": 2, "router_generation": router_generation,
                 "default_agent_did": "default", "agents": agents}).to_string()}]}})
@@ -105,7 +105,7 @@ mod tests {
     #[tokio::test]
     async fn waits_for_the_author_in_the_active_router_generation() {
         let (access, calls, server) = server(vec![
-            json!({"data": {"NodeReadiness": []}}),
+            json!({"data": {"view_0": []}}),
             observation(2, false, false),
             observation(1, true, true),
             observation(2, true, false),

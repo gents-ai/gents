@@ -1,6 +1,7 @@
 import Proofs.Store.Identity.NodeProvisioning
 import Proofs.Store.Identity.NodeProvisioningConformance
 import Proofs.Conformance.Family
+import Proofs.Tools.SelfConfig.CategoryGrants
 
 namespace Conformance.NodeProvisioning
 
@@ -156,5 +157,37 @@ def agentCreatorUnreached : Family CreatorInput Bool where
   inputs :=
     (NodeProvisioningConformance.agentCreatorCases.filter (!nativeAdmits ·)).map creatorInput
   model := fun i => agentCreatorMayPublish i.observation
+
+/-- A User-created Engineer on a node the User owns, selected as its default
+Agent, before `SelfConfig.provisionEngineer`. -/
+def unprovisionedEngineer : Identity.Household.State :=
+  SelfConfig.initDefaultSelection
+    (Identity.Household.commitAgentCreation
+      { objects := [⟨"nodes", "node", "user"⟩], relations := [], enrolled := [] }
+      "engineer" "user" "engineer" "node" true) "node" "user"
+
+structure EngineerGrantInput where
+  provisioned : Bool
+  resource : String
+  object : String
+  permission : String
+  deriving ToJson
+
+/-- What the Engineer may do on its Node, its own Agent and the default
+selection, before and after provisioning: the agent catalog and update of
+every Agent come only from provisioning. -/
+@[conformance_family]
+def engineerGrants : Family EngineerGrantInput Bool where
+  inputs := [false, true].flatMap fun provisioned =>
+    [("nodes", "node", "read"), ("nodes", "node", "update"), ("nodes", "node", "manage_agents"),
+      ("agents", "engineer", "read"), ("agents", "engineer", "update"),
+      ("agents", "engineer", "delete"), ("default_agent_selections", "node", "read"),
+      ("default_agent_selections", "node", "update")].map
+      fun (resource, object, permission) => { provisioned, resource, object, permission }
+  model := fun i =>
+    let state := if i.provisioned then
+      SelfConfig.provisionEngineer unprovisionedEngineer "engineer" "node"
+    else unprovisionedEngineer
+    Identity.Household.allowed 8 state "engineer" i.resource i.object i.permission
 
 end Conformance.NodeProvisioning
