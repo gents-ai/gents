@@ -2029,10 +2029,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-session/src/request/streaming.rs", 1),
     // ReplayEvidenceViolation in load_canonical_assistant_candidates_using
     ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
-    // CanonicalOutputReadError in validated_canonical_replay_boundary
-    ("crates/gents-session/src/session/output/replay_request.rs", 1),
-    // CanonicalOutputReadError in classify_terminal_read_error
-    ("crates/gents-session/src/session/request_output.rs", 1),
     // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
     ("crates/gents-store/src/local/storage_backend.rs", 3),
     // GuestTrap in try_step_on; RecordError in try_step_on
@@ -2092,6 +2088,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
     ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),
+    ("crates/gents-session/src/session/output.rs", &["CanonicalOutputReadError::in_error"]),
     ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),

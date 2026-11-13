@@ -101,7 +101,7 @@ pub fn canonical_read_loading(error: &anyhow::Error) -> bool {
 
 fn classify_terminal_read_error(error: &anyhow::Error) -> Option<CanonicalRequestOutput> {
     if matches!(
-        error.downcast_ref::<super::CanonicalOutputReadError>(),
+        super::CanonicalOutputReadError::in_error(error),
         Some(super::CanonicalOutputReadError::MissingCanonicalHeader { .. })
     ) {
         return Some(CanonicalRequestOutput::Loading);
