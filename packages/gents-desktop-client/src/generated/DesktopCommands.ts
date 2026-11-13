@@ -63,6 +63,8 @@ import type { InferenceSetupCatalog } from "./InferenceSetupCatalog.js";
 import type { InstalledPacksView } from "./InstalledPacksView.js";
 import type { InterruptRequestResult } from "./InterruptRequestResult.js";
 import type { JobControlOutcome } from "./JobControlOutcome.js";
+import type { JobState } from "./JobState.js";
+import type { JobView } from "./JobView.js";
 import type { JoinHistoryView } from "./JoinHistoryView.js";
 import type { JoinMemberView } from "./JoinMemberView.js";
 import type { JoinRequestDecideRequest } from "./JoinRequestDecideRequest.js";
@@ -202,6 +204,8 @@ export type DesktopCommands = {
   desktop_init_local_standard: { args: { request: DesktopInitRequest }; result: DesktopInitSummary };
   desktop_interrupt_request: { args: { request: DesktopInterruptRequest }; result: InterruptRequestResult };
   desktop_job_control: { args: { request: DesktopJobControlRequest }; result: JobControlOutcome };
+  desktop_job_view: { args: { nodeDid: string; address?: string | null; rowDocId?: string | null }; result: JobView };
+  desktop_jobs_list: { args: { nodeDid: string; states?: Array<JobState> | null; plugin?: string | null; sessionId?: string | null }; result: Array<JobView> };
   desktop_join_history_read: { args: { nodeDid: string }; result: JoinHistoryView };
   desktop_join_members_list: { args: { nodeDid: string }; result: Array<JoinMemberView> };
   desktop_join_request_decide: { args: { request: JoinRequestDecideRequest }; result: JoinRequestDecisionView };

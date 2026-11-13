@@ -303,6 +303,8 @@ export function createDesktopApiAdapter(
     backgroundTool: (request) =>
       invokeDesktop("desktop_background_tool", { request }),
     jobControl: (request) => invokeDesktop("desktop_job_control", { request }),
+    listJobs: (request) => invokeDesktop("desktop_jobs_list", request),
+    getJobView: (request) => invokeDesktop("desktop_job_view", request),
     processControl: (request) =>
       invokeDesktop("desktop_process_control", { request }),
   };

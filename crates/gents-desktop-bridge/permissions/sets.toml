@@ -146,10 +146,12 @@ permissions = [
 
 [[set]]
 identifier = "operations-read"
-description = "Operations snapshot, health, session provenance, MCP probe"
+description = "Operations snapshot, health, session provenance, MCP probe, workflow runs"
 permissions = [
   "allow-desktop-operations-snapshot",
   "allow-desktop-session-provenance",
+  "allow-desktop-jobs-list",
+  "allow-desktop-job-view",
   "allow-desktop-list-backends-with-health",
   "allow-desktop-list-mcp-services-with-health",
   "allow-desktop-probe-mcp-service",

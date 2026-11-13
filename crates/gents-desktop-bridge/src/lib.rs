@@ -12,6 +12,7 @@ pub mod host_browser;
 pub mod inference_setup;
 pub mod interrupt;
 pub mod job_control;
+pub mod job_view;
 mod local_pairing;
 pub mod logging;
 #[cfg(feature = "tauri-host")]

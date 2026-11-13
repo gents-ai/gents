@@ -141,6 +141,8 @@ const COMMANDS: &[&str] = &[
     "desktop_interrupt_request",
     "desktop_background_tool",
     "desktop_job_control",
+    "desktop_jobs_list",
+    "desktop_job_view",
     "desktop_process_control",
     "desktop_list_backends_with_health",
     "desktop_list_mcp_services_with_health",

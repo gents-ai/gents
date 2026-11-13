@@ -6,19 +6,20 @@ use gents_protocol::job::{
     JobChildRow, JobChildView, JobOutcome, JobPin, JobPinSummary, JobProgress, JobReadError,
     JobScope, JobState, JobView,
 };
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::background::job::admit::StepChild;
 use crate::background::job::input::{chain_of, derive_children, derive_children_for_jobs};
 use crate::background::status::ProcessControlScope;
 use crate::plugin::job_calls::job_state;
+use crate::views::jobs::{JobFields, Jobs};
 use gents_protocol::job::keys::job_spawn_key;
 use gents_session::session::tool_call_state::ToolCallState;
 use gents_session::session::tool_output_rows::{
     observe_canonical_tool_output_with_access, CanonicalToolOutputObservation,
 };
 use gents_store::config_client::ConfigAccess;
+pub mod query;
 
 /// Which job row a view reads: by physical doc id, or by its address.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,45 +31,20 @@ pub enum JobKey {
     },
 }
 
-fn job_row_selection() -> gents_protocol::document_query::Selection<
-    gents_protocol::document_query::fields::agent_tool_call::Doc,
-> {
-    use gents_protocol::document_query::{fields::agent_tool_call as fields, Selection};
-    Selection::doc_id()
-        .field(fields::SESSION_ID)
-        .field(fields::TOOL_CALL_ID)
-        .field(fields::REQUEST_ID)
-        .field(fields::REQUEST_DOC_ID)
-        .field(fields::NODE_DID)
-        .field(fields::REQUESTER_DID)
-        .field(fields::LIFECYCLE_STATE)
-        .field(fields::STARTED_AT)
-        .field(fields::COMPLETED_AT)
-        .field(fields::JOB_PIN)
-        .field(fields::JOB_PROGRESS)
-}
-
-#[derive(Deserialize)]
 struct Owner {
     session_id: String,
     node_did: String,
-    #[serde(default)]
     requester_did: Option<String>,
 }
 
-#[derive(Deserialize)]
 struct Stored {
-    #[serde(rename = "_docID")]
     doc_id: String,
     tool_call_id: String,
     request_id: String,
     request_doc_id: String,
     lifecycle_state: String,
-    #[serde(default)]
     started_at: Option<String>,
-    #[serde(default)]
     completed_at: Option<String>,
-    #[serde(default)]
     job_progress: Option<Value>,
 }
 
@@ -87,6 +63,14 @@ fn unavailable(error: impl Into<anyhow::Error>) -> JobReadError {
     }
     JobReadError::Unavailable {
         message: format!("{error:#}; retry when the node answers"),
+    }
+}
+
+fn unavailable_view(error: gents_store::views::ViewError) -> JobReadError {
+    if gents_store::config_client::TransactionFailure::permission_denied(&error) {
+        JobReadError::PermissionDenied
+    } else {
+        unavailable(error)
     }
 }
 
@@ -115,12 +99,24 @@ struct Decoded {
     completed_at: Option<u64>,
 }
 
-fn decode_job(row: &Value, owner: Owner) -> Result<Decoded, JobReadError> {
-    let Some(pin) = row.get("job_pin").filter(|pin| !pin.is_null()) else {
-        return Err(JobReadError::NotAJob);
-    };
+fn decode_job(row: JobFields) -> Result<Decoded, JobReadError> {
+    let pin = row.job_pin.as_ref().ok_or(JobReadError::NotAJob)?;
     let pin: JobPin = decode(pin, "job_pin")?;
-    let stored: Stored = decode(row, "job row")?;
+    let owner = Owner {
+        session_id: row.session_id,
+        node_did: row.node_did,
+        requester_did: row.requester_did,
+    };
+    let stored = Stored {
+        doc_id: row.doc_id,
+        tool_call_id: row.tool_call_id,
+        request_id: row.request_id,
+        request_doc_id: row.request_doc_id,
+        lifecycle_state: row.lifecycle_state,
+        started_at: row.started_at,
+        completed_at: row.completed_at,
+        job_progress: row.job_progress,
+    };
     let progress = stored
         .job_progress
         .as_ref()
@@ -202,38 +198,36 @@ pub async fn load_job_view(
     scope: Option<&ProcessControlScope>,
     key: JobKey,
 ) -> Result<JobView, JobReadError> {
-    let query = {
-        use gents_protocol::document_query::{fields::agent_tool_call as fields, Filter, Query};
-        let query = Query::select(job_row_selection());
-        match &key {
-            JobKey::RowDocId(doc_id) => query.filter(Filter::eq(fields::DOC_ID, doc_id)),
-            JobKey::Address {
-                session_id,
-                tool_call_id,
-            } => query
-                .filter(Filter::eq(fields::SESSION_ID, session_id))
-                .filter(Filter::eq(fields::TOOL_CALL_ID, tool_call_id)),
-        }
-        .render()
-    };
-    let response = access.read(&query).await.map_err(unavailable)?;
-    let Some(row) = response
-        .pointer("/data/AgentToolCall/0")
-        .filter(|row| !row.is_null())
-    else {
-        return Err(JobReadError::NotYetObservable);
-    };
-    let owner: Owner = decode(row, "job row")?;
+    load_scoped_job_view(access, scope, key, None).await
+}
+
+async fn load_scoped_job_view(
+    access: &ConfigAccess,
+    scope: Option<&ProcessControlScope>,
+    key: JobKey,
+    node_did: Option<String>,
+) -> Result<JobView, JobReadError> {
+    let rows = access
+        .read_view(&Jobs {
+            key: Some(key),
+            node_did,
+            session_id: None,
+        })
+        .await
+        .map_err(unavailable_view)?;
+    let row = rows
+        .into_iter()
+        .next()
+        .ok_or(JobReadError::NotYetObservable)?;
+    let row = row
+        .fields
+        .map_err(|error| malformed(format!("job row: {error}")))?;
     if scope.is_some_and(|scope| {
-        !scope.authorizes(
-            &owner.session_id,
-            &owner.node_did,
-            owner.requester_did.as_deref(),
-        )
+        !scope.authorizes(&row.session_id, &row.node_did, row.requester_did.as_deref())
     }) {
         return Err(JobReadError::NotAuthorized);
     }
-    let decoded = decode_job(row, owner)?;
+    let decoded = decode_job(row)?;
     let outcome = outcome_of(access, &decoded).await?;
     let chain = chain_of(access, &decoded.stored.doc_id, Some(&decoded.pin))
         .await
@@ -275,23 +269,29 @@ pub async fn list_jobs(
     access: &ConfigAccess,
     filter: &JobFilter,
 ) -> Result<Vec<JobView>, JobReadError> {
-    let rendered = {
-        use gents_protocol::document_query::{fields::agent_tool_call as fields, Filter, Query};
-        let mut query =
-            Query::select(job_row_selection()).filter(Filter::not_null(fields::JOB_PIN));
-        if let Some(session_id) = &filter.session_id {
-            query = query.filter(Filter::eq(fields::SESSION_ID, session_id));
-        }
-        query.render()
-    };
-    let response = access.read(&rendered).await.map_err(unavailable)?;
-    let rows = response
-        .pointer("/data/AgentToolCall")
-        .and_then(Value::as_array)
-        .ok_or_else(|| malformed("the AgentToolCall query omitted rows"))?;
+    list_scoped_jobs(access, filter, None).await
+}
+
+async fn list_scoped_jobs(
+    access: &ConfigAccess,
+    filter: &JobFilter,
+    node_did: Option<String>,
+) -> Result<Vec<JobView>, JobReadError> {
+    let rows = access
+        .read_view(&Jobs {
+            key: None,
+            node_did,
+            session_id: filter.session_id.clone(),
+        })
+        .await
+        .map_err(unavailable_view)?;
     let mut jobs = Vec::new();
     for row in rows {
-        match decode(row, "job row").and_then(|owner| decode_job(row, owner)) {
+        match row
+            .fields
+            .map_err(|error| malformed(format!("job row: {error}")))
+            .and_then(decode_job)
+        {
             Ok(decoded)
                 if filter
                     .plugin
@@ -299,15 +299,11 @@ pub async fn list_jobs(
                     .is_none_or(|plugin| *plugin == decoded.pin.plugin_ref)
                     && filter.state.keeps(&decoded) =>
             {
-                jobs.push(decoded);
+                jobs.push(decoded)
             }
             Ok(_) => {}
             Err(error) => {
-                let row_doc_id = row
-                    .get("_docID")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                tracing::warn!(row_doc_id, %error, "skipping an undecodable plugin job row");
+                tracing::warn!(row_doc_id = %row.doc_id, %error, "skipping an undecodable plugin job row")
             }
         }
     }

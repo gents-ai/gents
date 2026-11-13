@@ -1,21 +1,87 @@
 import { useEffect, useState } from "react";
+import { useJobs } from "../../../hooks/jobs";
 import { Button } from "@gents/ui/components/button";
 import type { DynamicWorkflows } from "@source-inc/gents-desktop-client";
+import type { JobView } from "@source-inc/gents-desktop-client/generated/JobView";
 import { useApp } from "@/app/AppContext";
 import { errorText } from "../../../lib/errorText";
 import { EmptyList } from "./ListDetail";
 import { Group, Row } from "./rows";
 import { PromoteWorkflowDialog } from "../PromoteWorkflowDialog";
-import type { NodeView } from "../../../hooks/fleetStore";
+import { WorkflowRunSheet } from "../WorkflowRunSheet";
+import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { useBootstrap } from "@/hooks/useClient";
+import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { isLocalNode } from "@/lib/firstRun";
+import { ACTIVE_STATES, RunHistory, RunningRuns, observedOf } from "./WorkflowRuns";
 
-/* dynamic scripts this node completed, one row per script, each promotable from
-   its latest run */
 export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
-  const { actions } = useApp();
   const bootstrap = useBootstrap();
   const local = isLocalNode(deployment, bootstrap?.initNodeDid);
+  const nodeDid = deployment.nodeDid;
+
+  const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
+  const running = useJobs({ nodeDid, states: ACTIVE_STATES }, sessions);
+  const [opened, setOpened] = useState<JobView | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const open = (run: JobView) => {
+    setOpened(run);
+    setSheetOpen(true);
+  };
+  const shownRun = opened
+    ? running.runs?.find((run) => run.row_doc_id === opened.row_doc_id)
+    : undefined;
+
+  return (
+    <div>
+      <RunningRuns
+        runs={running.runs}
+        error={running.error}
+        sessions={sessions}
+        empty={local ? null : "No workflows running on this node."}
+        onOpen={open}
+      />
+      {local && <LocalWorkflows nodeDid={nodeDid} observed={sessions} onOpen={open} />}
+      {opened && (
+        <WorkflowRunSheet
+          open={sheetOpen}
+          nodeDid={nodeDid}
+          rowDocId={opened.row_doc_id}
+          observed={observedOf(shownRun)}
+          onClose={() => setSheetOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function LocalWorkflows({
+  nodeDid,
+  observed,
+  onOpen,
+}: {
+  nodeDid: string;
+  observed: unknown;
+  onOpen: (run: JobView) => void;
+}) {
+  const { actions } = useApp();
+
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (id: string) =>
+    setExpanded((held) => {
+      const next = new Set(held);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  const runsButton = (id: string) => (
+    <Button
+      variant="outline"
+      aria-expanded={expanded.has(id)}
+      onClick={() => toggle(id)}
+    >
+      Runs
+    </Button>
+  );
   const [workflows, setWorkflows] = useState<DynamicWorkflows | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selector, setSelector] = useState<string | null>(null);
@@ -24,13 +90,6 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
 
   useEffect(() => {
     let current = true;
-    if (!local) {
-      setWorkflows(null);
-      setError(null);
-      return () => {
-        current = false;
-      };
-    }
     actions.listDynamicWorkflows().then(
       (value) => current && setWorkflows(value),
       (e: unknown) => current && setError(errorText(e)),
@@ -38,14 +97,13 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
     return () => {
       current = false;
     };
-  }, [actions, local, loads]);
+  }, [actions, loads]);
 
-  if (!local) return null;
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!workflows) return null;
   const { installed, workflows: dynamic } = workflows;
   return (
-    <div>
+    <>
       {installed.length > 0 && (
         <Group title="Installed">
           {installed.map((w) => (
@@ -55,15 +113,25 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
                 description={[w.version, w.pack, w.description]
                   .filter(Boolean)
                   .join(" · ")}
-              />
+              >
+                {runsButton(w.plugin)}
+              </Row>
+              {expanded.has(w.plugin) && (
+                <RunHistory
+                  nodeDid={nodeDid}
+                  plugin={w.plugin}
+                  observed={observed}
+                  onOpen={onOpen}
+                />
+              )}
             </div>
           ))}
         </Group>
       )}
       {dynamic.length === 0 ? (
         <EmptyList>
-          No workflows yet. A workflow an agent writes and runs appears here once it
-          completes, to keep as a tool.
+          No workflow scripts yet. A workflow an agent writes in a session appears here
+          once it completes, to keep as a tool.
         </EmptyList>
       ) : (
         <Group title="Dynamic workflows">
@@ -80,15 +148,26 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
                   .filter(Boolean)
                   .join(" · ")}
               >
-                {w.promoted_as.length === 0 && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setSelector(w.latest_address)}
-                  >
-                    Promote…
-                  </Button>
-                )}
+                <span className="flex gap-2">
+                  {runsButton(w.script_id)}
+                  {w.promoted_as.length === 0 && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setSelector(w.latest_address)}
+                    >
+                      Promote…
+                    </Button>
+                  )}
+                </span>
               </Row>
+              {expanded.has(w.script_id) && (
+                <RunHistory
+                  nodeDid={nodeDid}
+                  scriptId={w.script_id}
+                  observed={observed}
+                  onOpen={onOpen}
+                />
+              )}
             </div>
           ))}
         </Group>
@@ -102,6 +181,6 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
