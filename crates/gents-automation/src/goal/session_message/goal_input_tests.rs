@@ -203,11 +203,13 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 &SessionGoals,
                 &cause,
                 &target,
-                RenderedBody {
-                    content: "Follow up".into(),
-                    goal: None,
-                },
-                None,
+                (
+                    RenderedBody {
+                        content: "Follow up".into(),
+                        goal: None,
+                    },
+                    None,
+                ),
                 false,
                 &signer,
             )
@@ -230,11 +232,13 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 &SessionGoals,
                 &cause,
                 &target,
-                RenderedBody {
-                    content: "Follow up".into(),
-                    goal: None,
-                },
-                None,
+                (
+                    RenderedBody {
+                        content: "Follow up".into(),
+                        goal: None,
+                    },
+                    None,
+                ),
                 false,
                 &signer,
             )

@@ -93,11 +93,13 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             &SessionGoals,
             &cause,
             &target,
-            RenderedBody {
-                content: "deliver after interruption".to_owned(),
-                goal: None,
-            },
-            None,
+            (
+                RenderedBody {
+                    content: "deliver after interruption".to_owned(),
+                    goal: None,
+                },
+                None,
+            ),
             AgentMessageDelivery::Interrupt,
             &signer(&message),
         )
@@ -110,11 +112,13 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
                 &SessionGoals,
                 &cause,
                 &target,
-                RenderedBody {
-                    content: "replacement active request".to_owned(),
-                    goal: None,
-                },
-                None,
+                (
+                    RenderedBody {
+                        content: "replacement active request".to_owned(),
+                        goal: None,
+                    },
+                    None,
+                ),
                 AgentMessageDelivery::Queue,
                 &signer(&message),
             )
@@ -299,11 +303,13 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         &SessionGoals,
         &cause,
         &target_scope,
-        RenderedBody {
-            content: "start nested work".into(),
-            goal: Some(("finish nested work".into(), Some(500))),
-        },
-        None,
+        (
+            RenderedBody {
+                content: "start nested work".into(),
+                goal: Some(("finish nested work".into(), Some(500))),
+            },
+            None,
+        ),
         false,
         &signer,
     )

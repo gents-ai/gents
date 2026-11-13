@@ -1,6 +1,5 @@
 use gents_documents::patch::{SelfConfigPatch, SelfConfigTarget};
 use gents_loop::tool::{Tool, ToolDyn};
-use gents_protocol::operations::StringUpdate;
 use gents_store::graphql::escape_graphql_string;
 use gents_tools::builtin::self_config::command;
 use gents_tools::builtin::self_config::*;

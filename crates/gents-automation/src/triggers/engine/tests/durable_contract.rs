@@ -150,11 +150,11 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             let retained: Option<GoalBinding> = input
                 .retained
                 .as_ref()
-                .map(|goal| gents_lean_vocab::family::recode(goal));
+                .map(gents_lean_vocab::family::recode);
             let current: Option<GoalBinding> = input
                 .current
                 .as_ref()
-                .map(|goal| gents_lean_vocab::family::recode(goal));
+                .map(gents_lean_vocab::family::recode);
             let retained = retained.as_ref().map(GoalBinding::observation);
             let current = current.as_ref().map(GoalBinding::observation);
             let binding =
