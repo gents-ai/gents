@@ -45,7 +45,7 @@ pub(crate) fn apply_workspace_authority(
 ) -> CommandExecutionPolicy {
     let mut met = policy.clone();
     met.mode = policy.mode.meet(authority.command_mode());
-    if matches!(authority, WorkspaceAuthority::ReadWrite) {
+    if authority.denies_git_metadata_writes() {
         met = met.with_git_worktree_diff();
     }
     if matches!(met.mode, CommandExecutionMode::ReadOnly) && met.read_only_allowlist().is_empty() {

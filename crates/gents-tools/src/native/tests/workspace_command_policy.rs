@@ -7,7 +7,7 @@ use crate::native::{
     apply_workspace_authority, validate_command_policy, CommandConstraints, CommandExecutionPolicy,
 };
 use gents_session::workspace::{
-    admit_workspace_binding, bind_integrate, emit_create_workspace_plan,
+    admit_workspace_binding, bind_integrate, emit_create_workspace_plan, BindingWorkspace, CreationPolicy,
     execute_create_workspace_plan, git, git_worktree_caps, integrate_writer, new_binding,
     seal_writer, workspace_integrate_docs_mutation, AdmitBinding, Fixture,
     MemoryWorkspaceDocuments, WorkspaceDocuments,
@@ -150,9 +150,13 @@ fn integrate_applies_sealed_diff_to_trunk_not_via_worker_git_merge() {
     bind_integrate(&mut docs, "ws-int", "req-int", &hash);
 
     let first = admit_workspace_binding(
-        "ws-int",
-        "sealed",
-        Some(&hash),
+        BindingWorkspace {
+            workspace_id: "ws-int",
+            owner_node_did: "did:key:zWorkspaceOwner",
+            lifecycle_state: "sealed",
+            seal_hash: Some(&hash),
+            creation_policy: CreationPolicy::GitWorktreeDiff,
+        },
         &docs.load_bindings("ws-int").unwrap(),
         new_binding(
             "ws-int",
@@ -163,6 +167,7 @@ fn integrate_applies_sealed_diff_to_trunk_not_via_worker_git_merge() {
             Some(&hash),
         ),
         false,
+        false,
     )
     .unwrap();
     let AdmitBinding::Create { binding: a, .. } = first else {
@@ -170,9 +175,13 @@ fn integrate_applies_sealed_diff_to_trunk_not_via_worker_git_merge() {
     };
     docs.write_binding(a.clone()).unwrap();
     let second = admit_workspace_binding(
-        "ws-int",
-        "sealed",
-        Some(&hash),
+        BindingWorkspace {
+            workspace_id: "ws-int",
+            owner_node_did: "did:key:zWorkspaceOwner",
+            lifecycle_state: "sealed",
+            seal_hash: Some(&hash),
+            creation_policy: CreationPolicy::GitWorktreeDiff,
+        },
         &docs.load_bindings("ws-int").unwrap(),
         new_binding(
             "ws-int",
@@ -182,6 +191,7 @@ fn integrate_applies_sealed_diff_to_trunk_not_via_worker_git_merge() {
             "did:key:zWorkspaceOwner",
             Some(&hash),
         ),
+        false,
         false,
     )
     .unwrap();
