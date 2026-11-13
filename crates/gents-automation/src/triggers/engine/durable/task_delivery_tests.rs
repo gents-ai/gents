@@ -395,30 +395,36 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         session_before_retry["data"]["AgentSession"][0]["relationships_pending"],
         false
     );
-    let removed = node
-        .delete_dac_actor_relationship(
-            agent.did(),
+    let agent_did = identity::Did::new(agent.did()).unwrap();
+    let (agent_access, working_agent) = (&access, &agent_did);
+    let holds_working_agent = move || async move {
+        agent_access
+            .list_document_relationships("AgentSession", session_doc)
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.relation == "working_agent" && row.subject == working_agent.as_str())
+    };
+    let revoke_working_agent = move || {
+        gents_store::test_support::relationships::actor_in_txn(
+            agent_access,
             "AgentSession",
             session_doc,
             "working_agent",
-            agent.did(),
+            working_agent,
+            true,
         )
-        .await
-        .unwrap();
+    };
+    let removed = holds_working_agent().await;
+    revoke_working_agent().await.unwrap();
+    assert!(!holds_working_agent().await);
     assert_eq!(removed, modeled("created")["working_agent"]);
     let retry = write_task_delivery(&access, &fire, false, &create)
         .await
         .unwrap();
-    let restored = node
-        .delete_dac_actor_relationship(
-            agent.did(),
-            "AgentSession",
-            session_doc,
-            "working_agent",
-            agent.did(),
-        )
-        .await
-        .unwrap();
+    let restored = holds_working_agent().await;
+    revoke_working_agent().await.unwrap();
+    assert!(!holds_working_agent().await);
     assert_eq!(
         restored,
         modeled("duplicate-after-revocation")["working_agent"]

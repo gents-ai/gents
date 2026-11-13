@@ -261,7 +261,18 @@ pub async fn signed_pack_tool(
     plugins: Arc<gents_toolcalls::plugin::executor::PluginExecutor>,
 ) -> (SelfConfigFixture, Vec<Box<dyn ToolDyn>>) {
     let fixture = crate::test_support::self_config_fixture(label).await;
-    fixture.grant_selected_configuration().await;
+    fixture
+        .user_access()
+        .transact_write("test.self_config.engineer_init_grants", |txn| {
+            let node = fixture.node_did();
+            let agent = fixture.agent_did();
+            Box::pin(async move {
+                gents_documents::grant_selected_self_configuration(txn, node, agent).await?;
+                gents_documents::grant_node_administration(txn, node, agent).await
+            })
+        })
+        .await
+        .expect("User grants the default Agent what init grants the Engineer");
     fixture.grant_pack_install().await;
     fixture.grant_agent_schema().await;
     let mut tool_config = config(&[]);
