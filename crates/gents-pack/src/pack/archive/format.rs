@@ -471,6 +471,14 @@ pub fn pack_dir(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
     Ok((bytes, header))
 }
 
+/// [`pack_dir`] as [`write_built_pack`] packs it, so a check reports the
+/// digest the build produces.
+pub fn pack_built_dir(dir: &Path, release: &Release) -> Result<(Vec<u8>, PackHeader)> {
+    let mut bytes = Vec::new();
+    let header = write_built_pack(dir, &mut bytes, release)?;
+    Ok((bytes, header))
+}
+
 fn open_declared(dir: &Path, path: &str) -> Result<(std::fs::File, u64)> {
     let file = crate::pack::open_pack_asset(dir, path).with_context(|| {
         format!(

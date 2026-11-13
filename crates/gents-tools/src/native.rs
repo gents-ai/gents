@@ -253,9 +253,7 @@ impl ToolSet {
             _ => None,
         });
         let first = roots.next()?;
-        roots
-            .all(|root| root == first)
-            .then_some(first.as_path())
+        roots.all(|root| root == first).then_some(first.as_path())
     }
 
     pub fn tool_names(&self) -> Vec<String> {

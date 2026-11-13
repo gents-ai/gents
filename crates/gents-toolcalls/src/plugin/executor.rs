@@ -275,8 +275,14 @@ impl PluginExecutor {
         user_home: Option<&Path>,
     ) -> Result<allowed::Scope> {
         let release = self.release.is_release(record);
-        Ok(approval::workspace::allowed_scope(home, context.workdir, user_home)?
-            .with_own_folder(home, user_home, release, context.own_folder))
+        Ok(
+            approval::workspace::allowed_scope(home, context.workdir, user_home)?.with_own_folder(
+                home,
+                user_home,
+                release,
+                context.own_folder,
+            ),
+        )
     }
 
     pub fn home(&self) -> Option<&std::path::Path> {

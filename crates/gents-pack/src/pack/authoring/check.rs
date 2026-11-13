@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::pack::archive::{pack_dir, PackArchive};
+use crate::pack::archive::{pack_built_dir, PackArchive};
 use crate::pack::{declared_paths, PackKind, PackManifest};
 
 pub const PLACEHOLDER_OWNER: &str = "did:key:zPackCheckPlaceholderOwner";
@@ -59,7 +59,7 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
         return report;
     }
 
-    let archive = match pack_dir(dir)
+    let archive = match pack_built_dir(dir, &crate::pack::core_packs::runtime_release())
         .and_then(|(bytes, _)| PackArchive::from_bytes(&bytes).map_err(anyhow::Error::from))
     {
         Ok(archive) => archive,
