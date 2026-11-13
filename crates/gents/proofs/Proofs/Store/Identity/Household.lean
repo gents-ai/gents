@@ -1157,12 +1157,13 @@ def policyWithActorCatalog : List ResourceDefinition := policy.map fun resource 
   else resource
 
 /-- The restriction changes a relation's types and nothing the policy ID
-hashes, so the ID is the one the earlier policy had. External premise:
-`registerPolicy` keeps a policy already registered under an ID. A store
-created before the decision therefore keeps the earlier types and still admits
-a direct `agent_manager` grant until its policy is replaced; nothing replaces
-it at startup. Accepted for a release that only initialises fresh stores;
-open point in #3683. -/
+hashes, so the ID is the one the earlier policy had. A store created before
+the decision holds the earlier policy at that ID, and registering the present
+one there is refused (`conflicting_policy_cannot_replace`): the startup
+migration that registers the Household policy fails, so such a store does not
+start on this policy, and nothing replaces its policy. While it runs an earlier
+build it still admits a direct `agent_manager` grant. Accepted for a release
+that only initialises fresh stores; open point in #3683. -/
 theorem catalog_restriction_keeps_policy_id :
     (policyIdInput policy == policyIdInput policyWithActorCatalog) = true ∧
     typeAdmitted policyWithActorCatalog "nodes" "agent_manager" "actor" = true := by
