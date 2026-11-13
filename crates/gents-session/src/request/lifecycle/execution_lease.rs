@@ -952,9 +952,10 @@ async fn select_terminal_output(
                         "NoMessage cannot replace a reconstructable owned assistant header"
                     ),
                     Err(error)
-                        if error
-                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                            .is_some() => {}
+                        if gents_protocol::output::ReconstructionError::in_chain(
+                            error.as_ref(),
+                        )
+                        .is_some() => {}
                     Err(error) => return Err(error),
                 }
             }

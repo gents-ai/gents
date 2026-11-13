@@ -106,7 +106,7 @@ fn classify_terminal_read_error(error: &anyhow::Error) -> Option<CanonicalReques
     ) {
         return Some(CanonicalRequestOutput::Loading);
     }
-    let error = error.downcast_ref::<ReconstructionError>()?;
+    let error = ReconstructionError::in_chain(error.as_ref())?;
     if error.is_incomplete() {
         Some(CanonicalRequestOutput::Loading)
     } else {

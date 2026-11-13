@@ -2023,26 +2023,20 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-pack/src/plugin/http_calls.rs", 1),
     // E in any_error
     ("crates/gents-pack/src/plugin/store.rs", 1),
-    // ReconstructionError in recover_expired_generation_with_access_and_facts; ReconstructionError in validate_selection
-    ("crates/gents-session/src/request/lifecycle/canonical_recovery.rs", 2),
-    // PendingQueueChanged in RequestLifecycle::finish_natural_turn; ReconstructionError in select_terminal_output
-    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
-    // ReconstructionError in definitive_output_corruption; RecoveryPlanError in definitive_output_corruption
-    ("crates/gents-session/src/request/lifecycle/recovery.rs", 2),
+    // PendingQueueChanged in RequestLifecycle::finish_natural_turn
+    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 1),
     // PendingInputChanged in DefraStreamWriter::try_publish_steering_message
     ("crates/gents-session/src/request/streaming.rs", 1),
     // ReplayEvidenceViolation in load_canonical_assistant_candidates_using
     ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
     // CanonicalOutputReadError in validated_canonical_replay_boundary
     ("crates/gents-session/src/session/output/replay_request.rs", 1),
-    // CanonicalOutputReadError in classify_terminal_read_error; ReconstructionError in classify_terminal_read_error
-    ("crates/gents-session/src/session/request_output.rs", 2),
+    // CanonicalOutputReadError in classify_terminal_read_error
+    ("crates/gents-session/src/session/request_output.rs", 1),
     // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
     ("crates/gents-store/src/local/storage_backend.rs", 3),
     // GuestTrap in try_step_on; RecordError in try_step_on
     ("crates/gents-toolcalls/src/background/job/driver/step.rs", 2),
-    // ReconstructionError in caused_request_terminals_in_txn
-    ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
     // BackgroundSlotRefusal in DefraSessionHook::persist_background_tool_call
     ("crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", 1),
     // BackgroundSlotRefusal in DefraSessionHook::session_message_commit
@@ -2093,6 +2087,8 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
     ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
+    ("crates/gents-protocol/src/output.rs", &["ReconstructionError::in_chain"]),
+    ("crates/gents-protocol/src/output/recovery.rs", &["RecoveryPlanError::in_chain"]),
     ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
     ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
     ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),

@@ -107,9 +107,10 @@ async fn validate_selection(
                 match reader.load_message(&header.doc_id).await {
                     Ok(_) => return Err(RecoverySelectionRejected.into()),
                     Err(error)
-                        if error
-                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
-                            .is_some() => {}
+                        if gents_protocol::output::ReconstructionError::in_chain(
+                            error.as_ref(),
+                        )
+                        .is_some() => {}
                     Err(error) => return Err(error),
                 }
             }
@@ -526,7 +527,7 @@ async fn recover_expired_generation_with_access_and_facts(
                     }
                     match reader.load_message(&header.doc_id).await {
                         Ok(_) => { selected = Some(header.doc_id.clone()); break; }
-                        Err(error) if error.downcast_ref::<gents_protocol::output::ReconstructionError>().is_some() => {}
+                        Err(error) if gents_protocol::output::ReconstructionError::in_chain(error.as_ref()).is_some() => {}
                         Err(error) => return Err(error),
                     }
                 }
