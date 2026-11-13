@@ -10,13 +10,12 @@ use gents_session::request::lifecycle::{
 use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 
 #[tokio::test]
-async fn queued_turn_preserves_canonical_file_order_across_restart() {
-    check_turn_chronology(false).await;
-}
-
-#[tokio::test]
-async fn retried_turn_preserves_failed_turn_file_order_across_restart() {
-    check_turn_chronology(true).await;
+async fn queued_and_retried_turns_preserve_canonical_file_order_across_restart() {
+    for case in gents_lean_vocab::families::file_inventory_contracts_turn_chronology::cases() {
+        let queued = check_turn_chronology(false).await;
+        assert_eq!(check_turn_chronology(true).await, queued);
+        case.check(queued);
+    }
 }
 
 async fn finish_request(
@@ -66,7 +65,7 @@ async fn finish_request(
     );
 }
 
-async fn check_turn_chronology(retry: bool) {
+async fn check_turn_chronology(retry: bool) -> Option<Vec<u64>> {
     let name = if retry {
         "inventory-retry"
     } else {
@@ -234,12 +233,6 @@ async fn check_turn_chronology(retry: bool) {
             session_id: original.session_id,
         },
     };
-    let contracts: serde_json::Value = tokio::task::spawn_blocking(
-        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
-    )
-    .await
-    .unwrap()
-    .unwrap();
     let physical_tools = [
         first_tool.doc_id().unwrap().to_owned(),
         second_tool.doc_id().unwrap().to_owned(),
@@ -252,7 +245,7 @@ async fn check_turn_chronology(retry: bool) {
         .await
         .unwrap();
     assert_eq!(snapshot.entries.len(), 2);
-    assert_modeled_resource_order(&contracts, "sequential_resource", &snapshot, &expected);
+    let observed = observed_resource_order(&snapshot, &expected);
     assert_eq!(snapshot.binding.coverage.pending, 0);
     assert_eq!(snapshot.binding.coverage.unknown, 0);
     drop((first_request, successor, first_tool, second_tool));
@@ -275,8 +268,9 @@ async fn check_turn_chronology(retry: bool) {
         .unwrap();
     assert_eq!(restored.binding, snapshot.binding);
     assert_eq!(restored.entries, snapshot.entries);
-    assert_modeled_resource_order(&contracts, "sequential_resource", &restored, &expected);
+    assert_eq!(observed_resource_order(&restored, &expected), observed);
     reopened.node.shutdown().await.expect("node shutdown");
     drop(reopened);
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+    observed
 }

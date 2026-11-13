@@ -672,11 +672,13 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         let before_later_parent_work = FileInventorySnapshot::load(&node, &child_admission)
             .await
             .unwrap();
-        assert_modeled_resource_order(
-            &contracts,
+        let mut resource_orders = std::collections::BTreeMap::new();
+        resource_orders.insert(
             "forked_prefix_resource",
-            &before_later_parent_work,
-            &[(origin_tool.doc_id().unwrap(), 90)],
+            observed_resource_order(
+                &before_later_parent_work,
+                &[(origin_tool.doc_id().unwrap(), 90)],
+            ),
         );
         let make_request = |request_id: &str| {
             gents_protocol::request_admission::AgentRequestCreate::base(
@@ -779,17 +781,13 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             (origin_tool.doc_id().unwrap(), 90),
             (later_tool.doc_id().unwrap(), 2),
         ];
-        assert_modeled_resource_order(
-            &contracts,
+        resource_orders.insert(
             "sequential_resource",
-            &parent_snapshot,
-            &physical_tools,
+            observed_resource_order(&parent_snapshot, &physical_tools),
         );
-        assert_modeled_resource_order(
-            &contracts,
-            "forked_prefix_resource",
-            &snapshot,
-            &physical_tools[..1],
+        assert_eq!(
+            observed_resource_order(&snapshot, &physical_tools[..1]),
+            resource_orders["forked_prefix_resource"]
         );
         assert_eq!(
             snapshot.binding, before_later_parent_work.binding,
@@ -834,12 +832,15 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         )
         .await
         .unwrap();
-        assert_modeled_resource_order(
-            &contracts,
+        resource_orders.insert(
             "forked_repeated_resource",
-            &complete,
-            &physical_tools,
+            observed_resource_order(&complete, &physical_tools),
         );
+        for case in
+            gents_lean_vocab::families::file_inventory_contracts_fork_resource_order::cases()
+        {
+            case.check(resource_orders[case.input.name.as_str()].clone());
+        }
         assert!(complete.entries.iter().all(|entry| {
             entry.scope.session_id == complete_child.session_id && entry.scope.session_id != parent
         }));
@@ -876,27 +877,31 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
                 .await
                 .unwrap();
         assert_eq!(with_unknown.binding.coverage.unknown, 1);
-        let modeled = contracts["file_inventory_order_comparison_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == "unknown_other_request")
-            .unwrap();
-        for entry in &with_unknown.entries {
-            let (_, label) = physical_tools
+        for case in
+            gents_lean_vocab::families::file_inventory_contracts_unknown_request_entry_coverage::cases()
+        {
+            let mut observed = with_unknown
+                .entries
                 .iter()
-                .find(|(id, _)| *id == entry.tool_call_doc_id)
-                .unwrap();
-            let expected = modeled["request_coverage"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|row| row["tool"].as_u64() == Some(*label))
-                .unwrap();
-            assert_eq!(
-                entry.request_coverage,
-                Some(serde_json::from_value(expected["coverage"].clone()).unwrap())
-            );
+                .map(|entry| {
+                    gents_lean_vocab::families::file_inventory_contracts_unknown_request_entry_coverage::EntryCoverage {
+                        tool: physical_tools
+                            .iter()
+                            .find(|(id, _)| *id == entry.tool_call_doc_id)
+                            .unwrap()
+                            .1,
+                        coverage: entry.request_coverage.as_ref().map(|coverage| {
+                            gents_lean_vocab::families::file_inventory_contracts_unknown_request_entry_coverage::Coverage {
+                                entries: coverage.entries,
+                                pending: coverage.pending,
+                                unknown: coverage.unknown,
+                            }
+                        }),
+                    }
+                })
+                .collect::<Vec<_>>();
+            observed.sort_by_key(|entry| entry.tool);
+            case.check(observed);
         }
         assert_eq!(
             FileInventorySnapshot::load(&node, &child_admission)
@@ -958,79 +963,62 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
     }
 }
 
-fn assert_modeled_resource_order(
-    contracts: &serde_json::Value,
-    name: &str,
+fn observed_resource_order(
     snapshot: &FileInventorySnapshot,
     physical_tools: &[(&str, u64)],
-) {
-    let case = contracts["file_inventory_order_comparison_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == name)
-        .unwrap();
-    let expected = case["expected"].as_array().unwrap();
-    assert_eq!(snapshot.entries.len(), expected.len(), "{name}");
-    for entry in &snapshot.entries {
-        let (_, label) = physical_tools
+) -> Option<Vec<u64>> {
+    if snapshot.entries.is_empty() {
+        return None;
+    }
+    let label = |entry: &FileInventoryEntry| {
+        physical_tools
             .iter()
             .find(|(document, _)| *document == entry.tool_call_doc_id)
-            .unwrap();
-        let index = expected
-            .iter()
-            .position(|id| id.as_u64() == Some(*label))
-            .unwrap();
-        assert_eq!(
-            entry.order,
-            Some(gents_protocol::file_inventory::FileInventoryOrdinal {
-                index: index as u64,
-                entries: expected.len() as u64,
-            }),
-            "{name}"
-        );
+            .unwrap()
+            .1
+    };
+    let Some(mut ordered) = snapshot
+        .entries
+        .iter()
+        .map(|entry| {
+            entry
+                .order
+                .as_ref()
+                .map(|order| (order.index, order.entries, label(entry)))
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        assert!(snapshot.entries.iter().all(|entry| entry.order.is_none()));
+        return None;
+    };
+    ordered.sort();
+    let count = ordered.len() as u64;
+    assert!(ordered
+        .iter()
+        .enumerate()
+        .all(|(position, (index, entries, _))| *index == position as u64 && *entries == count));
+    Some(ordered.into_iter().map(|(_, _, label)| label).collect())
+}
+
+#[tokio::test]
+async fn terminal_publications_order_real_inventory_rows() {
+    for case in gents_lean_vocab::families::file_inventory_contracts_terminal_chronology::cases() {
+        let (background, notify) = match case.input.name.as_str() {
+            "sequential_resource" => (false, false),
+            "background_receipt_resource" => (true, false),
+            "background_completion_reference" => (true, true),
+            other => panic!("no chronology scenario builds {other}"),
+        };
+        case.check(check_real_inventory_chronology(background, notify).await);
     }
 }
 
-#[tokio::test]
-async fn canonical_terminal_publications_order_real_inventory_rows() {
-    check_real_inventory_chronology(false, false).await;
-}
-
-#[tokio::test]
-async fn background_receipt_cannot_order_real_inventory_rows() {
-    check_real_inventory_chronology(true, false).await;
-}
-
-#[tokio::test]
-async fn completion_notification_orders_real_inventory_rows() {
-    check_real_inventory_chronology(true, true).await;
-}
-
-async fn check_real_inventory_chronology(background: bool, notify: bool) {
+async fn check_real_inventory_chronology(
+    background: bool,
+    notify: bool,
+) -> gents_lean_vocab::families::file_inventory_contracts_terminal_chronology::ChronologyObservation
+{
     use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    let contracts: serde_json::Value = tokio::task::spawn_blocking(
-        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let modeled = contracts["file_inventory_order_comparison_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| {
-            case["name"]
-                == if notify {
-                    "background_completion_reference"
-                } else if background {
-                    "background_receipt_resource"
-                } else {
-                    "sequential_resource"
-                }
-        })
-        .unwrap();
-    let expected = modeled["expected"].as_array();
     let (fixture, mut request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "inventory-terminal-chronology".into(),
         real_identity: true,
@@ -1125,118 +1113,116 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
     let inventory = FileInventorySnapshot::load(&node, &admission)
         .await
         .unwrap();
-    assert_eq!(
-        inventory.entries.len(),
-        modeled["snapshot"]["tools"].as_array().unwrap().len()
-    );
-    for (tool, model_id) in [(&first, 90u64), (&second, 2)] {
-        let entry = inventory
-            .entries
-            .iter()
-            .find(|entry| entry.tool_call_doc_id == tool.doc_id().unwrap())
-            .unwrap();
-        let ordinal = expected.map(|ids| {
-            let index = ids
-                .iter()
-                .position(|id| id.as_u64() == Some(model_id))
-                .unwrap();
-            gents_protocol::file_inventory::FileInventoryOrdinal {
-                index: index.try_into().unwrap(),
-                entries: ids.len().try_into().unwrap(),
-            }
-        });
-        assert_eq!(entry.order, ordinal);
-    }
+    let observed =
+        gents_lean_vocab::families::file_inventory_contracts_terminal_chronology::ChronologyObservation {
+            entries: inventory.entries.len() as u64,
+            expected: observed_resource_order(
+                &inventory,
+                &[(first.doc_id().unwrap(), 90), (second.doc_id().unwrap(), 2)],
+            ),
+        };
     let repeated = FileInventorySnapshot::load(&node, &admission)
         .await
         .unwrap();
     assert_eq!(inventory.binding, repeated.binding);
     node.shutdown().await.expect("node shutdown");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+    observed
 }
 
 #[test]
 fn generated_request_coverage_uses_only_selected_physical_scope() {
-    use serde_json::Value;
-    let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let document = |value: &Value| format!("document-{:020}", value.as_u64().unwrap());
-    let cases = contracts["file_inventory_order_comparison_cases"]
-        .as_array()
-        .unwrap();
-    for case in cases {
+    gents_lean_vocab::families::file_inventory_contracts_request_coverage::replay(|input| {
+        let document = |id: u64| format!("document-{id:020}");
+        let image = |image: &gents_lean_vocab::families::file_inventory_contracts_request_coverage::ImageWire| match (image.kind.as_str(), &image.content_hash) {
+            ("file", Some(content_hash)) => gents_protocol::file_inventory::FileImageMetadata::File {
+                content_hash: content_hash.clone(),
+            },
+            ("missing", None) => gents_protocol::file_inventory::FileImageMetadata::Missing {},
+            _ => panic!("unmodeled image {image:?}"),
+        };
         let mut facts = Vec::new();
-        let mut entries = Vec::new();
-        for row in case["snapshot"]["tools"].as_array().unwrap() {
-            let tool = &row["tool"];
+        let mut probes = Vec::new();
+        for row in &input.snapshot.tools {
+            let tool = &row.tool;
             let scope = FileImageScope {
-                node_did: tool["scope"]["node"].as_str().unwrap().into(),
-                session_id: tool["scope"]["session"].as_str().unwrap().into(),
-                requester_did: tool["scope"]["requester"].as_str().unwrap().into(),
+                node_did: tool.scope.node.clone(),
+                session_id: tool.scope.session.clone(),
+                requester_did: tool.scope.requester.clone(),
             };
-            let capture = match row["capture"]["kind"].as_str().unwrap() {
-                "pending" => Capture::Pending,
-                "unknown" => Capture::Unknown,
-                "observed" => {
-                    let value = &row["capture"]["projection"];
-                    let projection = Projection {
-                        doc_id: document(&value["id"]),
-                        tool_call_doc_id: document(&tool["id"]),
-                        observation_doc_id: (!value["observation"].is_null())
-                            .then(|| document(&value["observation"])),
-                        verified_unchanged: value["verified_unchanged"]
-                            .as_bool()
-                            .filter(|value| *value),
-                        request_doc_id: document(&tool["request"]),
+            let capture = match (row.capture.kind.as_str(), &row.capture.projection) {
+                ("pending", None) => Capture::Pending,
+                ("unknown", None) => Capture::Unknown,
+                ("observed", Some(value)) => Capture::Observed {
+                    projection: Box::new(Projection {
+                        doc_id: document(value.id),
+                        tool_call_doc_id: document(tool.id),
+                        observation_doc_id: value.observation.map(document),
+                        verified_unchanged: Some(value.verified_unchanged).filter(|value| *value),
+                        request_doc_id: document(tool.request),
                         node_did: scope.node_did.clone(),
                         session_id: scope.session_id.clone(),
                         requester_did: scope.requester_did.clone(),
-                        changes: serde_json::from_value(value["changes"].clone()).unwrap(),
-                    };
-                    for change in &projection.changes {
-                        entries.push(FileInventoryEntry {
-                            tool_call_doc_id: projection.tool_call_doc_id.clone(),
-                            request_doc_id: projection.request_doc_id.clone(),
-                            scope: scope.clone(),
-                            projection_doc_id: projection.doc_id.clone(),
-                            observation_doc_id: projection.observation_doc_id.clone().unwrap(),
-                            change: change.clone(),
-                            order: None,
-                            request_coverage: None,
-                        });
-                    }
-                    Capture::Observed {
-                        projection: Box::new(projection),
-                        owner: scope.node_did.clone(),
-                    }
-                }
-                other => panic!("unknown modeled capture {other}"),
+                        changes: value
+                            .changes
+                            .iter()
+                            .map(|change| FileChangeMetadata {
+                                root: change.root.clone(),
+                                path: change.path.clone(),
+                                before: image(&change.before),
+                                after: image(&change.after),
+                            })
+                            .collect(),
+                    }),
+                    owner: scope.node_did.clone(),
+                },
+                other => panic!("unmodeled capture {other:?}"),
             };
+            probes.push(FileInventoryEntry {
+                tool_call_doc_id: document(tool.id),
+                request_doc_id: document(tool.request),
+                scope: scope.clone(),
+                projection_doc_id: String::new(),
+                observation_doc_id: String::new(),
+                change: FileChangeMetadata {
+                    root: String::new(),
+                    path: String::new(),
+                    before: gents_protocol::file_inventory::FileImageMetadata::Missing {},
+                    after: gents_protocol::file_inventory::FileImageMetadata::Missing {},
+                },
+                order: None,
+                request_coverage: None,
+            });
             facts.push(ToolFact {
-                tool_call_doc_id: document(&tool["id"]),
-                request_doc_id: document(&tool["request"]),
+                tool_call_doc_id: document(tool.id),
+                request_doc_id: document(tool.request),
                 scope,
-                state: tool["state"].as_str().unwrap().into(),
+                state: tool.state.clone(),
                 accepted_header_doc_id: Some("accepted".into()),
                 execution_generation: Some("generation".into()),
                 capture,
                 order: None,
             });
         }
-        apply_request_coverage(&facts, &mut entries);
-        for entry in entries {
-            let expected = case["request_coverage"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|row| document(&row["tool"]) == entry.tool_call_doc_id)
-                .unwrap();
-            assert_eq!(
-                entry.request_coverage,
-                Some(serde_json::from_value(expected["coverage"].clone()).unwrap()),
-                "{}",
-                case["name"]
-            );
-        }
-    }
-    assert_eq!(cases.len(), 13);
+        apply_request_coverage(&facts, &mut probes);
+        probes
+            .into_iter()
+            .map(|probe| {
+                let coverage = probe.request_coverage.expect("every selected tool has coverage");
+                gents_lean_vocab::families::file_inventory_contracts_request_coverage::ToolCoverage {
+                    tool: probe
+                        .tool_call_doc_id
+                        .strip_prefix("document-")
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                    coverage: gents_lean_vocab::families::file_inventory_contracts_request_coverage::Coverage {
+                        entries: coverage.entries,
+                        pending: coverage.pending,
+                        unknown: coverage.unknown,
+                    },
+                }
+            })
+            .collect()
+    });
 }

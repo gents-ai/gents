@@ -690,8 +690,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_goal_continuation_materialization")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_closure_cases"
-      "FileInventoryClosureCases"
+      "family"
+      "contracts_file_inventory_closure"
       "The native consumer checks closure construction against modeled rows, but supplies access and denial observations as fixture input. It does not verify live ACP decisions.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1613,28 +1613,28 @@ def caseCoverage : List CoverageEntry :=
       "ScopeNodeRouteCases")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_order_window_cases"
-      "FileInventoryOrderWindowCases"
+      "family"
+      "file_inventory_contracts_order_window"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_order_resolution_cases"
-      "FileInventoryOrderResolutionCases"
+      "family"
+      "file_inventory_contracts_order_resolution"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_order_comparison_cases"
-      "FileInventoryOrderComparisonCases"
+      "family"
+      "file_inventory_contracts_request_coverage"
       "Binds per-request source coverage to selected physical scopes. Verified no-change producer observations and installed per-turn totals remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_order_comparison_cases"
-      "FileInventoryOrderComparisonCases"
+      "family"
+      "file_inventory_contracts_order_comparison"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_order_entry_cases"
-      "FileInventoryOrderEntryCases"
+      "family"
+      "file_inventory_contracts_order_entry"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

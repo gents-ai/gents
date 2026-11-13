@@ -576,8 +576,6 @@ def snapshotRequestCasesJson : String :=
 
 def snapshotSessionCasesJson : String :=
   ""
-    ++ "\"file_inventory_closure_cases\":"
-      ++ fileInventoryClosureCasesJson ++ ","
     ++ "\"enrollment_auto_renewal_cases\":" ++ autoRenewalCasesJson ++ ","
     ++ "\"enrollment_renewal_intent_cases\":" ++ renewalIntentCasesJson ++ ","
     ++ "\"enrollment_cases\":"
@@ -964,14 +962,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
     ++ "\"file_inventory_reader_cases\":"
       ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
-    ++ "\"file_inventory_order_window_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingWindowCasesJson ++ ","
-    ++ "\"file_inventory_order_resolution_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingResolutionCasesJson ++ ","
-    ++ "\"file_inventory_order_comparison_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingComparisonCasesJson ++ ","
-    ++ "\"file_inventory_order_entry_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingEntryCasesJson ++ ","
     ++ "\"file_review_subscription_cases\":"
       ++ Conformance.FileReviewRouteContracts.subscriptionCasesJson ++ ","
 

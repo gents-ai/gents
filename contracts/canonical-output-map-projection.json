@@ -207,7 +207,7 @@
         { "file": "crates/gents/proofs/Proofs/Observe/FileInventory/Source.lean", "symbol": "FileInventory.buildDocuments" }
       ],
       "generated_groups": [
-        "file_inventory_closure_cases"
+        "families"
       ],
       "fixture_status": "summary_only",
       "native_owner_paths": [
