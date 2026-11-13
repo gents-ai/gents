@@ -523,7 +523,10 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
             ServiceLifecycleReceipt::Status { service, network } => {
                 print!("{}\n{}\n", service.summary(), network.summary());
             }
-            ServiceLifecycleReceipt::Uninstalled { definition, removed } => {
+            ServiceLifecycleReceipt::Uninstalled {
+                definition,
+                removed,
+            } => {
                 for line in commands::service::uninstall_summary(
                     manager.home(),
                     &definition,

@@ -26,7 +26,11 @@ async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstructio
     )
     .await;
 
-    for (case_index, case) in gents_lean_vocab::families::inference_slot_accounting_reconstruction::cases().into_iter().enumerate() {
+    for (case_index, case) in
+        gents_lean_vocab::families::inference_slot_accounting_reconstruction::cases()
+            .into_iter()
+            .enumerate()
+    {
         let input = &case.input;
         assert_eq!(
             input.row_backend_ids.len(),

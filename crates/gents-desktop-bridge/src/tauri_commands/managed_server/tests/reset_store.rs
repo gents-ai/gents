@@ -335,7 +335,9 @@ fn an_insecure_old_key_scopes_the_home_like_a_refused_store() {
     assert!(preview.stores[0].unsafe_key);
     assert!(!preview.stores[0].older);
     assert!(preview.delete_confirmation.is_some());
-    assert!(preview.stores[0].detail.contains("can be read by other users"));
+    assert!(preview.stores[0]
+        .detail
+        .contains("can be read by other users"));
 }
 
 #[test]

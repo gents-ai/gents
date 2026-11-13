@@ -1808,11 +1808,7 @@ async fn drive_claim_preserves_explicit_deadline(case: &ClaimDeadlineInput) -> C
     );
 
     let before_claim = chrono::Utc::now();
-    let mut lifecycle = lifecycle_for(
-        &actors,
-        request,
-        case.synthesized_claim_deadline.unwrap(),
-    );
+    let mut lifecycle = lifecycle_for(&actors, request, case.synthesized_claim_deadline.unwrap());
     let outcome = lifecycle.claim().await.unwrap();
 
     let row = fetch_deadline_runtime_row(&actors, request_id).await;

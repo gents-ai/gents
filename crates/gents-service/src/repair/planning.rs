@@ -1,6 +1,6 @@
 use gents_protocol::operations::install_repair::{
-    HomeState, RefusalAction, RefusalObservation, RepairAnswer, RepairObservation,
-    RepairOperation, RepairPlan, RepairPlanBlocker, RepairStep, RepairVersion,
+    HomeState, RefusalAction, RefusalObservation, RepairAnswer, RepairObservation, RepairOperation,
+    RepairPlan, RepairPlanBlocker, RepairStep, RepairVersion,
 };
 
 pub fn needs_archive(home: HomeState) -> bool {
@@ -32,8 +32,7 @@ fn continues_setup(observed: &RepairObservation) -> bool {
 }
 
 fn usable(observed: &RepairObservation, archive: bool) -> bool {
-    observed.home == HomeState::Healthy
-        || (observed.home == HomeState::UnfinishedSetup && !archive)
+    observed.home == HomeState::Healthy || (observed.home == HomeState::UnfinishedSetup && !archive)
 }
 
 pub fn keeps_served_home(observed: &RepairObservation) -> bool {

@@ -14,7 +14,9 @@ fn install_repair_home_classification_matches_lean() {
 
 #[test]
 fn install_repair_plans_match_lean() {
-    for case in families::install_repair_plans::cases::<String, String, String, String, String, String>() {
+    for case in
+        families::install_repair_plans::cases::<String, String, String, String, String, String>()
+    {
         let input: RepairObservation =
             serde_json::from_value(serde_json::to_value(&case.input).unwrap()).unwrap();
         let actual = planning::plan(&input);

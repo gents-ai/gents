@@ -416,7 +416,9 @@ mod tests {
             Some(IncompatibleStoreKind::LegacyRocksDb)
         );
 
-        assert!(error.to_string().contains("older version of Gents (a RocksDB store)"));
+        assert!(error
+            .to_string()
+            .contains("older version of Gents (a RocksDB store)"));
         assert_eq!(
             incompatible_store(&error, tempdir.path()).map(|store| store.kind),
             Some(IncompatibleStoreKind::LegacyRocksDb)
@@ -430,7 +432,9 @@ mod tests {
 
         let error = reject_legacy_store(tempdir.path()).unwrap_err();
 
-        assert!(error.to_string().contains("older version of Gents (a Lark store)"));
+        assert!(error
+            .to_string()
+            .contains("older version of Gents (a Lark store)"));
     }
 
     #[test]
@@ -440,7 +444,9 @@ mod tests {
 
         let error = reject_legacy_store(tempdir.path()).unwrap_err();
 
-        assert!(error.to_string().contains("is not a store this version can read"));
+        assert!(error
+            .to_string()
+            .contains("is not a store this version can read"));
     }
 
     #[test]

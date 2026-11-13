@@ -191,8 +191,8 @@ async fn a_foreign_version_refusal_keeps_the_incompatible_home_screen() {
     let (_temp, state) = orchestration_state();
     refused_with(&state, IncompatibleStoreKind::ForeignVersion);
     let result = repair_with(&state, true, |_| async move { ready() })
-    .await
-    .unwrap();
+        .await
+        .unwrap();
     assert_eq!(result.outcome, ManagedServerRepairOutcome::Ready);
     assert_eq!(
         state

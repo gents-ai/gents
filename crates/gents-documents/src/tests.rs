@@ -622,10 +622,10 @@ fn agent_and_context_share_canonical_reference_closure() {
 
 #[test]
 fn default_agent_publication_matches_lean() {
+    use gents_lean_vocab::families::configuration_scope_default_agent_publication as family;
     use gents_store::collection::Collection;
     use gents_store::identity::NodeIdentity;
     use serde_json::json;
-    use gents_lean_vocab::families::configuration_scope_default_agent_publication as family;
     let directory = tempfile::tempdir().unwrap();
     let alice =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("alice"), None)

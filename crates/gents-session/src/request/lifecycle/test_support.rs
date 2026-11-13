@@ -422,7 +422,6 @@ pub async fn observed_case_request(
     lifecycle
 }
 
-
 pub async fn agent_write_value(
     access: &gents_store::config_client::ConfigAccess,
     operation: &'static str,
@@ -437,4 +436,3 @@ pub async fn agent_write_value(
         .await
         .expect("Agent-signed canonical write")
 }
-

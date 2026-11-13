@@ -16,7 +16,10 @@ fn runtime_data_has_no_replication_template_or_app_escape() {
             !replicates,
             "{name}"
         );
-        if let Some(collection) = collections.iter().find(|collection| collection.name == name) {
+        if let Some(collection) = collections
+            .iter()
+            .find(|collection| collection.name == name)
+        {
             assert_eq!(collection.is_branchable, replicates, "{name} locality");
         }
         case.check(locality::LocalityOutput { replicates });

@@ -483,7 +483,9 @@ async fn apply_inner(
             }
         }
         ServiceAction::Restart => start_after_stop(config).await?,
-        ServiceAction::RewriteDefinition => on_manager(config, NativeServiceManager::install).await?,
+        ServiceAction::RewriteDefinition => {
+            on_manager(config, NativeServiceManager::install).await?
+        }
         ServiceAction::RefreshLog { restart } => {
             let restart = *restart;
             let pid = on_manager(config, move |manager| {

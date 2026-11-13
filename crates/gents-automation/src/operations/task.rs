@@ -50,7 +50,11 @@ pub fn session_title_kind(continues_session: bool, goal_backed: bool) -> TaskTit
 
 /// Loads the Task for firing: it and the Agent that answers it are enabled
 /// under `node_did`, read as whoever `access` acts for.
-pub async fn runnable(access: &ConfigAccess, node_did: &str, task_id: &str) -> Result<RunnableTask> {
+pub async fn runnable(
+    access: &ConfigAccess,
+    node_did: &str,
+    task_id: &str,
+) -> Result<RunnableTask> {
     let (task, agent) = access
         .transact_write("task_run.read", |txn| {
             Box::pin(async move {
@@ -184,7 +188,8 @@ pub async fn scheduled_task(
             .flatten()
     });
     let (task, another) = (tasks.next(), tasks.next());
-    let enabled_triggers = TaskMatches::of(usize::from(task.is_some()) + usize::from(another.is_some()));
+    let enabled_triggers =
+        TaskMatches::of(usize::from(task.is_some()) + usize::from(another.is_some()));
     let decision = schedule_decision(
         TaskMatches::of(rows(&response, "Schedule").len()),
         enabled_triggers,
@@ -195,9 +200,9 @@ pub async fn scheduled_task(
             schedule_id: schedule_id.to_owned(),
             node_did: node_did.to_owned(),
         }),
-        (ScheduleRunDecision::NoEnabledTrigger, _) => Err(TaskOperationError::NoEnabledTrigger(
-            schedule_id.to_owned(),
-        )),
+        (ScheduleRunDecision::NoEnabledTrigger, _) => {
+            Err(TaskOperationError::NoEnabledTrigger(schedule_id.to_owned()))
+        }
         (ScheduleRunDecision::ManyEnabledTriggers, _) => Err(
             TaskOperationError::ManyEnabledTriggers(schedule_id.to_owned()),
         ),

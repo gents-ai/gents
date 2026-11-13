@@ -244,10 +244,12 @@ fn insecure_key_file(home: &Path) -> Result<Option<PathBuf>, StoreCompatibilityE
                 path: keys.clone(),
                 source,
             })?;
-            let metadata = entry.metadata().map_err(|source| StoreCompatibilityError::Io {
-                path: entry.path(),
-                source,
-            })?;
+            let metadata = entry
+                .metadata()
+                .map_err(|source| StoreCompatibilityError::Io {
+                    path: entry.path(),
+                    source,
+                })?;
             if metadata.is_file() && metadata.permissions().mode() & 0o077 != 0 {
                 found.push(entry.path());
             }

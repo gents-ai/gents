@@ -409,9 +409,7 @@ fn modeled_number(value: &str, prefix: &str) -> u64 {
     value.strip_prefix(prefix).unwrap().parse().unwrap()
 }
 
-fn modeled_goal(
-    reference: &gents_protocol::request_input::GoalAssignmentInput,
-) -> wire::Reference {
+fn modeled_goal(reference: &gents_protocol::request_input::GoalAssignmentInput) -> wire::Reference {
     wire::Reference {
         goal: modeled_number(&reference.goal_id, "goal:"),
         root: reference
@@ -500,7 +498,13 @@ async fn generated_session_goal_reads_classify_and_bind() {
     let agent =
         gents_store::identity::KeyIdentity::load_or_create(home.path().join("agent.key"), None)
             .unwrap();
-    for modeled in gents_lean_vocab::families::goal_session_observation_contracts_classification::cases::<String, String, String>() {
+    for modeled in
+        gents_lean_vocab::families::goal_session_observation_contracts_classification::cases::<
+            String,
+            String,
+            String,
+        >()
+    {
         let case = serde_json::to_value(&modeled.input).unwrap();
         let (session_response, projection_response) = modeled_responses(&case, &agent).await;
         let read = || async {
@@ -541,7 +545,10 @@ async fn generated_session_goal_reads_classify_and_bind() {
             Ok(prepared) => {
                 let mut unchanged = prepared.clone();
                 unchanged.goal_assignment = input.goal_assignment.clone();
-                assert_eq!(unchanged, input, "{case}: binding changes only the assignment");
+                assert_eq!(
+                    unchanged, input,
+                    "{case}: binding changes only the assignment"
+                );
                 wire::PreparedWire {
                     kind: "prepared".into(),
                     reference: prepared.goal_assignment.as_ref().map(modeled_goal),

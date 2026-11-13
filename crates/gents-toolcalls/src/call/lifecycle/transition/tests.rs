@@ -26,9 +26,9 @@ async fn published_job_row(name: &str) -> PublishedAdmission {
         &admission.node_did,
         admission.tool.actor().as_str(),
     )
-        .await
-        .unwrap()
-        .unwrap();
+    .await
+    .unwrap()
+    .unwrap();
     let binding = gents_protocol::agent_identity::AgentIdentityBinding {
         agent_did: agent.agent_did,
         creation_nonce: agent.creation_nonce,

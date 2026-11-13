@@ -220,7 +220,11 @@ async fn a_readable_key_names_the_chmod_and_moves_nothing() {
     complete(&home);
     fs::create_dir_all(home.join("keys")).unwrap();
     fs::write(home.join("keys/local.key"), b"node key").unwrap();
-    fs::set_permissions(home.join("keys/local.key"), fs::Permissions::from_mode(0o644)).unwrap();
+    fs::set_permissions(
+        home.join("keys/local.key"),
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
     let before = checksum(temp.path());
     let receipt = prepare_staged(&home, &temp.path().join("repair.lock")).await;
     fs::remove_file(temp.path().join("repair.lock")).unwrap();

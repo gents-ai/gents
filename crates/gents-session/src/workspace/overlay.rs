@@ -994,9 +994,7 @@ pub(super) fn decode_isolated_workspace_record(
         .to_string();
     let creation_policy = optional_id(row.creation_policy.as_deref())
         .and_then(super::action_plan::CreationPolicy::parse)
-        .ok_or_else(|| {
-            anyhow!("IsolatedWorkspace {workspace_id} has no known creation_policy")
-        })?;
+        .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} has no known creation_policy"))?;
     Ok(IsolatedWorkspaceRecord {
         workspace_id,
         work_unit_id: row.work_unit_id,

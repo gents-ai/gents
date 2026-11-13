@@ -173,14 +173,13 @@ async fn prepare_with_lock(
         .as_ref()
         .map_or(StoreVerdict::Fine, |store| StoreVerdict::of(store.kind));
     let chosen = choice.home.clone();
-    let home = match tokio::task::spawn_blocking(move || {
-        classify_home(&chosen, last_refusal, verdict)
-    })
-    .await?
-    {
-        Ok(home) => home,
-        Err(blocker) => return Ok(blocked(blocker)),
-    };
+    let home =
+        match tokio::task::spawn_blocking(move || classify_home(&chosen, last_refusal, verdict))
+            .await?
+        {
+            Ok(home) => home,
+            Err(blocker) => return Ok(blocked(blocker)),
+        };
     let home = if home == HomeState::Interrupted {
         let serving = node_serves(manager.as_ref(), &choice.home).await;
         let chosen = choice.home.clone();
@@ -430,7 +429,10 @@ async fn settle(
         steps.push(RepairStep::SetAsideFolder);
     }
     let mut repairs = Repairs::new(progress, steps.len());
-    for finding in actions.iter().filter_map(|action| finding_for(action, facts)) {
+    for finding in actions
+        .iter()
+        .filter_map(|action| finding_for(action, facts))
+    {
         repairs.found(finding);
     }
     let mut applied_services = Vec::new();
@@ -650,15 +652,14 @@ async fn start(
         let server = answering_server(home, &graphql)?;
         let observed = observe_port(&server, read_initialized_did(home).await.as_deref()).await;
         let outcome = match hand_started(server.http_port, observed) {
-            Some(blocker) => RepairOutcome::Blocked(
-                service_serving_another(home)
-                    .await
-                    .map_or(blocker, |serving| Blocker::ServiceServesAnotherHome {
-                        home: home.to_path_buf(),
-                        serving,
-                        free_port: free_port_after(server.http_port),
-                    }),
-            ),
+            Some(blocker) => RepairOutcome::Blocked(service_serving_another(home).await.map_or(
+                blocker,
+                |serving| Blocker::ServiceServesAnotherHome {
+                    home: home.to_path_buf(),
+                    serving,
+                    free_port: free_port_after(server.http_port),
+                },
+            )),
             None => RepairOutcome::Answering(graphql),
         };
         return Ok(repairs.report(outcome));
@@ -767,9 +768,8 @@ async fn service_serving_another(home: &Path) -> Option<PathBuf> {
 /// The first loopback port after `taken` that nothing listens on now, for a
 /// node started by hand beside the service's.
 fn free_port_after(taken: u16) -> Option<u16> {
-    (taken.checked_add(1)?..=taken.saturating_add(100)).find(|port| {
-        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, *port)).is_ok()
-    })
+    (taken.checked_add(1)?..=taken.saturating_add(100))
+        .find(|port| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, *port)).is_ok())
 }
 fn answering_server(home: &Path, graphql: &str) -> Result<ServerConfig> {
     let url = url::Url::parse(graphql).context("parsing the recorded GraphQL endpoint")?;

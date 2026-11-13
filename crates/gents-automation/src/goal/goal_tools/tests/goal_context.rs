@@ -68,7 +68,9 @@ async fn versions(access: &ConfigAccess) -> Value {
 #[tokio::test]
 async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
     use gents_lean_vocab::families::goal_tool_context_contracts_context as wire;
-    for modeled in gents_lean_vocab::families::goal_tool_context_contracts_context::cases::<String>() {
+    for modeled in
+        gents_lean_vocab::families::goal_tool_context_contracts_context::cases::<String>()
+    {
         let case = &modeled.input;
         let mut observation = None;
         let mut read_only = None;
@@ -124,7 +126,11 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     root_goals.entry(root).or_insert(version.assignment.goal);
                 }
             }
-            if let Some(root) = entry.reference.as_ref().and_then(|reference| reference.root) {
+            if let Some(root) = entry
+                .reference
+                .as_ref()
+                .and_then(|reference| reference.root)
+            {
                 root_goals
                     .entry(root)
                     .or_insert(entry.reference.as_ref().unwrap().goal);
@@ -278,7 +284,9 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                                     .versions
                                     .iter()
                                     .map(|version| version.assignment.goal)
-                                    .find(|id| goal_id(identity.did(), &session, *id) == goal.goal_id)
+                                    .find(|id| {
+                                        goal_id(identity.did(), &session, *id) == goal.goal_id
+                                    })
                                     .unwrap(),
                                 root: number(
                                     goal.assignment_root_request_doc_id.as_deref().unwrap(),
