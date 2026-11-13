@@ -1,5 +1,13 @@
 pub use gents_loop::rig_compat::*;
 
+/// Rig's provider clients by the wire protocol each speaks, generic over the
+/// transport that carries it.
+pub mod providers {
+    pub use rig::providers::openai::Client as ResponsesClient;
+    pub use rig::providers::openai::CompletionsClient as ChatCompletionsClient;
+    pub use rig::providers::openrouter::Client as OpenRouterClient;
+}
+
 use async_stream::try_stream;
 use futures::{FutureExt, StreamExt};
 use rig::client::CompletionClient;

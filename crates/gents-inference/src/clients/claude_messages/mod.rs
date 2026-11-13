@@ -10,8 +10,9 @@ use std::collections::VecDeque;
 #[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::{Mutex, OnceLock};
 
-use rig::completion::CompletionError;
 use thiserror::Error;
+
+use crate::llm::rig_compat::completion::CompletionError;
 
 use gents_claude::profile;
 

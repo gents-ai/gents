@@ -618,6 +618,17 @@ pub(super) fn capturing(
     RenderedRequestCapturingHttpClient::new(MessagesTransport { fixture, live })
 }
 
+/// The capture layer decides at this future's first poll, so it is awaited
+/// in the task that armed the capture.
+pub(super) fn send_capturing(
+    fixture: Option<String>,
+    live: ClaudeHttpClient,
+    request: Request<Bytes>,
+) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send {
+    let client = capturing(fixture, live);
+    async move { client.send_streaming(request).await }
+}
+
 /// Serves a queued SSE fixture in tests; otherwise forwards to the Bun-exact client.
 #[derive(Clone)]
 pub(super) struct MessagesTransport {

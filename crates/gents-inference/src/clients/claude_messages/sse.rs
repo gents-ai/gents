@@ -7,8 +7,9 @@ use futures::StreamExt;
 use gents_claude::bedrock::{self as bedrock_rules, Mapped};
 use gents_claude::eventstream::{Decoder, EventStreamError};
 use gents_loop::provider_stream::{guard_response, ProviderStreamProtocol};
-use rig::completion::CompletionError;
-use rig::http_client;
+
+use crate::llm::rig_compat::completion::CompletionError;
+use crate::llm::rig_compat::http as http_client;
 
 #[cfg(test)]
 pub(crate) use super::sse_body::stream_sse_body;
@@ -33,7 +34,7 @@ impl From<EventStreamFailure> for http_client::Error {
 /// Bedrock's event-stream body as the Messages SSE bytes the parser reads. A
 /// modeled exception ends the stream after its `error` event, as the SDK's
 /// reader does; a damaged frame or a stream cut inside a frame is an error.
-fn event_stream_to_sse(body: http_client::sse::BoxedStream) -> http_client::sse::BoxedStream {
+fn event_stream_to_sse(body: http_client::BoxedStream) -> http_client::BoxedStream {
     Box::pin(async_stream::stream! {
         let mut body = body;
         let mut decoder = Decoder::new();

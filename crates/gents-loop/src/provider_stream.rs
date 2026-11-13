@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use crate::rig_compat::http::{self as http_client, StreamingResponse};
 use futures::StreamExt;
-use rig::http_client::{self, StreamingResponse};
 
 use crate::provider_activity::ProviderActivity;
 
@@ -261,7 +261,7 @@ mod tests {
             let payload = format!("data: {event}{}", if case.delimited { "\n\n" } else { "" });
             for split in 0..=payload.len() {
                 let activity = Arc::new(ProviderActivity::default());
-                let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter([
+                let body: http_client::BoxedStream = Box::pin(futures::stream::iter([
                     Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
                     Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
                 ]));
@@ -317,7 +317,7 @@ mod tests {
         ] {
             for split in 0..=payload.len() {
                 let activity = Arc::new(ProviderActivity::default());
-                let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter([
+                let body: http_client::BoxedStream = Box::pin(futures::stream::iter([
                     Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
                     Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
                 ]));
