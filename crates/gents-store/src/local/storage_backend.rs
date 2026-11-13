@@ -165,7 +165,7 @@ pub fn incompatible_store(
         });
     }
     if matches!(
-        find_source::<super::backend_protection::BackendProtectionError>(error),
+        super::backend_protection::BackendProtectionError::in_chain(error),
         Some(super::backend_protection::BackendProtectionError::MissingProvenance)
     ) {
         return Some(IncompatibleStore {
