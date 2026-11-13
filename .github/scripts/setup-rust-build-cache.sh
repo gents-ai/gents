@@ -80,8 +80,8 @@ if [[ -z "${SCCACHE_DIR:-}" ]]; then
   exit 1
 fi
 if ! command -v sccache >/dev/null 2>&1; then
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "::error::sccache is missing and Homebrew is not available to install it."
+  if [[ "$(uname -s)" != "Darwin" ]] || ! command -v brew >/dev/null 2>&1; then
+    echo "::error::sccache is missing; install it for the runner account (Homebrew on macOS, a release binary on Linux)."
     exit 1
   fi
   brew install sccache
@@ -91,15 +91,29 @@ mkdir -p "${SCCACHE_DIR}"
 echo "Using SCCACHE_DIR=${SCCACHE_DIR}"
 echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
 sccache --version
-# Never start or recycle the shared host daemon here; the checked-in launchd
-# service owns it.
-service_domain="gui/$(id -u)/com.source.gents.sccache"
-if ! launchctl print "${service_domain}" 2>/dev/null | grep -q 'state = running'; then
-  echo "::error::Host sccache launchd service is not running (${service_domain})."
-  exit 1
+# Never recycle a shared host daemon here; its supervisor owns it. On macOS
+# that is the checked-in launchd service. On Linux it is the systemd unit
+# GENTS_SCCACHE_UNIT when the host installs one; otherwise the server starts
+# on demand under the runner account and its own idle timeout ends it.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  service_domain="gui/$(id -u)/com.source.gents.sccache"
+  if ! launchctl print "${service_domain}" 2>/dev/null | grep -q 'state = running'; then
+    echo "::error::Host sccache launchd service is not running (${service_domain})."
+    exit 1
+  fi
+else
+  sccache_unit="${GENTS_SCCACHE_UNIT:-gents-sccache.service}"
+  if command -v systemctl >/dev/null 2>&1 && systemctl cat "${sccache_unit}" >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet "${sccache_unit}"; then
+      echo "::error::Host sccache systemd unit is not active (${sccache_unit})."
+      exit 1
+    fi
+  elif ! sccache --show-stats >/dev/null 2>&1; then
+    sccache --start-server
+  fi
 fi
 if ! sccache --show-stats >/dev/null 2>&1; then
-  echo "::error::Host sccache service is unavailable; repair the launchd service before running Studio builds."
+  echo "::error::Host sccache server is unavailable; repair its service before running runner builds."
   exit 1
 fi
 echo "Reusing the host sccache server."

@@ -19,6 +19,24 @@ runs:
       shell: bash
       run: .github/scripts/setup-macos-rust-toolchain.sh
 
+    # The workflow's cache defaults are the Studios' /Users/admin paths; a
+    # Linux runner keeps its caches in its own account's home.
+    - name: Use the runner account's cache directories
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        for name in SCCACHE_DIR LEAN_CACHE_ROOT; do
+          value="${!name:-}"
+          if [[ -z "${value}" || "${value}" == /Users/* ]]; then
+            case "${name}" in
+              SCCACHE_DIR) value="${HOME}/.cache/sccache" ;;
+              LEAN_CACHE_ROOT) value="${HOME}/.cache/gents-lean" ;;
+            esac
+            echo "${name}=${value}" >> "${GITHUB_ENV}"
+          fi
+          echo "${name}=${value}"
+        done
+
     # gents-migration's build script compiles the fixture lens for WASM and
     # the callback fixture and pack tests need WASI.
     - name: Install pinned Rust toolchain and WASM targets
