@@ -15,6 +15,8 @@ def parsed (raw : String) : Json :=
 
 def segment (value : CanonicalOutput.Segment) : Json := parsed (canonicalSegmentJson value)
 
+def close (value : CanonicalOutput.Segment) : Json := (segment value).getObjValD "close"
+
 def segments (values : List CanonicalOutput.Segment) : Json :=
   Json.arr (values.map segment).toArray
 

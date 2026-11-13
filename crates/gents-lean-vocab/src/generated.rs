@@ -5,10 +5,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub fn lean_auxiliary_output_cases() -> &'static [LeanAuxiliaryOutputCase] {
-    &lean_contract_snapshot().auxiliary_output_cases
-}
-
 pub fn lean_canonical_dispatch_observation_cases() -> &'static [LeanDispatchObservationCase] {
     &lean_contract_snapshot().canonical_dispatch_observation_cases
 }
@@ -138,54 +134,12 @@ pub fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAuxiliaryAuthority {
-    pub claimed_request_state: String,
-    pub generation: u64,
-    pub begin_boundary: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeanAuxiliaryKind {
     Compaction,
     CompactionFallback,
     Title,
     AccessReview,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAuxiliaryOutputCase {
-    pub name: String,
-    pub raw: LeanCanonicalSegment,
-    pub closing: LeanCanonicalSegment,
-    pub stale_closing: LeanCanonicalSegment,
-    pub recovery_closing: LeanCanonicalSegment,
-    pub authority: LeanAuxiliaryAuthority,
-    pub publication_message: LeanCanonicalMessage<LeanPayloadSpec>,
-    pub native_publication_closing: LeanCanonicalSegment,
-    pub native_publication_message: LeanCanonicalMessage<LeanPayloadSpec>,
-    pub observation: LeanCanonicalOutputObservation,
-    pub expected: LeanAuxiliaryOutputExpected,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAuxiliaryOutputExpected {
-    pub append_accepted: bool,
-    pub claimed_append_accepted: bool,
-    pub begin_accepted: bool,
-    pub begun_append_accepted: bool,
-    pub close_accepted: bool,
-    pub stale_close_replay_accepted: bool,
-    pub recovery_accepted: bool,
-    pub recovery_with_header_accepted: bool,
-    pub publication_accepted: bool,
-    pub empty_header_accepted: bool,
-    pub native_publication_accepted: bool,
-    pub audit: LeanReasoningAuditResult,
-    pub public_view: LeanCanonicalOutputView,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -515,40 +469,6 @@ pub struct LeanCanonicalFlush {
     pub payload: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalOutputObservation {
-    pub request: u64,
-    pub session: u64,
-    pub records: Vec<LeanCanonicalSegment>,
-    pub messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
-    pub denied_headers: Vec<u64>,
-    pub denied_segments: Vec<u64>,
-    pub dependency_denials: Vec<LeanDependencyDenial>,
-    pub owner: LeanOutputOwner,
-    pub target: LeanOutputTarget,
-    pub request_terminal: bool,
-    pub terminal_selection: Option<LeanTerminalSelection>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanCanonicalOutputView {
-    Absent,
-    Live { streams: Vec<LeanCanonicalStream> },
-    Settling { streams: Vec<LeanCanonicalStream> },
-    Loading,
-    Denied,
-    Conflicted,
-    Invalid,
-    Retracted,
-    RetainedPartial { streams: Vec<LeanCanonicalStream> },
-    Published {
-        message: LeanCanonicalMessage<LeanPayloadSpec>,
-        native: Box<LeanReconstructedMessage>,
-    },
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanCanonicalRecoveryItem {
@@ -599,13 +519,6 @@ pub struct LeanCanonicalSpawnedToolAdmission {
     pub failure_class: Option<String>,
     pub persistence: String,
     pub await_mode: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalStream {
-    pub declaration: LeanCanonicalDeclaration,
-    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1120,7 +1033,6 @@ pub struct LeanContractSnapshot {
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
-    pub auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub session_input_edit_cases: Vec<LeanSessionInputEditCase>,
@@ -1225,13 +1137,6 @@ pub struct LeanCrossActorObservation {
     pub agent_invoke: bool,
     pub node_permission_enforced: bool,
     pub requester_node_permission: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDependencyDenial {
-    pub root_close_id: u64,
-    pub denied_doc_id: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2690,14 +2595,6 @@ pub enum LeanMediaKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanMessageRole {
-    System,
-    User,
-    Assistant,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanNamedTransition {
     pub name: String,
     pub from: String,
@@ -2813,21 +2710,6 @@ pub struct LeanOrdinaryClientMutationCase {
 pub enum LeanOutcome {
     Complete,
     Partial,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanOutputOwner {
-    pub current_request: Option<(u64, u64)>,
-    pub live_tools: Vec<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanOutputTarget {
-    pub coordinate: LeanCanonicalCoordinate,
-    pub writer: LeanCanonicalWriter,
-    pub message_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -3667,24 +3549,6 @@ pub struct LeanR6BackgroundingCase {
     pub redrive_allowed: Option<bool>,
     #[serde(default)]
     pub operation: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanReasoningAuditResult {
-    Ok { streams: Vec<LeanCanonicalStream> },
-    Loading,
-    Conflicted,
-    Invalid,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanReconstructedMessage {
-    pub role: LeanMessageRole,
-    pub native_id: Option<String>,
-    pub native_request_id: Option<String>,
-    pub blocks: Vec<LeanMessageBlock<Vec<u8>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

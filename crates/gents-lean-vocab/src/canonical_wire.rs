@@ -3,7 +3,8 @@ use gents_protocol::message::{
     ToolResultContent, UserContent,
 };
 use gents_protocol::output::live::{
-    project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
+    project_live, reconstruct_dense_prefix, DensePrefix, DensePrefixError, LiveObservation,
+    LiveTarget, LiveView, OwnerLiveness,
 };
 use gents_protocol::output::reconstruction::{
     DependencyDenial as OutputDependencyDenial, ObservedSegment, ReconstructedStream,
@@ -1108,4 +1109,54 @@ pub fn project(observation: &Observation) -> LiveView {
             },
         ),
     })
+}
+
+pub fn outcome_wire(outcome: OutputOutcome) -> Outcome {
+    match outcome {
+        OutputOutcome::Complete => Outcome::Complete,
+        OutputOutcome::Partial => Outcome::Partial,
+    }
+}
+
+pub fn closure_wire(close: &SourceClose) -> Closure {
+    match close {
+        SourceClose::Closed {
+            outcome,
+            segments,
+            stream_bytes,
+        } => Closure::Closed {
+            outcome: outcome_wire(*outcome),
+            segments: u64::from(*segments),
+            stream_bytes: stream_bytes.clone(),
+        },
+        SourceClose::Retracted => Closure::Retracted,
+    }
+}
+
+/// The audit verdict of production's dense-prefix reconstruction.
+pub fn audit_wire(prefix: Result<DensePrefix, DensePrefixError>) -> AuditResult {
+    match prefix {
+        Ok(prefix) => AuditResult::Ok {
+            streams: prefix.streams.iter().map(stream_wire).collect(),
+        },
+        Err(DensePrefixError::Loading) => AuditResult::Loading,
+        Err(DensePrefixError::Conflicted { .. }) => AuditResult::Conflicted,
+        Err(DensePrefixError::Invalid { .. }) => AuditResult::Invalid,
+    }
+}
+
+/// Production's dense audit prefix of an observation's target.
+pub fn audit(observation: &Observation) -> AuditResult {
+    let records = segments(&observation.records, observation.session);
+    let observed: Vec<ObservedSegment<'_>> = records
+        .iter()
+        .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
+        .collect();
+    audit_wire(reconstruct_dense_prefix(
+        &observed,
+        &nat(observation.target.coordinate.request),
+        &source(&observation.target.coordinate.source),
+        &writer(&observation.target.writer),
+        None,
+    ))
 }

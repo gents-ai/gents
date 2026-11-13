@@ -313,6 +313,7 @@ import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.SchemaArgumentRepairFamily
 import Proofs.Conformance.ReasoningAudit
 import Proofs.Conformance.CanonicalOutputProjection
+import Proofs.Conformance.AuxiliaryOutput
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientDelivery
@@ -557,8 +558,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
-    ++ "\"auxiliary_output_cases\":" ++ jsonArray
-      (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
 
 
 def snapshotJson : String :=
