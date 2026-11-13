@@ -173,24 +173,55 @@ fn seed_position_matches_the_lean_model() {
 }
 
 #[tokio::test]
-async fn source_registered_before_collection_retains_its_first_arrival() -> Result<()> {
-    let fixture = fixture(false).await?;
-    let node = &fixture.node;
-    let access = &fixture.user;
-    let agent = &fixture.agent;
-    publish(access, vec![source("FutureWork")]).await?;
-    assert_eq!(cursor(agent, "FutureWork").await?, "0");
-    access
-        .add_collection("type FutureWork { label: String @immutable }")
-        .await?;
-    let first = create_source(access, "FutureWork", "first").await?;
-    publish(access, vec![trigger(true)]).await?;
-    assert_eq!(cursor(agent, "FutureWork").await?, "0");
-    let page = access.execute("{_documentArrivals(collection:\"FutureWork\",after:\"0\",limit:128){entries{docID cursor}}}").await?;
-    assert_eq!(
-        page["data"]["_documentArrivals"]["entries"],
-        json!([{"docID":first,"cursor":"1"}])
-    );
-    node.shutdown().await.expect("node shutdown");
+async fn first_arrival_after_missing_collection_matches_the_lean_model() -> Result<()> {
+    let cases = gents_lean_vocab::families::event_source_cursor_first_arrival::cases();
+    for case in &cases {
+        let fixture = fixture(false).await?;
+        let node = &fixture.node;
+        let access = &fixture.user;
+        let agent = &fixture.agent;
+        publish(access, vec![source("FutureWork")]).await?;
+        let seeded: u64 = cursor(agent, "FutureWork").await?.parse()?;
+        access
+            .add_collection("type FutureWork { label: String @immutable }")
+            .await?;
+        let mut created = Vec::new();
+        for index in 0..case.input.arrivals {
+            created.push(create_source(access, "FutureWork", &format!("arrival-{index}")).await?);
+        }
+        publish(access, vec![trigger(true)]).await?;
+        let after_publish: u64 = cursor(agent, "FutureWork").await?.parse()?;
+        let page = access.execute("{_documentArrivals(collection:\"FutureWork\",after:\"0\",limit:128){entries{docID cursor}}}").await?;
+        let entries = page["data"]["_documentArrivals"]["entries"]
+            .as_array()
+            .context("arrival page omitted entries")?;
+        let docs = entries
+            .iter()
+            .map(|entry| {
+                Ok(entry["docID"]
+                    .as_str()
+                    .context("arrival omitted document ID")?
+                    .to_owned())
+            })
+            .collect::<Result<Vec<String>>>()?;
+        assert_eq!(docs, created, "{:?}", case.input);
+        let pending = entries
+            .iter()
+            .map(|entry| {
+                Ok(entry["cursor"]
+                    .as_str()
+                    .context("arrival omitted cursor")?
+                    .parse::<u64>()?)
+            })
+            .collect::<Result<Vec<u64>>>()?;
+        case.check(
+            gents_lean_vocab::families::event_source_cursor_first_arrival::FirstArrivalOutput {
+                seeded,
+                after_publish,
+                pending,
+            },
+        );
+        node.shutdown().await.expect("node shutdown");
+    }
     Ok(())
 }

@@ -4,6 +4,7 @@ import Proofs.Conformance.Family
 
 namespace Conformance.Eval
 
+open Lean
 open Conformance.Contracts
 open _root_.Eval
 
@@ -54,5 +55,27 @@ def documentCapture : Conformance.Family CaptureInput Bool where
               [false, true].map fun nested =>
                 { collection, fields, filterFields, filter := captureFilter filterFields nested }
   model := fun i => documentCaptureAllowed i.collection i.fields i.filterFields
+
+deriving instance ToJson for ReasonRecord
+
+structure StoredVerdictInput where
+  kind : OutcomeKind
+  providerReason : Option ProviderReason
+  score : Option Nat
+  deriving ToJson
+
+structure StoredVerdictOutput where
+  score : Option Nat
+  reason : ReasonRecord
+  deriving ToJson
+
+@[conformance_family]
+def storedVerdict : Family StoredVerdictInput StoredVerdictOutput where
+  inputs := allKinds.flatMap fun kind =>
+    ([none] ++ allReasons.map some).flatMap fun reason =>
+      [none, some 0, some 10000].map fun score => { kind, providerReason := reason, score }
+  model := fun i =>
+    { score := storedScore i.kind i.providerReason i.score
+      reason := recordedReason i.providerReason }
 
 end Conformance.Eval

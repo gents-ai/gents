@@ -236,6 +236,10 @@
       "rust_owner": "gents",
       "reason": "the sweep registry and startup order stay in runtime; per-collection sweeps sit with their rows: Contract and Inference in inference, Requests and owed-delivery in session, tool-call, session-message, background-restart, plugin-job and task-hook sweeps in toolcalls"
     },
+    "Proofs.Runtime.RuntimeReconcile.ExecutionRegistry": {
+      "rust_owner": "gents-toolcalls",
+      "reason": "raised: the background execution registry holds one runtime service admission per reservation"
+    },
     "Proofs.Session.Client": {
       "rust_owner": "gents-protocol",
       "reason": "raised: the client turn projection is defined over the request and streaming-response models (session); Rust owner is gents-protocol client_protocol"

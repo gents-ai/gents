@@ -165,7 +165,6 @@ async fn starter_entry(
     node: &Arc<EmbeddedNode>,
     caller: &gents_protocol::row::AgentRequest,
     tools: &AgentToolConfig,
-    access: &ConfigAccess,
     lineage: &SessionLineage,
     filter: &SessionFilter,
 ) -> Result<Option<Value>> {
@@ -175,23 +174,6 @@ async fn starter_entry(
     ) else {
         return Ok(None);
     };
-    let visible = access
-        .read_view(&crate::views::SessionPage {
-            input: gents_protocol::operations::session::SessionListInput {
-                node_did: Some(starter.scope.node_did.clone()),
-                requester_did: starter.scope.requester_did.clone(),
-                session_id: Some(starter.scope.session_id.clone()),
-                include_archived: filter.include_archived,
-            },
-            ..Default::default()
-        })
-        .await?;
-    if !visible
-        .iter()
-        .any(|row| row.session.requester_did == starter.scope.requester_did)
-    {
-        return Ok(None);
-    }
     let target_allowed = starter.scope.requester_did.as_deref() == Some(caller.agent_did.as_str())
         && super::resolve_send_target(
             node,
@@ -342,7 +324,7 @@ pub async fn agent_session_list(
     // The starter heads the first page outside `limit`: it has no row in the
     // caller's requester scope to anchor a cursor on.
     let starter = match &cursor {
-        None => starter_entry(node, caller, tools, &access, &lineage, &filter).await?,
+        None => starter_entry(node, caller, tools, &lineage, &filter).await?,
         Some(_) => None,
     };
     let mut result = Vec::new();
