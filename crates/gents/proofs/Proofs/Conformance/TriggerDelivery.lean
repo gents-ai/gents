@@ -92,13 +92,6 @@ def StateWire.toModel (s : StateWire) : State :=
   { receipts := s.receipts.map (·.toModel), requests := s.requests.map (·.toModel),
     outcomes := s.outcomes.map (·.toModel), goals := s.goals.map (·.toModel) }
 
-def callbackVisibilityCases : List String := do
-  let visible ← [false, true]
-  let linked ← [false, true]
-  pure <| "{\"visible\":" ++ toString visible ++ ",\"linked\":" ++ toString linked ++
-    ",\"ready\":" ++ toString (EventDelivery.Durable.callbackResultReady visible linked) ++
-    ",\"after\":" ++ toString (EventDelivery.Durable.callbackResultCursor 4 5 visible linked) ++ "}"
-
 def identity (owner document : String) : Identity :=
   { owner, document, trigger := "handoff", collection := "Work" }
 
@@ -879,8 +872,7 @@ def deliveryOptions : Family DeliveryOptionInput Bool where
     [false, true].map fun targetExisting => { kind, emitOutcome, concurrency, targetExisting }
   model := fun i => Triggers.deliveryOptionsAllowed i.kind i.emitOutcome i.concurrency i.targetExisting
 
-def triggerDeliveryCallbackVisibilityCasesJson : String :=
-  jsonArray callbackVisibilityCases
+attribute [conformance_function] EventDelivery.Durable.callbackResultReady
 
 example : (admit (admit {} (fire "a")) (fire "a")).requests.length = 1 := by native_decide
 example : outcomeDue {} { fire := { fire "a" with goalBacked := true }, terminal := false } = false := by

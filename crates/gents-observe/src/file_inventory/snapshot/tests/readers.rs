@@ -1,47 +1,47 @@
 use super::*;
-use serde_json::Value;
+use gents_lean_vocab::families::file_inventory_contracts_shared_reader_snapshot as shared_reader;
 
-fn check_case(
-    cases: &[Value],
-    exercised: &mut BTreeSet<String>,
-    name: &str,
+type Observations = std::collections::BTreeMap<
+    &'static str,
+    Vec<
+        shared_reader::SharedReaderOutput<
+            gents_protocol::file_inventory::FileInventoryRefusalReason,
+        >,
+    >,
+>;
+
+fn observe(
+    observed: &mut Observations,
+    name: &'static str,
     result: Result<FileInventorySnapshot>,
 ) -> Option<FileInventorySnapshot> {
-    let case = cases.iter().find(|case| case["name"] == name).unwrap();
-    exercised.insert(name.into());
-    match case["expected"]["kind"].as_str().unwrap() {
-        "rejected" => {
-            let error = result.expect_err(name);
-            assert_eq!(
-                refusal_reason(&error),
-                gents_protocol::file_inventory::FileInventoryRefusalReason::Rejected,
-                "{name}: {error:#}"
-            );
-            None
-        }
-        "selected" => {
-            let snapshot = result.unwrap_or_else(|error| panic!("{name}: {error:#}"));
-            assert_eq!(
-                serde_json::to_value(&snapshot.binding.coverage).unwrap(),
-                case["coverage"],
-                "{name}"
-            );
-            Some(snapshot)
-        }
-        other => panic!("unhandled reader model outcome {other}"),
-    }
+    let (output, snapshot) = match result {
+        Ok(snapshot) => (
+            shared_reader::SharedReaderOutput {
+                refusal: None,
+                coverage: Some(shared_reader::Coverage {
+                    entries: snapshot.binding.coverage.entries,
+                    pending: snapshot.binding.coverage.pending,
+                    unknown: snapshot.binding.coverage.unknown,
+                }),
+            },
+            Some(snapshot),
+        ),
+        Err(error) => (
+            shared_reader::SharedReaderOutput {
+                refusal: Some(refusal_reason(&error)),
+                coverage: None,
+            },
+            None,
+        ),
+    };
+    observed.entry(name).or_default().push(output);
+    snapshot
 }
 
 #[tokio::test]
 async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy() {
-    let contracts: Value =
-        tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot::<Value>)
-            .await
-            .unwrap()
-            .unwrap();
-    let cases = contracts["file_inventory_reader_cases"].as_array().unwrap();
-    assert!(!cases.is_empty());
-    let mut exercised = BTreeSet::new();
+    let mut observed = Observations::new();
     let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "inventory-independent-reader".into(),
         real_identity: true,
@@ -124,9 +124,8 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
             session_id,
         },
     };
-    check_case(
-        cases,
-        &mut exercised,
+    observe(
+        &mut observed,
         "shared_missing_capture_is_not_empty_complete",
         FileInventorySnapshot::load(&node, &admission).await,
     );
@@ -187,9 +186,8 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
         } else {
             "shared_unreadable_projection_owner_is_not_trusted"
         };
-        let snapshot = check_case(
-            cases,
-            &mut exercised,
+        let snapshot = observe(
+            &mut observed,
             name,
             FileInventorySnapshot::load(&node, &admission).await,
         );
@@ -226,9 +224,8 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
         &mut admission.session_doc_id,
         "another-physical-root".into(),
     );
-    check_case(
-        cases,
-        &mut exercised,
+    observe(
+        &mut observed,
         "shared_root_physical_identity_changed",
         FileInventorySnapshot::load(&node, &admission).await,
     );
@@ -271,19 +268,29 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
     )
     .await
     .unwrap();
-    check_case(
-        cases,
-        &mut exercised,
+    observe(
+        &mut observed,
         "shared_authorized_empty_root",
         FileInventorySnapshot::load(&node, &admission).await,
     );
-    assert_eq!(
-        exercised,
-        cases
-            .iter()
-            .map(|case| case["name"].as_str().unwrap().to_owned())
-            .collect()
-    );
+    for case in gents_lean_vocab::families::file_inventory_contracts_shared_reader_snapshot::cases::<
+        gents_protocol::file_inventory::FileInventoryRefusalReason,
+    >() {
+        let outputs = observed
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the walk never reached {}", case.input.name));
+        let first = serde_json::to_value(&outputs[0]).unwrap();
+        for output in &outputs[1..] {
+            assert_eq!(
+                serde_json::to_value(output).unwrap(),
+                first,
+                "{}",
+                case.input.name
+            );
+        }
+        case.check(outputs.into_iter().next().unwrap());
+    }
+    assert!(observed.is_empty(), "{:?}", observed.keys());
     node.shutdown().await.expect("node shutdown");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
 }

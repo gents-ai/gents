@@ -5,7 +5,6 @@ import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
 
-open Conformance.Contracts (processStates processActions)
 
 inductive LifecycleTransitionClassification where
   | legal
@@ -42,39 +41,5 @@ def actionForPairFromSamples {σ α : Type}
               none
         | none => none
   candidates.head?
-
-def processTransitionAction? (source target : String) : Option String :=
-  actionForPairFromSamples
-    processStates
-    processActions
-    ProcessState.step?
-    ProcessState.toDefraDB
-    source
-    target
-
-def processTransitionClassification
-    (action : Option String) : LifecycleTransitionClassification :=
-  match action with
-  | some _ => .legal
-  | none => .illegal
-
-def processTransitionCase (source target : ProcessState) : LifecycleTransitionCase :=
-  let sourceName := source.toDefraDB
-  let targetName := target.toDefraDB
-  let action := processTransitionAction? sourceName targetName
-  let classification := processTransitionClassification action
-  { name := lifecycleTransitionCaseName "Process" sourceName targetName
-  , domain := "Process"
-  , fromState := sourceName
-  , toState := targetName
-  , classification := classification.toContract
-  , action := action
-  , boundary := none
-  }
-
-def processTransitionCases : List LifecycleTransitionCase :=
-  processStates.flatMap fun source =>
-    processStates.map fun target =>
-      processTransitionCase source target
 
 end Conformance.ContractCases

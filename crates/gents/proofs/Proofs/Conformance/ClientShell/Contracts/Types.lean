@@ -89,10 +89,6 @@ def jsonStringOption : Option String → String
   | some value => jsonString value
   | none       => "null"
 
-def jsonBoolOption : Option Bool → String
-  | some value => boolJson value
-  | none       => "null"
-
 def interruptPhaseName : ClientShell.InterruptControl.Phase → String
   | .idle => "ready"
   | .submitting => "submittingRequest"

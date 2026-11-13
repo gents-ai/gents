@@ -68,92 +68,11 @@ private def toolJson (value : Tool) : String := object
    ("agent_did", jsonString value.agentDid),
    ("accepted", boolString value.accepted), ("state", jsonString value.state.toDefraDB)]
 
-private def terminalSelectionJson : CanonicalOutput.TerminalSelection → String
-  | .noMessage => tagged "no_message"
-  | .message id => tagged "message" [("id", toString id)]
-
-/-- Serialization preserves every closure input field. Raw effects remain
-unselected inputs to the canonical owner rather than normalized output. -/
-private def closureJson (value : ClosureInput) : String := object
-  [("request", hydrationRequestJson value.request),
-   ("bases", jsonArray (value.bases.map (hydrationDocumentKeyJson ·.key))),
-   ("roots", jsonArray (value.roots.map toString)),
-   ("requirements", jsonArray (value.requirements.map fun row => object
-      [("request", toString row.request), ("session", toString row.session),
-       ("selection", optional terminalSelectionJson row.selection)])),
-   ("messages", jsonArray (value.messages.map canonicalMessageJson)),
-   ("segments", jsonArray (value.segments.map canonicalSegmentJson)),
-   ("access", jsonArray (value.access.map hydrationAccessJson)),
-   ("denied_headers", jsonArray (value.deniedHeaders.map toString)),
-   ("denied_segments", jsonArray (value.deniedSegments.map toString)),
-   ("dependency_denials", jsonArray (value.dependencyDenials.map fun row => object
-      [("root_close_id", toString row.rootCloseId), ("denied_doc_id", toString row.deniedDocId)])),
-   ("effects", jsonArray (value.effects.map hydrationEffectJson))]
-
-private def sessionOwnerJson (row : SessionOwner) : String := object
-  [("session", jsonString row.session), ("native_session", toString row.nativeSession),
-   ("requester", jsonString row.requester), ("node", jsonString row.node)]
-
-private def sessionReadJson (value : SessionReadObservation) : String := object
-  [("scope", object [("requester", jsonString value.scope.requester), ("node", jsonString value.scope.node),
-      ("session", jsonString value.scope.session),
-      ("native_session", toString value.scope.nativeSession)]),
-   ("source", sessionOwnerJson value.source), ("visible", boolString value.visible)]
-
-private def catalogJson (value : CatalogInput) : String := object
-  [("sessions", jsonArray (value.sessions.map sessionOwnerJson)),
-   ("session_reads", jsonArray (value.sessionReads.map sessionReadJson)),
-   ("closure_inputs", jsonArray (value.closureInputs.map closureJson))]
-
 private def boundaryName : ReadBoundary → String
   | .atomicExhaustive => "atomic_exhaustive"
   | .readerBound _ => "reader_bound"
   | .incomplete => "incomplete"
   | .nonAtomic => "non_atomic"
-
-private def sourceJson (value : SourceInput) : String := object
-  [("catalog", catalogJson value.catalog), ("tools", jsonArray (value.tools.map toolJson)),
-   ("projections", jsonArray (value.projections.map projectionJson)),
-   ("read_scope", match value.boundary with
-    | .readerBound scope => object [("requester", jsonString scope.requester), ("node", jsonString scope.node),
-        ("session", jsonString scope.session), ("native_session", toString scope.nativeSession)]
-    | _ => "null"),
-   ("boundary", jsonString (boundaryName value.boundary)),
-   ("session_owner", jsonString value.sessionOwner)]
-
-private def captureJson : Capture → String
-  | .pending => tagged "pending"
-  | .unknown => tagged "unknown"
-  | .observed projection => tagged "observed" [("projection", projectionJson projection)]
-
-private def windowJson (value : Order.Window) : String := object
-  [("tool", toString value.tool), ("admitted", toString value.admitted),
-   ("delivered", toString value.delivered)]
-
-private def snapshotJson (value : Snapshot) : String := object
-  [("admission", hydrationRequestJson value.admission),
-   ("documents", jsonArray (value.documents.map hydrationDocumentKeyJson)),
-   ("tools", jsonArray (value.tools.map fun row => object
-      [("tool", toolJson row.tool), ("capture", captureJson row.capture)])),
-   ("ordering", jsonArray (value.ordering.map (optional windowJson)))]
-
-private def selectionResultJson (result : Except Error Snapshot) : String :=
-  match result with
-  | .error .rejected => tagged "rejected"
-  | .error .unknown => tagged "unknown"
-  | .ok value => tagged "selected" [("snapshot", snapshotJson value),
-      ("known_empty", boolString value.knownEmpty)]
-
-private def selectionJson (source : SourceInput) (request : Request) : String :=
-  selectionResultJson (snapshot source.model request)
-
-private def selectionCaseJson (value : SelectionCase) : String := object
-  [("name", jsonString value.name), ("source", sourceJson value.source),
-   ("admission", hydrationRequestJson admission), ("expected", selectionJson value.source admission)]
-
-def forkCasesJson : String := jsonArray [object
-  [("name", jsonString "authorized_fork_origin"), ("source", sourceJson forkSource),
-   ("admission", hydrationRequestJson forkRequest), ("expected", selectionJson forkSource forkRequest)]]
 
 private def actionJson : ToolExecution.ToolCallContext.Action → String
   | .dispatch => tagged "dispatch"
@@ -174,80 +93,6 @@ private def publicationCaseJson (value : PublicationCase) : String := object
    ("observation", observationJson value.observation), ("projection_id", "3001"),
    ("expected", optional projectionJson
       (publish value.pre value.action value.won value.write value.actual value.observation 3001))]
-
-private def coverageJson (value : Coverage) : String := object
-  [("entries", toString value.entries), ("pending", toString value.pending),
-   ("unknown", toString value.unknown)]
-
-private def entryJson (value : Entry) : String := object
-  [("tool", toString value.tool), ("request", toString value.request), ("scope", scopeJson value.scope),
-   ("projection", toString value.projection), ("observation", toString value.observation),
-   ("change", changeJson value.change),
-   ("request_coverage", optional coverageJson value.requestCoverage),
-   ("order", match value.order with
-     | .unresolved => tagged "unresolved"
-     | .ordered index entries => tagged "ordered" [("index", toString index), ("entries", toString entries)])]
-
-private def cursorJson (value : Cursor) : String := object
-  [("snapshot", snapshotJson value.snapshot), ("offset", toString value.offset)]
-
-private def pageJson (value : Page) : String := object
-  [("snapshot", snapshotJson value.snapshot), ("offset", toString value.offset),
-   ("entries", jsonArray (value.entries.map entryJson)), ("next", optional cursorJson value.next)]
-
-private def refusalReasonJson : RefusalReason → String
-  | .rejected => jsonString "rejected"
-  | .stale => jsonString "stale"
-  | .unavailable => jsonString "unavailable"
-
-
-private def sourceProjectionCaseJson (value : SelectionCase) : String :=
-  let pages := match snapshot value.source.model admission with
-    | .error _ => []
-    | .ok current => (List.range (max 1 ((current.entries.length + pageLimit - 1) / pageLimit))).map
-        (fun index => pageJson (makePage current (index * pageLimit)))
-  object [("name", jsonString value.name), ("source", sourceJson value.source),
-    ("admission", hydrationRequestJson admission), ("expected", selectionJson value.source admission),
-    ("refusal", match snapshot value.source.model admission with
-      | .error error => refusalReasonJson error.refusal
-      | .ok _ => "null"),
-    ("pages", jsonArray pages)]
-
-def readerCasesJson : String := jsonArray ((FileInventory.ReaderExamples.cases.filter fun value =>
-  ["shared_native_root_read", "shared_authorized_empty_root",
-   "shared_root_physical_identity_changed", "shared_missing_capture_is_not_empty_complete",
-   "shared_unreadable_projection_owner_is_not_trusted"].contains value.name).map fun value =>
-  object [("name", jsonString value.name), ("source", sourceJson value.source),
-    ("expected", selectionResultJson (directSnapshot value.source.model admission.requester admission)),
-    ("coverage", match directSnapshot value.source.model admission.requester admission with
-      | .error _ => "null"
-      | .ok current => coverageJson current.coverage)])
-
-/-- Native projection checks refine this subset of the executable source cases.
-Canonical admission, fork selection and transport remain separate consumers. -/
-def sourceProjectionCasesJson : String :=
-  let selected := selectionCases.filter fun value =>
-    ["verified_unchanged_terminal", "unchanged_claim_cannot_carry_images",
-     "unchanged_claim_cannot_retain_image_identity", "unchanged_claim_cannot_precede_terminal",
-     "accepted_terminal_capture", "legacy_missing_capture_is_unknown",
-     "active_missing_capture_is_pending", "uncommitted_capture_before_terminal",
-     "projection_wrong_request", "projection_in_another_session_is_not_this_inventory",
-     "projection_wrong_actual_requester", "projection_wrong_actual_node",
-     "projection_foreign_stored_owner", "invalid_empty_capture_not_empty_inventory",
-     "duplicate_paths_in_capture"].contains value.name
-  let largeCase : SelectionCase := ⟨"one_capture_exceeds_one_page", oneLargeCapture, .selected 65 0 0 false⟩
-  jsonArray ((selected ++ [largeCase]).map sourceProjectionCaseJson)
-
-private def bindingJson (value : PageBinding) : String := object
-  [("admission", hydrationRequestJson value.admission), ("digest", jsonString value.digest),
-   ("coverage", coverageJson value.coverage)]
-
-private def pageCursorJson (value : PageCursor) : String := object
-  [("binding", bindingJson value.binding), ("offset", toString value.offset)]
-
-private def wirePageJson (value : WirePage) : String := object
-  [("binding", bindingJson value.binding), ("offset", toString value.offset),
-   ("entries", jsonArray (value.entries.map entryJson)), ("next", optional pageCursorJson value.next)]
 
 private def directSource (visible : Bool) : SourceInput :=
   let current := Examples.source 1
@@ -276,18 +121,6 @@ theorem direct_reader_cases_pinned :
       | .ok _ => true
       | .error _ => false) =
     [true, false, false, false, false, false, true] := by native_decide
-
-def directReaderCasesJson : String :=
-  jsonArray (directCases.map fun (name, actor, source) =>
-    let result := directSnapshot source.model actor admission
-    object [("name", jsonString name), ("actor", jsonString actor),
-      ("admission", hydrationRequestJson admission), ("source", sourceJson source),
-      ("expected", selectionResultJson result),
-      ("page", match result with
-        | .error _ => "null"
-        | .ok current => wirePageJson ((makePage current 0).toWire "direct-snapshot")),
-      ("wrong_physical_expected", selectionResultJson (directSnapshot source.model actor
-          {admission with nativeSession := admission.nativeSession + 1}))])
 
 deriving instance Lean.ToJson for Order.Window
 
@@ -849,5 +682,203 @@ or malformed native IDs cannot become modeled observations; abstract hash
 labels cannot bypass the capture decoder's byte/hash checks. These are
 executable inputs/outputs, not a production wire-format proposal. -/
 def publicationCasesJson : String := jsonArray (publicationCases.map publicationCaseJson)
+
+deriving instance Lean.ToJson for SessionOwner
+deriving instance Lean.ToJson for RefusalReason
+
+structure ScopeWire where
+  requester : String
+  node : String
+  session : String
+  nativeSession : Nat
+  deriving Lean.ToJson
+
+def ScopeWire.ofModel (value : CanonicalOutput.Hydration.AuthorizationScope) : ScopeWire :=
+  ⟨value.requester, value.node, value.session, value.nativeSession⟩
+
+structure SessionReadWire where
+  scope : ScopeWire
+  source : SessionOwner
+  visible : Bool
+  deriving Lean.ToJson
+
+structure CatalogWire where
+  sessions : List SessionOwner
+  sessionReads : List SessionReadWire
+  closureInputs : List ClosureWire
+  deriving Lean.ToJson
+
+structure SourceWire where
+  catalog : CatalogWire
+  tools : List ToolWire
+  projections : List ProjectionWire
+  readScope : Option ScopeWire
+  boundary : String
+  sessionOwner : String
+  deriving Lean.ToJson
+
+def SourceWire.ofModel (value : SourceInput) : SourceWire :=
+  { catalog :=
+      { sessions := value.catalog.sessions
+        sessionReads := value.catalog.sessionReads.map fun read =>
+          ⟨.ofModel read.scope, read.source, read.visible⟩
+        closureInputs := value.catalog.closureInputs.map ClosureWire.ofModel }
+    tools := value.tools.map ToolWire.ofModel
+    projections := value.projections.map ProjectionWire.ofModel
+    readScope := match value.boundary with
+      | .readerBound scope => some (.ofModel scope)
+      | _ => none
+    boundary := boundaryName value.boundary
+    sessionOwner := value.sessionOwner }
+
+structure DirectReaderInput where
+  name : String
+  actor : String
+  admission : FileInventory.Request
+  source : SourceWire
+  deriving Lean.ToJson
+
+/-- What the served node's direct reader shows: whether the read was accepted,
+for the admitted physical root and for another one, and the first page's
+binding coverage and entry count. -/
+structure DirectReaderOutput where
+  selected : Bool
+  wrongPhysicalSelected : Bool
+  coverage : Option Coverage
+  entries : Option Nat
+  deriving Lean.ToJson
+
+example : (directCases.map (·.1)).Nodup := by native_decide
+
+def directSourceOf (name : String) : SourceInput :=
+  ((directCases.find? (·.1 == name)).map (·.2.2)).getD (directSource true)
+
+/-- The wire carries each case to the native adapter; the model evaluates the
+case its unique name selects. -/
+@[conformance_family]
+def directReaderSnapshot : Family DirectReaderInput DirectReaderOutput where
+  inputs := directCases.map fun (name, actor, source) =>
+    { name, actor, admission, source := .ofModel source }
+  model := fun i =>
+    let source := (directSourceOf i.name).model
+    let result := directSnapshot source i.actor i.admission
+    let firstPage := result.toOption.map fun current => makePage current 0
+    { selected := result.toOption.isSome
+      wrongPhysicalSelected := (directSnapshot source i.actor
+        {i.admission with nativeSession := i.admission.nativeSession + 1}).toOption.isSome
+      coverage := firstPage.map fun page => (page.toWire "direct-snapshot").binding.coverage
+      entries := firstPage.map (·.entries.length) }
+
+structure ForkInput where
+  name : String
+  source : SourceWire
+  admission : FileInventory.Request
+  deriving Lean.ToJson
+
+structure ForkOutput where
+  selected : Bool
+  entries : Nat
+  deriving Lean.ToJson
+
+/-- The served-node fork scenario forks one completed, captured parent tool;
+this is the one source it builds. -/
+@[conformance_family]
+def forkSnapshot : Family ForkInput ForkOutput where
+  inputs := [{ name := "authorized_fork_origin", source := .ofModel forkSource, admission := forkRequest }]
+  model := fun _ =>
+    let result := snapshot forkSource.model forkRequest
+    { selected := result.toOption.isSome
+      entries := (result.toOption.map (·.entries.length)).getD 0 }
+
+structure SelectionInput where
+  name : String
+  source : SourceWire
+  admission : FileInventory.Request
+  deriving Lean.ToJson
+
+structure PageObservation where
+  offset : Nat
+  paths : List String
+  next : Option Nat
+  deriving Lean.ToJson
+
+structure SourceProjectionOutput where
+  refusal : Option RefusalReason
+  coverage : Option Coverage
+  pages : List PageObservation
+  deriving Lean.ToJson
+
+/-- Native projection checks refine this subset of the executable source cases:
+the served node publishes one tool with its own captures and projections.
+Canonical admission, fork selection and transport remain separate consumers. -/
+def sourceProjectionCases : List SelectionCase :=
+  (selectionCases.filter fun value =>
+    ["verified_unchanged_terminal", "unchanged_claim_cannot_carry_images",
+     "unchanged_claim_cannot_retain_image_identity", "unchanged_claim_cannot_precede_terminal",
+     "accepted_terminal_capture", "legacy_missing_capture_is_unknown",
+     "active_missing_capture_is_pending", "uncommitted_capture_before_terminal",
+     "projection_wrong_request", "projection_in_another_session_is_not_this_inventory",
+     "projection_wrong_actual_requester", "projection_wrong_actual_node",
+     "projection_foreign_stored_owner", "invalid_empty_capture_not_empty_inventory",
+     "duplicate_paths_in_capture"].contains value.name) ++
+  [⟨"one_capture_exceeds_one_page", oneLargeCapture, .selected 65 0 0 false⟩]
+
+example : (sourceProjectionCases.map (·.name)).Nodup := by native_decide
+
+def sourceProjectionSourceOf (name : String) : SourceInput :=
+  ((sourceProjectionCases.find? (·.name == name)).map (·.source)).getD (source 1)
+
+/-- Every page of the selected snapshot, followed from the first. -/
+def pageObservations (current : Snapshot) : List PageObservation :=
+  (List.range (max 1 ((current.entries.length + pageLimit - 1) / pageLimit))).map fun index =>
+    let page := makePage current (index * pageLimit)
+    { offset := page.offset, paths := page.entries.map (·.change.path)
+      next := page.next.map (·.offset) }
+
+/-- The wire carries each case to the native adapter; the model evaluates the
+case its unique name selects. -/
+@[conformance_family]
+def sourceProjectionPages : Family SelectionInput SourceProjectionOutput where
+  inputs := sourceProjectionCases.map fun value =>
+    { name := value.name, source := .ofModel value.source, admission }
+  model := fun i =>
+    match snapshot (sourceProjectionSourceOf i.name).model i.admission with
+    | .error error => { refusal := some error.refusal, coverage := none, pages := [] }
+    | .ok current =>
+        { refusal := none, coverage := some current.coverage, pages := pageObservations current }
+
+structure SharedReaderInput where
+  name : String
+  source : SourceWire
+  deriving Lean.ToJson
+
+structure SharedReaderOutput where
+  refusal : Option RefusalReason
+  coverage : Option Coverage
+  deriving Lean.ToJson
+
+/-- One served-node fixture walks a shared reader through a missing capture, a
+retained capture whose reader relation it toggles, a changed physical root and
+an empty root; these are the reader cases that walk builds. -/
+def sharedReaderCases : List SelectionCase :=
+  FileInventory.ReaderExamples.cases.filter fun value =>
+    ["shared_native_root_read", "shared_authorized_empty_root",
+     "shared_root_physical_identity_changed", "shared_missing_capture_is_not_empty_complete",
+     "shared_unreadable_projection_owner_is_not_trusted"].contains value.name
+
+example : (sharedReaderCases.map (·.name)).Nodup := by native_decide
+
+def sharedReaderSourceOf (name : String) : SourceInput :=
+  ((sharedReaderCases.find? (·.name == name)).map (·.source)).getD FileInventory.ReaderExamples.shared
+
+/-- The wire carries each case to the native adapter; the model evaluates the
+case its unique name selects as the admission's authenticated reader. -/
+@[conformance_family]
+def sharedReaderSnapshot : Family SharedReaderInput SharedReaderOutput where
+  inputs := sharedReaderCases.map fun value => { name := value.name, source := .ofModel value.source }
+  model := fun i =>
+    match directSnapshot (sharedReaderSourceOf i.name).model admission.requester admission with
+    | .error error => { refusal := some error.refusal, coverage := none }
+    | .ok current => { refusal := none, coverage := some current.coverage }
 
 end Conformance.FileInventoryContracts

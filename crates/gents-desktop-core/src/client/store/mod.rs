@@ -160,5 +160,6 @@ impl ClientStore {
 mod tests {
     mod observer_projection;
     mod session_summaries;
+    mod session_turn;
     mod store_semantics;
 }

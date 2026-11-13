@@ -30,6 +30,11 @@ use slot::{
 #[derive(Debug)]
 struct ActiveSnapshotReceiverClosed;
 
+/// The generation a successfully applied proposal publishes.
+pub(crate) fn next_generation(current: u64) -> u64 {
+    current + 1
+}
+
 impl std::fmt::Display for ActiveSnapshotReceiverClosed {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("active runtime snapshot receiver closed")
@@ -216,7 +221,7 @@ where
                         break;
                     };
                     let current_generation = self.current_snapshot.generation;
-                    let next_generation = current_generation + 1;
+                    let next_generation = next_generation(current_generation);
                     let proposed_agent_count = proposal.agents.len();
                     let proposed_unavailable_agent_count = proposal.unavailable_agents.len();
                     let proposed_default_agent_did = proposal.default_agent_did.clone();
@@ -271,7 +276,7 @@ where
         }
 
         let diff = diff_counts(&self.current_snapshot, &proposal);
-        let next_generation = self.current_snapshot.generation + 1;
+        let next_generation = next_generation(self.current_snapshot.generation);
         self.runtime_status
             .set_reconcile_phase(ReconcilePhase::Applying)
             .await;

@@ -748,6 +748,22 @@ impl Fixture {
             .unwrap()
     }
 
+    /// The goal as the client-control model sees it after a command fenced on
+    /// `before_commit`: the model names the session's goal document
+    /// `goal-document` and a commit after the fence `revision-after`.
+    pub async fn control_snapshot(&self, before_commit: &str) -> Value {
+        let current = self.current_goal().await;
+        let commit = self.goal_commit(&current.doc_id).await.cid;
+        json!({
+            "revision": {
+                "document": if current.doc_id == self.goal.doc_id { "goal-document" } else { "foreign-goal" },
+                "composite": if commit == before_commit { "revision-current" } else { "revision-after" },
+            },
+            "execution": self.observe().await,
+            "objective": current.objective,
+        })
+    }
+
     pub async fn goal_status(&self) -> String {
         self.current_goal().await.status
     }

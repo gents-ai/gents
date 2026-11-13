@@ -344,94 +344,103 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     assert_eq!(before["data"]["TriggerFire"].as_array().unwrap().len(), 0);
     assert_eq!(before["data"]["AgentRequest"].as_array().unwrap().len(), 0);
     assert_eq!(before["data"]["AgentSession"].as_array().unwrap().len(), 0);
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_task_session_publication_cases;
-    let modeled = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
-    let aborted: anyhow::Result<()> = access
-        .transact_write("test.task.abort_after_session_relationships", |txn| {
-            let fire = &fire;
-            let create = &create;
-            Box::pin(async move {
-                stage_task_delivery(txn, fire, false, create).await?;
-                anyhow::bail!("forced abort after staged Task session publication")
-            })
-        })
-        .await;
-    assert!(aborted
-        .unwrap_err()
-        .to_string()
-        .contains("forced abort after staged Task session publication"));
-    let before = access
-        .execute(
-            "{ TriggerFire { fire_key } AgentRequest { request_id } AgentSession { session_id } }",
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        !before["data"]["AgentRequest"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        modeled("aborted")["request"]
-    );
-    assert_eq!(
-        !before["data"]["AgentSession"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        modeled("aborted")["session"]
-    );
-    assert!(before["data"]["TriggerFire"].as_array().unwrap().is_empty());
-    let first = write_task_delivery(&access, &fire, false, &create)
-        .await
-        .unwrap();
-    let session_before_retry = access
-        .execute("{ AgentSession { _docID relationships_pending } }")
-        .await
-        .unwrap();
-    let session_doc = session_before_retry["data"]["AgentSession"][0]["_docID"]
-        .as_str()
-        .unwrap();
-    assert_eq!(
-        session_before_retry["data"]["AgentSession"][0]["relationships_pending"],
-        false
-    );
     let agent_did = identity::Did::new(agent.did()).unwrap();
-    let (agent_access, working_agent) = (&access, &agent_did);
-    let holds_working_agent = move || async move {
-        agent_access
-            .list_document_relationships("AgentSession", session_doc)
+    let (observed_access, working_agent) = (&access, &agent_did);
+    let session_doc = move || async move {
+        observed_access
+            .execute("{ AgentSession { _docID relationships_pending } }")
             .await
+            .unwrap()["data"]["AgentSession"]
+            .as_array()
             .unwrap()
-            .iter()
-            .any(|row| row.relation == "working_agent" && row.subject == working_agent.as_str())
+            .first()
+            .map(|row| {
+                assert_eq!(row["relationships_pending"], false);
+                row["_docID"].as_str().unwrap().to_owned()
+            })
     };
-    let revoke_working_agent = move || {
-        gents_store::test_support::relationships::actor_in_txn(
-            agent_access,
-            "AgentSession",
-            session_doc,
-            "working_agent",
-            working_agent,
-            true,
-        )
+    let observe = move || async move {
+        let requests = observed_access
+            .execute("{ AgentRequest { request_id } }")
+            .await
+            .unwrap();
+        let session = session_doc().await;
+        let relationships = match &session {
+            Some(doc) => observed_access
+                .list_document_relationships("AgentSession", doc)
+                .await
+                .unwrap(),
+            None => Vec::new(),
+        };
+        gents_lean_vocab::families::session_publication_task::TaskSessionPublication {
+            request: !requests["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            session: session.is_some(),
+            parent: relationships.iter().any(|row| row.relation == "parent"),
+            working_agent: relationships.iter().any(|row| {
+                row.relation == "working_agent" && row.subject == working_agent.as_str()
+            }),
+        }
     };
-    let removed = holds_working_agent().await;
-    revoke_working_agent().await.unwrap();
-    assert!(!holds_working_agent().await);
-    assert_eq!(removed, modeled("created")["working_agent"]);
-    let retry = write_task_delivery(&access, &fire, false, &create)
-        .await
-        .unwrap();
-    let restored = holds_working_agent().await;
-    revoke_working_agent().await.unwrap();
-    assert!(!holds_working_agent().await);
-    assert_eq!(
-        restored,
-        modeled("duplicate-after-revocation")["working_agent"]
-    );
-    assert_eq!(first.request.doc_id, retry.request.doc_id);
-    assert!(!first.duplicate);
-    assert!(retry.duplicate);
+    let mut deliveries = Vec::new();
+    for case in gents_lean_vocab::families::session_publication_task::cases() {
+        let before = &case.input.before;
+        if observe().await.working_agent && !before.working_agent {
+            gents_store::test_support::relationships::actor_in_txn(
+                observed_access,
+                "AgentSession",
+                &session_doc().await.unwrap(),
+                "working_agent",
+                working_agent,
+                true,
+            )
+            .await
+            .unwrap();
+        }
+        let start = observe().await;
+        assert_eq!(
+            (start.request, start.session, start.parent, start.working_agent),
+            (
+                before.request,
+                before.session,
+                before.parent,
+                before.working_agent
+            ),
+            "{} starts from its modeled state",
+            case.input.name
+        );
+        if case.input.committed {
+            let delivery = write_task_delivery(&access, &fire, false, &create)
+                .await
+                .unwrap();
+            assert_eq!(delivery.duplicate, !case.input.fresh);
+            deliveries.push(delivery);
+        } else {
+            let aborted: anyhow::Result<()> = access
+                .transact_write("test.task.abort_after_session_relationships", |txn| {
+                    let fire = &fire;
+                    let create = &create;
+                    Box::pin(async move {
+                        stage_task_delivery(txn, fire, false, create).await?;
+                        anyhow::bail!("forced abort after staged Task session publication")
+                    })
+                })
+                .await;
+            assert!(aborted
+                .unwrap_err()
+                .to_string()
+                .contains("forced abort after staged Task session publication"));
+            let fires = access.execute("{ TriggerFire { fire_key } }").await.unwrap();
+            assert!(fires["data"]["TriggerFire"].as_array().unwrap().is_empty());
+        }
+        case.check(observe().await);
+    }
+    let first = &deliveries[0];
+    for retry in &deliveries[1..] {
+        assert_eq!(first.request.doc_id, retry.request.doc_id);
+    }
     let after = access.execute("{ TriggerFire { fire_key goal_assignment_applied } AgentRequest { request_id lifecycle_state } Goal { goal_id } }").await.unwrap();
     assert_eq!(after["data"]["TriggerFire"].as_array().unwrap().len(), 1);
     assert_eq!(
@@ -580,45 +589,41 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         "completed"
     );
     let session_doc = session["_docID"].as_str().unwrap();
-    let trace = gents_lean_vocab::lean_contract_snapshot()
-        .identity_publication_cases
-        .iter()
-        .find(|case| case.name == "interrupted_then_repaired")
+    for trace in gents_lean_vocab::families::identity_publication_session_recovery::cases() {
+        gents_store::test_support::relationships::resource_in_txn(
+            &access,
+            "AgentSession",
+            session_doc,
+            "parent",
+            "agents",
+            &agent_doc,
+            true,
+        )
+        .await
         .unwrap();
-    gents_store::test_support::relationships::resource_in_txn(
-        &access,
-        "AgentSession",
-        session_doc,
-        "parent",
-        "agents",
-        &agent_doc,
-        true,
-    )
-    .await
-    .unwrap();
-    access.write("test.session.interrupted", &format!(
+        access.write("test.session.interrupted", &format!(
         r#"mutation {{ update_AgentSession(docID: "{}", input: {{ relationships_pending: true }}) {{ _docID }} }}"#,
         escape_graphql_string(session_doc),
     )).await.unwrap();
-    let actor = identity::Did::new(agent.did()).unwrap();
-    assert_eq!(
-        gents_session::session::recover_agent_session_relationships_with_access(
-            &access, node_did, &actor
-        )
-        .await
-        .unwrap(),
-        1
-    );
-    let recovered = user_access
-        .execute("{ AgentSession { relationships_pending } }")
-        .await
-        .unwrap();
-    assert_eq!(
-        recovered["data"]["AgentSession"][0]["relationships_pending"]
-            .as_bool()
+        let actor = identity::Did::new(agent.did()).unwrap();
+        assert_eq!(
+            gents_session::session::recover_agent_session_relationships_with_access(
+                &access, node_did, &actor
+            )
+            .await
             .unwrap(),
-        trace.steps[1].after.pending
-    );
+            1
+        );
+        let recovered = user_access
+            .execute("{ AgentSession { relationships_pending } }")
+            .await
+            .unwrap();
+        trace.check(
+            recovered["data"]["AgentSession"][0]["relationships_pending"]
+                .as_bool()
+                .unwrap(),
+        );
+    }
     let request_row = access
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",

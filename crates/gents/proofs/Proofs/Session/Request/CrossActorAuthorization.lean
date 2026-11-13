@@ -447,10 +447,6 @@ def decisionString : Decision → String
   | .conflict => "conflict"
   | .claimed => "claimed"
 
-def changeString : PermissionChange → String
-  | .revoke => "revoke"
-  | .grant => "grant"
-
 def intentJson (intent : Intent) : Json := Json.mkObj
   [("document", toJson intent.document), ("session", toJson intent.session),
    ("agent_document", toJson intent.agentDocument), ("author", toJson intent.author),
@@ -474,24 +470,6 @@ def terminalSelectionString : CanonicalOutput.TerminalSelection → String
   | .noMessage => "no_message"
   | .message _ => "message"
 
-def caseJson (c : Case) : Json := Json.mkObj
-  [("name", toJson c.name), ("intent", intentJson c.intent),
-   ("observation", observationJson c.checkedObservation),
-   ("before_session_changes", toJson (c.beforeSessionChanges.map changeString)),
-   ("session_changes", toJson (c.sessionChanges.map changeString)),
-   ("invoke_changes", toJson (c.invokeChanges.map changeString)),
-   ("node_changes", toJson (c.nodeChanges.map changeString)),
-   ("native_committed", toJson c.nativeCommitted), ("prior_effect", toJson c.prior.committedBy),
-   ("prior_lifecycle", toJson c.prior.lifecycle.toDefraDB),
-   ("prior_terminal_output", toJson (c.prior.terminalSelection.map terminalSelectionString)),
-   ("prior_failure_reason", toJson c.prior.failureReason),
-   ("decision", toJson (decisionString (decideClaim c.intent c.checkedObservation c.nativeCommit))),
-   ("effect", toJson (applyClaim c.prior c.intent c.checkedObservation c.nativeCommit).committedBy),
-   ("lifecycle", toJson (applyClaim c.prior c.intent c.checkedObservation c.nativeCommit).lifecycle.toDefraDB),
-   ("terminal_output", toJson ((applyClaim c.prior c.intent c.checkedObservation c.nativeCommit).terminalSelection.map terminalSelectionString)),
-   ("failure_reason", toJson (applyClaim c.prior c.intent c.checkedObservation c.nativeCommit).failureReason)]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
 
 /-! Pending rejection: a request the runtime rejects before admission is
 terminalized only through the runtime's own distinct managed Agent, and only

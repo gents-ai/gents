@@ -553,11 +553,12 @@ mod tests {
 
     #[test]
     fn derived_identity_matches_lean_cases() {
+        use gents_lean_vocab::families::agent_identity_derivation as derivation;
         use rapidhash::{HashMapExt, RapidHashMap};
         let directory = tempfile::tempdir().unwrap();
         let mut roots = RapidHashMap::new();
-        for case in gents_lean_vocab::lean_identity_derivation_cases() {
-            let mut derive = |input: &gents_lean_vocab::LeanIdentityDerivationInput| {
+        for case in gents_lean_vocab::families::agent_identity_derivation::cases() {
+            let mut derive = |input: &derivation::DerivationInput| {
                 let next = roots.len();
                 let root = roots.entry(input.node_key.clone()).or_insert_with(|| {
                     KeyIdentity::load_or_create(
@@ -568,16 +569,11 @@ mod tests {
                 });
                 derive_agent_identity(root, &input.creation_nonce).unwrap()
             };
-            let left = derive(&case.left);
-            let right = derive(&case.right);
-            assert_eq!(
-                left.did() == right.did(),
-                case.expected_same_did,
-                "{}: {:?} -> {:?}",
-                case.name,
-                case.left.label,
-                case.right.label
-            );
+            let left = derive(&case.input.left);
+            let right = derive(&case.input.right);
+            case.check(derivation::DerivationOutput {
+                same_did: left.did() == right.did(),
+            });
         }
     }
 
