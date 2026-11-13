@@ -5075,6 +5075,7 @@ name = "gents-lens-fixture-add-label"
 version = "0.1.0"
 dependencies = [
  "lens_sdk",
+ "rapidhash",
  "serde_json",
 ]
 

@@ -1,13 +1,13 @@
-use std::collections::HashMap;
 use std::error::Error;
 
 use lens_sdk::StreamOption;
+use rapidhash::RapidHashMap;
 use serde_json::Value;
 
 #[cfg(all(feature = "lens-entry", target_arch = "wasm32"))]
 lens_sdk::define!(try_transform, try_inverse);
 
-pub fn apply_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
+pub fn apply_label(mut doc: RapidHashMap<String, Value>) -> RapidHashMap<String, Value> {
     let needs_label = match doc.get("label") {
         None => true,
         Some(Value::Null) => true,
@@ -25,7 +25,7 @@ pub fn apply_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
     doc
 }
 
-pub fn drop_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
+pub fn drop_label(mut doc: RapidHashMap<String, Value>) -> RapidHashMap<String, Value> {
     doc.remove("label");
     doc
 }
@@ -35,8 +35,8 @@ pub fn drop_label(mut doc: HashMap<String, Value>) -> HashMap<String, Value> {
     allow(dead_code)
 )]
 fn try_transform(
-    iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<HashMap<String, Value>>>>,
-) -> Result<StreamOption<HashMap<String, Value>>, Box<dyn Error>> {
+    iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<RapidHashMap<String, Value>>>>,
+) -> Result<StreamOption<RapidHashMap<String, Value>>, Box<dyn Error>> {
     if let Some(item) = iter.next() {
         let input = match item? {
             Some(v) => v,
@@ -52,8 +52,8 @@ fn try_transform(
     allow(dead_code)
 )]
 fn try_inverse(
-    iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<HashMap<String, Value>>>>,
-) -> Result<StreamOption<HashMap<String, Value>>, Box<dyn Error>> {
+    iter: &mut dyn Iterator<Item = lens_sdk::Result<Option<RapidHashMap<String, Value>>>>,
+) -> Result<StreamOption<RapidHashMap<String, Value>>, Box<dyn Error>> {
     if let Some(item) = iter.next() {
         let input = match item? {
             Some(v) => v,

@@ -113,7 +113,7 @@ fn streamable_http_transport_config(
     trace_context_headers: &RapidHashMap<String, String>,
 ) -> Result<StreamableHttpClientTransportConfig> {
     let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint.to_string());
-    let mut headers = std::collections::HashMap::new();
+    let mut headers = RapidHashMap::new();
     if let Some(node_did) = node_did_header {
         headers.insert(
             HeaderName::from_static(NODE_DID_HEADER),
@@ -122,13 +122,13 @@ fn streamable_http_transport_config(
     }
     insert_trace_context_headers(&mut headers, trace_context_headers);
     if !headers.is_empty() {
-        config = config.custom_headers(headers);
+        config = config.custom_headers(headers.into_iter().collect());
     }
     Ok(config)
 }
 
 fn insert_trace_context_headers(
-    headers: &mut std::collections::HashMap<HeaderName, HeaderValue>,
+    headers: &mut RapidHashMap<HeaderName, HeaderValue>,
     trace_context_headers: &RapidHashMap<String, String>,
 ) {
     for (name, value) in trace_context_headers {

@@ -1442,15 +1442,6 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
     }
 }
 
-/// Files whose std-hasher maps are fixed by a third-party signature: the lens
-/// SDK's document map, rmcp's `custom_headers` and Rig's `additional_props`.
-#[rustfmt::skip]
-const STD_HASH_ALLOWLIST: &[&str] = &[
-    "crates/gents-lenses/fixture_add_label/src/lib.rs",
-    "crates/gents-tools/src/mcp/pool.rs",
-    "crates/gents-inference/src/clients/pushdown_tests.rs",
-];
-
 const STD_HASH_NAMES: &[&str] = &["HashMap", "HashSet", "DefaultHasher"];
 
 fn all_rust_sources(root: &Path, output: &mut Vec<PathBuf>) {
@@ -1545,6 +1536,8 @@ fn std_hash_sites(syntax: &syn::File) -> usize {
 
 /// Maps and sets use `rapidhash::RapidHashMap`/`RapidHashSet` and hashers use
 /// `rapidhash::fast::RapidHasher`, matching DefraDB; this covers tests too.
+/// A third-party parameter typed as std's map takes a converted value
+/// (`into_iter().collect()`, `.into()`), so no file names the std type.
 #[test]
 fn hash_maps_use_rapidhash() {
     let root = repo_root();
@@ -1552,7 +1545,7 @@ fn hash_maps_use_rapidhash() {
     for directory in ["crates", "apps"] {
         all_rust_sources(&root.join(directory), &mut sources);
     }
-    let actual = sources
+    let violations = sources
         .into_iter()
         .filter_map(|path| {
             let source = std::fs::read_to_string(&path)
@@ -1560,29 +1553,20 @@ fn hash_maps_use_rapidhash() {
             let syntax = syn::parse_file(&source)
                 .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
             (std_hash_sites(&syntax) > 0).then(|| {
-                path.strip_prefix(&root)
-                    .expect("source under repo root")
-                    .to_string_lossy()
-                    .into_owned()
+                format!(
+                    "{}: names a std hash map, set or hasher; use rapidhash",
+                    path.strip_prefix(&root)
+                        .expect("source under repo root")
+                        .display()
+                )
             })
         })
-        .collect::<BTreeSet<_>>();
-    let allowed = STD_HASH_ALLOWLIST
-        .iter()
-        .map(|path| path.to_string())
-        .collect::<BTreeSet<_>>();
-    let mut violations = actual
-        .difference(&allowed)
-        .map(|path| format!("{path}: names a std hash map, set or hasher; use rapidhash"))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>();
-    violations.extend(
-        allowed.difference(&actual).map(|path| {
-            format!("{path}: no longer names a std hasher; remove its allowlist entry")
-        }),
-    );
     assert!(
         violations.is_empty(),
-        "rapidhash ratchet failed:\n{}",
+        "rapidhash rule failed:\n{}",
         violations.join("\n")
     );
 }
