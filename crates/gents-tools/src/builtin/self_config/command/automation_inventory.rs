@@ -8,7 +8,7 @@ impl ConfigCommandTool {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<String> {
-        let rows = self.automation_rows(target, None).await?;
+        let rows = self.automation_rows(target, true, None).await?;
         let total = rows.len();
         let mut selected = rows
             .iter()
@@ -52,7 +52,11 @@ impl ConfigCommandTool {
         id: &str,
     ) -> Result<String> {
         let rows = self
-            .automation_rows(target, (target == SelfConfigTarget::Task).then_some(id))
+            .automation_rows(
+                target,
+                false,
+                (target == SelfConfigTarget::Task).then_some(id),
+            )
             .await?;
         let document = rows
             .into_iter()
@@ -67,15 +71,21 @@ impl ConfigCommandTool {
     async fn automation_rows(
         &self,
         target: SelfConfigTarget,
+        calling_agent: bool,
         task_id: Option<&str>,
     ) -> Result<Vec<Value>> {
         let access = self.core.access()?;
         let inventory = access
             .transact_readonly("self_config.automation_inventory", |txn| {
                 Box::pin(async move {
-                    gents_documents::views::tasks::inventory(txn, &self.node_did, true, task_id)
-                        .await
-                        .map_err(anyhow::Error::from)
+                    gents_documents::views::tasks::inventory(
+                        txn,
+                        &self.node_did,
+                        calling_agent,
+                        task_id,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
                 })
             })
             .await?;

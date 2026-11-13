@@ -112,7 +112,8 @@ async fn session_views_match_model_on_served_node() -> anyhow::Result<()> {
 #[tokio::test]
 async fn session_ordering_matches_model_on_served_node() -> anyhow::Result<()> {
     use gents_protocol::document_query::{fields::agent_session as session, Input, Update};
-    let cases = gents_lean_vocab::families::session_ordering::cases();
+    let cases =
+        tokio::task::spawn_blocking(gents_lean_vocab::families::session_ordering::cases).await?;
     assert_eq!(cases.len(), 6);
     for (index, case) in cases.into_iter().enumerate() {
         let (db, user, _, binding) = gents_inference::test_support::signed_test_node(
@@ -128,21 +129,20 @@ async fn session_ordering_matches_model_on_served_node() -> anyhow::Result<()> {
             agent.as_ref(),
         )?;
         for source in &case.input {
-            let doc_id = gents_session::test_support::create_agent_owned_session(
+            let doc_id = gents_session::test_support::create_agent_owned_session_at(
                 &access,
                 db.node_identity.did(),
                 &source.session_id,
                 Some(user.did()),
+                source.created_at.as_str(),
             )
             .await;
             let mutation = Update::doc(
                 doc_id,
-                Input::new()
-                    .set(session::CREATED_AT, source.created_at.as_str())
-                    .set(
-                        session::OBSERVATION,
-                        serde_json::json!({"last_activity_at": source.last_activity_at}),
-                    ),
+                Input::new().set(
+                    session::OBSERVATION,
+                    serde_json::json!({"last_activity_at": source.last_activity_at}),
+                ),
             )
             .render();
             access

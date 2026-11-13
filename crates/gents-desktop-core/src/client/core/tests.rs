@@ -1348,7 +1348,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
     )
     .await?;
     core.save_agent(
-        &serde_json::from_value(runtime.agent_value(&agent, "profile"))?,
+        &serde_json::from_value(runtime.agent_value_for_create(&agent, "profile").await)?,
         None,
     )
     .await?;

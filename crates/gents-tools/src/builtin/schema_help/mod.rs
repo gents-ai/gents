@@ -146,9 +146,13 @@ pub struct SchemaTool {
 impl SchemaTool {
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
+        let node_did = node.node_identity_did().unwrap_or_default().to_owned();
         Self {
-            node_did: node.node_identity_did().unwrap_or_default().to_owned(),
-            access: ConfigAccess::local(node),
+            access: match identity::Did::new(node_did.as_str()) {
+                Ok(actor) => ConfigAccess::local_as(node, actor),
+                Err(_) => ConfigAccess::local(node),
+            },
+            node_did,
             home: None,
             caller: None,
         }

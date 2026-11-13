@@ -18,7 +18,8 @@ pub(crate) async fn dispatch(command: TaskCommand) -> Result<()> {
 
 pub(crate) async fn task_list(args: TaskListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let inventory = load_task_inventory(&access, None).await?;
+    let node_did = live_node_did(&access).await?;
+    let inventory = load_task_inventory(&access, &node_did, None).await?;
     let tasks = inventory.task_summaries();
     print_json(&json!({
         "count": tasks.len(),
@@ -34,7 +35,8 @@ pub(crate) async fn task_show(args: TaskShowArgs) -> Result<()> {
         args.task_id_flag.as_deref(),
     )?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let inventory = load_task_inventory(&access, Some(&task_id)).await?;
+    let node_did = live_node_did(&access).await?;
+    let inventory = load_task_inventory(&access, &node_did, Some(&task_id)).await?;
     let Some(task) = inventory.tasks.first() else {
         anyhow::bail!("no Task with task_id = {task_id}");
     };
@@ -133,21 +135,24 @@ impl TaskInventory {
     }
 }
 
-pub(crate) async fn load_task_inventory(
-    access: &ConfigAccess,
-    task_id_filter: Option<&str>,
-) -> Result<TaskInventory> {
-    let node_did = crate::commands::config::binding::resolve_target_node_did(
+async fn live_node_did(access: &ConfigAccess) -> Result<String> {
+    crate::commands::config::binding::resolve_target_node_did(
         None,
         Some(crate::cli::ManifestNodeDidBindingArg::Live),
         None,
         None,
         Some(access),
     )
-    .await?;
+    .await
+}
+
+pub(crate) async fn load_task_inventory(
+    access: &ConfigAccess,
+    node_did: &str,
+    task_id_filter: Option<&str>,
+) -> Result<TaskInventory> {
     let inventory = access
         .transact_readonly("task.inventory", |txn| {
-            let node_did = &node_did;
             Box::pin(async move {
                 gents_documents::views::tasks::inventory(txn, node_did, false, task_id_filter)
                     .await

@@ -421,6 +421,25 @@ pub async fn create_agent_owned_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> String {
+    create_agent_owned_session_at(
+        access,
+        node_did,
+        session_id,
+        requester_did,
+        "2020-01-01T00:00:00Z",
+    )
+    .await
+}
+
+/// `created_at` is immutable on AgentSession, so a fixture that needs a
+/// particular creation time supplies it here rather than updating the row.
+pub async fn create_agent_owned_session_at(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    created_at: &str,
+) -> String {
     let agent_did = access
         .actor_did()
         .expect("an Agent-owned session needs its Agent actor");
@@ -436,7 +455,7 @@ pub async fn create_agent_owned_session(
                     requester_did,
                     None,
                     None,
-                    "2020-01-01T00:00:00Z",
+                    created_at,
                 )
                 .await?;
                 let session =

@@ -172,7 +172,15 @@ impl ConfigCommandTool {
                 let effective = core
                     .read_effective_config(&self.categories, self.no_lockout, self.preview)
                     .await?;
-                ordered! {"resource": "AgentContext", "document": effective.get("context")}.pretty()
+                let document = effective
+                    .get("context")
+                    .filter(|context| !context.is_null())
+                    .map(|context| {
+                        serde_json::from_value::<gents_documents::AgentContext>(context.clone())
+                    })
+                    .transpose()
+                    .context("decoding the selected AgentContext")?;
+                ordered! {"resource": "AgentContext", "document": document}.pretty()
             }
             "preview" | "edit" => {
                 let parsed = ParsedArgs::parse(&rest)?;

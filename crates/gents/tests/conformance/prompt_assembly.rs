@@ -51,6 +51,9 @@ fn production_sources() -> Vec<(String, String)> {
             {
                 continue;
             }
+            if declared_test_only(&path) {
+                continue;
+            }
             let source = std::fs::read_to_string(&path)
                 .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
             out.push((relative, source));
@@ -58,6 +61,30 @@ fn production_sources() -> Vec<(String, String)> {
     }
     out.sort();
     out
+}
+
+fn declared_test_only(path: &Path) -> bool {
+    let (Some(stem), Some(dir)) = (
+        path.file_stem().and_then(|stem| stem.to_str()),
+        path.parent(),
+    ) else {
+        return false;
+    };
+    let declaration = format!("mod {stem};");
+    [dir.with_extension("rs"), dir.join("mod.rs")]
+        .iter()
+        .filter_map(|parent| std::fs::read_to_string(parent).ok())
+        .any(|parent| {
+            let lines = parent.lines().map(str::trim).collect::<Vec<_>>();
+            lines.iter().enumerate().any(|(index, line)| {
+                line.ends_with(&declaration)
+                    && lines[..index]
+                        .iter()
+                        .rev()
+                        .take_while(|attribute| attribute.starts_with("#["))
+                        .any(|attribute| *attribute == "#[cfg(test)]")
+            })
+        })
 }
 
 fn files_containing(needles: &[&str]) -> BTreeSet<String> {
