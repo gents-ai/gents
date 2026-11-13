@@ -5,7 +5,7 @@ use anyhow::Result;
 use gents_eval::authoring::write::WriteHost;
 use gents_store::identity::NodeIdentity;
 
-pub(crate) struct CliWriteHost;
+pub(crate) struct CliWriteHost(pub(crate) PathBuf);
 
 #[async_trait::async_trait]
 impl WriteHost for CliWriteHost {
@@ -23,7 +23,7 @@ impl WriteHost for CliWriteHost {
 
     async fn caller_identity(&self) -> Result<Arc<dyn NodeIdentity>> {
         Ok(Arc::new(
-            gents_service::home_state::load_client_identity().await?,
+            gents_service::home_state::client_identity_for(&self.0).await?,
         ))
     }
 }

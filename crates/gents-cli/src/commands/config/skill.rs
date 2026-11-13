@@ -12,7 +12,7 @@ use gents::operations::skill::{SkillImport, SkillSourceRoot, SkillWrite};
 
 fn access(graphql: &str) -> Result<ConfigAccess> {
     Ok(ConfigAccess::Graphql(
-        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)?,
+        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None).await?,
     ))
 }
 

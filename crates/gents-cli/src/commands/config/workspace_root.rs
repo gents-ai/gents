@@ -31,7 +31,8 @@ fn path_text(path: &std::path::Path) -> Result<&str> {
 
 fn operator_access(graphql: &str) -> Result<ConfigAccess> {
     Ok(ConfigAccess::Graphql(
-        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)?
+        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None)
+            .await?
             .with_client_signed_agent_creates(),
     ))
 }
