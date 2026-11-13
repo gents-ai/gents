@@ -414,8 +414,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
-    ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
-    ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""
@@ -444,15 +442,9 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"storage_observation_runtime_cases\":"
       ++ jsonArray
         (storageObservationRuntimeCases.map storageObservationRuntimeCaseJson) ++ ","
-    ++ "\"native_filesystem_boundary_cases\":"
-      ++ jsonArray
-        (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
     ++ "\"managed_exec_tool_boundary_cases\":"
       ++ jsonArray
         (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
-    ++ "\"managed_exec_liveness_cases\":"
-      ++ jsonArray
-        (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
     ++ "\"process_stop_cases\":"
       ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
     ++ "\"completion_retry_cases\":"
@@ -487,7 +479,6 @@ def snapshotPluginCasesJson : String :=
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

@@ -251,82 +251,53 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
 
 #[tokio::test]
 async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
-    let goal_case = gents_lean_vocab::lean_goal_create_cases()
-        .iter()
-        .find(|case| case.expected == "fresh" && case.token_budget.is_none())
-        .unwrap();
-    let replay = gents_lean_vocab::lean_canonical_dispatch_observation_cases()
-        .iter()
-        .find(|case| case.name == "won_dispatch_then_replay")
-        .unwrap();
-    let args = json!({"objective": goal_case.objective}).to_string();
-    for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
-        let mut completion_mutation = None;
-        for inject in [false, true] {
-            let db = gents_inference::test_support::test_db(
-                "goal-dispatch-replay",
-                crate::lifecycle_hooks::composition(),
-            )
-            .await;
-            let node = db.node.clone();
-            let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-            let mut hook = DefraSessionHook::with_identity(node.clone(), identity.did(), policy)
-                .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create)
-                .with_goal_tools(Arc::new(crate::goal::goal_tools::GoalToolAnswers));
-            assert!(matches!(
-                hook.on_completion_call(&user_text_message("Create a goal"), &[])
-                    .await,
-                HookAction::Continue
-            ));
-            let session = hook.session_id().await.unwrap();
-            bind_managed_hook_request(
-                &mut hook,
-                "control-receipt",
-                &identity,
-                Utc::now() + chrono::Duration::minutes(5),
-            )
-            .await;
-            let access = hook.actor_access().unwrap();
-            accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
-            let (action, trace) =
-                gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_and_trace(
-                    completion_mutation,
-                    hook.on_tool_call("create_goal", None, "control-call", &args),
+    for case in gents_lean_vocab::families::contracts_goal_create_committed::cases::<
+        crate::goal::GoalCreateDisposition,
+    >() {
+        let goal_case = &case.input;
+        let replay = gents_lean_vocab::lean_canonical_dispatch_observation_cases()
+            .iter()
+            .find(|case| case.name == "won_dispatch_then_replay")
+            .unwrap();
+        let args = json!({"objective": goal_case.objective}).to_string();
+        for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
+            let mut completion_mutation = None;
+            for inject in [false, true] {
+                let db = gents_inference::test_support::test_db(
+                    "goal-dispatch-replay",
+                    crate::lifecycle_hooks::composition(),
                 )
                 .await;
-            let mutations = trace.len();
-            let goal = access
-                .transact_readonly("test.hook_control_goal", |txn| {
-                    Box::pin(crate::goal::load_canonical_goal_in_txn(
-                        txn,
-                        identity.did(),
-                        &session,
-                    ))
-                })
-                .await
-                .unwrap()
-                .expect("the control effect committed before completion");
-            assert_eq!(goal.objective, goal_case.objective);
-            if inject {
-                assert_eq!(Some(mutations), completion_mutation, "fault must fire");
-                assert!(
-                    matches!(action, ToolCallHookAction::Terminate { .. }),
-                    "{action:?}"
-                );
-                let row = fetch_tool_call_row(&hook, &session, "control-call").await;
-                assert_eq!(
-                    row["lifecycle_state"].as_str() == Some("running"),
-                    replay.expected[0].running,
-                    "{row}"
-                );
-                let again = hook
-                    .on_tool_call("create_goal", None, "control-call", &args)
+                let node = db.node.clone();
+                let identity =
+                    gents_store::test_support::held_runtime_identity(db.node_identity.did());
+                let mut hook =
+                    DefraSessionHook::with_identity(node.clone(), identity.did(), policy)
+                        .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create)
+                        .with_goal_tools(Arc::new(crate::goal::goal_tools::GoalToolAnswers));
+                assert!(matches!(
+                    hook.on_completion_call(&user_text_message("Create a goal"), &[])
+                        .await,
+                    HookAction::Continue
+                ));
+                let session = hook.session_id().await.unwrap();
+                bind_managed_hook_request(
+                    &mut hook,
+                    "control-receipt",
+                    &identity,
+                    Utc::now() + chrono::Duration::minutes(5),
+                )
+                .await;
+                let access = hook.actor_access().unwrap();
+                accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
+                let (action, trace) =
+                    gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_and_trace(
+                        completion_mutation,
+                        hook.on_tool_call("create_goal", None, "control-call", &args),
+                    )
                     .await;
-                assert_eq!(
-                    matches!(again, ToolCallHookAction::Continue),
-                    replay.expected[1].may_invoke
-                );
-                let after = access
+                let mutations = trace.len();
+                let goal = access
                     .transact_readonly("test.hook_control_goal", |txn| {
                         Box::pin(crate::goal::load_canonical_goal_in_txn(
                             txn,
@@ -335,32 +306,68 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                         ))
                     })
                     .await
-                    .unwrap()
                     .unwrap();
-                assert_eq!(
-                    serde_json::to_value(after).unwrap(),
-                    serde_json::to_value(goal).unwrap(),
-                    "replay must not alter the committed goal"
-                );
-            } else {
-                assert!(
-                    matches!(action, ToolCallHookAction::Skip { .. }),
-                    "{action:?}"
-                );
-                let completion = trace
-                    .iter()
-                    .rposition(|operation| {
-                        *operation != Some("session.publish_child_relationships")
-                    })
-                    .expect("the control call commits its completion")
-                    + 1;
-                completion_mutation = Some(completion);
+                case.check(match goal {
+                    Some(_) => crate::goal::GoalCreateDisposition::Fresh,
+                    None => crate::goal::GoalCreateDisposition::Denied,
+                });
+                let goal = goal.expect("the control effect committed before completion");
+                assert_eq!(goal.objective, goal_case.objective);
+                if inject {
+                    assert_eq!(Some(mutations), completion_mutation, "fault must fire");
+                    assert!(
+                        matches!(action, ToolCallHookAction::Terminate { .. }),
+                        "{action:?}"
+                    );
+                    let row = fetch_tool_call_row(&hook, &session, "control-call").await;
+                    assert_eq!(
+                        row["lifecycle_state"].as_str() == Some("running"),
+                        replay.expected[0].running,
+                        "{row}"
+                    );
+                    let again = hook
+                        .on_tool_call("create_goal", None, "control-call", &args)
+                        .await;
+                    assert_eq!(
+                        matches!(again, ToolCallHookAction::Continue),
+                        replay.expected[1].may_invoke
+                    );
+                    let after = access
+                        .transact_readonly("test.hook_control_goal", |txn| {
+                            Box::pin(crate::goal::load_canonical_goal_in_txn(
+                                txn,
+                                identity.did(),
+                                &session,
+                            ))
+                        })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(
+                        serde_json::to_value(after).unwrap(),
+                        serde_json::to_value(goal).unwrap(),
+                        "replay must not alter the committed goal"
+                    );
+                } else {
+                    assert!(
+                        matches!(action, ToolCallHookAction::Skip { .. }),
+                        "{action:?}"
+                    );
+                    let completion = trace
+                        .iter()
+                        .rposition(|operation| {
+                            *operation != Some("session.publish_child_relationships")
+                        })
+                        .expect("the control call commits its completion")
+                        + 1;
+                    completion_mutation = Some(completion);
+                }
+                hook_execution_fixtures()
+                    .lock()
+                    .await
+                    .remove(&hook_execution_fixture_key(&hook, "control-receipt"));
+                node.shutdown().await.expect("shut down test node");
             }
-            hook_execution_fixtures()
-                .lock()
-                .await
-                .remove(&hook_execution_fixture_key(&hook, "control-receipt"));
-            node.shutdown().await.expect("shut down test node");
         }
     }
 }

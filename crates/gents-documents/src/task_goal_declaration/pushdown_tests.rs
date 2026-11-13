@@ -24,3 +24,25 @@ fn task_declaration_treats_omitted_budget_as_uncapped_and_still_rejects_bad_caps
     assert!(validate_task_goal_declaration(Some("ship it"), Some(-1)).is_err());
     assert!(validate_task_goal_declaration(Some("ship it"), Some(i64::MAX)).is_ok());
 }
+
+#[test]
+fn task_goal_declarations_follow_the_lean_publication_model() {
+    gents_lean_vocab::families::contracts_task_goal_declaration::replay(|case| {
+        let budget = case
+            .goal_token_budget
+            .as_ref()
+            .map(|budget| budget.0.as_i64());
+        gents_lean_vocab::families::contracts_task_goal_declaration::TaskGoalDeclarationOutput {
+            declaration_valid: match budget {
+                Some(None) => false,
+                Some(Some(budget)) => {
+                    validate_task_goal_declaration(case.goal_objective.as_deref(), Some(budget))
+                        .is_ok()
+                }
+                None => {
+                    validate_task_goal_declaration(case.goal_objective.as_deref(), None).is_ok()
+                }
+            },
+        }
+    });
+}

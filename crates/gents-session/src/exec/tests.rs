@@ -429,10 +429,12 @@ async fn managed_exec_spawn_outcome_matches_the_lean_model() {
         let executor_registered = crate::exec::status::active_native_executors()
             .iter()
             .any(|snapshot| snapshot.tool_name.as_deref() == Some("spawn-failure"));
-        case.check(gents_lean_vocab::families::managed_exec_spawn_outcome::SpawnOutput {
-            state: state.as_str().to_string(),
-            executor_registered,
-        });
+        case.check(
+            gents_lean_vocab::families::managed_exec_spawn_outcome::SpawnOutput {
+                state: state.as_str().to_string(),
+                executor_registered,
+            },
+        );
     }
 }
 
@@ -783,5 +785,69 @@ fn concurrent_managed_commands_retain_complete_output() {
         .collect();
     for worker in workers {
         worker.join().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_exec_liveness_follows_the_lean_composed_model() {
+    for case in gents_lean_vocab::families::contracts_managed_exec_liveness_exec::cases::<String>()
+    {
+        let cancellation_token = CancellationToken::new();
+        let (script, deadline_at) = match case.input.trigger.as_str() {
+            "deadline_elapsed" => (
+                "printf partial; sleep 30",
+                Some(Utc::now() + chrono::Duration::milliseconds(200)),
+            ),
+            "cancel_requested" => {
+                let token = cancellation_token.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    token.cancel();
+                });
+                ("sleep 30", None)
+            }
+            "observe_exit_success" => ("exit 0", None),
+            "observe_exit_failure" => ("exit 1", None),
+            other => panic!("no managed exec scenario for trigger {other}"),
+        };
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            run_managed_exec(ManagedExecRequest {
+                argv: vec!["/bin/sh".to_string(), "-c".to_string(), script.to_string()],
+                cwd: PathBuf::from("/"),
+                deadline_at,
+                cancellation_token,
+                max_output_bytes: 1024,
+                stdin: Vec::new(),
+                environment: None,
+                tool_name: Some(format!("liveness-{}", case.input.name)),
+                live_output: None,
+            }),
+        )
+        .await
+        .expect("a managed command reaches its outcome within the bound");
+        let (state, kill_signal_required) = match &outcome {
+            ManagedExecOutcome::TimedOut { kill, .. }
+            | ManagedExecOutcome::Cancelled { kill, .. } => {
+                let signaled = kill.term_signal_sent || kill.kill_signal_sent;
+                (
+                    if signaled {
+                        ManagedExecState::KillSignaled
+                    } else {
+                        ManagedExecState::Exited
+                    },
+                    signaled,
+                )
+            }
+            ManagedExecOutcome::Exited { .. } => (ManagedExecState::Exited, false),
+            ManagedExecOutcome::SpawnFailed { .. } => (ManagedExecState::SpawnFailed, false),
+        };
+        case.check(
+            gents_lean_vocab::families::contracts_managed_exec_liveness_exec::ManagedExecLivenessExecOutput {
+                exec_state: state.as_str().to_owned(),
+                kill_signal_required,
+            },
+        );
     }
 }

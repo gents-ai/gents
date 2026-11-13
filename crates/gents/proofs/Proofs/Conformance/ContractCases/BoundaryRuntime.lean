@@ -245,9 +245,6 @@ def nativeFilesystemBoundaryCase (toolName : String) : NativeFilesystemBoundaryC
   , innerPollBlocks := true
   , requestDeadlineMs := 15
   , blockerMs := 200
-  , expectedTerminal := "timedOut"
-  , expectedFailureClass := some "external"
-  , queueAdvancesBeforeBlockerReturns := true
   }
 
 def nativeFilesystemBoundaryCases : List NativeFilesystemBoundaryCase :=

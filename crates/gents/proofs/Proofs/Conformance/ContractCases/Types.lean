@@ -339,9 +339,6 @@ structure NativeFilesystemBoundaryCase where
   innerPollBlocks : Bool
   requestDeadlineMs : Nat
   blockerMs : Nat
-  expectedTerminal : String
-  expectedFailureClass : Option String
-  queueAdvancesBeforeBlockerReturns : Bool
   deriving Repr
 
 structure ManagedExecToolBoundaryCase where
@@ -354,17 +351,6 @@ structure ManagedExecToolBoundaryCase where
   cancelRequiresKill : Bool
   descendantsInTerminationScope : Bool
   captureDrainBounded : Bool
-  deriving Repr
-
-structure ManagedExecLivenessCase where
-  name : String
-  trigger : String
-  preExecState : String
-  preToolState : String
-  expectedExecState : String
-  expectedToolState : String
-  maxSteps : Nat
-  killSignalRequired : Bool
   deriving Repr
 
 structure ProcessStopCase where

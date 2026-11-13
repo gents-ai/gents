@@ -361,36 +361,6 @@ def goalCreateCases : List GoalCreateCase :=
         (some (GoalAutomation.maxTokenBudget + 1)), existing := none }
   ]
 
-def createDispositionName : GoalAutomation.CreateDisposition → String
-  | .denied => "denied"
-  | .invalid => "invalid"
-  | .fresh => "fresh"
-  | .idempotent => "idempotent"
-  | .conflict => "conflict"
-
-def goalCreateCaseJson (w : GoalCreateCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"caller\":" ++ jsonString w.request.caller ++ ","
-    ++ "\"current_session\":" ++ jsonString w.request.currentSession ++ ","
-    ++ "\"requested_owner\":" ++ jsonString w.request.requestedOwner ++ ","
-    ++ "\"requested_session\":" ++ jsonString w.request.requestedSession ++ ","
-    ++ "\"objective\":" ++ jsonString w.request.objective ++ ","
-    ++ "\"objective_nonempty\":" ++ boolString w.request.objectiveNonempty ++ ","
-    ++ "\"token_budget\":" ++ (match w.request.tokenBudget with
-      | none => "null,"
-      | some value => toString value ++ ",")
-    ++ "\"goal_tools\":" ++ boolString w.request.goalTools ++ ","
-    ++ "\"goal_create\":" ++ boolString w.request.goalCreate ++ ","
-    ++ "\"existing\":" ++ boolString w.existing.isSome ++ ","
-    ++ "\"existing_matches\":" ++ boolString
-      (w.existing == some (GoalAutomation.createFingerprint w.request)) ++ ","
-    ++ "\"expected\":" ++ jsonString
-      (createDispositionName (GoalAutomation.decideCreate w.request w.existing))
-    ++ "}"
-
-def goalCreateCasesJson : String := jsonArray (goalCreateCases.map goalCreateCaseJson)
-
 structure TaskGoalPublicationCase where
   name : String
   nodeDid : String
@@ -428,42 +398,158 @@ def taskGoalPublicationCases : List TaskGoalPublicationCase :=
         some (GoalAutomation.maxTokenBudget + 1)⟩ }
   ]
 
-def taskPublicationModeName : GoalAutomation.TaskPublicationMode → String
-  | .invalid => "invalid"
-  | .ordinary => "ordinary"
-  | .atomicGoalBacked => "atomic_goal_backed"
+def budgetWire (budget : Option Int) : Option Lean.Json := budget.map Lean.toJson
 
-def goalOptionalStringJson : Option String → String
-  | none => "null"
-  | some value => jsonString value
+def budgetOfWire (budget : Option Lean.Json) : Option Int :=
+  budget.bind fun value => value.getInt?.toOption
 
-def goalOptionalIntJson : Option Int → String
-  | none => "null"
-  | some value => toString value
+structure GoalFingerprintWire where
+  owner : String
+  session : String
+  objective : String
+  tokenBudget : Option Lean.Json
+  deriving Lean.ToJson
 
-def taskGoalPublicationCaseJson (w : TaskGoalPublicationCase) : String :=
-  let publication := GoalAutomation.decideTaskPublication
-    w.declaration w.nodeDid w.taskId w.fireKey
-  "{"
-    ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"node_did\":" ++ jsonString w.nodeDid ++ ","
-    ++ "\"task_id\":" ++ jsonString w.taskId ++ ","
-    ++ "\"fire_key\":" ++ jsonString w.fireKey ++ ","
-    ++ "\"goal_objective\":" ++ goalOptionalStringJson w.declaration.goalObjective ++ ","
-    ++ "\"goal_token_budget\":" ++ goalOptionalIntJson w.declaration.goalTokenBudget ++ ","
-    ++ "\"declaration_valid\":" ++ boolString
-      (GoalAutomation.validTaskGoalDeclaration w.declaration) ++ ","
-    ++ "\"expected_mode\":" ++ jsonString (taskPublicationModeName publication.mode) ++ ","
-    ++ "\"expected_published\":" ++ boolString publication.published ++ ","
-    ++ "\"expected_runnable_request\":" ++ boolString publication.runnableRequest ++ ","
-    ++ "\"expected_durable_goal\":" ++ boolString publication.durableGoal ++ ","
-    ++ "\"expected_session_id\":" ++ goalOptionalStringJson publication.sessionId ++ ","
-    ++ "\"expected_request_id\":" ++ goalOptionalStringJson publication.requestId ++ ","
-    ++ "\"expected_retry_key\":" ++ goalOptionalStringJson publication.retryKey
-    ++ "}"
+def GoalFingerprintWire.ofModel (f : GoalAutomation.Fingerprint) : GoalFingerprintWire :=
+  { owner := f.owner, session := f.session, objective := f.objective
+  , tokenBudget := budgetWire f.tokenBudget }
 
-def taskGoalPublicationCasesJson : String :=
-  jsonArray (taskGoalPublicationCases.map taskGoalPublicationCaseJson)
+def GoalFingerprintWire.toModel (f : GoalFingerprintWire) : GoalAutomation.Fingerprint :=
+  { owner := f.owner, session := f.session, objective := f.objective
+  , tokenBudget := budgetOfWire f.tokenBudget }
+
+/-- A token budget is a JSON number: the overflow case carries
+`maxTokenBudget + 1`, which no signed 64-bit wire integer holds. -/
+structure GoalCreateInput where
+  name : String
+  caller : String
+  currentSession : String
+  requestedOwner : String
+  requestedSession : String
+  objective : String
+  objectiveNonempty : Bool
+  tokenBudget : Option Lean.Json
+  goalTools : Bool
+  goalCreate : Bool
+  existingFingerprint : Option GoalFingerprintWire
+  deriving Lean.ToJson
+
+def GoalCreateInput.ofCase (w : GoalCreateCase) : GoalCreateInput :=
+  { name := w.name, caller := w.request.caller, currentSession := w.request.currentSession
+  , requestedOwner := w.request.requestedOwner, requestedSession := w.request.requestedSession
+  , objective := w.request.objective, objectiveNonempty := w.request.objectiveNonempty
+  , tokenBudget := budgetWire w.request.tokenBudget, goalTools := w.request.goalTools
+  , goalCreate := w.request.goalCreate
+  , existingFingerprint := w.existing.map GoalFingerprintWire.ofModel }
+
+def GoalCreateInput.request (i : GoalCreateInput) : GoalAutomation.CreateRequest :=
+  { caller := i.caller, currentSession := i.currentSession
+  , requestedOwner := i.requestedOwner, requestedSession := i.requestedSession
+  , objective := i.objective, objectiveNonempty := i.objectiveNonempty
+  , tokenBudget := budgetOfWire i.tokenBudget, goalTools := i.goalTools
+  , goalCreate := i.goalCreate }
+
+deriving instance Lean.ToJson for GoalAutomation.CreateDisposition
+
+@[conformance_family]
+def goalCreate : Family GoalCreateInput GoalAutomation.CreateDisposition where
+  inputs := goalCreateCases.map GoalCreateInput.ofCase
+  model := fun i => GoalAutomation.decideCreate i.request (i.existingFingerprint.map GoalFingerprintWire.toModel)
+
+/-- The goal hook takes the owner and session from its bound identity and the
+existing goal from the store, so the dispatch-replay scenario builds only an
+authorized fresh request with no budget. -/
+def goalCreateCommittedCases : List GoalCreateCase :=
+  goalCreateCases.filter fun c => c.name ∈ ["authorized_fresh"]
+
+@[conformance_family]
+def goalCreateCommitted : Family GoalCreateInput GoalAutomation.CreateDisposition where
+  inputs := goalCreateCommittedCases.map GoalCreateInput.ofCase
+  model := fun i => GoalAutomation.decideCreate i.request (i.existingFingerprint.map GoalFingerprintWire.toModel)
+
+structure TaskGoalDeclarationInput where
+  name : String
+  goalObjective : Option String
+  goalTokenBudget : Option Lean.Json
+  deriving Lean.ToJson
+
+structure TaskGoalDeclarationOutput where
+  declarationValid : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def taskGoalDeclaration : Family TaskGoalDeclarationInput TaskGoalDeclarationOutput where
+  inputs := taskGoalPublicationCases.map fun w =>
+    { name := w.name, goalObjective := w.declaration.goalObjective
+    , goalTokenBudget := budgetWire w.declaration.goalTokenBudget }
+  model := fun i =>
+    { declarationValid := GoalAutomation.validTaskGoalDeclaration
+        ⟨i.goalObjective, budgetOfWire i.goalTokenBudget⟩ }
+
+structure TaskGoalPublicationInput where
+  name : String
+  nodeDid : String
+  taskId : String
+  fireKey : String
+  goalObjective : Option String
+  goalTokenBudget : Option Lean.Json
+  deriving Lean.ToJson
+
+def TaskGoalPublicationInput.ofCase (w : TaskGoalPublicationCase) : TaskGoalPublicationInput :=
+  { name := w.name, nodeDid := w.nodeDid, taskId := w.taskId, fireKey := w.fireKey
+  , goalObjective := w.declaration.goalObjective
+  , goalTokenBudget := budgetWire w.declaration.goalTokenBudget }
+
+def TaskGoalPublicationInput.publication (i : TaskGoalPublicationInput) :
+    GoalAutomation.TaskPublication :=
+  GoalAutomation.decideTaskPublication ⟨i.goalObjective, budgetOfWire i.goalTokenBudget⟩
+    i.nodeDid i.taskId i.fireKey
+
+structure TaskGoalPublicationIdentity where
+  sessionId : Option String
+  requestId : Option String
+  retryKey : Option String
+  deriving Lean.ToJson
+
+/-- Only an atomic goal-backed publication has a fire identity; the others are
+covered by `taskGoalDeclaration`. -/
+def taskGoalPublicationIdentityCases : List TaskGoalPublicationCase :=
+  taskGoalPublicationCases.filter fun w =>
+    (GoalAutomation.decideTaskPublication w.declaration w.nodeDid w.taskId w.fireKey).mode
+      == .atomicGoalBacked
+
+@[conformance_family]
+def taskGoalPublicationIdentity :
+    Family TaskGoalPublicationInput TaskGoalPublicationIdentity where
+  inputs := taskGoalPublicationIdentityCases.map TaskGoalPublicationInput.ofCase
+  model := fun i =>
+    let publication := i.publication
+    { sessionId := publication.sessionId, requestId := publication.requestId
+    , retryKey := publication.retryKey }
+
+deriving instance Lean.ToJson for GoalAutomation.TaskPublicationMode
+
+structure TaskGoalPublicationMaterialized where
+  mode : GoalAutomation.TaskPublicationMode
+  published : Bool
+  runnableRequest : Bool
+  durableGoal : Bool
+  deriving Lean.ToJson
+
+/-- The production materializer scenario publishes one scheduled goal Task on
+its own node; it builds the positive-budget declaration. -/
+def taskGoalPublicationMaterializedCases : List TaskGoalPublicationCase :=
+  taskGoalPublicationCases.filter fun w =>
+    w.name ∈ ["positive_budget_uses_atomic_goal_publication"]
+
+@[conformance_family]
+def taskGoalPublicationMaterialized :
+    Family TaskGoalPublicationInput TaskGoalPublicationMaterialized where
+  inputs := taskGoalPublicationMaterializedCases.map TaskGoalPublicationInput.ofCase
+  model := fun i =>
+    let publication := i.publication
+    { mode := publication.mode, published := publication.published
+    , runnableRequest := publication.runnableRequest, durableGoal := publication.durableGoal }
 
 structure TaskGoalRecoveryCase where
   name : String

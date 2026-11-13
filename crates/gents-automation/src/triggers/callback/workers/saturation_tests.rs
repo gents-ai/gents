@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{CallbackWorkers, PLUGIN_CALLBACK_CONCURRENCY};
 use crate::triggers::callback::documents::{load_callback, load_invocation, CallbackInvocationDoc};
+use crate::triggers::callback::LIFECYCLE_SUCCEEDED;
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_pack::plugin::store;
@@ -118,58 +119,37 @@ async fn wait_for_arrival_checkpoint(
     .expect("source delivery must checkpoint the claimed prefix after the capacity refusal");
 }
 
-fn transition(name: &str) -> &'static gents_lean_vocab::LeanCallbackTransitionCase {
-    gents_lean_vocab::lean_contract_snapshot()
-        .callback_transition_cases
-        .iter()
-        .find(|case| case.name == name)
-        .expect("callback transition emitted by Lean")
-}
-
-trait Phase {
-    fn state(&self) -> &str;
-    fn journal(&self) -> Value;
-}
-
-impl Phase for gents_lean_vocab::LeanCallbackTransitionCasePre {
-    fn state(&self) -> &str {
-        &self.state
-    }
-
-    fn journal(&self) -> Value {
-        Value::Array(
-            self.journal
-                .iter()
-                .map(|item| json!({"index": item.index, "state": item.state}))
-                .collect(),
-        )
-    }
-}
-
-impl Phase for gents_lean_vocab::LeanCallbackTransitionCasePost {
-    fn state(&self) -> &str {
-        &self.state
-    }
-
-    fn journal(&self) -> Value {
-        Value::Array(
-            self.journal
-                .iter()
-                .map(|item| json!({"index": item.index, "state": item.state}))
-                .collect(),
-        )
-    }
-}
-
-fn assert_phase<P>(row: &Value, phase: &P, attempts: u64)
-where
-    P: Phase,
-{
-    assert_eq!(row["lifecycle_state"], phase.state(), "{row}");
-    assert_eq!(row["attempts"], attempts, "{row}");
-    let journal: Value = serde_json::from_str(row["action_journal"].as_str().unwrap()).unwrap();
-    assert_eq!(journal, phase.journal(), "{row}");
+fn checkpoint(
+    row: &Value,
+    results: &[Value],
+) -> gents_lean_vocab::families::contracts_callback_saturation_trace::SaturationCheckpoint {
     assert!(row["error"].is_null(), "{row}");
+    let journal: Vec<Value> =
+        serde_json::from_str(row["action_journal"].as_str().unwrap()).unwrap();
+    gents_lean_vocab::families::contracts_callback_saturation_trace::SaturationCheckpoint {
+        state: row["lifecycle_state"].as_str().unwrap().to_owned(),
+        attempts: row["attempts"].as_u64().unwrap(),
+        journal: journal
+            .iter()
+            .map(|entry| gents_lean_vocab::families::contracts_callback_saturation_trace::CallbackJournalEntryWire {
+                index: entry["index"].as_u64().unwrap(),
+                state: entry["state"].as_str().unwrap().to_owned(),
+            })
+            .collect(),
+        result_emitted: results
+            .iter()
+            .any(|result| result["invocation_id"] == row["invocation_id"]),
+    }
+}
+
+fn assert_same(
+    observed: &gents_lean_vocab::families::contracts_callback_saturation_trace::SaturationCheckpoint,
+    reference: &gents_lean_vocab::families::contracts_callback_saturation_trace::SaturationCheckpoint,
+) {
+    assert_eq!(
+        serde_json::to_value(observed).unwrap(),
+        serde_json::to_value(reference).unwrap()
+    );
 }
 
 async fn create_inputs(access: &ConfigAccess, items: impl Iterator<Item = usize>) {
@@ -223,291 +203,298 @@ async fn output_rows(access: &ConfigAccess) -> Vec<Value> {
 /// seconds after reserving the final round. Production budgets are unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
-    let claim = transition("claim_preserves_captured_group");
-    let running = &transition("interrupt_marks_executing_action_and_fails").pre;
-    let success = &transition("success_preserves_captured_group_and_emits_result").post;
-    assert!(success.result_emitted);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let (entered, mut arrivals) = mpsc::unbounded_channel();
-    let release_all = CancellationToken::new();
-    let hits = Arc::new(AtomicUsize::new(0));
-    let app = Router::new().route("/hold", get(hold)).with_state(Gate {
-        entered,
-        hits: hits.clone(),
-        release_all: release_all.clone(),
-    });
-    let server_stop = CancellationToken::new();
-    let server_shutdown = server_stop.clone();
-    let mut server = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(server_shutdown.cancelled_owned())
-            .await
-            .unwrap();
-    });
-    let _server_guard = server_stop.clone().drop_guard();
-    let _release_guard = release_all.clone().drop_guard();
-
-    let canned = json!({"http_calls": {
-        "requests": [{"id": "release", "url": format!("http://{address}/hold")}],
-        "state": {"step": 1}
-    }});
-    let (home, mut plugin) = installed_plugin(
-        &asking_plugin_wat("http_calls", "http_results", &canned, false),
-        None,
-    );
-    let _identity = gents_store::test_support::pin_fixed_signing_identity(home.path());
-    plugin.declaration.manifold = Some(json!({
-        "fs": "None", "net": {"OutboundHttp": [format!("http://{address}")]},
-        "env": "None", "crypto": false, "child_process": false
-    }));
-    plugin.declaration.limits = Some(gents_pack::pack::PluginLimits {
-        wall_clock_secs: Some(30),
-        ..Default::default()
-    });
-    plugin.granted =
-        store::grant_on_install(home.path(), &plugin.namespace, &plugin.declaration, true).unwrap();
-    store::write_record(home.path(), &plugin).unwrap();
-    let plugins = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
-    let db = crate::triggers::callback::test_node_builder("callback-saturation").await;
-    let node = db.node.clone();
-    let owner = db.node_identity.did();
-    crate::triggers::callback::seed_test_agent(&node, owner).await;
-    ConfigAccess::local(node.clone())
-        .add_collection(
-            "type SaturationInput { item: Int correlation: String }
-             type SaturationOutput { item: Int correlation: String http_calls: Boolean
-                 state: JSON http_results: JSON }",
-        )
-        .await
-        .unwrap();
-    let access = crate::triggers::callback::test_agent_access(&node);
-    let documents = [
-        (
-            gents_store::collection::Collection::Callback,
-            json!({"callback_id": CALLBACK, "handler": {
-                "kind": "plugin", "plugin": "team/plugin", "digest": plugin.digest,
-                "correlation_field": "correlation", "outputs": [{
-                    "name": "result", "collection": "SaturationOutput",
-                    "schema": "SaturationOutput/v1", "correlation_field": "correlation",
-                    "cardinality": "one", "required": true
-                }]
-            }}),
-        ),
-        (
-            gents_store::collection::Collection::EventSource,
-            json!({"event_source_id": "saturation", "source_collection": "SaturationInput",
-                "event_kind": "created", "correlation_field": "correlation"}),
-        ),
-        (
-            gents_store::collection::Collection::CallbackBinding,
-            json!({"binding_id": "saturation", "agent_did":crate::triggers::callback::test_agent_did(),"event_source_id": "saturation",
-                "callback_id": CALLBACK, "input_fields": ["item", "correlation"]}),
-        ),
-    ]
-    .into_iter()
-    .map(|(collection, mut value)| {
-        value["node_did"] = json!(owner);
-        DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        }
-    })
-    .collect();
-    let plan = DesiredStateApplyPlan::new(documents).unwrap();
-    let config_access = ConfigAccess::local_as(node.clone(), identity::Did::new(owner).unwrap());
-    config_access
-        .transact_write("test.callback_saturation_config", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
+    for case in gents_lean_vocab::families::contracts_callback_saturation_trace::cases::<String>() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (entered, mut arrivals) = mpsc::unbounded_channel();
+        let release_all = CancellationToken::new();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route("/hold", get(hold)).with_state(Gate {
+            entered,
+            hits: hits.clone(),
+            release_all: release_all.clone(),
+        });
+        let server_stop = CancellationToken::new();
+        let server_shutdown = server_stop.clone();
+        let mut server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(server_shutdown.cancelled_owned())
                 .await
-                .map(|_| ())
-            })
-        })
-        .await
-        .unwrap();
-    create_inputs(&access, 0..PLUGIN_CALLBACK_CONCURRENCY).await;
+                .unwrap();
+        });
+        let _server_guard = server_stop.clone().drop_guard();
+        let _release_guard = release_all.clone().drop_guard();
 
-    let cancel = CancellationToken::new();
-    let _cancel_guard = cancel.clone().drop_guard();
-    let mut engine = tokio::spawn(crate::triggers::callback::run_callback_engine(
-        node.clone(),
-        owner.into(),
-        None,
-        plugins.clone(),
-        crate::triggers::callback::test_snapshot(),
-        cancel.clone(),
-    ));
-
-    let scenario = async {
-        let mut releases = Vec::new();
-        for _ in 0..PLUGIN_CALLBACK_CONCURRENCY {
-            releases.push(
-                tokio::time::timeout(WAIT, arrivals.recv())
-                    .await
-                    .expect("all plugin workers must enter their HTTP gates")
-                    .unwrap(),
-            );
-        }
-        let initial = invocations(&access).await;
-        assert_eq!(initial.len(), PLUGIN_CALLBACK_CONCURRENCY);
-        for row in &initial {
-            assert_phase(row, running, claim.post.attempts);
-        }
-        assert!(result_rows(&access).await.is_empty());
-        let stale_running = snapshot(&node, &initial[0], owner).await;
-
-        let mut updates = node.subscribe_updates();
-        let claimed_head = arrival_head(&access).await;
-        create_inputs(
-            &access,
-            PLUGIN_CALLBACK_CONCURRENCY..PLUGIN_CALLBACK_CONCURRENCY + 1,
-        )
-        .await;
-        let saturated = wait_for_invocations(&access, &mut updates, |rows| {
-            rows.len() == PLUGIN_CALLBACK_CONCURRENCY + 1
-        })
-        .await;
-        let pending = saturated
-            .iter()
-            .find(|row| row["input"]["item"] == PLUGIN_CALLBACK_CONCURRENCY)
-            .unwrap();
-        assert_phase(pending, &claim.pre, claim.pre.attempts);
-        let stale_pending = snapshot(&node, pending, owner).await;
-        wait_for_arrival_checkpoint(&access, &mut updates, &claimed_head).await;
-        assert_ne!(
-            arrival_head(&access).await,
-            claimed_head,
-            "the unclaimed arrival stays beyond the checkpoint"
+        let canned = json!({"http_calls": {
+            "requests": [{"id": "release", "url": format!("http://{address}/hold")}],
+            "state": {"step": 1}
+        }});
+        let (home, mut plugin) = installed_plugin(
+            &asking_plugin_wat("http_calls", "http_results", &canned, false),
+            None,
         );
-        assert_eq!(
-            snapshot(&node, pending, owner).await.lifecycle_state,
-            claim.pre.state
-        );
-        assert_eq!(hits.load(Ordering::SeqCst), PLUGIN_CALLBACK_CONCURRENCY);
-        assert!(arrivals.try_recv().is_err());
-
-        releases.pop().unwrap().send(()).unwrap();
-        releases.push(tokio::time::timeout(WAIT, arrivals.recv()).await
-            .expect("periodic recovery must start the pending invocation without another source arrival")
-            .unwrap());
-        let resumed = invocations(&access).await;
-        let recovered = resumed
-            .iter()
-            .find(|row| row["invocation_id"] == pending["invocation_id"])
-            .unwrap();
-        assert_phase(recovered, running, claim.post.attempts);
-        let mut succeeded = 0;
-        for row in &resumed {
-            if row["lifecycle_state"] == success.state.as_str() {
-                succeeded += 1;
-                assert_phase(row, success, claim.post.attempts);
-            } else {
-                assert_phase(row, running, claim.post.attempts);
-            }
-        }
-        assert_eq!(
-            succeeded, 1,
-            "the sweep must leave all held attempts running"
-        );
-        assert_eq!(result_rows(&access).await.len(), 1);
-        assert_eq!(hits.load(Ordering::SeqCst), PLUGIN_CALLBACK_CONCURRENCY + 1);
-        updates = node.subscribe_updates();
-        for release in releases {
-            release.send(()).unwrap();
-        }
-        let completed = wait_for_invocations(&access, &mut updates, |rows| {
-            rows.len() == PLUGIN_CALLBACK_CONCURRENCY + 1
-                && rows
-                    .iter()
-                    .all(|row| row["lifecycle_state"] == success.state.as_str())
-        })
-        .await;
-        for row in &completed {
-            assert_phase(row, success, claim.post.attempts);
-        }
-        let results = result_rows(&access).await;
-        assert_eq!(results.len(), completed.len());
-        assert_eq!(
-            results
-                .iter()
-                .map(|row| row["invocation_id"].as_str().unwrap())
-                .collect::<BTreeSet<_>>(),
-            completed
-                .iter()
-                .map(|row| row["invocation_id"].as_str().unwrap())
-                .collect::<BTreeSet<_>>()
-        );
-        let outputs = output_rows(&access).await;
-        assert_eq!(outputs.len(), completed.len());
-        for (item, output) in outputs.iter().enumerate() {
-            assert_eq!(output["item"], item);
-            assert_eq!(output["correlation"], format!("item-{item}"));
-            assert_eq!(output["http_results"]["release"]["status"], 204, "{output}");
-            assert_eq!(output["http_results"]["release"]["body"], "", "{output}");
-        }
-        let sources = rows(&access, "{ SaturationInput { _docID } }", "SaturationInput").await;
-        assert_eq!(sources.len(), completed.len());
-
-        let callback = load_callback(&node, CALLBACK, owner)
+        let _identity = gents_store::test_support::pin_fixed_signing_identity(home.path());
+        plugin.declaration.manifold = Some(json!({
+            "fs": "None", "net": {"OutboundHttp": [format!("http://{address}")]},
+            "env": "None", "crypto": false, "child_process": false
+        }));
+        plugin.declaration.limits = Some(gents_pack::pack::PluginLimits {
+            wall_clock_secs: Some(30),
+            ..Default::default()
+        });
+        plugin.granted =
+            store::grant_on_install(home.path(), &plugin.namespace, &plugin.declaration, true)
+                .unwrap();
+        store::write_record(home.path(), &plugin).unwrap();
+        let plugins = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+        let db = crate::triggers::callback::test_node_builder("callback-saturation").await;
+        let node = db.node.clone();
+        let owner = db.node_identity.did();
+        crate::triggers::callback::seed_test_agent(&node, owner).await;
+        ConfigAccess::local(node.clone())
+            .add_collection(
+                "type SaturationInput { item: Int correlation: String }
+                 type SaturationOutput { item: Int correlation: String http_calls: Boolean
+                     state: JSON http_results: JSON }",
+            )
             .await
+            .unwrap();
+        let access = crate::triggers::callback::test_agent_access(&node);
+        let documents = [
+            (
+                gents_store::collection::Collection::Callback,
+                json!({"callback_id": CALLBACK, "handler": {
+                    "kind": "plugin", "plugin": "team/plugin", "digest": plugin.digest,
+                    "correlation_field": "correlation", "outputs": [{
+                        "name": "result", "collection": "SaturationOutput",
+                        "schema": "SaturationOutput/v1", "correlation_field": "correlation",
+                        "cardinality": "one", "required": true
+                    }]
+                }}),
+            ),
+            (
+                gents_store::collection::Collection::EventSource,
+                json!({"event_source_id": "saturation", "source_collection": "SaturationInput",
+                    "event_kind": "created", "correlation_field": "correlation"}),
+            ),
+            (
+                gents_store::collection::Collection::CallbackBinding,
+                json!({"binding_id": "saturation", "agent_did":crate::triggers::callback::test_agent_did(),"event_source_id": "saturation",
+                    "callback_id": CALLBACK, "input_fields": ["item", "correlation"]}),
+            ),
+        ]
+        .into_iter()
+        .map(|(collection, mut value)| {
+            value["node_did"] = json!(owner);
+            DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            }
+        })
+        .collect();
+        let plan = DesiredStateApplyPlan::new(documents).unwrap();
+        let config_access =
+            ConfigAccess::local_as(node.clone(), identity::Did::new(owner).unwrap());
+        config_access
+            .transact_write("test.callback_saturation_config", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
+            })
+            .await
+            .unwrap();
+        create_inputs(&access, 0..PLUGIN_CALLBACK_CONCURRENCY).await;
+
+        let cancel = CancellationToken::new();
+        let _cancel_guard = cancel.clone().drop_guard();
+        let mut engine = tokio::spawn(crate::triggers::callback::run_callback_engine(
+            node.clone(),
+            owner.into(),
+            None,
+            plugins.clone(),
+            crate::triggers::callback::test_snapshot(),
+            cancel.clone(),
+        ));
+
+        let scenario = async {
+            let mut releases = Vec::new();
+            for _ in 0..PLUGIN_CALLBACK_CONCURRENCY {
+                releases.push(
+                    tokio::time::timeout(WAIT, arrivals.recv())
+                        .await
+                        .expect("all plugin workers must enter their HTTP gates")
+                        .unwrap(),
+                );
+            }
+            let initial = invocations(&access).await;
+            assert_eq!(initial.len(), PLUGIN_CALLBACK_CONCURRENCY);
+            let initial_results = result_rows(&access).await;
+            assert!(initial_results.is_empty());
+            let held = checkpoint(&initial[0], &initial_results);
+            for row in &initial {
+                assert_same(&checkpoint(row, &initial_results), &held);
+            }
+            let stale_running = snapshot(&node, &initial[0], owner).await;
+
+            let mut updates = node.subscribe_updates();
+            let claimed_head = arrival_head(&access).await;
+            create_inputs(
+                &access,
+                PLUGIN_CALLBACK_CONCURRENCY..PLUGIN_CALLBACK_CONCURRENCY + 1,
+            )
+            .await;
+            let saturated = wait_for_invocations(&access, &mut updates, |rows| {
+                rows.len() == PLUGIN_CALLBACK_CONCURRENCY + 1
+            })
+            .await;
+            let pending = saturated
+                .iter()
+                .find(|row| row["input"]["item"] == PLUGIN_CALLBACK_CONCURRENCY)
+                .unwrap();
+            let unclaimed = checkpoint(pending, &result_rows(&access).await);
+            let stale_pending = snapshot(&node, pending, owner).await;
+            wait_for_arrival_checkpoint(&access, &mut updates, &claimed_head).await;
+            assert_ne!(
+                arrival_head(&access).await,
+                claimed_head,
+                "the unclaimed arrival stays beyond the checkpoint"
+            );
+            assert_eq!(
+                snapshot(&node, pending, owner).await.lifecycle_state,
+                unclaimed.state
+            );
+            assert_eq!(hits.load(Ordering::SeqCst), PLUGIN_CALLBACK_CONCURRENCY);
+            assert!(arrivals.try_recv().is_err());
+
+            releases.pop().unwrap().send(()).unwrap();
+            releases.push(tokio::time::timeout(WAIT, arrivals.recv()).await
+                .expect("periodic recovery must start the pending invocation without another source arrival")
+                .unwrap());
+            let resumed = invocations(&access).await;
+            let recovered = resumed
+                .iter()
+                .find(|row| row["invocation_id"] == pending["invocation_id"])
+                .unwrap();
+            let resumed_results = result_rows(&access).await;
+            assert_same(&checkpoint(recovered, &resumed_results), &held);
+            let mut early_success = Vec::new();
+            for row in &resumed {
+                if row["lifecycle_state"] == LIFECYCLE_SUCCEEDED {
+                    early_success.push(checkpoint(row, &resumed_results));
+                } else {
+                    assert_same(&checkpoint(row, &resumed_results), &held);
+                }
+            }
+            assert_eq!(
+                early_success.len(),
+                1,
+                "the sweep must leave all held attempts running"
+            );
+            assert_eq!(resumed_results.len(), 1);
+            assert_eq!(hits.load(Ordering::SeqCst), PLUGIN_CALLBACK_CONCURRENCY + 1);
+            updates = node.subscribe_updates();
+            for release in releases {
+                release.send(()).unwrap();
+            }
+            let completed = wait_for_invocations(&access, &mut updates, |rows| {
+                rows.len() == PLUGIN_CALLBACK_CONCURRENCY + 1
+                    && rows
+                        .iter()
+                        .all(|row| row["lifecycle_state"] == LIFECYCLE_SUCCEEDED)
+            })
+            .await;
+            let results = result_rows(&access).await;
+            let finished = checkpoint(&completed[0], &results);
+            for row in &completed {
+                assert_same(&checkpoint(row, &results), &finished);
+            }
+            for early in &early_success {
+                assert_same(early, &finished);
+            }
+            case.check(vec![unclaimed, held, finished.clone()]);
+            assert_eq!(results.len(), completed.len());
+            assert_eq!(
+                results
+                    .iter()
+                    .map(|row| row["invocation_id"].as_str().unwrap())
+                    .collect::<BTreeSet<_>>(),
+                completed
+                    .iter()
+                    .map(|row| row["invocation_id"].as_str().unwrap())
+                    .collect::<BTreeSet<_>>()
+            );
+            let outputs = output_rows(&access).await;
+            assert_eq!(outputs.len(), completed.len());
+            for (item, output) in outputs.iter().enumerate() {
+                assert_eq!(output["item"], item);
+                assert_eq!(output["correlation"], format!("item-{item}"));
+                assert_eq!(output["http_results"]["release"]["status"], 204, "{output}");
+                assert_eq!(output["http_results"]["release"]["body"], "", "{output}");
+            }
+            let sources = rows(&access, "{ SaturationInput { _docID } }", "SaturationInput").await;
+            assert_eq!(sources.len(), completed.len());
+
+            let callback = load_callback(&node, CALLBACK, owner)
+                .await
+                .unwrap()
+                .unwrap();
+            let stale_workers = CallbackWorkers::new(1, CancellationToken::new());
+            for stale in [stale_pending, stale_running] {
+                stale_workers.dispatch(
+                    node.clone(),
+                    access.clone(),
+                    &stale,
+                    &callback,
+                    None,
+                    plugins.clone(),
+                );
+                stale_workers.drain().await;
+            }
+            assert_eq!(
+                invocations(&access).await,
+                completed,
+                "stale dispatch must reload terminal state"
+            );
+            assert_eq!(result_rows(&access).await, results);
+            assert_eq!(output_rows(&access).await, outputs);
+            assert_eq!(hits.load(Ordering::SeqCst), completed.len());
+            assert!(arrivals.try_recv().is_err());
+        };
+        let outcome = AssertUnwindSafe(async {
+            tokio::time::timeout(SCENARIO_LIMIT, scenario)
+                .await
+                .expect("callback saturation scenario exceeded its total deadline");
+        })
+        .catch_unwind()
+        .await;
+
+        cancel.cancel();
+        release_all.cancel();
+        let drained = tokio::time::timeout(WAIT, &mut engine).await;
+        if drained.is_err() {
+            engine.abort();
+        }
+        server_stop.cancel();
+        let stopped = tokio::time::timeout(WAIT, &mut server).await;
+        if stopped.is_err() {
+            server.abort();
+        }
+        node.shutdown().await.expect("node shutdown");
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
+        drained
+            .expect("callback workers drain on cancellation")
             .unwrap()
             .unwrap();
-        let stale_workers = CallbackWorkers::new(1, CancellationToken::new());
-        for stale in [stale_pending, stale_running] {
-            stale_workers.dispatch(
-                node.clone(),
-                access.clone(),
-                &stale,
-                &callback,
-                None,
-                plugins.clone(),
-            );
-            stale_workers.drain().await;
-        }
-        assert_eq!(
-            invocations(&access).await,
-            completed,
-            "stale dispatch must reload terminal state"
-        );
-        assert_eq!(result_rows(&access).await, results);
-        assert_eq!(output_rows(&access).await, outputs);
-        assert_eq!(hits.load(Ordering::SeqCst), completed.len());
-        assert!(arrivals.try_recv().is_err());
-    };
-    let outcome = AssertUnwindSafe(async {
-        tokio::time::timeout(SCENARIO_LIMIT, scenario)
-            .await
-            .expect("callback saturation scenario exceeded its total deadline");
-    })
-    .catch_unwind()
-    .await;
-
-    cancel.cancel();
-    release_all.cancel();
-    let drained = tokio::time::timeout(WAIT, &mut engine).await;
-    if drained.is_err() {
-        engine.abort();
+        stopped.expect("HTTP gates release on cleanup").unwrap();
     }
-    server_stop.cancel();
-    let stopped = tokio::time::timeout(WAIT, &mut server).await;
-    if stopped.is_err() {
-        server.abort();
-    }
-    node.shutdown().await.expect("node shutdown");
-    if let Err(panic) = outcome {
-        std::panic::resume_unwind(panic);
-    }
-    drained
-        .expect("callback workers drain on cancellation")
-        .unwrap()
-        .unwrap();
-    stopped.expect("HTTP gates release on cleanup").unwrap();
 }
