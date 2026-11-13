@@ -83,8 +83,11 @@ pub(in crate::runtime::agent) async fn run_agent(
     gents_store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
-    let (runtime_status_owner, runtime_status) =
-        RuntimeStatusHandle::start(agent.node.clone(), agent.node_did().to_string());
+    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start(
+        agent.node.clone(),
+        agent.node_did().to_string(),
+        agent.storage_fault(),
+    );
     run_agent_with_runtime_status(
         agent,
         external_shutdown,
@@ -129,6 +132,7 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
         agent.node_did().to_string(),
         writer,
         retry_delay,
+        agent.storage_fault(),
     );
     run_agent_with_runtime_status(
         agent,
@@ -185,20 +189,24 @@ async fn finish_run_agent(
     if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::Shutdown {
         if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::ShuttingDown
         {
-            if let Err(error) = runtime_status
-                .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
-                .await
-            {
+            let persisted = crate::runtime::storage_fault::tolerate_unwritable_store(
+                runtime_status
+                    .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
+                    .await,
+            );
+            if let Err(error) = persisted {
                 tracing::error!(error = %error, "failed to publish terminal ShuttingDown state");
                 teardown_error = Some(error);
             } else if let Some(observer) = &terminal_observer {
                 observer.on_process_state_change(ProcessLifecycleState::ShuttingDown);
             }
         }
-        if let Err(error) = runtime_status
-            .set_process_state_durable(ProcessLifecycleState::Shutdown)
-            .await
-        {
+        let persisted = crate::runtime::storage_fault::tolerate_unwritable_store(
+            runtime_status
+                .set_process_state_durable(ProcessLifecycleState::Shutdown)
+                .await,
+        );
+        if let Err(error) = persisted {
             tracing::error!(error = %error, "failed to publish terminal Shutdown state");
             if teardown_error.is_none() {
                 teardown_error = Some(error);

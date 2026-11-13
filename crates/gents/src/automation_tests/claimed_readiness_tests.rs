@@ -104,8 +104,11 @@ async fn source(
         agent_executor_capacities: Default::default(),
         agent_executor_queue_capacities: Default::default(),
     });
-    let (owner, status) =
-        crate::runtime::status::RuntimeStatusHandle::start(db.node.clone(), db.node_identity.did());
+    let (owner, status) = crate::runtime::status::RuntimeStatusHandle::start(
+        db.node.clone(),
+        db.node_identity.did(),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     status.publish_applied(&snapshot).await;
     let (_, rx) = watch::channel(snapshot);
     (
@@ -473,14 +476,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 .unwrap()
                 .is_some());
         }
-        publish_readiness(
-            &db,
-            observation,
-            &status,
-            settled,
-            case.newer_than_terminal,
-        )
-        .await;
+        publish_readiness(&db, observation, &status, settled, case.newer_than_terminal).await;
         let observed = load_goal(&db).await;
         let intent = controller
             .build_intent(
@@ -495,7 +491,11 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             "{name}"
         );
         let after = load_goal(&db).await;
-        assert_eq!(recovery_projection(&after), case_expected(&case.expected), "{name}");
+        assert_eq!(
+            recovery_projection(&after),
+            case_expected(&case.expected),
+            "{name}"
+        );
         assert_eq!(
             controller
                 .continuation_child_exists(
@@ -747,7 +747,11 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
         agent_executor_capacities: Default::default(),
         agent_executor_queue_capacities: Default::default(),
     });
-    let (owner, status) = RuntimeStatusHandle::start(db.node.clone(), db.node_identity.did());
+    let (owner, status) = RuntimeStatusHandle::start(
+        db.node.clone(),
+        db.node_identity.did(),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     status.publish_applied(&snapshot).await;
     assert!(status.goal_reconcile_settled().await);
     let (_tx, rx) = watch::channel(snapshot);

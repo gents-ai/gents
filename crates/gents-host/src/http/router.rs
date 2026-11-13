@@ -57,6 +57,17 @@ pub struct RuntimeHttpState {
     pub serve_lifecycle: ServeLifecycleHandle,
 }
 
+impl RuntimeHttpState {
+    pub(crate) fn storage_observation(
+        &self,
+    ) -> gents_protocol::node_readiness::RuntimeStorageObservation {
+        self.activation_runtime
+            .get()
+            .map(|runtime| runtime.storage_fault().observation())
+            .unwrap_or_default()
+    }
+}
+
 /// Ready only after serve writes `runtime.json` for this process; never
 /// returns to starting.
 #[derive(Clone, Debug, Default)]

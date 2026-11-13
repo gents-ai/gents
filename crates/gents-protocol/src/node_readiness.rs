@@ -243,6 +243,28 @@ pub enum AgentReadinessUnknownReason {
     ProcessNotReady,
     RouterGenerationStale,
     AgentNotAssigned,
+    StorageUnavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RuntimeStorageObservation {
+    #[default]
+    Writable,
+    Unavailable,
+}
+
+impl RuntimeStorageObservation {
+    pub fn from_unavailable(unavailable: bool) -> Self {
+        if unavailable {
+            Self::Unavailable
+        } else {
+            Self::Writable
+        }
+    }
+
+    pub fn is_unavailable(self) -> bool {
+        matches!(self, Self::Unavailable)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -344,6 +366,19 @@ pub fn decode_node_readiness_snapshot(
     Ok(snapshot)
 }
 
+pub fn project_node_readiness_summary_with_storage(
+    row: Option<&NodeReadinessRow>,
+    expected_node_did: &str,
+    storage: RuntimeStorageObservation,
+) -> ProjectedNodeReadinessSummary {
+    if storage.is_unavailable() {
+        return ProjectedNodeReadinessSummary::Unknown(
+            AgentReadinessUnknownReason::StorageUnavailable,
+        );
+    }
+    project_node_readiness_summary(row, expected_node_did)
+}
+
 pub fn project_node_readiness_summary(
     row: Option<&NodeReadinessRow>,
     expected_node_did: &str,
@@ -387,6 +422,35 @@ pub fn project_node_readiness_summary(
         ready_count,
         unavailable_agents,
     })
+}
+
+pub fn project_node_readiness_with_storage<'a>(
+    row: Option<&NodeReadinessRow>,
+    expected_node_did: &str,
+    configured_agent_dids: impl IntoIterator<Item = &'a str>,
+    configured_default_agent_did: Option<&str>,
+    storage: RuntimeStorageObservation,
+) -> NodeReadinessProjection {
+    if storage.is_unavailable() {
+        let mut agent_dids = BTreeSet::new();
+        for agent_did in configured_agent_dids {
+            if is_canonical_id(agent_did) {
+                agent_dids.insert(agent_did.to_owned());
+            }
+        }
+        if let Some(default_agent_did) = configured_default_agent_did {
+            if is_canonical_id(default_agent_did) {
+                agent_dids.insert(default_agent_did.to_owned());
+            }
+        }
+        return unknown_projection(agent_dids, AgentReadinessUnknownReason::StorageUnavailable);
+    }
+    project_node_readiness(
+        row,
+        expected_node_did,
+        configured_agent_dids,
+        configured_default_agent_did,
+    )
 }
 
 pub fn project_node_readiness<'a>(

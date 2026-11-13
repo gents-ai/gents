@@ -46,6 +46,7 @@ structure ClientAgentReadinessCase where
   unavailable : Bool
   startupDemoted : Bool
   runtimeUnavailableReason : String
+  storageUnavailable : Bool
   expectedState : String
   expectedReason : Option String
   expectedRuntimeAdmissible : Bool

@@ -39,6 +39,7 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
                 durable: case.input.durable,
             }),
             std::time::Duration::from_millis(1),
+            crate::runtime::storage_fault::StorageFaultObservation::new(),
         );
         runtime_status.initialize_startup("general").await.unwrap();
         if case.input.registered {
@@ -132,7 +133,11 @@ async fn aborted_staged_generation_does_not_release_active_startup_obligation() 
         .expect("fixture node has an identity")
         .to_owned();
     gents_documents::test_support::ensure_test_node(&node, &node_did).await;
-    let (status_owner, runtime_status) = RuntimeStatusHandle::start(node.clone(), node_did);
+    let (status_owner, runtime_status) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did,
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     runtime_status.initialize_startup("general").await.unwrap();
     let barrier = Arc::new(StartupBarrier::ready_for_test());
     let (fatal_error, _fatal_errors) = mpsc::unbounded_channel();

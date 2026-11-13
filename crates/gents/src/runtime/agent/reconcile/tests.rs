@@ -73,6 +73,7 @@ fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> Runtim
         node_did,
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     runtime_status
 }
@@ -1531,6 +1532,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
             .expect("fixture node has an identity"),
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
@@ -1602,6 +1604,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
             .expect("fixture node has an identity"),
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let runner = move |_agent: AgentWithTools,
@@ -1698,6 +1701,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         "did:test:source-failure-rollback",
         writer,
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     runtime_status.initialize_startup(&agent_did).await.unwrap();
     let slot_failure_policy = Arc::new(PublisherBackedSlotFailurePolicy {
@@ -1836,6 +1840,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
             release: source_release.clone(),
         }),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let lineage = AgentLineage::provision("closed-watch");
     let agent_did = lineage.binding.agent_did.clone();

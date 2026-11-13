@@ -285,6 +285,7 @@ impl GentsBuilder {
             backend_prober_options:
                 gents_inference::backends::health::BackendProberOptions::default(),
             backend_health: self.backend_health,
+            storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: self.process_state_observer,
             runtime_snapshot_observer: None,
             startup_build_failure_observer: None,
