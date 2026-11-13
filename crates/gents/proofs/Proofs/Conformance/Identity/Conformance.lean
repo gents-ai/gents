@@ -466,6 +466,11 @@ def observed (state : State) : List Action → List Bool
 theorem node_administrator_is_explicit_and_revocable :
     observed initial nodeAdministratorChanges = [false, false, true, false] := by native_decide
 
+/-- Document ACP's answers: the reader grant is explicit and its revocation
+withdraws it. A runtime that does not host the node reads exactly this. The
+hosting runtime's node key reads past document ACP (`Household.nativeRead`,
+`Configuration.hosting_runtime_reads_without_reader_grant`), so for it the
+revocation removes the relation and not the read. -/
 theorem runtime_reader_is_explicit_and_revocable :
     observed initial runtimeReaderChanges = [true, true, false, false, false, true, true] := by native_decide
 
@@ -2074,7 +2079,9 @@ def json : Json := Json.mkObj
           ["read", "update"].map fun permission => Json.mkObj
             [("revoked", toJson revoked), ("actor", toJson actor),
              ("permission", toJson permission),
-             ("expected", toJson (Household.allowed 5 state actor "configuration" "binding" permission))])),
+             ("expected", toJson (if permission == "read" then
+               Household.nativeRead (actor == "runtime") 5 state actor "configuration" "binding"
+               else Household.allowed 5 state actor "configuration" "binding" permission))])),
    ("configuration_removal_cases", toJson
       ([(["doc"], "exact"), ([], "empty"), (["other"], "different"),
         (["doc", "doc"], "duplicate")].map fun (returned, name) =>
