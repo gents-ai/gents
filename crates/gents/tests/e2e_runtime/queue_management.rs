@@ -428,40 +428,66 @@ async fn invalid_edited_attachment_does_not_supersede_the_original() {
 }
 
 #[tokio::test]
-async fn edited_skill_outside_context_does_not_supersede_the_original() {
-    let db = test_db("invalid-edited-skill").await;
-    let fixture = support::managed_agent_fixture(&db).await;
-    let original = enqueue_owned(
-        &db,
-        &fixture,
-        "invalid-skill-session",
-        "original",
-        "original message",
-        QueueDelivery::Queue,
-    )
-    .await;
-    let before = row_as(&fixture, &original).await;
-    let error = submit_edit(
-        &db,
-        &fixture,
-        "invalid-skill-session",
-        PendingQueueEdit {
-            expected_request_doc_ids: vec![original.clone()],
-            selected_request_doc_ids: vec![original.clone()],
-            messages: vec![PendingMessageEdit {
-                request_doc_id: original.clone(),
-                content: "changed".into(),
-                authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
-                    selected_skill_ids: vec!["unavailable".into()],
-                    ..Default::default()
-                }),
-            }],
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("skill"));
-    assert_eq!(row_as(&fixture, &original).await, before);
+async fn queue_edit_skill_context_matches_the_lean_model() {
+    let cases =
+        gents_lean_vocab::families::queue_edit_skill_context_edit::cases::<String, String>();
+    for (index, case) in cases.iter().enumerate() {
+        let db = test_db(&format!("queue-edit-skill-context-{index}")).await;
+        let fixture = support::managed_agent_fixture(&db).await;
+        match case.input.context_skill_ids.as_slice() {
+            [] => {}
+            [skill] if skill.as_str() == "review" => install_review_skill(&db, &fixture).await,
+            other => panic!("this fixture installs only the review skill: {other:?}"),
+        }
+        let session = format!("queue-edit-skill-context-session-{index}");
+        let original = enqueue_owned(
+            &db,
+            &fixture,
+            &session,
+            "original",
+            "original message",
+            QueueDelivery::Queue,
+        )
+        .await;
+        let before = row_as(&fixture, &original).await;
+        let edit = submit_edit(
+            &db,
+            &fixture,
+            &session,
+            PendingQueueEdit {
+                expected_request_doc_ids: vec![original.clone()],
+                selected_request_doc_ids: vec![original.clone()],
+                messages: vec![PendingMessageEdit {
+                    request_doc_id: original.clone(),
+                    content: "changed".into(),
+                    authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
+                        selected_skill_ids: case.input.selected_skill_ids.clone(),
+                        ..Default::default()
+                    }),
+                }],
+            },
+        )
+        .await;
+        let result = match &edit {
+            Ok(_) => "accepted".to_string(),
+            Err(error) if error.to_string().contains("skill") => "refused_skill".to_string(),
+            Err(_) => "refused_other".to_string(),
+        };
+        let after = row_as(&fixture, &original).await;
+        let original_state = if after["lifecycle_state"] == "superseded" {
+            "superseded"
+        } else if after == before {
+            "unchanged"
+        } else {
+            "altered"
+        };
+        case.check(
+            gents_lean_vocab::families::queue_edit_skill_context_edit::EditOutput {
+                result,
+                original: original_state.to_string(),
+            },
+        );
+    }
 }
 
 #[tokio::test]

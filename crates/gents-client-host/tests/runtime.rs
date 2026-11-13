@@ -63,6 +63,8 @@ mod fake_llm;
 mod goal_delivery;
 #[path = "support/initialization.rs"]
 mod initialization;
+#[path = "support/live_runtime.rs"]
+mod live_runtime;
 #[path = "support/passive_settings.rs"]
 mod passive_settings;
 #[allow(dead_code)]
@@ -188,6 +190,18 @@ async fn editor_recovers_goal_commands_after_lost_replies_and_reload() -> Result
     copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
 }
 
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_recovers_text_goal_commands_after_lost_replies_and_reload() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-goal-delivery")
+        .await
+        .with_context(|| {
+            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
+        })?;
+    copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
+}
+
 #[cfg(feature = "editor-e2e")]
 #[cfg_attr(
     windows,
@@ -262,7 +276,7 @@ async fn managed_runtime_replacement_preserves_running_input_enrollment_and_tran
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> Result<()> {
+async fn enrolled_client_resumes_a_durable_goal_and_observes_completion() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Goal).await.with_context(|| {
         ["runtime.log", "runtime.err", "client-host.log"]
@@ -274,6 +288,22 @@ async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> Re
             })
             .join("\n")
     })
+}
+
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_text_input_into_a_live_request() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-steering").await?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+}
+
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_text_input_and_preserves_a_live_goal() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-goal-steering").await?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -682,6 +712,66 @@ async fn installed_editor_refreshes_models_and_reconnects_without_the_runtime_ke
 }
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
+    if matches!(journey, Journey::Conversation) {
+        return live_runtime::exercise(root, false).await;
+    }
+    if matches!(journey, Journey::Goal) {
+        return live_runtime::exercise(root, true).await;
+    }
+    if matches!(journey, Journey::RuntimeReplacement) {
+        return live_runtime::exercise_replacement(root).await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::Editor) {
+        return live_runtime::exercise_editor(root, "live").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorWorkspace) {
+        return live_runtime::exercise_editor(root, "live-workspace").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorDelivery) {
+        return live_runtime::exercise_editor(root, "live-delivery").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorReview) {
+        return live_runtime::exercise_editor(root, "live-review").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorGoalRemoval) {
+        return live_runtime::exercise_editor(root, "live-goal-removal").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorGoalReplacement) {
+        return live_runtime::exercise_editor(root, "live-goal-replacement").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorQuestions) {
+        return live_runtime::exercise_editor(root, "live-questions").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorRelatedWork) {
+        return live_runtime::exercise_editor(root, "live-related-work").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorInventory) {
+        return live_runtime::exercise_editor(root, "live-review-inventory").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorUndo) {
+        return live_runtime::exercise_editor(root, "live-undo").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorRetry) {
+        return live_runtime::exercise_editor(root, "retry").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorHistory)
+        && !editor_history::Options::from_env()?.profile
+        && std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST").is_none()
+    {
+        return live_runtime::exercise_editor(root, "live-history").await;
+    }
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
         .transpose()?;
@@ -1327,21 +1417,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await
         .context("live output was not observed before provider completion")??;
     }
-    if matches!(journey, Journey::RuntimeReplacement) {
-        runtime_replacement::refuse_busy(&host_binary, &node_home).await?;
-        let unchanged = access.execute(&signed_query).await?;
-        let unchanged = &unchanged["data"]["AgentRequest"][0];
-        ensure!(
-            unchanged["_docID"] == original_doc_id,
-            "busy refusal replaced the input: {unchanged}"
-        );
-        ensure!(
-            !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
-                unchanged["lifecycle_state"].as_str()
-            ),
-            "busy refusal terminated the input: {unchanged}"
-        );
-    }
     if journey.is_steering() {
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
@@ -1751,27 +1826,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("the exact request's terminal answer was not observed")??;
-    if matches!(journey, Journey::RuntimeReplacement) {
-        runtime_replacement::Fixture {
-            root,
-            home: &node_home,
-            binary: &host_binary,
-            node_did,
-            agent_did,
-            session,
-            client_did: &client_did,
-            original_doc_id: &original_doc_id,
-            access: &access,
-        }
-        .replace_and_verify(&mut runtime, &mut client, &mut id)
-        .await.with_context(|| {
-            let requests: Vec<_> = provider.captured_chat_requests().iter().map(|request| json!({
-                "model":request["model"], "stream":request["stream"],
-                "userMessages":request["messages"].as_array().into_iter().flatten().filter(|message| message["role"] == "user").map(|message| message["content"].clone()).collect::<Vec<_>>(),
-            })).collect();
-            format!("provider observations: {}; completion gate permits: {}", json!(requests), gate.available_permits())
-        })?;
-    }
     let wrong_scope = client
         .try_call(
             id,
@@ -1832,36 +1886,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "the recovered Goal must deliver its frozen image to the provider exactly once: {images:?}"
         );
     }
-    let user_rounds = requests
-        .iter()
-        .filter(|request| {
-            request["messages"].as_array().is_some_and(|messages| {
-                messages.iter().any(|message| {
-                    message["role"] == "user"
-                        && match &message["content"] {
-                            Value::String(text) => text == "Return the fixture response.",
-                            Value::Array(parts) => parts
-                                .iter()
-                                .any(|part| part["text"] == "Return the fixture response."),
-                            _ => false,
-                        }
-                })
-            })
-        })
-        .count();
-    ensure!(
-        user_rounds
-            == if matches!(journey, Journey::EditorGoalRecovery) {
-                7
-            } else if matches!(journey, Journey::EditorGoalSteering) {
-                3
-            } else if journey.is_steering() || matches!(journey, Journey::RuntimeReplacement) {
-                2
-            } else {
-                1
-            },
-        "unexpected provider round count: {user_rounds}"
-    );
     if journey.is_steering() {
         let evidence = editor_steering::verify(
             &access,
@@ -2123,8 +2147,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
         let evidence =
-            editor_workspace::verify(&access, &provider, root, node_did, session, &client_did)
-                .await?;
+            editor_workspace::verify(&access, root, node_did, session, &client_did).await?;
         std::fs::write(
             root.join("editor-workspace-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
@@ -2573,7 +2596,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut client,
             &mut id,
             &access,
-            &provider,
             root,
             node_did,
             session,

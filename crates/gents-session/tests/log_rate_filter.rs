@@ -1,6 +1,6 @@
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use gents_session::log_rate::{RateLimitConfig, RateLimitFilter, SUMMARY_TARGET};
@@ -17,21 +17,45 @@ fn test_clock() -> Instant {
 }
 
 #[derive(Clone, Default)]
-struct CapturedOutput(Arc<Mutex<Vec<u8>>>);
+struct CapturedOutput(Arc<CapturedBuffer>);
+
+#[derive(Default)]
+struct CapturedBuffer {
+    bytes: Mutex<Vec<u8>>,
+    changed: Condvar,
+}
 
 impl CapturedOutput {
     fn lines(&self) -> Vec<String> {
-        String::from_utf8(self.0.lock().expect("capture lock").clone())
+        String::from_utf8(self.0.bytes.lock().expect("capture lock").clone())
             .expect("utf8 log output")
             .lines()
             .map(str::to_string)
             .collect()
     }
+
+    fn wait_for<F>(&self, timeout: Duration, condition: F) -> bool
+    where
+        F: Fn(&[u8]) -> bool,
+    {
+        let bytes = self.0.bytes.lock().expect("capture lock");
+        let (bytes, _) = self
+            .0
+            .changed
+            .wait_timeout_while(bytes, timeout, |bytes| !condition(bytes))
+            .expect("capture notification");
+        condition(&bytes)
+    }
 }
 
 impl io::Write for CapturedOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().expect("capture lock").extend_from_slice(buf);
+        self.0
+            .bytes
+            .lock()
+            .expect("capture lock")
+            .extend_from_slice(buf);
+        self.0.changed.notify_all();
         Ok(buf.len())
     }
 
@@ -49,10 +73,6 @@ impl<'a> MakeWriter<'a> for CapturedOutput {
 }
 
 #[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "synchronous test waiting for the wall-clock summary flush"
-)]
 fn filter_caps_burst_and_sustained_worker_floods_with_context_and_summaries() {
     let output = CapturedOutput::default();
     let filter = RateLimitFilter::with_clock(
@@ -154,27 +174,18 @@ fn filter_caps_burst_and_sustained_worker_floods_with_context_and_summaries() {
         );
     }
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let summary_seen = loop {
-        let lines = output.lines();
-        if lines
-            .iter()
+    let summary_seen = output.wait_for(Duration::from_secs(10), |bytes| {
+        let text = String::from_utf8_lossy(bytes);
+        text.lines()
             .any(|line| line.contains(SUMMARY_TARGET) && line.contains("suppressed=995"))
-            && lines.iter().any(|line| {
+            && text.lines().any(|line| {
                 line.contains(SUMMARY_TARGET)
                     && line.contains("suppressed=119")
                     && line.contains("original_target=workers::worker")
                     && line.contains("original_file=")
                     && line.contains("original_line=")
             })
-        {
-            break true;
-        }
-        if Instant::now() > deadline {
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    });
     assert!(
         summary_seen,
         "suppression summary missing or wrong: {:#?}",

@@ -263,5 +263,21 @@ abbrev rootEditSelectionOk
   | some (some root) =>
       rootSelectionOk policyConfigured published (root.trim == "") resolved
 
+/-- Outcome of binding a request cwd under a workspace placement: the cwd is
+bound only when the placement admits it by component containment. -/
+inductive CwdBinding where
+  | bound
+  | outsideRoot
+  deriving DecidableEq, Repr
+
+def boundRequestCwd (placement cwd : CanonicalPath) : CwdBinding :=
+  if admitted {placement} (some cwd) then .bound else .outsideRoot
+
+theorem persisted_cwd_must_stay_under_placement (placement cwd : CanonicalPath) :
+    boundRequestCwd placement cwd =
+      if contains placement cwd then .bound else .outsideRoot := by
+  unfold boundRequestCwd
+  split_ifs with h1 h2 <;> simp_all [admitted]
+
 end RootAdmission
 end PeerRegistryDiscovery
