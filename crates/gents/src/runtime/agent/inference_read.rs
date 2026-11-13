@@ -22,26 +22,44 @@ impl super::Gents {
         if key.node != self.node_did() {
             return Ok(InferenceObservationRead::Unavailable);
         }
-        let Some(visible) = observation_visible(self.observation_node(), &actor, key).await? else {
-            return Ok(InferenceObservationRead::Forbidden);
-        };
-        Ok(visible
-            .then(|| self.inference_observations().snapshot(key))
-            .flatten()
-            .map_or(
-                InferenceObservationRead::Unavailable,
-                InferenceObservationRead::Visible,
-            ))
+        Ok(
+            match observation_route(self.observation_node(), &actor, key).await? {
+                ActivityRoute::Forbidden => InferenceObservationRead::Forbidden,
+                ActivityRoute::Unavailable => InferenceObservationRead::Unavailable,
+                ActivityRoute::Visible => self.inference_observations().snapshot(key).map_or(
+                    InferenceObservationRead::Unavailable,
+                    InferenceObservationRead::Visible,
+                ),
+            },
+        )
     }
 }
 
-/// `None` when the actor holds no native node read; otherwise whether the
-/// session and active request are visible to it.
-async fn observation_visible(
+/// Lean `ClientInferenceObservation.ActivityResponse`, before the in-memory
+/// snapshot is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ActivityRoute {
+    Forbidden,
+    Unavailable,
+    Visible,
+}
+
+/// Lean `activityResponse`: `None` when the actor holds no native node read,
+/// otherwise the session and active request query it was allowed to run.
+fn activity_route(response: Option<&serde_json::Value>) -> ActivityRoute {
+    match response {
+        None => ActivityRoute::Forbidden,
+        Some(response) if activity_visible(response) => ActivityRoute::Visible,
+        Some(_) => ActivityRoute::Unavailable,
+    }
+}
+
+async fn observation_route(
     node: &Arc<defra_node::Node>,
     actor: &identity::Did,
     key: &InferenceKey,
-) -> anyhow::Result<Option<bool>> {
+) -> anyhow::Result<ActivityRoute> {
     use gents_protocol::document_query::{
         fields::{agent_request, agent_session},
         Filter, Query, QuerySet, Selection,
@@ -72,10 +90,10 @@ async fn observation_visible(
                     )
                     .await?
                 {
-                    return Ok::<_, anyhow::Error>(None);
+                    return Ok::<_, anyhow::Error>(activity_route(None));
                 }
                 let response = txn.run(&query).await?;
-                Ok::<_, anyhow::Error>(Some(activity_visible(&response)))
+                Ok::<_, anyhow::Error>(activity_route(Some(&response)))
             })
         },
     )
@@ -121,55 +139,29 @@ fn activity_visible(response: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
 
+    fn observed_sources(sessions: u64, requests: u64, active: bool) -> serde_json::Value {
+        let state = if active { "processing" } else { "completed" };
+        serde_json::json!({"data": {
+            "AgentSession": vec![serde_json::json!({"_docID":"session"}); sessions as usize],
+            "AgentRequest": vec![serde_json::json!({"_docID":"request", "lifecycle_state":state}); requests as usize],
+        }})
+    }
+
     #[test]
     fn visibility_matches_lean_for_direct_reads() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().inference_visibility_cases;
-        for case in cases {
-            let sessions = case.sessions as usize;
-            let requests = case.requests as usize;
-            let state = if case.active {
-                "processing"
-            } else {
-                "completed"
-            };
-            let response = serde_json::json!({"data": {
-                "AgentSession": vec![serde_json::json!({"_docID":"session"}); sessions],
-                "AgentRequest": vec![serde_json::json!({"_docID":"request", "lifecycle_state":state}); requests],
-            }});
-            assert_eq!(
-                activity_visible(&response),
-                case.expected,
-                "{case:?}"
-            );
-        }
+        gents_lean_vocab::families::inference_observation_source_visibility::replay(|case| {
+            activity_visible(&observed_sources(case.sessions, case.requests, case.active))
+        });
     }
 
     #[test]
     fn route_gate_matches_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().inference_route_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let sessions = case.sessions as usize;
-            let requests = case.requests as usize;
-            let state = if case.active {
-                "processing"
-            } else {
-                "completed"
-            };
-            let response = serde_json::json!({"data": {
-                "AgentSession": vec![serde_json::json!({"_docID":"session"}); sessions],
-                "AgentRequest": vec![serde_json::json!({"_docID":"request", "lifecycle_state":state}); requests],
-            }});
-            let visible = case
-                .holds_node_read
-                .then(|| activity_visible(&response));
-            let observed = match visible {
-                None => "forbidden",
-                Some(true) => "visible",
-                Some(false) => "unavailable",
-            };
-            assert_eq!(observed, case.expected.as_str(), "{case:?}");
-        }
+        gents_lean_vocab::families::inference_observation_activity_route::replay::<ActivityRoute>(
+            |case| {
+                let response = observed_sources(case.sessions, case.requests, case.active);
+                activity_route(case.holds_node_read.then_some(&response))
+            },
+        );
     }
 
     #[tokio::test]
@@ -234,8 +226,8 @@ resources:
             })
         }).await.unwrap();
         assert_eq!(
-            observation_visible(&node, &actor, &key).await.unwrap(),
-            Some(false)
+            observation_route(&node, &actor, &key).await.unwrap(),
+            ActivityRoute::Unavailable
         );
         node.add_dac_actor_relationship(
             owner.did(),
@@ -247,8 +239,8 @@ resources:
         .await
         .unwrap();
         assert_eq!(
-            observation_visible(&node, &actor, &key).await.unwrap(),
-            Some(false)
+            observation_route(&node, &actor, &key).await.unwrap(),
+            ActivityRoute::Unavailable
         );
         node.add_dac_actor_relationship(
             owner.did(),
@@ -260,8 +252,8 @@ resources:
         .await
         .unwrap();
         assert_eq!(
-            observation_visible(&node, &actor, &key).await.unwrap(),
-            Some(true)
+            observation_route(&node, &actor, &key).await.unwrap(),
+            ActivityRoute::Visible
         );
         // A revoked node read refuses the route even though both documents
         // stay visible to the actor (Lean `without_node_read_activity_is_forbidden`).
@@ -273,8 +265,8 @@ resources:
         .await
         .unwrap();
         assert_eq!(
-            observation_visible(&node, &actor, &key).await.unwrap(),
-            None
+            observation_route(&node, &actor, &key).await.unwrap(),
+            ActivityRoute::Forbidden
         );
         node.shutdown().await.expect("node shutdown");
     }

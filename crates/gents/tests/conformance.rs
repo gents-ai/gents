@@ -52,8 +52,6 @@ mod hooks;
 mod interrupts_manual;
 #[path = "conformance/p2p_replication.rs"]
 mod p2p_replication;
-#[path = "conformance/plugin_job.rs"]
-mod plugin_job;
 #[path = "conformance/prompt_template.rs"]
 mod prompt_template;
 #[path = "conformance/recovery_sweeps.rs"]

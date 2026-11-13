@@ -579,4 +579,70 @@ mod tests {
             Some(Some(InstalledVia::SelfConfig))
         );
     }
+
+    fn lean_record(
+        record: &gents_lean_vocab::families::plugin_job_provenance_read::RecordWire<
+            InstalledVia,
+            String,
+        >,
+    ) -> Option<Option<InstalledVia>> {
+        match (record.kind.as_str(), record.via) {
+            ("absent", None) => None,
+            ("legacy", None) => Some(None),
+            ("written", Some(via)) => Some(Some(via)),
+            other => panic!("unknown Lean install record {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recorded_provenance_matches_lean() {
+        gents_lean_vocab::families::plugin_job_provenance_read::replay::<
+            InstalledVia,
+            PackKind,
+            String,
+        >(
+            |i| gents_lean_vocab::families::plugin_job_provenance_read::ProvenanceOutput {
+                provenance: recorded_provenance(i.pack_kind.clone(), lean_record(&i.record)),
+            },
+        );
+    }
+
+    #[test]
+    fn install_record_matches_lean() {
+        gents_lean_vocab::families::plugin_job_install_record::replay::<
+            InstalledVia,
+            PackKind,
+            String,
+        >(|i| {
+            let prior = gents_lean_vocab::family::recode(&i.prior);
+            let stored = record_after_install_via(
+                lean_record(&prior),
+                i.pack_kind.clone(),
+                i.explicit,
+                i.via,
+            );
+            let record = Some(Some(stored));
+            let (kind, via) = match record {
+                None => ("absent", None),
+                Some(None) => ("legacy", None),
+                Some(Some(via)) => ("written", Some(via)),
+            };
+            gents_lean_vocab::families::plugin_job_install_record::InstallOutput {
+                record: gents_lean_vocab::families::plugin_job_install_record::RecordWire {
+                    kind: kind.to_owned(),
+                    via,
+                },
+                provenance: recorded_provenance(i.pack_kind.clone(), record),
+            }
+        });
+    }
+
+    #[test]
+    fn installer_provenance_matches_lean() {
+        gents_lean_vocab::families::plugin_job_installer_authority::replay::<InstalledVia>(|i| {
+            gents_lean_vocab::families::plugin_job_installer_authority::ProvenanceOutput {
+                provenance: installer_provenance(i.via, i.pack_authority),
+            }
+        });
+    }
 }

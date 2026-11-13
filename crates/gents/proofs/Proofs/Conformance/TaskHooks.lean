@@ -350,33 +350,197 @@ theorem runCases_trace_records_the_agent_attempt : ∀ c ∈ runCases,
         (fun i => match i with | HookInvocation.work => true | HookInvocation.hook _ => false)).length
       = (if c.expectedAgentRan then 1 else 0) := by decide
 
-private def runCaseJson (c : RunCase) : String :=
-  let result := runOf c
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"hooks\":" ++ jsonArray (c.hooks.map hookJson) ++
-    ",\"script\":" ++ jsonArray (c.script.map (fun s =>
-      "{\"hook_id\":" ++ jsonString s.hookId ++
-        ",\"result\":" ++ commandResultJson s.result ++ "}")) ++
-    ",\"revoked\":" ++ jsonStringArray c.revoked ++
-    ",\"refused_before_launch\":" ++ jsonStringArray
-      ((c.hooks.filter (fun h => !launchAllowed h.phase (!c.revoked.contains h.hookId))).map
-        TaskHook.hookId) ++
-    ",\"agent\":" ++ jsonString (agentResultString c.agent) ++
-    ",\"expected_agent_ran\":" ++ boolJson c.expectedAgentRan ++
-    ",\"before_attempted\":" ++ jsonArray (result.beforeAttempted.map attemptJson) ++
-    ",\"after_success_attempted\":" ++
-      jsonArray (result.afterSuccessAttempted.map attemptJson) ++
-    ",\"after_failure_attempted\":" ++
-      jsonArray (result.afterFailureAttempted.map attemptJson) ++
-    ",\"finally_attempted\":" ++ jsonArray (result.finallyAttempted.map attemptJson) ++
-    ",\"invocation_trace\":" ++ jsonArray ((invocationTrace result).map invocationJson) ++
-    ",\"cleanup_errors\":" ++ jsonStringArray result.cleanupErrors ++
-    ",\"expected_outcome\":" ++ outcomeJson c.expectedOutcome ++
-    ",\"expected_final_outcome\":" ++ outcomeJson c.expectedFinalOutcome ++
-    ",\"expected_request_state\":" ++
-      jsonString c.expectedFinalOutcome.toRequestState.toDefraDB ++ "}"
+end Conformance.TaskHooksContracts
 
-def runCasesJson : String := jsonArray (runCases.map runCaseJson)
+namespace TaskHooks
+deriving instance Lean.ToJson for HookPhase, AgentResult
+end TaskHooks
+
+namespace Conformance.TaskHooksContracts
+open TaskHooks Conformance.Contracts
+
+inductive CommandKind | exited | launchFailed | timedOut | interrupted
+  deriving Lean.ToJson
+
+structure CommandWire where
+  kind : CommandKind
+  code : Option Int
+  deriving Lean.ToJson
+
+private def CommandWire.ofModel : CommandResult → CommandWire
+  | .exited code => ⟨.exited, some code⟩
+  | .launchFailed => ⟨.launchFailed, none⟩
+  | .timedOut => ⟨.timedOut, none⟩
+  | .interrupted => ⟨.interrupted, none⟩
+
+private def CommandWire.toModel (c : CommandWire) : CommandResult :=
+  match c.kind with
+  | .exited => .exited (c.code.getD 0)
+  | .launchFailed => .launchFailed
+  | .timedOut => .timedOut
+  | .interrupted => .interrupted
+
+structure HookWire where
+  hookId : String
+  phase : HookPhase
+  command : List String
+  timeoutSecs : Option Int
+  skipExitCodes : List Int
+  /-- The timeout the model resolves for this hook, as the hook's own wire
+  record states it; the run output carries it again for comparison. -/
+  effectiveTimeoutSecs : Nat
+  deriving Lean.ToJson
+
+private def HookWire.ofModel (h : TaskHook) : HookWire :=
+  { hookId := h.hookId, phase := h.phase, command := h.command, timeoutSecs := h.timeoutSecs
+    skipExitCodes := h.skipExitCodes, effectiveTimeoutSecs := h.effectiveTimeout }
+
+private def HookWire.toModel (h : HookWire) : TaskHook :=
+  { hookId := h.hookId, phase := h.phase, command := h.command, timeoutSecs := h.timeoutSecs
+    skipExitCodes := h.skipExitCodes }
+
+structure ScriptWire where
+  hookId : String
+  result : CommandWire
+  deriving Lean.ToJson
+
+structure AttemptWire where
+  hookId : String
+  result : CommandWire
+  succeeded : Bool
+  deriving Lean.ToJson
+
+private def AttemptWire.ofModel (a : HookAttempt) : AttemptWire :=
+  { hookId := a.hookId, result := CommandWire.ofModel a.result, succeeded := a.result.succeeded }
+
+inductive ErrorKind | hook | agent
+  deriving Lean.ToJson
+
+structure ErrorWire where
+  kind : ErrorKind
+  hookId : Option String
+  deriving Lean.ToJson
+
+inductive OutcomeKind | success | failure | interrupted | parked
+  deriving Lean.ToJson
+
+structure OutcomeWire where
+  kind : OutcomeKind
+  error : Option ErrorWire
+  deriving Lean.ToJson
+
+private def OutcomeWire.ofModel : TaskOutcome → OutcomeWire
+  | .success => ⟨.success, none⟩
+  | .failure (.hook id) => ⟨.failure, some ⟨.hook, some id⟩⟩
+  | .failure .agent => ⟨.failure, some ⟨.agent, none⟩⟩
+  | .interrupted => ⟨.interrupted, none⟩
+  | .parked => ⟨.parked, none⟩
+
+inductive InvocationKind | hook | work
+  deriving Lean.ToJson
+
+structure InvocationWire where
+  kind : InvocationKind
+  hookId : Option String
+  deriving Lean.ToJson
+
+private def InvocationWire.ofModel : HookInvocation → InvocationWire
+  | .hook id => ⟨.hook, some id⟩
+  | .work => ⟨.work, none⟩
+
+structure RunInput where
+  name : String
+  hooks : List HookWire
+  script : List ScriptWire
+  revoked : List String
+  agent : AgentResult
+  deriving Lean.ToJson
+
+private def RunInput.ofCase (c : RunCase) : RunInput :=
+  { name := c.name, hooks := c.hooks.map HookWire.ofModel
+    script := c.script.map fun s => { hookId := s.hookId, result := CommandWire.ofModel s.result }
+    revoked := c.revoked, agent := c.agent }
+
+private def RunInput.hookList (i : RunInput) : List TaskHook := i.hooks.map HookWire.toModel
+
+private def RunInput.scriptList (i : RunInput) : List ScriptedResult :=
+  i.script.map fun s => ⟨s.hookId, s.result.toModel⟩
+
+private def RunInput.run (i : RunInput) : RunResult :=
+  runTask i.hookList
+    (ownershipCheckedExec (fun h => !i.revoked.contains h.hookId) (scriptedExec i.scriptList))
+    i.agent
+
+private def RunInput.refused (i : RunInput) : List String :=
+  (i.hookList.filter fun h => !launchAllowed h.phase (!i.revoked.contains h.hookId)).map
+    TaskHook.hookId
+
+/-- An occurrence launches a process unless its launch is refused or its
+executable cannot start; the processes' own log records only launched ones. -/
+private def RunInput.launches (i : RunInput) (hookId : String) : Bool :=
+  !(i.refused.contains hookId) &&
+    (i.scriptList.find? (·.hookId == hookId)).all fun s => s.result != .launchFailed
+
+structure RunOutput where
+  effectiveTimeoutSecs : List Nat
+  refusedBeforeLaunch : List String
+  agentRan : Bool
+  beforeAttempted : List AttemptWire
+  afterSuccessAttempted : List AttemptWire
+  afterFailureAttempted : List AttemptWire
+  finallyAttempted : List AttemptWire
+  invocationTrace : List InvocationWire
+  launchedTrace : List InvocationWire
+  cleanupErrors : List String
+  outcome : OutcomeWire
+  finalOutcome : OutcomeWire
+  requestState : String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def runTrace : Family RunInput RunOutput where
+  inputs := runCases.map RunInput.ofCase
+  model := fun i =>
+    let r := i.run
+    let trace := invocationTrace r
+    { effectiveTimeoutSecs := i.hookList.map TaskHook.effectiveTimeout
+      refusedBeforeLaunch := i.refused
+      agentRan := r.agentResult.isSome
+      beforeAttempted := r.beforeAttempted.map AttemptWire.ofModel
+      afterSuccessAttempted := r.afterSuccessAttempted.map AttemptWire.ofModel
+      afterFailureAttempted := r.afterFailureAttempted.map AttemptWire.ofModel
+      finallyAttempted := r.finallyAttempted.map AttemptWire.ofModel
+      invocationTrace := trace.map InvocationWire.ofModel
+      launchedTrace := (trace.filter fun inv => match inv with
+        | .work => true
+        | .hook id => i.launches id).map InvocationWire.ofModel
+      cleanupErrors := r.cleanupErrors
+      outcome := OutcomeWire.ofModel r.outcome
+      finalOutcome := OutcomeWire.ofModel r.finalOutcome
+      requestState := r.finalOutcome.toRequestState.toDefraDB }
+
+structure AdmittedOutput where
+  admitted : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def runAdmitted : Family RunInput AdmittedOutput where
+  inputs := runCases.map RunInput.ofCase
+  model := fun i => { admitted := (admitHooks i.hookList).isSome }
+
+structure DaemonOutput where
+  refusedBeforeLaunch : List String
+  agentRan : Bool
+  deriving Lean.ToJson
+
+/-- The daemon scenario gates its first before hook on a revocation of the
+claimed execution, so only the trace whose revocation falls between before
+hooks can be built there; the executor family replays every trace. -/
+@[conformance_family]
+def daemonRevocation : Family RunInput DaemonOutput where
+  inputs := (runCases.filter fun c =>
+    c.name ∈ ["revoked_between_before_hooks_refuses_the_next_launch"]).map RunInput.ofCase
+  model := fun i => { refusedBeforeLaunch := i.refused, agentRan := i.run.agentResult.isSome }
 
 structure RecoveryCase where
   name : String

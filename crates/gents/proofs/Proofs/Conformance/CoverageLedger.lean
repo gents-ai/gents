@@ -947,15 +947,18 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "task_hooks_contracts_effective_timeout")
       "task-hooks" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "task_hook_run_cases"
-      "TaskHookRunCases"
-      "The consumer binds the emitted phase vocabulary to the production TaskHookPhase encoding and replays admission over every trace; the executor consumer below drives the traces.")
+  , tagged (consumerCoverage
+      "family"
+      "task_hooks_contracts_run_admitted")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "task_hook_run_cases"
-      "TaskHookRunCases"
-      "Every generated trace runs through the production orchestration and managed host execution with real commands: each scripted result is produced by a real process (an exit status, a nonexistent executable, a command outliving its model-resolved timeout, or a held command cancelled through the interrupt or shutdown source its phase uses). The processes' own invocation log, with the owned work's entry, is compared against the emitted invocationTrace, excluding only occurrences that could not launch; attempts, outcomes and the terminal request state are compared too. The daemon placement of the before gate at claim and the after phases ahead of terminalization is fenced by daemon tests, not these traces.")
+      "family"
+      "task_hooks_contracts_run_trace"
+      "Every generated trace runs through the production orchestration and managed host execution with real commands: each scripted result is produced by a real process (an exit status, a nonexistent executable, a command outliving its model-resolved timeout, or a held command cancelled through the interrupt or shutdown source its phase uses). The processes' own invocation log, with the owned work's entry, is compared against the emitted launchedTrace; attempts, outcomes and the terminal request state are compared too. The daemon placement of the before gate at claim and the after phases ahead of terminalization is fenced by daemon tests, not these traces.")
+      "task-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "task_hooks_contracts_daemon_revocation")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1348,8 +1351,12 @@ def caseCoverage : List CoverageEntry :=
       "inference_observation_trace")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "inference_visibility_cases"
-      "InferenceVisibilityCases")
+      "family"
+      "inference_observation_source_visibility")
+      "client-shell" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "inference_observation_activity_route")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "Proofs.Conformance.ClientOptimisticSend"
@@ -2032,20 +2039,20 @@ def caseCoverage : List CoverageEntry :=
       "plugin_receipt_commits")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_resource_child_admission_cases"
-      "PluginChildAdmissionCases")
+      "family"
+      "tool_policy_plugin_calls_child_admissible")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
       "plugin_effects_admissions")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_tool_effect_terminal_cases"
-      "PluginEffectTerminalCases")
+      "family"
+      "plugin_effects_terminal_presentation")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_tool_effect_accounting_cases"
-      "PluginEffectAccountingCases")
+      "family"
+      "plugin_effects_child_accounting")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -2104,16 +2111,40 @@ def caseCoverage : List CoverageEntry :=
       "plugin_job_spawn_keys")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_authority_cases"
-      "PluginJobAuthorityCases")
+      "family"
+      "plugin_job_provenance_read")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_wire_cases"
-      "PluginJobWireCases")
+      "family"
+      "plugin_job_install_record")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_wire_cases"
-      "PluginJobWireCases")
+      "family"
+      "plugin_job_installer_authority")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_script_origin")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_pack_block_admission")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_policy_validity")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_target_wiring")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_published_read_deferral")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_wire_sample")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2304,16 +2335,26 @@ def caseCoverage : List CoverageEntry :=
       "plugin_job_commit_kills")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_process_claim_cases"
-      "ClientProcessClaimCases")
+      "family"
+      "native_refinement_claim_scenario")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "native_refinement_claim_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (the served claim scenario builds only the agent's own client-owned intent at its observed revision; claims as another agent, for another owner or invocation, or after a revision change are not driven)")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "native_refinement_client_process_receipt")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_control_grant_cases"
-      "ClientControlGrantCases")
+      "family"
+      "native_refinement_grant_scenario")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "native_refinement_grant_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (production publishes a control outcome only inside the claim's fenced transaction; unfenced publication is unreachable)")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2502,14 +2543,9 @@ def caseCoverage : List CoverageEntry :=
       "contracts_background_receipt_contention")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "r4c_background_work_cases"
-      "R4cBackgroundWorkCases")
+      "family"
+      "contracts_tool_output_canonical_source")
       "background-tools" [Surface.operatorUi]
-  , tagged (followUpCoverage
-      "r4c_background_work_cases"
-      "R4cBackgroundWorkCases"
-      "#1571: replace the retired state/registry dispatch consumer with canonical_source_reconstruction over physical tool segments; migrate the generated witness schema. Generic paging coverage below is unchanged.")
-      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "contracts_tool_output_paging")
@@ -2564,8 +2600,8 @@ def caseCoverage : List CoverageEntry :=
       "Generated native scripts bind transactional lease, publication, recovery and tool owners. Title scripts bind signed parent-only admission, own claim/begin, renewal, Complete/Partial/retracted audit closure, retry coordinates, terminal-parent isolation and purpose denial. Rows marked nativeGap retain explicit replication or unmaterialized-input premises; trace summaries and finite cases do not establish the application's universal invariants in Rust.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_spawned_target_rejection_cases"
-      "CanonicalSpawnedTargetRejectionCases")
+      "family"
+      "dispatch_observation_contracts_spawned_target")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
       "canonical_dispatch_observation_cases"
@@ -2614,10 +2650,14 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "terminal_diagnostic_replay_contracts_stored_replay")
       "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contract_cases_compaction_projection_join_staged_turn_reduction")
+      "compaction" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "compaction_projection_join_cases"
-      "CompactionProjectionJoinCases"
-      "Model-derived projection/estimate/reduction and rebuilt-admission observations bind exact input identities, failure propagation and threshold/output-capacity boundaries. Provider projection and estimation are explicit fallible native premises, not modeled serializers. Native adapters and the real serialized-request experiment remain pending; controlled observations are not native consumer coverage.")
+      "family"
+      "contract_cases_compaction_projection_join_projection_join"
+      "model-production-gap: no production path reaches these emitted cases yet. Model-derived projection/estimate/reduction and rebuilt-admission observations bind exact input identities, failure propagation and threshold/output-capacity boundaries. Provider projection and estimation are explicit fallible native premises, not modeled serializers. Native adapters and the real serialized-request experiment remain pending; controlled observations are not native consumer coverage.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "compaction_canonical_projection_cases"
@@ -2952,8 +2992,8 @@ def caseCoverage : List CoverageEntry :=
       "The native consumer checks full and delta codec reconstruction with an injected base and witness. It does not exercise DefraDB base lookup, authorization, or provider-send ordering.")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "durable_reduction_cases"
-      "DurableReductionCases"
+      "family"
+      "contract_cases_durable_reduction"
       "Checks durable create/load/conflict and capture citations. The exported send_permitted fence is not exercised: validate actual provider dispatch against durable reduction facts through the owned completion loop.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage

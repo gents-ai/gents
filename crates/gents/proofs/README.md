@@ -260,7 +260,7 @@ to a fallible complete-request projection and estimation boundary, then to the
 existing reduction decision. Rebuilt requests are projected and measured again;
 dispatch requires both threshold admission and positive output capacity. The
 provider serializer and estimator remain explicit native parameters, not a
-second implementation in Lean. `compaction_projection_join_cases` supplies
+second implementation in Lean. `contract_cases_compaction_projection_join_projection_join` supplies
 controlled observations at that boundary; it does not establish that native
 serialization produced them. `compaction_canonical_projection_cases` supplies
 the immutable records and checks full reconstructed native messages;

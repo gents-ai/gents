@@ -86,22 +86,6 @@ impl LeanPluginJobControlCase {
     }
 }
 
-impl LeanPluginJobAuthorityCase {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Provenance { name, .. }
-            | Self::Install { name, .. }
-            | Self::Installer { name, .. }
-            | Self::Origin { name, .. }
-            | Self::PackJobBlock { name, .. }
-            | Self::PolicyValid { name, .. }
-            | Self::ConsentedDynamic { name, .. }
-            | Self::WireTargetsFrom { name, .. }
-            | Self::PublishedRead { name, .. } => name,
-        }
-    }
-}
-
 impl LeanSurface {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -118,13 +102,11 @@ impl LeanSurface {
 mod generated;
 pub use generated::*;
 
-mod background_transcript;
 mod canonical_execution;
 mod canonical_output;
 pub mod canonical_presentation;
 pub mod claude_replay;
 mod compaction_canonical_projection;
-mod compaction_projection_join;
 pub mod consumer_scan;
 pub mod family;
 mod title;
@@ -139,7 +121,6 @@ pub use canonical_output::*;
 pub use canonical_presentation::native_adapter::native_presentation;
 pub use canonical_presentation::*;
 pub use compaction_canonical_projection::*;
-pub use compaction_projection_join::*;
 pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use title::*;
 
@@ -217,14 +198,6 @@ pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
-}
-
-pub fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBackgroundWorkCase {
-    lean_contract_snapshot()
-        .r4c_background_work_cases
-        .iter()
-        .find(|case| case.witness() == witness)
-        .unwrap_or_else(|| panic!("Lean R4c background-work witness {witness:?} was not emitted"))
 }
 
 pub fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {

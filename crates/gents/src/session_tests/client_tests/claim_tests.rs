@@ -380,52 +380,10 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     };
     use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 
-    let model = &gents_lean_vocab::lean_contract_snapshot().client_process_claim_cases;
-    let grant_model = &gents_lean_vocab::lean_contract_snapshot().client_control_grant_cases;
-    let may_publish = |authority: bool, fenced: bool| {
-        grant_model
-            .iter()
-            .find(|case| case["authority"] == authority && case["fenced"] == fenced)
-            .unwrap()["expected"]
-            .as_bool()
-            .unwrap()
-    };
-    let conflict = model
-        .iter()
-        .find(|case| {
-            case["claimant"] == "agent"
-                && case["owner"] == "client"
-                && case["requested_id"] == "call"
-                && case["requested_doc"] == "doc"
-                && case["read"] == true
-                && case["update"] == true
-                && case["invoke"] == true
-                && case["current_revision"] == 1
-        })
-        .unwrap()["expected"]
-        .as_bool()
-        .unwrap();
-    assert!(
-        !conflict,
-        "the executable model rejects the stale authorization observation"
-    );
-    let modeled = |read: bool, update: bool, invoke: bool| {
-        model
-            .iter()
-            .find(|case| {
-                case["claimant"] == "agent"
-                    && case["owner"] == "client"
-                    && case["requested_id"] == "call"
-                    && case["requested_doc"] == "doc"
-                    && case["read"] == read
-                    && case["update"] == update
-                    && case["invoke"] == invoke
-                    && case["current_revision"] == 0
-            })
-            .unwrap()["expected"]
-            .as_bool()
-            .unwrap()
-    };
+    let grant_cases = gents_lean_vocab::families::native_refinement_grant_scenario::cases();
+    let mut publications = Vec::new();
+    let claim_cases = gents_lean_vocab::families::native_refinement_claim_scenario::cases();
+    let mut claims = Vec::new();
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let foreign =
@@ -645,14 +603,13 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .await
     .unwrap();
     let denied_update = submit(&collaborator_access, &denied_update).await.unwrap();
-    assert_eq!(
+    claims.push((
+        (true, false, true),
         claim(&node, &agent_access, &agent, &denied_update)
             .await
             .unwrap()
             .is_some(),
-        modeled(true, false, true),
-        "session read and agent invocation do not authorize a session update"
-    );
+    ));
     let denied_update_receipt = read_receipt(
         &collaborator_access,
         runtime.did(),
@@ -696,14 +653,13 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .await
     .unwrap();
     let denied_invoke = submit(&collaborator_access, &denied_invoke).await.unwrap();
-    assert_eq!(
+    claims.push((
+        (true, true, false),
         claim(&node, &agent_access, &agent, &denied_invoke)
             .await
             .unwrap()
             .is_some(),
-        modeled(true, true, false),
-        "session update does not authorize invoking the agent"
-    );
+    ));
     let denied_invoke_receipt = read_receipt(
         &collaborator_access,
         runtime.did(),
@@ -745,14 +701,13 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         )
         .await
         .unwrap();
-    assert_eq!(
+    claims.push((
+        (false, true, true),
         claim(&node, &agent_access, &agent, &denied_read)
             .await
             .unwrap()
             .is_some(),
-        modeled(false, true, true),
-        "session update and agent invoke do not bypass the native node read gate"
-    );
+    ));
     assert!(matches!(
         prepare(
             &user_access,
@@ -874,14 +829,13 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
             .await
             .is_err()
     );
-    assert_eq!(
+    claims.push((
+        (true, true, true),
         claim(&node, &agent_access, &agent, &first)
             .await
             .unwrap()
             .is_some(),
-        modeled(true, true, true),
-        "a foreign-owned claim cannot poison the agent's claim"
-    );
+    ));
     let claim_query = |intent: &str| {
         format!(
             r#"{{ AgentToolControlClaim(filter: {{ intent_doc_id: {{ _eq: "{}" }} }}) {{ _docID receipt_json }} }}"#,
@@ -945,7 +899,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    assert_eq!(unconfirmed.is_some(), may_publish(true, true));
+    publications.push(((true, true), unconfirmed.is_some()));
     let unconfirmed = unconfirmed.unwrap();
     assert!(matches!(
         &unconfirmed.outcome,
@@ -1052,10 +1006,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .expect("native revocation did not finish while the claim was open")
     .unwrap();
     pause.resume.notify_one();
-    assert_eq!(
-        paused.await.unwrap().unwrap().is_some(),
-        modeled(true, false, false)
-    );
+    claims.push(((true, false, false), paused.await.unwrap().unwrap().is_some()));
     let retained = recover_claim(&agent_access, &agent, runtime.did(), &first_claim)
         .await
         .unwrap()
@@ -1081,8 +1032,7 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     )
     .await
     .unwrap();
-    assert_eq!(observed.is_some(), may_publish(false, true));
-    assert!(!may_publish(true, false));
+    publications.push(((false, true), observed.is_some()));
     let rows = agent_access.execute(&claim_query(&first)).await.unwrap();
     let signed = rows["data"]["AgentToolControlClaim"]
         .as_array()
@@ -1100,5 +1050,32 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
         )
         .await
         .unwrap());
+    assert_eq!(claim_cases.len(), claims.len());
+    for (case, (permissions, claimed)) in claim_cases.iter().zip(claims) {
+        assert_eq!(
+            (
+                case.input.claimant.as_str(),
+                case.input.owner.as_deref(),
+                case.input.requested_id.as_str(),
+                case.input.requested_doc.as_str(),
+                case.input.current_revision,
+                (case.input.read, case.input.update, case.input.invoke),
+            ),
+            ("agent", Some("client"), "call", "doc", 0, permissions),
+            "the served scenario builds {:?}",
+            case.input
+        );
+        case.check(claimed);
+    }
+    assert_eq!(grant_cases.len(), publications.len());
+    for (case, (grant, published)) in grant_cases.iter().zip(publications) {
+        assert_eq!(
+            (case.input.authority, case.input.fenced),
+            grant,
+            "the served scenario publishes {:?}",
+            case.input
+        );
+        case.check(published);
+    }
     node.shutdown().await.unwrap();
 }

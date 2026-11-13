@@ -3474,19 +3474,6 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
 
 #[tokio::test]
 async fn canonical_tool_output_uses_modeled_physical_source_facts() {
-    let witness = gents_lean_vocab::lean_r4c_background_work_case(
-        "r4c.read_tool_output.canonical_source_reconstruction",
-    );
-    let gents_lean_vocab::LeanR4cBackgroundWorkCase::ReadToolOutputCanonicalSourceReconstruction {
-        cases,
-        ..
-    } = witness;
-    assert_eq!(
-        cases.len(),
-        5,
-        "Lean must export every canonical source case"
-    );
-
     let acceptance = gents_lean_vocab::lean_contract_snapshot()
         .canonical_execution_gate_cases
         .iter()
@@ -3499,7 +3486,7 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
         unreachable!()
     };
 
-    for case in cases {
+    for case in gents_lean_vocab::families::contracts_tool_output_canonical_source::cases() {
         let mut adapter = NativeCanonicalExecutionAdapter;
         let mut native = adapter.initialize(seed).await.unwrap();
         adapter
@@ -3507,45 +3494,67 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
             .await
             .unwrap();
         let physical_tool = native.tool_ids.iter().find_map(|(physical, symbolic)| {
-            (*symbolic == case.document).then_some(physical.clone())
+            (*symbolic == case.input.document).then_some(physical.clone())
         });
-        if physical_tool.is_none() {
-            assert!(
-                case.expected_state.is_none(),
-                "{} lost its physical tool",
-                case.name
-            );
-            continue;
-        }
-        let physical_tool = physical_tool.expect("modeled source lacks accepted physical tool");
-        for record in &case.segments {
-            if !matches!(&record.coordinate.source, LeanCanonicalSource::Tool { call } if *call == case.document)
-            {
-                continue;
+        let observation = match physical_tool {
+            None => gents_lean_vocab::families::contracts_tool_output_canonical_source::ToolOutputObservation {
+                state: None,
+                payload: None,
+            },
+            Some(physical_tool) => {
+                for segment in &case.input.segments {
+                    fn without_nulls(value: serde_json::Value) -> serde_json::Value {
+                        match value {
+                            serde_json::Value::Object(map) => serde_json::Value::Object(
+                                map.into_iter()
+                                    .filter(|(_, value)| !value.is_null())
+                                    .map(|(key, value)| (key, without_nulls(value)))
+                                    .collect(),
+                            ),
+                            serde_json::Value::Array(items) => serde_json::Value::Array(
+                                items.into_iter().map(without_nulls).collect(),
+                            ),
+                            other => other,
+                        }
+                    }
+                    let record: LeanCanonicalSegment = serde_json::from_value(without_nulls(
+                        serde_json::to_value(segment).expect("segment encodes"),
+                    ))
+                    .unwrap_or_else(|error| panic!("{}: segment decodes: {error}", case.input.name));
+                    if !matches!(&record.coordinate.source, LeanCanonicalSource::Tool { call } if *call == case.input.document)
+                    {
+                        continue;
+                    }
+                    let segment = native
+                        .tool_output_segment(&record, case.input.document, &physical_tool)
+                        .unwrap();
+                    native.insert_replicated_segment(&segment).await.unwrap();
+                }
+                let actual =
+                    gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
+                        &native.access,
+                        &physical_tool,
+                        &native.request_doc_id,
+                        &native.session_id,
+                        &native.node_did,
+                        Some(&native.requester_did),
+                    )
+                    .await;
+                let (state, payload) = match actual {
+                    Ok(gents_session::session::tool_output_rows::CanonicalToolOutputObservation::Open(text)) => {
+                        (Some("open".to_owned()), Some(text))
+                    }
+                    Ok(gents_session::session::tool_output_rows::CanonicalToolOutputObservation::Closed(text)) => {
+                        (Some("closed".to_owned()), Some(text))
+                    }
+                    Err(_) => (None, None),
+                };
+                gents_lean_vocab::families::contracts_tool_output_canonical_source::ToolOutputObservation {
+                    state,
+                    payload: payload.map(|text| text.into_bytes().into_iter().map(u64::from).collect()),
+                }
             }
-            let segment = native
-                .tool_output_segment(record, case.document, &physical_tool)
-                .unwrap();
-            native.insert_replicated_segment(&segment).await.unwrap();
-        }
-        let actual =
-            gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
-                &native.access,
-                &physical_tool,
-                &native.request_doc_id,
-                &native.session_id,
-                &native.node_did,
-                Some(&native.requester_did),
-            )
-            .await;
-        match &case.expected_payload {
-            Some(expected) => assert_eq!(
-                actual.unwrap().into_text().as_bytes(),
-                expected,
-                "{} canonical output drifted",
-                case.name
-            ),
-            None => assert!(actual.is_err(), "{} must fail closed", case.name),
-        }
+        };
+        case.check(observation);
     }
 }

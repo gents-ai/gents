@@ -324,11 +324,10 @@ async fn background_commands_without_a_sandbox_never_run() {
 
 #[tokio::test]
 async fn spawn_process_rejects_target_policy_before_spawned_admission() {
-    let cases = gents_lean_vocab::lean_canonical_spawned_target_rejection_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
+    for case in gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::cases() {
         for target in DeniedTarget::ALL {
-            spawned_target_rejection_case(case, &target).await;
+            let observed = spawned_target_rejection_case(&case.input, &target).await;
+            case.check(Some(observed));
         }
     }
 }
@@ -478,10 +477,9 @@ async fn admission_harness(
 }
 
 async fn spawned_target_rejection_case(
-    case: &gents_lean_vocab::LeanSpawnedTargetRejectionCase,
+    case: &gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetInput,
     target: &DeniedTarget,
-) {
-    let expected = &case.expected;
+) -> gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetOutput {
     let AdmissionHarness {
         _db,
         _dir,
@@ -501,7 +499,7 @@ async fn spawned_target_rejection_case(
     assert!(
         matches!(action, ToolCallHookAction::Skip { .. }),
         "{}/{}: {action:?}",
-        case.name,
+        case.parent_tool,
         target.target()
     );
 
@@ -516,30 +514,13 @@ async fn spawned_target_rejection_case(
     let (parents, spawned): (Vec<_>, Vec<_>) = rows
         .iter()
         .partition(|row| row["spawned_by_tool_call_doc_id"].is_null());
-    assert_eq!(
-        !spawned.is_empty(),
-        expected.spawned_admitted,
-        "{}: {rows:?}",
-        target.target()
-    );
-    assert_eq!(parents.len(), 1, "{rows:?}");
+    let spawned_admitted = !spawned.is_empty();
+    assert_eq!(parents.len(), 1, "{}: {rows:?}", target.target());
     let parent = parents[0];
     assert_eq!(parent["tool_name"], case.parent_tool.as_str());
-    assert_eq!(
-        (
-            parent["lifecycle_state"] == "failed",
-            parent["started_at"].is_string(),
-            parent["tool_failure_class"].as_str(),
-        ),
-        (
-            expected.failed,
-            expected.started,
-            expected.failure_class.as_deref(),
-        ),
-        "{}/{}",
-        case.name,
-        target.target()
-    );
+    let failed = parent["lifecycle_state"] == "failed";
+    let started = parent["started_at"].is_string();
+    let failure_class = parent["tool_failure_class"].as_str().map(str::to_owned);
     assert!(root.path().exists());
 
     let mut fixture = hook_execution_fixtures()
@@ -559,12 +540,12 @@ async fn spawned_target_rejection_case(
         .lifecycle
         .terminalize_owned(completion_outcome, selection, None)
         .await;
-    assert_eq!(
-        completion.is_ok(),
-        expected.completion_accepted,
-        "{}/{}: {completion:?}",
-        case.name,
-        target.target()
-    );
     node.shutdown().await.expect("shut down test node");
+    gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetOutput {
+        failed,
+        started,
+        failure_class,
+        spawned_admitted,
+        completion_accepted: completion.is_ok(),
+    }
 }

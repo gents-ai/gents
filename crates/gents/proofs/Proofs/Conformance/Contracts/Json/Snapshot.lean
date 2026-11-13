@@ -260,7 +260,7 @@ import Proofs.Conformance.ProviderToolIdentity
 import Proofs.Conformance.ReasoningDeltas
 import Proofs.Conformance.AggregateBudget
 import Proofs.Conformance.Contracts.Json.RenderedCapture
-import Proofs.Conformance.Contracts.Json.DurableReduction
+import Proofs.Conformance.ContractCases.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
 import Proofs.Conformance.Contracts.Json.SessionDocuments
 import Proofs.Conformance.Contracts.Json.RequestInput
@@ -268,7 +268,7 @@ import Proofs.Conformance.Contracts.Json.AggregateBudget
 import Proofs.Conformance.ContractCases.RollingCompaction
 import Proofs.Conformance.ContractCases.ReductionEngine
 import Proofs.Conformance.ContractCases.RenderedCapture
-import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
+import Proofs.Conformance.ContractCases.CompactionProjectionJoin
 import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Conformance.AccountRotation.Contracts
@@ -340,10 +340,6 @@ def snapshotPromptTailJson : String :=
 
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"durable_reduction_cases\":"
-      ++ durableReductionCasesJson ++ ","
-    ++ "\"compaction_projection_join_cases\":"
-      ++ compactionProjectionJoinCasesJson ++ ","
     ++ "\"compaction_canonical_projection_cases\":"
       ++ compactionCanonicalProjectionCasesJson ++ ","
     ++ "\"goal_link_cases\":"
@@ -352,8 +348,6 @@ def snapshotCaptureTailJson : String :=
     ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
-    ++ "\"task_hook_run_cases\":"
-      ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""
@@ -397,10 +391,6 @@ def snapshotGoalCasesJson : String :=
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"goal_wake_receipt_cases\":"
       ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
-    ++ "\"client_process_claim_cases\":"
-      ++ Conformance.NativeRefinement.clientProcessClaimCasesJson ++ ","
-    ++ "\"client_control_grant_cases\":"
-      ++ Conformance.NativeRefinement.clientControlGrantCasesJson ++ ","
     ++ "\"tool_admission_handoff_cases\":"
       ++ CanonicalOutput.Execution.AdmissionHandoff.Cases.casesJson ++ ","
     ++ "\"delegated_publication_cases\":"
@@ -433,8 +423,6 @@ def snapshotRequestCasesJson : String :=
       ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
-    ++ "\"canonical_spawned_target_rejection_cases\":"
-      ++ Conformance.DispatchObservationContracts.spawnedTargetCasesJson ++ ","
     ++ "\"canonical_worker_capacity_cases\":"
       ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
@@ -462,10 +450,6 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
-    ++ "\"inference_visibility_cases\":"
-      ++ Conformance.InferenceObservation.visibilityCasesJson ++ ","
-    ++ "\"inference_route_cases\":"
-      ++ Conformance.InferenceObservation.routeCasesJson ++ ","
 
 def snapshotIdentityCasesJson : String :=
   ""
@@ -556,8 +540,6 @@ def snapshotRecoveryCasesJson : String :=
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
     ++ "\"recovery_sweep_ids\":"
       ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
-    ++ "\"r4c_background_work_cases\":"
-      ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
@@ -572,17 +554,9 @@ def snapshotRecoveryCasesJson : String :=
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"plugin_resource_child_admission_cases\":"
-      ++ Conformance.PluginResources.pluginResourceChildAdmissionCasesJson ++ ","
-    ++ "\"plugin_resource_tool_effect_terminal_cases\":"
-      ++ Conformance.PluginResources.pluginResourceToolEffectTerminalCasesJson ++ ","
-    ++ "\"plugin_resource_tool_effect_accounting_cases\":"
-      ++ Conformance.PluginResources.pluginResourceToolEffectAccountingCasesJson ++ ","
     ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
     ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
     ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
-    ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
-    ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
     ++ "\"workspace_path_capability_cases\":"

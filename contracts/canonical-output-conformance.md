@@ -132,7 +132,7 @@ count. After reduction it rebuilds from the checkpoint and retained suffix and
 projects and estimates again before authorizing dispatch. Provider-view repair
 also requires fresh admission; shrinking the history is not evidence of fit.
 
-`compaction_projection_join_cases` exercises this composition with explicit
+`contract_cases_compaction_projection_join_projection_join` exercises this composition with explicit
 projection/estimation observations. Those observations are controlled inputs at
 the native-owner boundary, not a Lean implementation of provider serialization.
 `compaction_canonical_projection_cases` supplies the actual immutable records
