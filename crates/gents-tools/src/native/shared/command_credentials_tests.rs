@@ -287,6 +287,7 @@ async fn changed_identity_configuration_invalidates_waiting_command_exclusions()
     write_identity_config(&home, &original);
     scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         Default::default(),
         ToolWorkspaceScope {
             runtime_home: Some(home.clone()),

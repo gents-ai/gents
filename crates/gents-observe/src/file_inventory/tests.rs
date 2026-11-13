@@ -389,6 +389,7 @@ async fn plugin_file_effect_entries_are_ordered() -> bool {
         let document = effect.doc_id().unwrap().to_owned();
         let writer = registry.writer_for(document.clone()).await;
         let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            None,
             None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
             Default::default(), false,
             writer_tool.call(WriteFileArgs {path: "file.txt".into(), content: after.into(),
@@ -532,6 +533,7 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     let writer = registry.writer_for(doc_id.clone()).await;
     let tool = WriteFileTool::new(ToolContext::new(root_path.clone(), false).unwrap());
     let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
         None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
         Default::default(), false,
         tool.call(WriteFileArgs {

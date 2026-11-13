@@ -119,6 +119,7 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         };
         let result = scope_request_tool_execution_with_workspace_overlay(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             ToolWorkspaceScope {
                 runtime_home: None,

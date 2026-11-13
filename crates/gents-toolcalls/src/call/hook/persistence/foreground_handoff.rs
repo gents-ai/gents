@@ -181,6 +181,7 @@ impl DefraSessionHook {
                     AssertUnwindSafe(gents_session::exec::ownership::scope_process_recorder(
                         recorder,
                         scope_request_tool_execution_with_workspace_overlay(
+                            None,
                             context.deadline_at,
                             process_token.clone(),
                             workspace,

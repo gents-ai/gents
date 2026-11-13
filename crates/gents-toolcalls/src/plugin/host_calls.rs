@@ -371,6 +371,7 @@ mod tests {
     #[tokio::test]
     async fn background_sleep_uses_the_admitted_tool_lifetime() {
         let outcome = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            None,
             Some(chrono::Utc::now() + chrono::Duration::seconds(30)),
             tokio_util::sync::CancellationToken::new(), None, None, None, None,
             Default::default(), true,

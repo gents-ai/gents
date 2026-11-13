@@ -202,6 +202,7 @@ mod bound {
     ) -> Result<String, String> {
         scope_request_tool_execution_with_workspace_overlay(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             ToolWorkspaceScope::cwd_only(Some(workdir.to_owned())),
             None,
@@ -869,6 +870,7 @@ mod bound {
         let queue = approval::queue_dir(&home);
         let call = scope_request_tool_execution_with_workspace_overlay(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             ToolWorkspaceScope::cwd_only(Some(work.clone())),
             None,
@@ -879,6 +881,7 @@ mod bound {
             approval::scope_interactive(true, async {
                 tokio::spawn(approval::carry_interactive(
                     scope_request_tool_execution_with_workspace_overlay(
+                        None,
                         None,
                         tokio_util::sync::CancellationToken::new(),
                         ToolWorkspaceScope::cwd_only(Some(work)),
@@ -1590,12 +1593,8 @@ mod tool_writes {
             .await
             .unwrap();
 
-        let dispatched = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
-            None,
-            Some(NODE.into()),
-            None,
-            None,
-            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        let dispatched = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                Some(gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(None, Some(NODE.into()), None, None)),
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 None,
@@ -1605,8 +1604,7 @@ mod tool_writes {
                 BTreeMap::new(),
                 false,
                 tool.call_with_receipt(output.to_string()),
-            ),
-        )
+            )
         .await;
         if let Some(writes) = dispatched.deferred_writes {
             registry

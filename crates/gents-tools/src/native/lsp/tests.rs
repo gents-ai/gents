@@ -1024,6 +1024,7 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
     let pool = LspPool::new();
     let initial = scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         Default::default(),
         ToolWorkspaceScope {
             runtime_home: Some(first_home),
@@ -1043,6 +1044,7 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
         ..key.clone()
     };
     let next = scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         Default::default(),
         ToolWorkspaceScope {
@@ -1148,6 +1150,7 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
     };
     let pool = LspPool::new();
     scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         Default::default(),
         ToolWorkspaceScope {
@@ -2996,6 +2999,7 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
     };
     let met = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
@@ -3090,6 +3094,7 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
         operator_guard_home: None,
     };
     let spawned = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
