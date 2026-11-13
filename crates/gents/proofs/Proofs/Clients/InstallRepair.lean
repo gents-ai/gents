@@ -422,7 +422,10 @@ structure ServiceObservation where
   deriving Repr, DecidableEq, Lean.ToJson
 
 /-- `rewriteDefinition` writes back a deleted definition while its job still runs this home's
-node, which would otherwise be gone at the next login. -/
+node, which would otherwise be gone at the next login. A job the service manager still holds
+after its definition was deleted, and that is not this home's node, is stopped: the service manager
+keeps restarting it, and each restart would take the store of a home that setup is creating
+(#3737). Whether a job is loaded is asked of the service manager, never read from the file. -/
 inductive ServiceAction where
   | move | stop | reinstall | switch | refreshLog | restart | rewriteDefinition
   deriving Repr, DecidableEq, Lean.ToJson
@@ -436,8 +439,9 @@ structure ServiceStep where
 
 def servicePlan (s : ServiceObservation) : List ServiceStep := Id.run do
   if !s.definitionPresent then
-    return if s.loaded && s.serving == .same then [⟨.rewriteDefinition, false, false, false⟩]
-      else []
+    return if !s.loaded then []
+      else if s.serving == .same then [⟨.rewriteDefinition, false, false, false⟩]
+      else [⟨.stop, false, false, false⟩]
   if !s.sameHome then
     if s.servedHomePresent && s.operation != .repoint then return []
     if !s.beforeSetup && !s.homeComplete then return []
@@ -459,6 +463,11 @@ theorem a_deleted_definition_of_a_running_node_is_written_back (s : ServiceObser
     (absent : s.definitionPresent = false) (loaded : s.loaded = true) (same : s.serving = .same) :
     servicePlan s = [⟨.rewriteDefinition, false, false, false⟩] := by
   simp [servicePlan, Id.run, absent, loaded, same]
+
+theorem a_loaded_job_without_a_definition_is_stopped_before_setup (s : ServiceObservation)
+    (absent : s.definitionPresent = false) (loaded : s.loaded = true)
+    (other : s.serving ≠ .same) : servicePlan s = [⟨.stop, false, false, false⟩] := by
+  simp [servicePlan, Id.run, absent, loaded, other]
 
 theorem service_plan_keeps_served_home (s : ServiceObservation)
     (present : s.definitionPresent = true) (other : s.sameHome = false)
