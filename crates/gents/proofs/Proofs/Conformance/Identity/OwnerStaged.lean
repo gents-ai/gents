@@ -185,4 +185,27 @@ def httpApply : Family ApplyInput ApplyOutput where
     { result := applied.result.name, committed := applied.committed
       readable := pairingReadable applied.state }
 
+structure HostInput where
+  /-- `host_access`: a local access the runtime host built for itself or a
+  hosted Agent; `foreign`: a local access built without the runtime key. -/
+  carrier : String
+  /-- `sibling`: a derived Agent of the runtime; `user`: a forged Agent row;
+  `outsider`: no Agent row. -/
+  target : String
+  deriving ToJson, FromJson
+
+structure HostOutput where
+  outcome : String
+  deriving ToJson
+
+/-- An embedded cursor-writer grant by a requester holding Node authority,
+through a host access or a foreign one. -/
+@[conformance_family]
+def hostAccess : Family HostInput HostOutput where
+  inputs := ["host_access", "foreign"].flatMap fun carrier =>
+    ["sibling", "user", "outsider"].map fun target => { carrier, target }
+  model := fun i =>
+    let carrier := if i.carrier == "host_access" then KeyCarrier.hostAccess else .foreign
+    { outcome := (hostCursorGrant carrier i.target).name }
+
 end Conformance.OwnerStaged

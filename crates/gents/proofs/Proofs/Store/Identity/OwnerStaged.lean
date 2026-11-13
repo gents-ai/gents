@@ -138,6 +138,34 @@ def derivedAgents (proof : Option (DID → String → DID)) (rows : DID → List
       if derive runtime row.nonce == row.did && namedOnce (rows runtime) row.did then some row.did
       else none
 
+/-- Where a deciding transaction holds the runtime key. `route`: the runtime's
+signed owner-staged route, which keeps the key it is served with. `hostAccess`:
+a local access the runtime host built for itself or for an Agent it hosts;
+the host derived that Agent's signer from the same key, so the access carries
+the key's proof as a field, never through ambient context. `foreign`: any
+other access, which holds no runtime key. Decision (release blocker on #3734):
+an Agent's own self-config, the Engineer's included, is applied inside the
+node through a `hostAccess`, so it must stage the same target grants the route
+stages. -/
+inductive KeyCarrier where
+  | route
+  | hostAccess
+  | foreign
+  deriving DecidableEq, Repr
+
+/-- The derivation proof a carrier holds: the same fact on both paths that
+hold the runtime key, and none otherwise. -/
+def proofFrom (derive : DID → String → DID) : KeyCarrier → Option (DID → String → DID)
+  | .route | .hostAccess => some derive
+  | .foreign => none
+
+theorem host_access_proof_is_the_route_proof (derive : DID → String → DID) :
+    proofFrom derive .hostAccess = proofFrom derive .route := rfl
+
+theorem foreign_access_controls_no_agent (derive : DID → String → DID)
+    (rows : DID → List AgentRow) (runtime : DID) :
+    derivedAgents (proofFrom derive .foreign) rows runtime = [] := rfl
+
 theorem no_proof_controls_no_agent (rows : DID → List AgentRow) (runtime : DID) :
     derivedAgents none rows runtime = [] := rfl
 
@@ -561,6 +589,39 @@ theorem pairing_refusal_ignores_the_observation :
      pairingOutcome "outsider" "foreign", pairingOutcome "other-admin" "missing",
      pairingOutcome "other-admin" "foreign"] =
     [.denied, .denied, .denied, .denied, .denied] := by native_decide
+
+/-! ### Embedded applies by the host
+
+An embedded apply through a host access decides every owner-staged change as
+the route does: the target kinds, the owners staged as and the outcome are
+the same functions of the same proof. -/
+
+/-- The decision through a carrier, given the runtime's Agent rows. -/
+def carriedDecision (carrier : KeyCarrier) (derive : DID → String → DID)
+    (rows : DID → List AgentRow) (state : State) (runtime requester : DID)
+    (authority : Authority) (relation : Relation) (grant : Bool) : Outcome :=
+  decision state runtime (derivedAgents (proofFrom derive carrier) rows) requester authority
+    relation grant
+
+theorem host_access_decides_as_the_route (derive : DID → String → DID)
+    (rows : DID → List AgentRow) (state : State) (runtime requester : DID)
+    (authority : Authority) (relation : Relation) (grant : Bool) :
+    carriedDecision .hostAccess derive rows state runtime requester authority relation grant =
+      carriedDecision .route derive rows state runtime requester authority relation grant := rfl
+
+/-- A cursor writer is admitted only as an Agent the carrier proves the
+runtime controls: through a host access the derived Agent is staged and a
+forged row or an outsider is refused by kind; without the key every Agent is
+refused by kind. -/
+def hostCursorGrant (carrier : KeyCarrier) (target : String) : Outcome :=
+  carriedDecision carrier fixtureDerive fixtureRows runtimeCursor "runtime" "user" cursorAuthority
+    ⟨"configuration", "cursor", "writer", .actor target⟩ true
+
+theorem host_access_stages_only_controlled_cursor_writers :
+    [hostCursorGrant .hostAccess "sibling", hostCursorGrant .hostAccess "user",
+     hostCursorGrant .hostAccess "outsider", hostCursorGrant .foreign "sibling"] =
+      [.staged "runtime", .outOfKind, .outOfKind, .outOfKind] := by
+  native_decide
 
 /-! ### Transport independence
 

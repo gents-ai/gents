@@ -1461,6 +1461,10 @@ def caseCoverage : List CoverageEntry :=
       "owner_staged_http_apply")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
+      "family"
+      "owner_staged_host_access")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
       "pack_placement_reader_cases"
       "PackPlacementReaderCases")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
