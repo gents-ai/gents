@@ -1,0 +1,57 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "item",
+        "type": "text"
+      },
+      {
+        "name": "cost",
+        "type": "float64"
+      },
+      {
+        "name": "due",
+        "type": "timestamp"
+      },
+      {
+        "name": "paid",
+        "type": "bool"
+      }
+    ],
+    "markdown": "| item | cost | due | paid |\n| --- | --- | --- | --- |\n| rent | 1200.0 | 2024-01-31T00:00:00 | true |\n| tea | 2.5 | 2024-02-01T09:30:00 | false |\n| tea | 2.5 | 2024-02-01T09:30:00 | false |\n| tea | 2.5 | 2024-02-01T09:30:00 | false |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 4,
+    "rows": [
+      [
+        "rent",
+        1200.0,
+        "2024-01-31T00:00:00",
+        true
+      ],
+      [
+        "tea",
+        2.5,
+        "2024-02-01T09:30:00",
+        false
+      ],
+      [
+        "tea",
+        2.5,
+        "2024-02-01T09:30:00",
+        false
+      ],
+      [
+        "tea",
+        2.5,
+        "2024-02-01T09:30:00",
+        false
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM book_Budget"
+  }
+}

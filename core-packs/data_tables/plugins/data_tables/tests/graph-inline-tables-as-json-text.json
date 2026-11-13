@@ -1,0 +1,25 @@
+{
+  "expect": {
+    "result": {
+      "columns": "[{\"name\":\"s\",\"type\":\"int64\"}]",
+      "complete": true,
+      "markdown": "| s |\n| --- |\n| 3 |",
+      "mode": "query",
+      "offset": 0,
+      "order": "columns",
+      "row_count": 1,
+      "warnings": []
+    },
+    "rows": [
+      {
+        "row": 0,
+        "values": "[3]"
+      }
+    ]
+  },
+  "input": {
+    "run_id": "r2",
+    "sql": "SELECT sum(column_1) AS s FROM t",
+    "tables": "{\"t\": {\"rows\": [[1], [2]]}}"
+  }
+}

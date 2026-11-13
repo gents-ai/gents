@@ -1,0 +1,71 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "id",
+        "type": "int64"
+      },
+      {
+        "name": "name",
+        "type": "text"
+      },
+      {
+        "name": "tags",
+        "type": "list<text>"
+      },
+      {
+        "name": "geo",
+        "type": "struct"
+      },
+      {
+        "name": "lat",
+        "type": "float64"
+      },
+      {
+        "name": "extra",
+        "type": "bool"
+      }
+    ],
+    "markdown": "| id | name | tags | geo | lat | extra |\n| --- | --- | --- | --- | --- | --- |\n| 1 | Ana | [\"x\",\"y\"] | {\"lat\":1.5,\"lon\":2} | 1.5 | NULL |\n| 2 | NULL | [] | NULL | NULL | NULL |\n| 3 | Cy | NULL | NULL | NULL | true |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        1,
+        "Ana",
+        [
+          "x",
+          "y"
+        ],
+        {
+          "lat": 1.5,
+          "lon": 2
+        },
+        1.5,
+        null
+      ],
+      [
+        2,
+        null,
+        [],
+        null,
+        null,
+        null
+      ],
+      [
+        3,
+        "Cy",
+        null,
+        null,
+        null,
+        true
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT id, name, tags, geo, geo['lat'] AS lat, extra FROM records"
+  }
+}

@@ -1,0 +1,11 @@
+type DataTable {
+  run_id: String @index
+  table: String
+  source: String
+  format: String
+  sheet: String
+  row_count: Int
+  columns: String
+  profile: String
+  error: String
+}

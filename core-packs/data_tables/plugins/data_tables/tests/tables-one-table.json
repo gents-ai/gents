@@ -1,0 +1,41 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| people | people.csv | 3 | name, score, joined, active |",
+    "tables": [
+      {
+        "column_count": 4,
+        "columns": [
+          {
+            "name": "name",
+            "type": "text"
+          },
+          {
+            "name": "score",
+            "type": "int64"
+          },
+          {
+            "name": "joined",
+            "type": "date"
+          },
+          {
+            "name": "active",
+            "type": "bool"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "people",
+        "row_count": 3,
+        "source": "people.csv"
+      }
+    ],
+    "warnings": []
+  },
+  "input": {
+    "table": "people"
+  }
+}

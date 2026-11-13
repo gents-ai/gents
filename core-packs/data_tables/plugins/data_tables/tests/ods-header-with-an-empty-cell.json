@@ -1,0 +1,41 @@
+{
+  "bind": "fixtures/headers",
+  "expect": {
+    "columns": [
+      {
+        "name": "column_1",
+        "type": "int64"
+      },
+      {
+        "name": "a",
+        "type": "int64"
+      },
+      {
+        "name": "b",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| column_1 | a | b |\n| --- | --- | --- |\n| 0 | 1 | 2 |\n| 1 | 3 | 4 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 2,
+    "rows": [
+      [
+        0,
+        1,
+        2
+      ],
+      [
+        1,
+        3,
+        4
+      ]
+    ],
+    "warnings": [
+      "1 empty column name was named column_<position>"
+    ]
+  },
+  "input": {
+    "sql": "SELECT * FROM gapo_S"
+  }
+}
