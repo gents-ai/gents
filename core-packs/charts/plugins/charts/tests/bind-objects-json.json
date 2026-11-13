@@ -1,0 +1,42 @@
+{
+  "bind": "fixtures/data",
+  "expect": {
+    "response": {
+      "alt": "Scatter chart titled \"Fruit\". X axis: kg, from 3.25 to 12.5. Y axis: price, from 1 to 5. 1 series. \"price\": 3 points, y from 1.2 to 4.1, correlation -0.9521.",
+      "chart": "scatter",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "correlation": -0.9521,
+          "gaps": 0,
+          "mark": "point",
+          "max": 4.1,
+          "min": 1.2,
+          "name": "price",
+          "points": 3,
+          "x_max": 12.5,
+          "x_min": 3.25
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Fruit</title><desc id=\"chart-desc\">Scatter chart titled &quot;Fruit&quot;. X axis: kg, from 3.25 to 12.5. Y axis: price, from 1 to 5. 1 series. &quot;price&quot;: 3 points, y from 1.2 to 4.1, correlation -0.9521.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Fruit</text><line x1=\"47.12\" y1=\"240.5\" x2=\"537.88\" y2=\"240.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"177.5\" x2=\"537.88\" y2=\"177.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"47.12\" y1=\"113.5\" x2=\"537.88\" y2=\"113.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"129.5\" y1=\"50\" x2=\"129.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"211.5\" y1=\"50\" x2=\"211.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"293.5\" y1=\"50\" x2=\"293.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"374.5\" y1=\"50\" x2=\"374.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"456.5\" y1=\"50\" x2=\"456.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><circle cx=\"476.54\" cy=\"290.35\" r=\"4\" fill=\"#0072b2\" fill-opacity=\"0.78\" stroke=\"#ffffff\" stroke-width=\"0.75\"><title>price: 12.5, 1.2</title></circle><circle cx=\"292.5\" cy=\"252.4\" r=\"4\" fill=\"#0072b2\" fill-opacity=\"0.78\" stroke=\"#ffffff\" stroke-width=\"0.75\"><title>price: 8, 1.8</title></circle><circle cx=\"98.24\" cy=\"106.93\" r=\"4\" fill=\"#0072b2\" fill-opacity=\"0.78\" stroke=\"#ffffff\" stroke-width=\"0.75\"><title>price: 3.25, 4.1</title></circle><line x1=\"47.12\" y1=\"303.5\" x2=\"537.88\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"46.62\" y1=\"50\" x2=\"46.62\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"47.5\" y1=\"303\" x2=\"47.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"47.12\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2</text><line x1=\"129.5\" y1=\"303\" x2=\"129.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"128.91\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">4</text><line x1=\"211.5\" y1=\"303\" x2=\"211.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"210.71\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">6</text><line x1=\"293.5\" y1=\"303\" x2=\"293.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"292.5\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">8</text><line x1=\"374.5\" y1=\"303\" x2=\"374.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"374.29\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">10</text><line x1=\"456.5\" y1=\"303\" x2=\"456.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"456.09\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">12</text><line x1=\"538.5\" y1=\"303\" x2=\"538.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"537.88\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">14</text><line x1=\"43.12\" y1=\"303.5\" x2=\"47.12\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">1</text><line x1=\"43.12\" y1=\"240.5\" x2=\"47.12\" y2=\"240.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"243.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2</text><line x1=\"43.12\" y1=\"177.5\" x2=\"47.12\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"180.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">3</text><line x1=\"43.12\" y1=\"113.5\" x2=\"47.12\" y2=\"113.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"117.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><line x1=\"43.12\" y1=\"50.5\" x2=\"47.12\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><text x=\"292.5\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">kg</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">price</text></svg>",
+      "warnings": [
+        "column \"kg\": 1 values are empty or not numbers; those rows are not drawn"
+      ],
+      "width": 560
+    }
+  },
+  "input": {
+    "chart": "scatter",
+    "file": "objects.json",
+    "height": 360,
+    "output": "svg",
+    "title": "Fruit",
+    "width": 560,
+    "x": "kg",
+    "y": [
+      "price"
+    ]
+  }
+}

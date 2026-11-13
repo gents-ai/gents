@@ -1,0 +1,51 @@
+{
+  "input": {
+    "chart": "line",
+    "file": "gaps.csv",
+    "x": "x",
+    "y": [
+      "y",
+      "z"
+    ],
+    "output": "svg",
+    "width": 560,
+    "height": 360
+  },
+  "bind": "fixtures/data",
+  "expect": {
+    "response": {
+      "alt": "Line chart. X axis: x, from 1 to 7. Y axis from 0 to 20. 2 series. \"y\": 5 points, lowest 10 at 1, highest 18 at 7. \"z\": 5 points, lowest 5 at 1, highest 11 at 7.",
+      "chart": "line",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 2,
+          "mark": "line",
+          "max": 18.0,
+          "min": 10.0,
+          "name": "y",
+          "points": 5
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 2,
+          "mark": "line",
+          "max": 11.0,
+          "min": 5.0,
+          "name": "z",
+          "points": 5
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">line chart</title><desc id=\"chart-desc\">Line chart. X axis: x, from 1 to 7. Y axis from 0 to 20. 2 series. &quot;y&quot;: 5 points, lowest 10 at 1, highest 18 at 7. &quot;z&quot;: 5 points, lowest 5 at 1, highest 11 at 7.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><line x1=\"37.24\" y1=\"232.5\" x2=\"506\" y2=\"232.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"37.24\" y1=\"162.5\" x2=\"506\" y2=\"162.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"37.24\" y1=\"91.5\" x2=\"506\" y2=\"91.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"115.5\" y1=\"20\" x2=\"115.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"272.5\" y1=\"20\" x2=\"272.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"428.5\" y1=\"20\" x2=\"428.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><circle cx=\"37.24\" cy=\"161.5\" r=\"2.5\" fill=\"#0072b2\"/><circle cx=\"193.49\" cy=\"133.2\" r=\"2.5\" fill=\"#0072b2\"/><path d=\"M 349.75,90.75 L 427.87,62.45 L 506,48.3\" fill=\"none\" stroke=\"#0072b2\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"161.5\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>y: 1, 10</title></circle><circle cx=\"193.49\" cy=\"133.2\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>y: 3, 12</title></circle><circle cx=\"349.75\" cy=\"90.75\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>y: 5, 15</title></circle><circle cx=\"427.87\" cy=\"62.45\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>y: 6, 17</title></circle><circle cx=\"506\" cy=\"48.3\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>y: 7, 18</title></circle><path d=\"M 37.24,232.25 L 115.36,218.1\" fill=\"none\" stroke=\"#e69f00\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"271.62\" cy=\"189.8\" r=\"2.5\" fill=\"#e69f00\"/><path d=\"M 427.87,161.5 L 506,147.35\" fill=\"none\" stroke=\"#e69f00\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"232.25\" r=\"3\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>z: 1, 5</title></circle><circle cx=\"115.36\" cy=\"218.1\" r=\"3\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>z: 2, 6</title></circle><circle cx=\"271.62\" cy=\"189.8\" r=\"3\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>z: 4, 8</title></circle><circle cx=\"427.87\" cy=\"161.5\" r=\"3\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>z: 6, 10</title></circle><circle cx=\"506\" cy=\"147.35\" r=\"3\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>z: 7, 11</title></circle><line x1=\"37.24\" y1=\"303.5\" x2=\"506\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"36.74\" y1=\"20\" x2=\"36.74\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"115.5\" y1=\"303\" x2=\"115.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"115.36\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2</text><line x1=\"272.5\" y1=\"303\" x2=\"272.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"271.62\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">4</text><line x1=\"428.5\" y1=\"303\" x2=\"428.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"427.87\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">6</text><line x1=\"33.24\" y1=\"303.5\" x2=\"37.24\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"33.24\" y1=\"232.5\" x2=\"37.24\" y2=\"232.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"236.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><line x1=\"33.24\" y1=\"162.5\" x2=\"37.24\" y2=\"162.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"165.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10</text><line x1=\"33.24\" y1=\"91.5\" x2=\"37.24\" y2=\"91.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"94.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">15</text><line x1=\"33.24\" y1=\"20.5\" x2=\"37.24\" y2=\"20.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"24\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">20</text><text x=\"271.62\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">x</text><line x1=\"520\" y1=\"25\" x2=\"534\" y2=\"25\" fill=\"none\" stroke=\"#0072b2\" stroke-width=\"2.5\"/><text x=\"540\" y=\"29\" font-size=\"12\" fill=\"#1f2328\">y</text><line x1=\"520\" y1=\"43\" x2=\"534\" y2=\"43\" fill=\"none\" stroke=\"#e69f00\" stroke-width=\"2.5\"/><text x=\"540\" y=\"47\" font-size=\"12\" fill=\"#1f2328\">z</text></svg>",
+      "warnings": [
+        "column \"y\": 1 empty values are drawn as gaps, not zeros",
+        "column \"y\": 1 values are not numbers (first is \"unknown\" in row 4) and are drawn as gaps, not zeros",
+        "column \"z\": 2 empty values are drawn as gaps, not zeros"
+      ],
+      "width": 560
+    }
+  }
+}

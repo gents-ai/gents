@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "titel": "x",
+    "data": "k,v\na,1\n"
+  },
+  "expect": {
+    "chart": "bar",
+    "error": "the field \"titel\" is not known; check the field names in the tool description",
+    "warnings": []
+  }
+}

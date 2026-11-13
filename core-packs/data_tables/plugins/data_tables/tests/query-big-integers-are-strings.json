@@ -1,0 +1,36 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "a",
+        "type": "int64"
+      },
+      {
+        "name": "b",
+        "type": "int64"
+      },
+      {
+        "name": "c",
+        "type": "uint64"
+      }
+    ],
+    "markdown": "| a | b | c |\n| --- | --- | --- |\n| 9007199254740993 | 9007199254740992 | 18446744073709551615 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 1,
+    "rows": [
+      [
+        "9007199254740993",
+        9007199254740992,
+        "18446744073709551615"
+      ]
+    ],
+    "warnings": [
+      "2 integers beyond 2^53 appear as strings so no digit is lost"
+    ]
+  },
+  "input": {
+    "sql": "SELECT 9007199254740993 AS a, 9007199254740992 AS b, CAST(18446744073709551615 AS BIGINT UNSIGNED) AS c"
+  }
+}

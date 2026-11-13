@@ -1,0 +1,15 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "result": {
+      "complete": false,
+      "error": "only SELECT queries are accepted; write the statement as a SELECT, and to save its result as a file add output",
+      "mode": "query",
+      "warnings": []
+    }
+  },
+  "input": {
+    "run_id": "r1",
+    "sql": "DROP TABLE events"
+  }
+}

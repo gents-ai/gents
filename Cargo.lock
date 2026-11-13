@@ -4517,6 +4517,7 @@ dependencies = [
  "gents-automation",
  "gents-chatgpt-login",
  "gents-claude-login",
+ "gents-core-packs",
  "gents-desktop-core",
  "gents-documents",
  "gents-eval",
@@ -4631,6 +4632,10 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "gents-core-packs"
+version = "1.0.0-rc2"
 
 [[package]]
 name = "gents-desktop"

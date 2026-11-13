@@ -1,0 +1,31 @@
+{
+  "bind": "fixtures/links",
+  "expect": {
+    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| inside | inside.csv | 1 | k |",
+    "tables": [
+      {
+        "column_count": 1,
+        "columns": [
+          {
+            "name": "k",
+            "type": "int64"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "inside",
+        "row_count": 1,
+        "source": "inside.csv"
+      }
+    ],
+    "warnings": [
+      "1 files were skipped: outside.csv: cannot read outside.csv: a link that leads outside the folder or a file this call may not read"
+    ]
+  },
+  "input": {
+    "mode": "tables"
+  }
+}

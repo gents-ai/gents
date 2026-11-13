@@ -1,0 +1,33 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "result": {
+      "columns": "[{\"name\":\"kind\",\"type\":\"text\"},{\"name\":\"n\",\"type\":\"int64\"}]",
+      "complete": true,
+      "markdown": "| kind | n |\n| --- | --- |\n| a | 2 |\n| b | 1 |",
+      "mode": "query",
+      "offset": 0,
+      "order": "columns",
+      "row_count": 2,
+      "warnings": []
+    },
+    "rows": [
+      {
+        "row": 0,
+        "values": "[\"a\",2]"
+      },
+      {
+        "row": 1,
+        "values": "[\"b\",1]"
+      }
+    ]
+  },
+  "input": {
+    "cursor": "",
+    "files": [],
+    "mode": "",
+    "run_id": "r1",
+    "sql": "SELECT kind, count(*) AS n FROM events GROUP BY kind",
+    "table": null
+  }
+}
