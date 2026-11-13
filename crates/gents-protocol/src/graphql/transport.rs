@@ -20,15 +20,30 @@ impl Default for GraphqlRequestOptions {
     }
 }
 
+/// How long a pooled connection to a DefraDB HTTP server may sit idle before
+/// a client stops reusing it. The server closes a keep-alive connection that
+/// has sent no request for 30 seconds (hyper's HTTP/1 header read timeout,
+/// armed by the timer DefraDB's `net::server` sets). A client whose connection
+/// task has not yet observed that close would send its next request, a
+/// transaction begin or another non-idempotent POST included, into the closed
+/// connection and fail with an incomplete message. The pool compares this age
+/// when it hands a connection out, so a shorter limit holds whether or not
+/// that task has run since the server closed.
+pub const POOLED_CONNECTION_IDLE_LIMIT: Duration = Duration::from_secs(20);
+
 #[cfg(feature = "native")]
 pub(super) async fn graphql_http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
         .get_or_try_init(|| async {
             // Native certificate loading can block; initialize once off the executor.
-            tokio::task::spawn_blocking(|| reqwest::Client::builder().build())
-                .await?
-                .map_err(GraphqlError::ClientBuild)
+            tokio::task::spawn_blocking(|| {
+                reqwest::Client::builder()
+                    .pool_idle_timeout(POOLED_CONNECTION_IDLE_LIMIT)
+                    .build()
+            })
+            .await?
+            .map_err(GraphqlError::ClientBuild)
         })
         .await
 }
