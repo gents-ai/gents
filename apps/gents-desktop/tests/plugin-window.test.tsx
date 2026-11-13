@@ -161,6 +161,48 @@ describe("a plugin window", () => {
     );
   });
 
+  it("reads only its own plugin from the packs on disk", async () => {
+    registerBoard();
+    const listing = (pack: string, name: string) => ({
+      id: `${pack}/${name}`,
+      door: "pack" as const,
+      producer: "afb" as const,
+      file: `/home/packs/${pack}/plugins/${name}_ui.afb`,
+      pack,
+      defaultEnabled: true,
+    });
+    const readUxPluginSource = vi.fn(async (_id: string) => {
+      throw new Error("not read in this test");
+    });
+    const api = {
+      fetchDesktopSnapshot: vi.fn(async () => running()),
+      startDesktopClient: vi.fn(async () => running()),
+      fetchSessionSnapshot: vi.fn(async () => null),
+      setSelectedNode: vi.fn(async () => undefined),
+      listUxPlugins: vi.fn(async () => ({
+        plugins: [listing("acme/tools", "notes"), listing("acme/games", "chess")],
+      })),
+      readUxPluginSource,
+    } as unknown as DesktopApiAdapter;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    render(
+      <App
+        bridge={{
+          api,
+          listenToUpdates: async () => () => {},
+          supportsManagedServer: false,
+        }}
+        start={{ pluginId: "notes", nodeDid: deployment.nodeDid }}
+      />,
+    );
+    await waitFor(() => expect(readUxPluginSource).toHaveBeenCalled());
+    await act(async () => {});
+    /* each scan asks again for a module it could not read */
+    expect(new Set(readUxPluginSource.mock.calls.map(([id]) => id))).toEqual(
+      new Set(["acme/tools/notes"]),
+    );
+  });
+
   it("closes once its plugin, having run, is turned off, but not one that never ran", async () => {
     const close = vi.fn();
     const record = { id: "board", name: "Board", door: "pack" as const };

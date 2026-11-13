@@ -152,8 +152,9 @@ function AppHost({
   );
 }
 
-/* A plugin page's own window: the client and the plugin host, and the node
-   it was opened from. Startup and recovery stay with the main window. */
+/* A plugin page's own window: the client, the plugin host running that one
+   plugin, and the node it was opened from. Startup and recovery stay with
+   the main window. */
 function PluginWindowReactions({
   app,
   bridge,
@@ -165,7 +166,7 @@ function PluginWindowReactions({
 }) {
   useClientRuntime(app, bridge.listenToUpdates);
   usePlatformSetup();
-  useUxHost(app, bridge.listenToUpdates);
+  useUxHost(app, bridge.listenToUpdates, start.pluginId);
   const { selectNode } = app.actions;
   useEffect(() => {
     if (start.nodeDid) selectNode(start.nodeDid);

@@ -153,8 +153,9 @@ let opened = false;
 let following: Array<() => void> = [];
 
 /* idempotent: the doors open once per webview, however often the shell
-   re-renders or HMR re-evaluates the caller */
-export function openUxDoors(app: DesktopApp): void {
+   re-renders or HMR re-evaluates the caller. `page`: the plugin whose page
+   this window is, the only one it runs. */
+export function openUxDoors(app: DesktopApp, page?: string): void {
   if (opened) return;
   opened = true;
   /* page documents are read from the selected node, by the same rule the
@@ -169,8 +170,9 @@ export function openUxDoors(app: DesktopApp): void {
     list: (node) => app.actions.listUxPlugins(node),
     source: (id, node) => app.actions.readUxPluginSource(id, node),
     node: nodeDid,
+    only: page,
   });
-  discoverBundledUxPlugins();
+  discoverBundledUxPlugins(page);
   void scanRuntimeUxPlugins();
   /* another node's pages replace this one's when the selection moves */
   const followNode = () => void followSelectedUxNode().catch(() => undefined);
@@ -185,9 +187,11 @@ export function openUxDoors(app: DesktopApp): void {
 const showsPages = (route: Route): boolean =>
   route.name === "plugin" || route.name === "packs";
 
+/** `page`: the plugin whose page fills this window, in a window of its own */
 export function useUxHost(
   app: DesktopApp,
   listenToUpdates: DesktopBridge["listenToUpdates"],
+  page?: string,
 ): void {
   const route = useRoute();
   const routeRef = useRef(route);
@@ -198,8 +202,8 @@ export function useUxHost(
   }, [route]);
   useEffect(() => {
     installUxHost(buildUxHost(app, () => routeRef.current));
-    openUxDoors(app);
-  }, [app]);
+    openUxDoors(app, page);
+  }, [app, page]);
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;

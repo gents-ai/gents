@@ -142,6 +142,38 @@ it("refreshes only the changed pack and removes its retired pages", async () => 
   expect(chips()).toEqual(["second:chip"]);
 });
 
+it("runs only its own plugin in a window opened for one", async () => {
+  const board = packed("board", true);
+  const other = {
+    ...packed("other", true),
+    id: "other/game/other",
+    pack: "other/game",
+  };
+  listings = [board, clock("clock"), other];
+  sources.set(board.id, chipPlugin("board"));
+  sources.set(other.id, chipPlugin("other"));
+  sources.set("clock", chipPlugin("clock"));
+  configureUxDoors({
+    list: async () => ({ plugins: [...listings] }),
+    source: async (id: string) => {
+      call("desktop_ux_plugin_source", { id });
+      return { source: sources.get(id) as string, css: null, digest: "sha256:0" };
+    },
+    only: "board",
+  });
+  await scanRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: board.id }]]);
+  expect(chips()).toEqual(["board:chip"]);
+  expect(Object.keys(uxPluginRecords())).toEqual(["board"]);
+
+  /* another pack's change, heard from the main window, loads nothing here */
+  call.mockClear();
+  await refreshRuntimePackUxPlugins("other/game");
+  await reloadRuntimeUxPlugins();
+  expect(reads()).toEqual([["desktop_ux_plugin_source", { id: board.id }]]);
+  expect(chips()).toEqual(["board:chip"]);
+});
+
 it("reports an explicit pack refresh failure without retiring the current pages", async () => {
   const entry = packed("widget", true);
   listings = [entry];
