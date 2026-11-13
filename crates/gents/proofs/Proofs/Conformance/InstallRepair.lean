@@ -60,6 +60,21 @@ def servicePlans : Conformance.Family ServiceObservation (List ServiceStep) wher
          present, operation⟩
   model := servicePlan
 
+/-- One machine seen by both planners: the plan's service fields are the service observation's. -/
+@[conformance_family]
+def settlePlans : Conformance.Family SettleObservation (List ServiceStep) where
+  inputs := [HomeState.absent, .healthy, .interrupted, .missingStoreKey, .olderStore,
+      .unfinishedSetup].flatMap fun home =>
+    answers.flatMap fun (interactive, answer) =>
+      [(false, Operation.run), (true, .run), (true, .repoint)].flatMap fun (present, operation) =>
+        (List.range 32).map fun n =>
+          ⟨⟨home, .same, interactive, answer, false, false, false, true, bit n 0, bit n 3,
+            true, bit n 0 && bit n 1, false, false, present, operation⟩,
+           ⟨bit n 0, bit n 0 && bit n 1, true, home == .healthy || home == .unfinishedSetup, true, true,
+            bit n 2, bit n 3, false, false, .same, false, false,
+            if bit n 4 then .same else .none, present, operation⟩⟩
+  model := settleServicePlan
+
 @[conformance_family]
 def refusals : Conformance.Family RefusalObservation RefusalAction where
   inputs := (List.range 16).map fun n =>
