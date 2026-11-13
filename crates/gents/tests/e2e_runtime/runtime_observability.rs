@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState};
 use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
@@ -9,7 +8,7 @@ use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::interrupt::TEST_RUNTIME_READY_TIMEOUT;
-use crate::support::snapshots::{fetch_runtime_snapshot_as, RuntimeSnapshot};
+use crate::support::snapshots::{fetch_runtime_snapshot_as, RuntimeSnapshot, SnapshotReader};
 use crate::support::{managed_agent_fixture, test_db};
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
@@ -85,6 +84,8 @@ where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
     let deadline = tokio::time::Instant::now() + TEST_RUNTIME_READY_TIMEOUT;
+    let mut readiness = access.subscribe_changes("NodeReadiness").await;
+    let mut runtime = access.subscribe_changes("NodeRuntime").await;
     loop {
         let last_snapshot = fetch_runtime_snapshot_as(access, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
@@ -92,12 +93,19 @@ where
                 return snapshot.clone();
             }
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out after {TEST_RUNTIME_READY_TIMEOUT:?} waiting for runtime snapshot for \
-             {node_did}; last observed snapshot: {last_snapshot:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, async {
+            tokio::select! {
+                _ = readiness.recv() => {}
+                _ = runtime.recv() => {}
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out after {TEST_RUNTIME_READY_TIMEOUT:?} waiting for runtime snapshot for \
+                {node_did}; last observed snapshot: {last_snapshot:?}"
+            )
+        });
     }
 }
 

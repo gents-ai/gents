@@ -341,6 +341,35 @@ theorem rejected_cwd_cannot_override_host_policy (input : RequestInput)
     inputWithinContext input skills cwdAllowed queueAllowed = false := by
   simp [inputWithinContext, hcwd, hdeny]
 
+/-- An edit whose authored input selects only skills is admitted exactly when its
+skill selection is inside the Agent's context allowlist: the cwd, queue and
+captured-context conjuncts of `inputWithinContext` are vacuous for that input. -/
+inductive QueueEditResult where
+  | accepted
+  | refusedSkill
+  deriving DecidableEq, Repr
+
+def queueEditResult (selectedSkillIds contextSkillIds : List String) : QueueEditResult :=
+  if inputWithinContext { selectedSkillIds := selectedSkillIds } contextSkillIds
+      (fun _ => true) (fun _ => true)
+  then .accepted
+  else .refusedSkill
+
+inductive OriginalRequest where
+  | superseded
+  | unchanged
+  deriving DecidableEq, Repr
+
+/-- An accepted edit replaces the original request; a refused edit leaves the
+original request exactly as it was. -/
+def originalAfterEdit : QueueEditResult → OriginalRequest
+  | .accepted => .superseded
+  | .refusedSkill => .unchanged
+
+theorem edited_skill_outside_context_does_not_supersede_the_original :
+    originalAfterEdit (queueEditResult ["unavailable"] []) = .unchanged := by
+  decide
+
 structure RequestWorkspace where
   workspaceId : Option String := none
   ownerNodeDid : Option String := none

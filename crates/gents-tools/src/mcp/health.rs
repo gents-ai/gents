@@ -2214,111 +2214,151 @@ mod tests {
         assert_eq!(map.persisted.lock().await.len(), 2);
         node.shutdown().await.expect("shut down test node");
     }
-    #[tokio::test]
-    async fn probe_shutdown_cancels_pending_mcp_without_pruning_or_failure() {
-        let started = Arc::new(tokio::sync::Notify::new());
-        let seen = started.clone();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counted = calls.clone();
-        let pool = McpPool::new_with_list_tools_handler(move |_, _| {
-            let seen = seen.clone();
-            let counted = counted.clone();
-            async move {
-                counted.fetch_add(1, Ordering::SeqCst);
-                seen.notify_one();
-                std::future::pending::<anyhow::Result<ListToolsResult>>().await
+    /// The distinct services probed. A probe that did not fail is the one in
+    /// flight at shutdown, so it is started at most once.
+    fn started_once(calls: &[String], failing: &[String]) -> u64 {
+        let mut services = Vec::<&String>::new();
+        for call in calls {
+            if services.contains(&call) {
+                assert!(failing.contains(call), "{call} probed again: {calls:?}");
+            } else {
+                services.push(call);
             }
-        });
-        let health = ServiceHealthMap::new();
-        let now = chrono::Utc::now();
-        for id in ["pending", "unobserved"] {
-            health
-                .set_entry(
-                    id.into(),
-                    super::ServiceHealthEntry::from_public(ServiceHealth {
-                        status: super::HealthStatus::Healthy,
-                        last_seen: now,
-                        last_error: None,
-                    }),
-                )
-                .await;
         }
-        let options = HealthCheckerOptions {
-            probe_timeout: std::time::Duration::from_secs(60),
-            ..Default::default()
-        };
-        let before = health.snapshot_full(options.failure_threshold_k).await;
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let run_cancel = cancel.clone();
-        let run_health = health.clone();
-        let handle = tokio::spawn(async move {
-            super::run_health_check_cycle_with_cancel(
-                vec![registry_entry("pending", now), registry_entry("later", now)],
-                now,
-                &pool,
-                &run_health,
-                "local-host",
-                None,
-                &options,
-                None,
-                None,
-                Some(&run_cancel),
-            )
-            .await
-        });
-        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
-            .await
-            .unwrap();
-        cancel.cancel();
-        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
-            .await
-            .expect("pending MCP observation must stop on shutdown")
-            .unwrap()
-            .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(health.snapshot_full(3).await, before);
+        services.len() as u64
     }
 
     #[tokio::test]
-    async fn probe_shutdown_prevents_new_mcp_probes_and_failure_events() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counted = calls.clone();
-        let pool = McpPool::new_with_list_tools_handler(move |_, _| {
-            counted.fetch_add(1, Ordering::SeqCst);
-            async { anyhow::bail!("must not probe after shutdown") }
-        });
-        let cancel = tokio_util::sync::CancellationToken::new();
-        cancel.cancel();
-        let node = gents_inference::auth::credential::test_support::test_node().await;
-        let health = ServiceHealthMap::new();
-        health
-            .set_entry(
-                "unobserved".into(),
-                super::ServiceHealthEntry::from_public(ServiceHealth {
-                    status: super::HealthStatus::Healthy,
-                    last_seen: chrono::Utc::now(),
-                    last_error: None,
-                }),
-            )
-            .await;
-        let before = health.snapshot_full(3).await;
-        let handle = super::spawn_health_checker(
-            node.clone(),
-            pool,
-            health.clone(),
-            "local-host".into(),
-            None,
-            cancel,
-            HealthCheckerOptions::default(),
-            "did:key:owner".into(),
-        );
-        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
-            .await
-            .expect("an already-cancelled health worker must not start a cycle")
-            .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(health.snapshot_full(3).await, before);
-        node.shutdown().await.expect("shut down test node");
+    async fn probe_shutdown_follows_the_lean_shutdown_model() {
+        for case in gents_lean_vocab::families::mcp_health_shutdown_observation::cases::<String>() {
+            let input = &case.input;
+            let probed = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let started = Arc::new(tokio::sync::Notify::new());
+            let failing = input
+                .registry
+                .iter()
+                .take(usize::try_from(input.failing).unwrap())
+                .cloned()
+                .collect::<Vec<_>>();
+            let pool = McpPool::new_with_list_tools_handler({
+                let probed = probed.clone();
+                let started = started.clone();
+                move |service_id: String, _| {
+                    probed.lock().unwrap().push(service_id.clone());
+                    let fails = failing.contains(&service_id);
+                    let started = started.clone();
+                    async move {
+                        if fails {
+                            anyhow::bail!("probe failed");
+                        }
+                        started.notify_one();
+                        std::future::pending::<anyhow::Result<ListToolsResult>>().await
+                    }
+                }
+            });
+            let health = ServiceHealthMap::new();
+            let now = chrono::Utc::now();
+            for id in &input.known {
+                health
+                    .set_entry(
+                        id.clone(),
+                        super::ServiceHealthEntry::from_public(ServiceHealth {
+                            status: super::HealthStatus::Healthy,
+                            last_seen: now,
+                            last_error: None,
+                        }),
+                    )
+                    .await;
+            }
+            let options = HealthCheckerOptions {
+                failure_threshold_k: input.threshold.try_into().unwrap(),
+                probe_timeout: std::time::Duration::from_secs(60),
+                ..Default::default()
+            };
+            let k_max = options.failure_threshold_k;
+            let sorted = |mut snapshot: Vec<super::MCPServiceHealthSnapshot>| {
+                snapshot.sort_by(|a, b| a.service_id.cmp(&b.service_id));
+                snapshot
+            };
+            let before = sorted(health.snapshot_full(k_max).await);
+            let cancel = tokio_util::sync::CancellationToken::new();
+            match input.shutdown.as_str() {
+                "before_cycle" => {
+                    cancel.cancel();
+                    let node = gents_inference::auth::credential::test_support::test_node().await;
+                    let handle = super::spawn_health_checker(
+                        node.clone(),
+                        pool,
+                        health.clone(),
+                        "local-host".into(),
+                        None,
+                        cancel,
+                        options,
+                        "did:key:owner".into(),
+                    );
+                    tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+                        .await
+                        .expect("an already-cancelled health worker must not start a cycle")
+                        .unwrap();
+                    node.shutdown().await.expect("shut down test node");
+                }
+                "during_probe" => {
+                    let run_cancel = cancel.clone();
+                    let run_health = health.clone();
+                    let registry = input
+                        .registry
+                        .iter()
+                        .map(|id| registry_entry(id, now))
+                        .collect::<Vec<_>>();
+                    let handle = tokio::spawn(async move {
+                        super::run_health_check_cycle_with_cancel(
+                            registry,
+                            now,
+                            &pool,
+                            &run_health,
+                            "local-host",
+                            None,
+                            &options,
+                            None,
+                            None,
+                            Some(&run_cancel),
+                        )
+                        .await
+                    });
+                    tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+                        .await
+                        .unwrap();
+                    cancel.cancel();
+                    tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+                        .await
+                        .expect("pending MCP observation must stop on shutdown")
+                        .unwrap()
+                        .unwrap();
+                }
+                other => panic!("unknown shutdown {other}"),
+            }
+            let after = sorted(health.snapshot_full(k_max).await);
+            case.check(
+                gents_lean_vocab::families::mcp_health_shutdown_observation::Output {
+                    probes_started: started_once(
+                        &probed.lock().unwrap(),
+                        &input.registry
+                            [..usize::try_from(input.failing).unwrap().min(input.registry.len())],
+                    ),
+                    unchanged: after == before,
+                    entries: after
+                        .iter()
+                        .map(|entry| {
+                            gents_lean_vocab::families::mcp_health_shutdown_observation::Entry {
+                                service: entry.service_id.clone(),
+                                state: entry.status.clone(),
+                                failure_count: entry.failure_count.into(),
+                            }
+                        })
+                        .collect(),
+                },
+            );
+        }
     }
 
     #[tokio::test]

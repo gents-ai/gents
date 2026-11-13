@@ -2,7 +2,7 @@ use futures::StreamExt;
 use tokio::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub(super) enum Change {
     Quiet,
@@ -13,7 +13,7 @@ pub(super) enum Change {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(serde::Deserialize))]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub(super) enum Wake {
     Cancel,
@@ -21,6 +21,18 @@ pub(super) enum Wake {
     Rescan,
     Changed,
     Wait,
+}
+
+pub(super) fn classify<F>(batch: Option<&events::DocumentChangeBatch>, relevant: F) -> Change
+where
+    F: Fn(&events::DocumentChangeBatch) -> bool,
+{
+    match batch {
+        None => Change::Closed,
+        Some(batch) if batch.resync_required => Change::Overflow,
+        Some(batch) if relevant(batch) => Change::Relevant,
+        Some(_) => Change::Unrelated,
+    }
 }
 
 /// `Proofs.ToolCalls.Background.Observation` owns wake priority and closure latching.
@@ -86,12 +98,7 @@ impl Observation {
                 biased;
                 _ = tokio::time::sleep_until(deadline_at) => Change::Quiet,
                 _ = tokio::time::sleep_until(self.rescan_at()) => Change::Quiet,
-                batch = changes.next(), if self.feed_open() => match batch {
-                    None => Change::Closed,
-                    Some(batch) if batch.resync_required => Change::Overflow,
-                    Some(batch) if relevant(&batch) => Change::Relevant,
-                    Some(_) => Change::Unrelated,
-                },
+                batch = changes.next(), if self.feed_open() => classify(batch.as_ref(), &relevant),
             };
             let now = Instant::now();
             let wake = self.wake(now, deadline_at, false, change);
