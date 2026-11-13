@@ -113,19 +113,6 @@ class ArtifactTests(unittest.TestCase):
         e.check_result({'role': 'host', 'name': 'gents-client-host'}, 0,
                        'test result: ok. 0 passed; 0 failed;')
 
-    def test_runtime_live_cases_run_only_with_a_live_target(self):
-        runtime = {'role': 'host', 'name': 'runtime', 'path': 'runtime'}
-        with patch.dict(e.os.environ, {'GENTS_LIVE_TARGET': ''}):
-            skipped = e.command(runtime)
-            self.assertEqual(e.command({**runtime, 'name': 'metadata'}), ['runtime'])
-        self.assertEqual(skipped[:2], ['runtime', '--exact'])
-        self.assertEqual(skipped[2:], [flag for name in e.LIVE_TESTS for flag in ('--skip', name)])
-        source = (Path(__file__).parents[2] / 'crates/gents-client-host/tests/runtime.rs').read_text()
-        for name in e.LIVE_TESTS:
-            self.assertIn(f'async fn {name}(', source)
-        with patch.dict(e.os.environ, {'GENTS_LIVE_TARGET': 'workstation-1'}):
-            self.assertEqual(e.command(runtime), ['runtime'])
-
     def test_changed_or_missing_artifacts_fail_before_execution(self):
         manifest = self.root / 'manifest.json'
         items = self.select(self.required())

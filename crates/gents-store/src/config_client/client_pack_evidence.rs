@@ -145,8 +145,8 @@ pub(super) enum VerifiedPackEvidence {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PackEvidenceError {
-    #[error(transparent)]
-    Config(Box<ConfigClientError>),
+    #[error("{0}")]
+    Config(#[source] Box<ConfigClientError>),
     #[error("pack mutation does not use a trusted configuration schema")]
     UnsupportedCollection,
     #[error("pack mutation evidence does not match its operation or actor")]

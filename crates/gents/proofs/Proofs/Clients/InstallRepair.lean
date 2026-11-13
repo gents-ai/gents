@@ -611,6 +611,49 @@ theorem a_set_up_home_never_gets_a_new_identity (o : ClientIdentityObservation)
   unfold clientIdentityAction
   split <;> simp_all
 
+/-- How a command chose its home: `--home`, `GENTS_HOME`, the folder remembered at setup, or
+`~/.gents` when nothing is remembered. -/
+inductive HomeSelection where
+  | flag | env | remembered | fallback
+  deriving Repr, DecidableEq, Lean.ToJson
+
+structure HomeSetup where
+  settingsPresent : Bool
+  pending : Bool
+  deriving Repr, DecidableEq, Lean.ToJson
+
+/-- One client command: the home it selected and the default home it did not. The CLI's client
+key is one per machine, so a home decides only whether a missing key may be created. After
+cc99b5314f a check before dispatch judged the default home for every client command but `status`:
+`gents sessions --home X` minted a key for a set-up X whenever the default home was not set up,
+refused X for the default home's sake, and failed on a remembered file it never needed. -/
+structure ClientCommand where
+  selection : HomeSelection
+  keyPresent : Bool
+  selected : HomeSetup
+  other : HomeSetup
+  deriving Repr, DecidableEq, Lean.ToJson
+
+def commandIdentityAction (c : ClientCommand) : ClientIdentityAction :=
+  clientIdentityAction ⟨c.keyPresent, c.selected.settingsPresent, c.selected.pending⟩
+
+/-- Only a command whose home comes from neither `--home` nor `GENTS_HOME` reads the remembered
+file. -/
+def readsRememberedFile : HomeSelection → Bool
+  | .flag | .env => false
+  | .remembered | .fallback => true
+
+theorem a_command_never_consults_another_home (c : ClientCommand) (other : HomeSetup) :
+    commandIdentityAction { c with other } = commandIdentityAction c := rfl
+
+theorem a_selected_set_up_home_never_gets_a_new_identity (c : ClientCommand)
+    (settings : c.selected.settingsPresent = true) (finished : c.selected.pending = false) :
+    commandIdentityAction c ≠ .create :=
+  a_set_up_home_never_gets_a_new_identity _ settings finished
+
+theorem an_explicit_home_never_reads_the_remembered_file :
+    readsRememberedFile .flag = false := rfl
+
 end InstallRepair
 
 namespace InstallRepair

@@ -53,6 +53,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
             let did = resolve_node_did(Some(&home_dir), target.node_did.as_deref())?;
             let rows = list_with_usage(
                 &access,
+                &home_dir,
                 &did,
                 target.provider.as_deref(),
                 refresh,
@@ -390,6 +391,7 @@ pub(crate) fn attach_reads(rows: &mut [AccountRow], reads: &UsageReads, node_did
 
 pub(crate) async fn list_with_usage(
     access: &ConfigAccess,
+    home: &std::path::Path,
     node_did: &str,
     provider: Option<&str>,
     refresh: bool,
@@ -404,7 +406,7 @@ pub(crate) async fn list_with_usage(
                 UsageTrigger::Open
             };
             let requested = async {
-                let identity = gents_service::home_state::load_client_identity().await?;
+                let identity = gents_service::home_state::client_identity_for(home).await?;
                 request_usage_reads(&identity, graphql, trigger, provider).await
             }
             .await;

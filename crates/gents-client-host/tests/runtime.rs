@@ -204,6 +204,7 @@ async fn editor_recovers_the_original_message_after_a_lost_helper_reply() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "drives a local model; run through `make live-client`"]
 async fn native_client_submits_signed_input_and_observes_live_and_durable_output() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let result = exercise(temp.path(), Journey::Conversation).await;
@@ -211,6 +212,7 @@ async fn native_client_submits_signed_input_and_observes_live_and_durable_output
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "drives a local model; run through `make live-client`"]
 async fn managed_runtime_replacement_preserves_running_input_enrollment_and_transcript(
 ) -> Result<()> {
     let temp = tempfile::tempdir()?;
@@ -220,6 +222,7 @@ async fn managed_runtime_replacement_preserves_running_input_enrollment_and_tran
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "drives a local model; run through `make live-client`"]
 async fn enrolled_client_resumes_a_durable_goal_and_observes_completion() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Goal)

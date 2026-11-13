@@ -158,7 +158,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             let endpoint = gents_service::home_state::resolve_graphql_endpoint(
                 Some(endpoint),
                 args.home.as_deref(),
-            )?;
+            )
+            .await?;
             gents_host::p2p_status::load_live_http_p2p_status(Some(&home_dir), &endpoint).await
         }
         None => gents_host::p2p_status::persisted_p2p_status(matching_runtime_state),

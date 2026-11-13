@@ -246,3 +246,266 @@ fn print_on_a_broken_default_folder_leaves_it_and_names_how_to_repair() -> Resul
     );
     Ok(())
 }
+
+const CLIENT_COMMANDS: &[&[&str]] = &[
+    &["status"],
+    &["sessions", "list"],
+    &["automation", "task", "list"],
+    &["config", "agent", "list"],
+    &["runtime", "p2p", "status"],
+    &["runtime", "diagnose"],
+    &[
+        "utils",
+        "data",
+        "query",
+        "find",
+        "--collection",
+        "AgentSession",
+        "--field",
+        "_docID",
+    ],
+    &["utils", "debug", "background", "list"],
+];
+
+#[derive(Clone, Copy, Debug)]
+enum HomeSelection {
+    Flag,
+    Env,
+    Remembered,
+    Fallback,
+}
+
+struct ClientIdentityFixture {
+    user_home: tempfile::TempDir,
+    identities: tempfile::TempDir,
+    other: tempfile::TempDir,
+}
+
+impl ClientIdentityFixture {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            user_home: tempfile::tempdir()?,
+            identities: tempfile::tempdir()?,
+            other: tempfile::tempdir()?,
+        })
+    }
+
+    fn key(&self) -> PathBuf {
+        self.identities.path().join("cli/principal.ed25519.key")
+    }
+
+    fn command(
+        &self,
+        command: &[&str],
+        selection: HomeSelection,
+        selected: &Path,
+    ) -> Result<Command> {
+        let mut process = Command::new(cli_bin());
+        process
+            .env("HOME", self.user_home.path())
+            .env("GENTS_DESKTOP_HOME", self.identities.path())
+            .env_remove("GENTS_HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .env("RUST_LOG", "error")
+            .args(command);
+        match selection {
+            HomeSelection::Flag => {
+                process.arg("--home").arg(selected);
+            }
+            HomeSelection::Env => {
+                process.env("GENTS_HOME", selected);
+            }
+            HomeSelection::Remembered => {
+                let remembered = remembered_home_path(self.user_home.path());
+                fs::create_dir_all(
+                    remembered
+                        .parent()
+                        .context("remembered file has a parent")?,
+                )?;
+                fs::write(&remembered, format!("{}\n", selected.display()))?;
+            }
+            HomeSelection::Fallback => {}
+        }
+        Ok(process)
+    }
+
+    fn run(&self, command: &[&str], selection: HomeSelection, selected: &Path) -> Result<Output> {
+        self.command(command, selection, selected)?
+            .output()
+            .with_context(|| format!("running gents {}", command.join(" ")))
+    }
+
+    fn selected_home(&self, selection: HomeSelection) -> PathBuf {
+        match selection {
+            HomeSelection::Fallback => self.user_home.path().join(".gents"),
+            _ => self.other.path().to_path_buf(),
+        }
+    }
+}
+
+fn set_up(home: &Path) -> Result<()> {
+    fs::create_dir_all(home)?;
+    fs::write(home.join("init.json"), "{}")?;
+    Ok(())
+}
+
+#[test]
+fn a_set_up_home_never_gets_a_new_client_identity_however_it_is_selected() -> Result<()> {
+    let mut wrong = Vec::new();
+    for selection in [
+        HomeSelection::Flag,
+        HomeSelection::Env,
+        HomeSelection::Remembered,
+        HomeSelection::Fallback,
+    ] {
+        for command in CLIENT_COMMANDS {
+            let fixture = ClientIdentityFixture::new()?;
+            let home = fixture.selected_home(selection);
+            set_up(&home)?;
+
+            let output = fixture.run(command, selection, &home)?;
+
+            let stderr = stderr_of(&output);
+            if output.status.code() == Some(2) {
+                wrong.push(format!(
+                    "{command:?} {selection:?}: did not parse:\n{stderr}"
+                ));
+            } else if fixture.key().exists() {
+                wrong.push(format!(
+                    "{command:?} {selection:?}: minted a client identity for set-up {}:\n{stderr}",
+                    home.display()
+                ));
+            } else if !stderr.contains(&*home.to_string_lossy()) {
+                wrong.push(format!(
+                    "{command:?} {selection:?}: does not name {}:\n{stderr}",
+                    home.display()
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n\n"));
+    Ok(())
+}
+
+#[test]
+fn an_explicit_home_never_reads_the_remembered_file_for_any_client_command() -> Result<()> {
+    let mut wrong = Vec::new();
+    for command in CLIENT_COMMANDS {
+        let fixture = ClientIdentityFixture::new()?;
+        let remembered = remembered_home_path(fixture.user_home.path());
+        fs::create_dir_all(&remembered)?;
+
+        let output = fixture.run(command, HomeSelection::Flag, fixture.other.path())?;
+
+        let stderr = stderr_of(&output);
+        if output.status.code() == Some(2) {
+            wrong.push(format!("{command:?}: did not parse:\n{stderr}"));
+        } else if stderr.contains(&*remembered.to_string_lossy()) {
+            wrong.push(format!("{command:?}: read the remembered file:\n{stderr}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n\n"));
+    Ok(())
+}
+
+const RESOLVING_COMMANDS: &[&[&str]] = &[
+    &["status"],
+    &["sessions", "list"],
+    &["automation", "task", "list"],
+    &["config", "agent", "list"],
+    &["runtime", "p2p", "status"],
+    &[
+        "utils",
+        "data",
+        "query",
+        "find",
+        "--collection",
+        "AgentSession",
+        "--field",
+        "_docID",
+    ],
+    &["utils", "debug", "background", "list"],
+];
+
+fn place(home: &Path, settings_present: bool, pending: bool) -> Result<()> {
+    fs::create_dir_all(home)?;
+    if settings_present {
+        fs::write(home.join("init.json"), "{}")?;
+    }
+    if pending {
+        fs::write(home.join("init-pending"), "")?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_client_command_decides_its_identity_by_the_selected_home() -> Result<()> {
+    use gents_lean_vocab::families::install_repair_client_commands as family;
+    for case in family::cases::<String, String>() {
+        let input = &case.input;
+        let selection = match input.selection.as_str() {
+            "flag" => HomeSelection::Flag,
+            "env" => HomeSelection::Env,
+            "remembered" => HomeSelection::Remembered,
+            "fallback" => HomeSelection::Fallback,
+            other => panic!("unknown home selection {other}"),
+        };
+        for command in RESOLVING_COMMANDS {
+            let fixture = ClientIdentityFixture::new()?;
+            let home = fixture.selected_home(selection);
+            place(
+                &home,
+                input.selected.settings_present,
+                input.selected.pending,
+            )?;
+            let other = match selection {
+                HomeSelection::Flag | HomeSelection::Env => {
+                    let remembered = remembered_home_path(fixture.user_home.path());
+                    fs::create_dir_all(
+                        remembered
+                            .parent()
+                            .context("remembered file has a parent")?,
+                    )?;
+                    let other = fixture.user_home.path().join("remembered");
+                    fs::write(&remembered, format!("{}\n", other.display()))?;
+                    other
+                }
+                HomeSelection::Remembered => fixture.user_home.path().join(".gents"),
+                HomeSelection::Fallback => fixture.other.path().to_path_buf(),
+            };
+            place(&other, input.other.settings_present, input.other.pending)?;
+            let held = if input.key_present {
+                let paths = gents_desktop_core::client::DesktopPaths::from_root(
+                    fixture.identities.path().join("cli"),
+                );
+                paths.ensure_root_dirs().await?;
+                gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
+                Some(fs::read(fixture.key())?)
+            } else {
+                None
+            };
+
+            let output = tokio::process::Command::from(fixture.command(command, selection, &home)?)
+                .output()
+                .await?;
+
+            let stderr = stderr_of(&output);
+            assert_ne!(output.status.code(), Some(2), "{command:?}:\n{stderr}");
+            let after = fs::read(fixture.key()).ok();
+            let refused = stderr.contains(&format!(
+                "This machine has no Gents client identity for {}",
+                home.display()
+            ));
+            let observed = match (held, after) {
+                (Some(before), Some(after)) if before == after && !refused => "load",
+                (None, Some(_)) => "create",
+                (None, None) if refused => "refuse",
+                _ => "neither",
+            };
+            eprintln!("gents {} with the home by {selection:?}", command.join(" "));
+            case.check(observed.to_owned());
+        }
+    }
+    Ok(())
+}

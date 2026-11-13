@@ -257,11 +257,12 @@ pub fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
     Ok(false)
 }
 
-pub fn resolve_graphql_endpoint(
+pub async fn resolve_graphql_endpoint(
     explicit: Option<&str>,
     home: Option<&Path>,
 ) -> Result<GraphqlEndpoint> {
     let home_dir = resolve_home_dir(home);
+    let identity = client_identity_for(&home_dir).await?;
     if let Some(graphql) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         let url = reqwest::Url::parse(graphql).context("invalid GraphQL endpoint")?;
         anyhow::ensure!(
@@ -272,19 +273,11 @@ pub fn resolve_graphql_endpoint(
                 && url.fragment().is_none(),
             "GraphQL endpoint must be an HTTP URL without credentials, query or fragment"
         );
-        let identity = existing_client_identity(&home_dir, &cli_identity_paths()?)?;
-        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-            identity.private_key_bytes(),
-        )?;
-        return Ok(gents::runtime::lifecycle_hooks::compose_endpoint(
-            GraphqlEndpoint::as_principal(graphql, identity.did())
-                .with_client_signing_capability(capability)?
-                .with_client_signed_agent_creates(),
-        )?);
+        return client_signed_endpoint(graphql, &identity);
     }
 
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
-        return home_graphql_endpoint(&home_dir, runtime_state.graphql);
+        return home_endpoint_as(&home_dir, runtime_state.graphql, &identity);
     }
 
     anyhow::ensure!(
@@ -294,29 +287,48 @@ pub fn resolve_graphql_endpoint(
         home_dir.display()
     );
 
-    home_graphql_endpoint(
+    home_endpoint_as(
         &home_dir,
         format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"),
+        &identity,
     )
 }
 
 /// Client document access retains the user's identity. Credentials remain bound to
 /// this home's endpoint or loopback; loading a runtime key never grants client access.
-pub fn home_graphql_endpoint(home_dir: &Path, url: impl Into<String>) -> Result<GraphqlEndpoint> {
-    home_graphql_endpoint_with_paths(home_dir, url, &cli_identity_paths()?)
+pub async fn home_graphql_endpoint(
+    home_dir: &Path,
+    url: impl Into<String>,
+) -> Result<GraphqlEndpoint> {
+    home_graphql_endpoint_with_paths(home_dir, url, &cli_identity_paths()?).await
 }
 
-fn home_graphql_endpoint_with_paths(
+async fn home_graphql_endpoint_with_paths(
     home_dir: &Path,
     url: impl Into<String>,
     paths: &gents_desktop_core::client::DesktopPaths,
+) -> Result<GraphqlEndpoint> {
+    let identity = client_identity_in(home_dir, paths).await?;
+    home_endpoint_as(home_dir, url, &identity)
+}
+
+fn home_endpoint_as(
+    home_dir: &Path,
+    url: impl Into<String>,
+    identity: &gents_desktop_core::client::PrincipalIdentity,
 ) -> Result<GraphqlEndpoint> {
     let url = url.into();
     anyhow::ensure!(
         endpoint_serves_home(home_dir, &url),
         "endpoint is not this home's runtime"
     );
-    let identity = existing_client_identity(home_dir, paths)?;
+    client_signed_endpoint(url, identity)
+}
+
+fn client_signed_endpoint(
+    url: impl Into<String>,
+    identity: &gents_desktop_core::client::PrincipalIdentity,
+) -> Result<GraphqlEndpoint> {
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         identity.private_key_bytes(),
     )?;
@@ -352,9 +364,10 @@ fn cli_identity_paths_under(
 /// The CLI's held User key signs every client-authored command; a registry
 /// lookup by DID cannot present the key to owners that need its capability.
 pub fn held_client_identity(
+    home: &Path,
     actor_did: &str,
 ) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
-    let identity = existing_client_identity(&resolve_home_dir(None), &cli_identity_paths()?)?;
+    let identity = existing_client_identity(home, &cli_identity_paths()?)?;
     anyhow::ensure!(
         identity.did() == actor_did,
         "the GraphQL endpoint is not authenticated as this CLI's client identity"
@@ -471,7 +484,17 @@ fn existing_client_identity(
 pub async fn client_identity_for(
     home: &Path,
 ) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
-    let paths = cli_identity_paths().map_err(ClientIdentityError::load)?;
+    client_identity_in(
+        home,
+        &cli_identity_paths().map_err(ClientIdentityError::load)?,
+    )
+    .await
+}
+
+async fn client_identity_in(
+    home: &Path,
+    paths: &gents_desktop_core::client::DesktopPaths,
+) -> std::result::Result<gents_desktop_core::client::PrincipalIdentity, ClientIdentityError> {
     let key_present = tokio::fs::try_exists(paths.identity_key_path())
         .await
         .map_err(ClientIdentityError::load)?;
@@ -488,7 +511,7 @@ pub async fn client_identity_for(
             });
         }
     }
-    load_or_create_client_identity(&paths).await
+    load_or_create_client_identity(paths).await
 }
 
 /// `init` creating a new Node's store: the Node it makes is owned by this
@@ -511,11 +534,6 @@ async fn load_or_create_client_identity(
         .map_err(ClientIdentityError::load)
 }
 
-/// [`client_identity_for`] the default home, for callers that are not given one.
-pub async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity> {
-    Ok(client_identity_for(&resolve_home_dir(None)).await?)
-}
-
 type HeldUserIdentity = std::pin::Pin<
     Box<
         dyn std::future::Future<
@@ -524,12 +542,13 @@ type HeldUserIdentity = std::pin::Pin<
     >,
 >;
 
-/// [`load_client_identity`] in the shape a pack wire takes to load the held
-/// User identity only when it writes through a local transaction.
-pub fn load_held_user_identity() -> HeldUserIdentity {
-    Box::pin(async {
+/// [`client_identity_for`] `home` in the shape a pack wire takes to load the
+/// held User identity only when it writes through a local transaction.
+pub fn load_held_user_identity(home: &Path) -> HeldUserIdentity {
+    let home = home.to_path_buf();
+    Box::pin(async move {
         let identity: std::sync::Arc<dyn gents_store::identity::NodeIdentity> =
-            std::sync::Arc::new(load_client_identity().await?);
+            std::sync::Arc::new(client_identity_for(&home).await?);
         Ok(identity)
     })
 }
@@ -608,12 +627,19 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let paths = gents_desktop_core::client::DesktopPaths::from_root(home.path().join("cli"));
         let url = "http://127.0.0.1:9191/api/v0/graphql";
-        assert!(super::home_graphql_endpoint_with_paths(home.path(), url, &paths).is_err());
+        std::fs::write(super::init_config_path(home.path()), "{}").unwrap();
+        assert!(
+            super::home_graphql_endpoint_with_paths(home.path(), url, &paths)
+                .await
+                .is_err()
+        );
         paths.ensure_root_dirs().await.unwrap();
         let identity = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths)
             .await
             .unwrap();
-        let endpoint = super::home_graphql_endpoint_with_paths(home.path(), url, &paths).unwrap();
+        let endpoint = super::home_graphql_endpoint_with_paths(home.path(), url, &paths)
+            .await
+            .unwrap();
         let access = gents_store::config_client::ConfigAccess::Graphql(endpoint);
         assert_eq!(access.actor_did().as_deref(), Some(identity.did()));
         assert!(super::home_graphql_endpoint_with_paths(
@@ -621,6 +647,7 @@ mod tests {
             "https://unrelated.example/api/v0/graphql",
             &paths
         )
+        .await
         .is_err());
     }
 
