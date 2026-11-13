@@ -205,6 +205,88 @@ pub fn build_timeline_order(
 mod tests {
     use super::*;
 
+    #[test]
+    fn generated_pending_timeline_cases_preserve_request_identities_and_order() {
+        gents_lean_vocab::families::contracts_pending_timeline::replay(|i| {
+            let role = |role: &str| match role {
+                "user" => TimelineRole::User,
+                "assistant" => TimelineRole::Assistant,
+                role => panic!("unknown modeled role {role}"),
+            };
+            let role_name = |role: TimelineRole| match role {
+                TimelineRole::User => "user".to_owned(),
+                TimelineRole::Assistant => "assistant".to_owned(),
+            };
+            let messages: Vec<_> = i
+                .messages
+                .iter()
+                .map(|row| TimelineMessageInput {
+                    key: row.key.to_string(),
+                    sequence: Some(row.sequence),
+                    role: role(&row.role),
+                    emits_item: row.emits_item,
+                    dedup_token: row.token.map(|key| key.to_string()),
+                })
+                .collect();
+            let pending: Vec<_> = i
+                .pending
+                .iter()
+                .map(|row| PendingInput {
+                    key: row.key.to_string(),
+                    placement: row
+                        .before_sequence
+                        .map_or(PendingPlacement::Tail, |message_sequence| {
+                            PendingPlacement::BeforeMessage { message_sequence }
+                        }),
+                })
+                .collect();
+            let groups: Vec<_> = i.groups.iter().map(|sequence| Some(*sequence)).collect();
+            let overlay = i.overlay.as_ref().map(|overlay| OverlayInput {
+                has_durable_owner: overlay.has_durable_owner,
+                placement: overlay
+                    .before_sequence
+                    .map_or(OverlayPlacement::Tail, |sequence| {
+                        OverlayPlacement::BeforeOrphan {
+                            message_sequence: Some(sequence),
+                        }
+                    }),
+            });
+            let slot =
+                |kind: &str, key: Option<u64>, sequence: Option<i64>, role: Option<String>| {
+                    gents_lean_vocab::families::contracts_pending_timeline::TimelineSlot {
+                        kind: kind.to_owned(),
+                        key,
+                        sequence,
+                        role,
+                    }
+                };
+            gents_lean_vocab::families::contracts_pending_timeline::TimelineOutput {
+                slots: build_timeline_order(&messages, &groups, &pending, overlay)
+                    .into_iter()
+                    .map(|timeline_slot| match timeline_slot {
+                        TimelineSlot::Message {
+                            key,
+                            sequence,
+                            role,
+                        } => slot(
+                            "message",
+                            Some(key.parse().unwrap()),
+                            Some(sequence.unwrap()),
+                            Some(role_name(role)),
+                        ),
+                        TimelineSlot::ToolGroup { message_sequence } => {
+                            slot("tool_group", None, Some(message_sequence.unwrap()), None)
+                        }
+                        TimelineSlot::Pending { key } => {
+                            slot("pending", Some(key.parse().unwrap()), None, None)
+                        }
+                        TimelineSlot::Overlay => slot("overlay", None, None, None),
+                    })
+                    .collect(),
+            }
+        });
+    }
+
     fn msg(key: &str, seq: i64, role: TimelineRole) -> TimelineMessageInput {
         TimelineMessageInput {
             key: key.to_string(),

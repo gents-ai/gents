@@ -1125,19 +1125,6 @@ pub struct LeanAuxiliarySessionChildBindingCaseBinding {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendCaptureScopeCase {
-    pub persisted: Vec<u64>,
-    pub next: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendGenerationMarkCase {
-    pub marked: Option<u64>,
-    pub observed: Option<u64>,
-    pub applies: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendHealthAdmissionCase {
     pub name: String,
     pub enabled: bool,
@@ -1162,21 +1149,6 @@ pub struct LeanBackendHealthCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendHealthWakeCase {
-    pub started_ms: i64,
-    pub now_ms: i64,
-    pub observed_ms: Option<i64>,
-    pub fresh: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendParkedFinalizeCase {
-    pub request: gents_protocol::request_lifecycle::RequestLifecycleState,
-    pub outcome: gents_protocol::request_lifecycle::RequestLifecycleState,
-    pub allowed: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendProbeConfiguration {
     pub backend_id: u32,
     pub revision: u32,
@@ -1191,42 +1163,6 @@ pub struct LeanBackendProbeScheduleCase {
     pub periodic: bool,
     pub due: Vec<u32>,
     pub observed: Vec<LeanBackendProbeConfiguration>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendReparkCase {
-    pub resuming: bool,
-    pub observed_generation: u64,
-    pub observed_expiry: i64,
-    pub expected_generation: u64,
-    pub expected_expiry: i64,
-    pub now: i64,
-    pub allowed: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendResumeAdmissionCase {
-    pub waiting: bool,
-    pub version_present: bool,
-    pub claimed: bool,
-    pub same_identity: bool,
-    pub same_deadline: bool,
-    pub same_backend: bool,
-    pub admitted: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendResumedTurnCase {
-    pub completed: Vec<u32>,
-    pub next: usize,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanBackendWakeCase {
-    pub now_ms: i64,
-    pub deadline_ms: i64,
-    pub attempts: u32,
-    pub wake_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2991,15 +2927,8 @@ pub struct LeanContractSnapshot {
     pub event_group_capture_cases: Vec<serde_json::Value>,
     pub callback_transition_case_count: usize,
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
-    pub session_document_starter_verification_cases: Vec<serde_json::Value>,
-    pub session_document_archive_cases: Vec<serde_json::Value>,
     pub session_document_reference_encoding: String,
-    pub session_document_selection_cases: Vec<serde_json::Value>,
-    pub session_document_projection_cases: Vec<serde_json::Value>,
     pub session_document_retry_cases: Vec<serde_json::Value>,
-    pub session_document_fork_cases: Vec<serde_json::Value>,
-    pub session_document_edit_anchor_cases: Vec<serde_json::Value>,
-    pub session_document_edit_fork_binding_cases: Vec<serde_json::Value>,
     pub plugin_job_opening_cases: Vec<LeanPluginJobOpeningCase>,
     pub session_reply_preview_cases: Vec<LeanSessionReplyPreviewCase>,
     pub request_input_cases: Vec<serde_json::Value>,
@@ -3132,14 +3061,6 @@ pub struct LeanContractSnapshot {
     pub tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub tool_retry_cases: Vec<LeanToolRetryCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub backend_wake_cases: Vec<LeanBackendWakeCase>,
-    pub backend_capture_scope_cases: Vec<LeanBackendCaptureScopeCase>,
-    pub backend_health_wake_cases: Vec<LeanBackendHealthWakeCase>,
-    pub backend_generation_mark_cases: Vec<LeanBackendGenerationMarkCase>,
-    pub backend_resume_admission_cases: Vec<LeanBackendResumeAdmissionCase>,
-    pub backend_repark_cases: Vec<LeanBackendReparkCase>,
-    pub backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
-    pub backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub backend_health_cases: Vec<LeanBackendHealthCase>,
     pub backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,

@@ -69,3 +69,64 @@ pub(super) fn model_session(value: &serde_json::Value) -> gents_protocol::sessio
             "title": value["title"], "tags": value["tags"], "provenance": provenance, "observation": observation,
         })).unwrap()
 }
+
+pub(super) fn wire_session(session: &gents_protocol::session::AgentSession) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let value = serde_json::to_value(session).unwrap();
+    let id = |value: &Value| {
+        value
+            .as_str()
+            .map_or(Value::Null, |text| serde_json::from_str(text).unwrap())
+    };
+    let time = |value: &Value| {
+        value.as_str().map_or(Value::Null, |text| {
+            json!(chrono::DateTime::parse_from_rfc3339(text)
+                .unwrap()
+                .timestamp())
+        })
+    };
+    let scope = |node: &Value, session: &Value, requester: &Value| json!({"node": id(node), "session": id(session), "requester": id(requester)});
+    let provenance = &value["provenance"];
+    let starter = &provenance["started_by"];
+    let fork = &provenance["fork"];
+    let observation = &value["observation"];
+    let latest = &observation["latest_request"];
+    let wire = json!({
+        "scope": scope(&value["node_did"], &value["session_id"], &value["requester_did"]),
+        "agent": id(&value["agent_did"]),
+        "created_at": time(&value["created_at"]),
+        "closed_at": time(&value["closed_at"]),
+        "stopped_at": time(&value["stopped_at"]),
+        "archived_at": time(&value["archived_at"]),
+        "archive_revision": value["archive_revision"].as_u64().unwrap_or(0),
+        "provenance": if provenance.is_null() { Value::Null } else { json!({
+            "task_id": id(&provenance["task_id"]),
+            "parent_request_doc_id": id(&provenance["parent_request_doc_id"]),
+            "opening_request_doc_id": id(&provenance["opening_request_doc_id"]),
+            "started_by": if starter.is_null() { Value::Null } else {
+                scope(&starter["node_did"], &starter["session_id"], &starter["requester_did"])
+            },
+            "fork": if fork.is_null() { Value::Null } else { json!({
+                "source_session_id": id(&fork["source_session_id"]),
+                "at_user_turn": fork["at_user_turn"],
+            })},
+        })},
+        "tags": if value["tags"].is_null() { json!([]) } else { value["tags"].clone() },
+        "title": value["title"],
+        "observation": if observation.is_null() { Value::Null } else { json!({
+            "activity": time(&observation["last_activity_at"]),
+            "preview": observation["preview"],
+            "latest": if latest.is_null() { Value::Null } else { json!({
+                "doc_id": id(&latest["request_doc_id"]),
+                "request_id": id(&latest["request_id"]),
+                "state": latest["lifecycle_state"],
+            })},
+        })},
+    });
+    assert_eq!(
+        model_session(&wire),
+        *session,
+        "the session carries state its modeled wire form does not"
+    );
+    wire
+}

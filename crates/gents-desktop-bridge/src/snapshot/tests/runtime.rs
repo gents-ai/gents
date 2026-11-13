@@ -736,15 +736,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             Ok(serde_json::json!({"data": {"AgentSession": [self.0.clone()]}}))
         }
     }
-    let model: serde_json::Value = tokio::task::spawn_blocking(
-        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let cases = model["session_document_starter_verification_cases"]
-        .as_array()
-        .unwrap();
+    let cases = gents_lean_vocab::families::contracts_starter_verification::cases();
     let dir = tempfile::tempdir().unwrap();
     let signer =
         gents_store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
@@ -808,15 +800,13 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             }
             row
         };
-        for case in cases {
-            let name = case["name"].as_str().unwrap();
-            let expected = case["accepted"].as_bool().unwrap();
+        for case in &cases {
+            let name = case.input.name.as_str();
             let candidate = candidate(name);
             let read = SessionRead(candidate.clone(), Default::default());
             let verified = gents_session::session::origin::verified_recorded_starter(&read, &scope)
                 .await
                 .unwrap();
-            assert_eq!(verified.is_some(), expected, "{name}");
             let mut stored = candidate.clone();
             for field in ["_docID", "started_by_node_did", "started_by_session_id"] {
                 stored.as_object_mut().unwrap().remove(field);
@@ -827,7 +817,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             super::super::runtime_tasks::resolve_summary_starters(&read, &cache, &mut summaries)
                 .await;
             let summarized = summaries[0].started_by.as_ref();
-            assert_eq!(summarized.is_some(), expected, "{name}");
+            assert_eq!(summarized.is_some(), verified.is_some(), "{name}");
             if let (Some(link), Some(view)) = (&verified, summarized) {
                 assert_eq!(view.node_did, source.node_did);
                 assert_eq!(view.session_id, source.session_id);
@@ -843,6 +833,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
                 before,
                 "{name}: a rebuild with verified evidence does not read"
             );
+            case.check(verified.is_some());
         }
     }
 }

@@ -155,7 +155,6 @@ pub mod consumer_scan;
 pub mod family;
 mod prompt_assembly;
 mod request_execution_lease;
-mod session_documents;
 mod title;
 
 /// Family types generated from `families.schema.json`, which Lean emits.
