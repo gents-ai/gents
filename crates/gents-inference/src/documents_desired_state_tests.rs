@@ -11,44 +11,46 @@ use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 
 #[tokio::test]
-async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
+async fn desired_state_preview_applies_the_advertised_context_ceiling() -> Result<()> {
+    use gents_lean_vocab::families::configuration_scope_context_preview as preview;
+
     let node = Arc::new(gents_store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
     let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
-    let profile = |window: Value| {
-        config(
-            Collection::InferenceProfile,
-            json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","context_window":window}),
-        )
-    };
-    apply(
-        &access,
-        vec![document(backend(owner, "backend")), profile(Value::Null)],
-    )
-    .await?;
     let typed: gents_documents::InferenceBackend =
         serde_json::from_value(backend(owner, "backend"))?;
-    crate::backends::registry::record_model_catalog(
-        &node,
-        &typed,
-        serde_json::from_value(json!({
-            "node_did": null,
-            "observed_at": "2026-09-25T00:00:00Z",
-            "models": [{"model_name":"model","context_window":272000,"max_context_window":872000}],
-        }))?,
-    )
-    .await?;
-
-    let rejected = preview_window(&access, &profile, 900_000)
-        .await
-        .expect_err("above the advertised maximum");
-    assert!(
-        format!("{rejected:#}").contains("exceeds model model advertised maximum 872000"),
-        "{rejected:#}"
-    );
-    preview_window(&access, &profile, 500_000).await?;
-    preview_window(&access, &profile, 872_000).await?;
+    for case in gents_lean_vocab::families::configuration_scope_context_preview::cases() {
+        let input: &preview::ContextPreviewInput = &case.input;
+        let profile = |window: Value| {
+            config(
+                Collection::InferenceProfile,
+                json!({"node_did":owner,"profile_id":input.profile_id,"backend_id":"backend",
+                    "model_name":input.model_name,"context_window":window}),
+            )
+        };
+        apply(
+            &access,
+            vec![document(backend(owner, "backend")), profile(Value::Null)],
+        )
+        .await?;
+        crate::backends::registry::record_model_catalog(
+            &node,
+            &typed,
+            serde_json::from_value(json!({
+                "node_did": null,
+                "observed_at": "2026-09-25T00:00:00Z",
+                "models": [{"model_name":input.model_name,"context_window":input.model_default,
+                    "max_context_window":input.maximum}],
+            }))?,
+        )
+        .await?;
+        let rejection = preview_window(&access, &profile, input.selected)
+            .await
+            .err()
+            .map(|error| error.root_cause().to_string());
+        case.check(rejection);
+    }
     Ok(())
 }
 

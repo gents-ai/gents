@@ -86,4 +86,22 @@ theorem step_refines_transition
       rcases h_step with ⟨h_state, h_post⟩
       exact Transition.reapFailed (h_state := h_state) (h_post := h_post.symm)
 
+def initialPendingSpawn : ManagedExecContext :=
+  { state := .pendingSpawn, deadline := 1, now := 2 }
+
+def spawnAttemptState (spawnFails : Bool) : ManagedExecState :=
+  match initialPendingSpawn.step? (if spawnFails then .spawnFailed else .spawn) with
+  | some post => post.state
+  | none => .pendingSpawn
+
+def registersExecutor : ManagedExecState → Bool
+  | .pendingSpawn | .spawnFailed => false
+  | _ => true
+
+theorem spawnAttemptState_of_failed_spawn :
+    spawnAttemptState true = .spawnFailed := rfl
+
+theorem failed_spawn_registers_no_executor :
+    registersExecutor (spawnAttemptState true) = false := rfl
+
 end ManagedExecContext

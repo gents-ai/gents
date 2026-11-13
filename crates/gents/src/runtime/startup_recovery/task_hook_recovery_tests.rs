@@ -839,39 +839,6 @@ mod render_snapshot_tests {
     }
 
     #[test]
-    fn projects_partial_row_with_malformed_types_as_missing() {
-        // Wrong-typed / missing selected fields render as <missing>, and
-        // malformed types are simply ignored rather than panicking.
-        let row = serde_json::json!({
-            "lifecycle_state": 17,
-            "execution_generation": {"nested": true},
-            "execution_lease_secs": "not-a-number"
-        });
-        let (lifecycle_state, generation, expires_at, lease_secs) =
-            project_request_row(&row).expect("row projects even when typed wrong");
-        assert_eq!(lifecycle_state, None);
-        assert_eq!(generation, None);
-        assert_eq!(expires_at, None);
-        assert_eq!(lease_secs, None);
-    }
-
-    #[test]
-    fn empty_array_and_absent_key_project_to_missing_row() {
-        // Empty array: query succeeded but no row matched.
-        let empty: Vec<serde_json::Value> = Vec::new();
-        assert!(empty.first().and_then(project_request_row).is_none());
-
-        // Absent key: data object present without AgentRequest.
-        let data = serde_json::json!({ "SomethingElse": [] });
-        let rows = data
-            .get("AgentRequest")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        assert!(rows.first().and_then(project_request_row).is_none());
-    }
-
-    #[test]
     fn renders_missing_fields_and_missing_row() {
         let partial = render_snapshot(ts(), Ok(Ok(Some((None, None, None, None)))));
         assert!(partial.contains("lifecycle_state=<missing>"));

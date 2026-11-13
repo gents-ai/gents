@@ -23,6 +23,18 @@ pub(super) enum Wake {
     Wait,
 }
 
+pub(super) fn classify<F>(batch: Option<&events::DocumentChangeBatch>, relevant: F) -> Change
+where
+    F: Fn(&events::DocumentChangeBatch) -> bool,
+{
+    match batch {
+        None => Change::Closed,
+        Some(batch) if batch.resync_required => Change::Overflow,
+        Some(batch) if relevant(batch) => Change::Relevant,
+        Some(_) => Change::Unrelated,
+    }
+}
+
 /// `Proofs.ToolCalls.Background.Observation` owns wake priority and closure latching.
 /// The host must poll ready timers and finish each durable read; notifications
 /// supply invalidations, never lifecycle or authorization facts.
@@ -86,12 +98,7 @@ impl Observation {
                 biased;
                 _ = tokio::time::sleep_until(deadline_at) => Change::Quiet,
                 _ = tokio::time::sleep_until(self.rescan_at()) => Change::Quiet,
-                batch = changes.next(), if self.feed_open() => match batch {
-                    None => Change::Closed,
-                    Some(batch) if batch.resync_required => Change::Overflow,
-                    Some(batch) if relevant(&batch) => Change::Relevant,
-                    Some(_) => Change::Unrelated,
-                },
+                batch = changes.next(), if self.feed_open() => classify(batch.as_ref(), &relevant),
             };
             let now = Instant::now();
             let wake = self.wake(now, deadline_at, false, change);

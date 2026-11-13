@@ -921,65 +921,68 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
 }
 
 #[tokio::test]
-async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-cancel-{}", uuid::Uuid::new_v4()));
-    let node_db = gents_inference::test_support::test_db(
-        "cancelling-one-hook-does-not-cancel-unre",
-        gents_session::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = node_db.node.clone();
+async fn hook_interrupts_cancel_only_their_own_calls_as_the_lean_model_says() {
+    use gents_lean_vocab::families::hook_interrupt_scope::Interrupted;
 
-    let hook_a = signed_hook(&node, FailurePolicy::default()).await;
-    let hook_b = signed_hook(&node, FailurePolicy::default()).await;
-    assert!(matches!(
-        hook_a
-            .on_completion_call(&user_text_message("A"), &[])
-            .await,
-        HookAction::Continue
-    ));
-    assert!(matches!(
-        hook_b
-            .on_completion_call(&user_text_message("B"), &[])
-            .await,
-        HookAction::Continue
-    ));
-    let session_a = hook_a.session_id().await.expect("session a");
-    let session_b = hook_b.session_id().await.expect("session b");
-    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&hook_a, "req-a", &session_a, deadline).await;
-    bind_interruptible_request(&hook_b, "req-b", &session_b, deadline).await;
-
-    accept_hook_tool_call(&hook_a, "internal-a", "slow", "{}", None).await;
-    accept_hook_tool_call(&hook_b, "internal-b", "slow", "{}", None).await;
-    assert!(matches!(
-        hook_a.on_tool_call("slow", None, "internal-a", "{}").await,
-        ToolCallHookAction::Continue
-    ));
-    assert!(matches!(
-        hook_b.on_tool_call("slow", None, "internal-b", "{}").await,
-        ToolCallHookAction::Continue
-    ));
-
-    assert_eq!(hook_a.cancel_in_flight_tool_calls().await.unwrap(), 1);
-
-    let row_a = fetch_tool_call_row(&hook_a, &session_a, "internal-a").await;
-    assert_eq!(
-        row_a
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("cancelled")
-    );
-    let row_b = fetch_tool_call_row(&hook_b, &session_b, "internal-b").await;
-    assert_eq!(
-        row_b
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("running")
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
+    for (index, case) in gents_lean_vocab::families::hook_interrupt_scope::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let node_db = gents_inference::test_support::test_db(
+            &format!("hook-interrupt-scope-{index}"),
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+        let mut hooks = Vec::new();
+        for (label, calls) in [
+            ("own", case.input.own_calls),
+            ("other", case.input.other_calls),
+        ] {
+            let hook = signed_hook(&node, FailurePolicy::default()).await;
+            assert!(matches!(
+                hook.on_completion_call(&user_text_message(label), &[])
+                    .await,
+                HookAction::Continue
+            ));
+            let session = hook.session_id().await.expect("hook session");
+            bind_interruptible_request(&hook, &format!("req-{label}"), &session, deadline).await;
+            let mut ids = Vec::new();
+            for call in 0..calls {
+                let id = format!("internal-{label}-{call}");
+                accept_hook_tool_call(&hook, &id, "slow", "{}", None).await;
+                assert!(matches!(
+                    hook.on_tool_call("slow", None, &id, "{}").await,
+                    ToolCallHookAction::Continue
+                ));
+                ids.push(id);
+            }
+            hooks.push((hook, session, ids));
+        }
+        let cancelled = hooks[0].0.cancel_in_flight_tool_calls().await.unwrap();
+        let mut states = Vec::new();
+        for (hook, session, ids) in &hooks {
+            let mut observed = Vec::new();
+            for id in ids {
+                let row = fetch_tool_call_row(hook, session, id).await;
+                observed.push(
+                    row.get("lifecycle_state")
+                        .and_then(|value| value.as_str())
+                        .expect("tool call lifecycle state")
+                        .to_owned(),
+                );
+            }
+            states.push(observed);
+        }
+        let other_states = states.pop().unwrap();
+        let own_states = states.pop().unwrap();
+        case.check(Interrupted {
+            cancelled: u64::try_from(cancelled).unwrap(),
+            own_states,
+            other_states,
+        });
+    }
 }
 
 #[tokio::test]
@@ -1999,63 +2002,80 @@ async fn remote_presentations_persist_the_same_selected_identity() {
     }
 }
 
-#[tokio::test]
-async fn background_ownership_blocks_retirement_and_stopping_refuses_new_reservations() {
+#[test]
+fn background_registry_reservations_follow_the_lean_registry_model() {
+    use gents_lean_vocab::families::background_execution_registry_traces::Outcome;
+    use gents_lean_vocab::families::background_execution_registry_traces::StepResult;
     use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
     use gents_store::service::RetirementError;
+    use rapidhash::HashMapExt;
 
-    let registry = BackgroundExecutionRegistry::default();
-    let authority = RetirementAuthority {
-        operator_authenticated: true,
-        observed_build_matches: true,
+    let refusal = |error: &RetirementError| {
+        match error {
+            RetirementError::Unauthorized => "unauthorized",
+            RetirementError::BuildChanged => "build_changed",
+            RetirementError::Busy => "busy",
+            RetirementError::Stopping => "stopping",
+            RetirementError::Unavailable => "unavailable",
+        }
+        .to_owned()
     };
-    let reservation = registry
-        .reserve("owned".into(), "owned-doc".into(), CancellationToken::new())
-        .unwrap();
-    assert_eq!(
-        registry.service_admission().retire(authority),
-        Err(RetirementError::Busy)
+    gents_lean_vocab::families::background_execution_registry_traces::replay::<String, String>(
+        |trace| {
+            let registry = BackgroundExecutionRegistry::default();
+            let mut held = RapidHashMap::new();
+            let results = trace
+                .steps
+                .iter()
+                .map(|step| {
+                    let refused = match step.kind.as_str() {
+                        // One call id for every reservation: the registry keys
+                        // by document, so a later document replaces nothing.
+                        "reserve" => match registry.reserve(
+                            "same".to_owned(),
+                            step.doc.clone(),
+                            CancellationToken::new(),
+                        ) {
+                            Ok(reservation) => {
+                                held.insert(step.doc.clone(), reservation);
+                                None
+                            }
+                            Err(error) => Some(match error.downcast_ref::<RetirementError>() {
+                                Some(error) => refusal(error),
+                                None if error
+                                    .to_string()
+                                    .contains("already has an execution owner") =>
+                                {
+                                    "duplicate".to_owned()
+                                }
+                                None => panic!("unclassified reservation refusal: {error:#}"),
+                            }),
+                        },
+                        "release" => {
+                            held.remove(&step.doc);
+                            None
+                        }
+                        "retire" => registry
+                            .service_admission()
+                            .retire(RetirementAuthority {
+                                operator_authenticated: step.operator_authenticated,
+                                observed_build_matches: step.observed_build_matches,
+                            })
+                            .err()
+                            .map(|error| refusal(&error)),
+                        other => panic!("unknown modeled registry step {other}"),
+                    };
+                    let mut live = registry.active_tool_call_doc_ids();
+                    live.sort();
+                    StepResult {
+                        refusal: refused,
+                        live,
+                    }
+                })
+                .collect();
+            Outcome { results }
+        },
     );
-    drop(reservation);
-    registry.service_admission().retire(authority).unwrap();
-    let refusal = registry
-        .reserve(
-            "refused".into(),
-            "refused-doc".into(),
-            CancellationToken::new(),
-        )
-        .err()
-        .expect("stopping runtime must refuse a reservation");
-    assert_eq!(
-        refusal.downcast_ref::<RetirementError>(),
-        Some(&RetirementError::Stopping)
-    );
-    assert!(!registry.contains("refused", "refused-doc").await);
-}
-
-#[tokio::test]
-async fn replacing_a_registry_entry_does_not_release_the_original_workers_retirement_guard() {
-    use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
-    use gents_store::service::RetirementError;
-
-    let registry = BackgroundExecutionRegistry::default();
-    let old = registry
-        .reserve("same".into(), "old-doc".into(), CancellationToken::new())
-        .unwrap();
-    let new = registry
-        .reserve("same".into(), "new-doc".into(), CancellationToken::new())
-        .unwrap();
-    drop(new);
-    let authority = RetirementAuthority {
-        operator_authenticated: true,
-        observed_build_matches: true,
-    };
-    assert_eq!(
-        registry.service_admission().retire(authority),
-        Err(RetirementError::Busy)
-    );
-    drop(old);
-    registry.service_admission().retire(authority).unwrap();
 }
 
 #[tokio::test]

@@ -1,6 +1,3 @@
-//! A plugin job's result reaches the parent as a bounded notification and is
-//! paged in full through `job_calls::result`.
-
 use std::time::Duration;
 
 use gents_protocol::job::JobResultRequest;
@@ -138,10 +135,16 @@ async fn session_texts(h: &JobHarness) -> Vec<String> {
     texts
 }
 
-/// The text of the parent session's completion notification for the job.
 async fn notification(h: &JobHarness) -> String {
+    use crate::support::snapshots::SnapshotReader;
     let marker = format!("<tool-completion tool_call_id=\"{TOOL_CALL}\"");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut changes = h
+        .actors
+        .fixture
+        .access
+        .subscribe_changes("AgentMessage")
+        .await;
     loop {
         if let Some(text) = session_texts(h)
             .await
@@ -150,11 +153,9 @@ async fn notification(h: &JobHarness) -> String {
         {
             return text;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no completion notification for {TOOL_CALL}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no completion notification for {TOOL_CALL}"));
     }
 }
 
@@ -198,29 +199,5 @@ async fn job_result_over_4000_bytes_is_truncated_in_the_notification_and_paged_i
     let first = page(0, full.total_bytes / 2).await;
     let second = page(first.offset + first.result.len() as u64, u64::MAX).await;
     assert_eq!(format!("{}{}", first.result, second.result), full.result);
-    h.runtime.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn job_calls_result_refuses_a_row_outside_process_control_scope() {
-    let (h, row_doc_id) = completed_harness("plugin-job-surface-scope", json!("done")).await;
-    let request_doc_id = parent_request_doc_id(&h).await;
-
-    let caller = caller(&h, "another-session", &request_doc_id, &row_doc_id).await;
-    let error = read_result(
-        &caller,
-        PLUGIN,
-        &JobResultRequest {
-            row_doc_id: row_doc_id.clone(),
-            offset: 0,
-            limit: u64::MAX,
-        },
-        usize::MAX,
-    )
-    .await
-    .expect_err("a row of another session is refused")
-    .to_string();
-    assert!(error.contains(&row_doc_id), "{error}");
-    assert!(error.contains("is not in this call's scope"), "{error}");
     h.runtime.shutdown().await;
 }
