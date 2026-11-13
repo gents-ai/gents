@@ -21,11 +21,7 @@ invoke("desktop_pack_plugin_bind", {
 });
 invoke("desktop_default_packs");
 invoke("desktop_default_packs_approve", {
-  request: { packs: [{ pack: "example/demo", digest: "sha256:reviewed" }] },
-});
-invoke("desktop_default_packs_approve", {
-  // @ts-expect-error An approval names the digest it reviewed.
-  request: { packs: [{ pack: "example/demo" }] },
+  request: { packs: [{ pack: "gents/dynamic_workflows" }] },
 });
 
 invoke("desktop_join_requests_list", { nodeDid: "did:key:z6MkNode" });

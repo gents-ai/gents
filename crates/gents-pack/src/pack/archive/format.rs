@@ -285,13 +285,39 @@ pub fn write_pack(dir: &Path, out: impl Write) -> Result<PackHeader> {
 }
 
 fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<PackHeader> {
+    write_pack_validated(dir, out, bounds, |manifest| {
+        validate_manifest(&manifest.name, manifest)
+    })
+}
+
+/// [`pack_dir`] for a pack built for a plugin interface this runtime does not
+/// load: a fixture of an archive another runtime built.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn pack_dir_for_any_interface(dir: &Path) -> Result<(Vec<u8>, PackHeader)> {
+    let mut bytes = Vec::new();
+    let header = write_pack_validated(dir, &mut bytes, Bounds::default(), |manifest| {
+        let current = PackManifest {
+            plugin_interface: None,
+            ..manifest.clone()
+        };
+        validate_manifest(&current.name, &current)
+    })?;
+    Ok((bytes, header))
+}
+
+fn write_pack_validated(
+    dir: &Path,
+    out: impl Write,
+    bounds: Bounds,
+    validate: impl FnOnce(&PackManifest) -> Result<()>,
+) -> Result<PackHeader> {
     let mut manifest_file = crate::pack::open_pack_asset(dir, "manifest.json")?;
     let mut manifest_bytes = Vec::new();
     manifest_file
         .read_to_end(&mut manifest_bytes)
         .context("reading manifest.json")?;
     let manifest = PackManifest::from_slice(&manifest_bytes).context("parsing manifest.json")?;
-    validate_manifest(&manifest.name.clone(), &manifest)?;
+    validate(&manifest)?;
     let paths = declared_paths(&manifest);
     ensure!(
         paths.len() < bounds.entries,

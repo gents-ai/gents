@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "file": "truncated.json"
+  },
+  "bind": "fixtures/hostile",
+  "expect": {
+    "chart": "bar",
+    "error": "the JSON data ends early; it looks truncated",
+    "warnings": []
+  }
+}

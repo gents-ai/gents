@@ -20,25 +20,17 @@ const pack = (name: string, over: Partial<DefaultPack> = {}): DefaultPack => ({
   pack: `gents/${name}`,
   purpose: `doing ${name}`,
   without: `Without it the Engineer cannot do ${name}.`,
-  state: "needs_approval",
+  state: "missing",
   version: "1.0.0",
-  digest: `sha256:${name}`,
-  requested: [],
-  turns_on: [],
   reason: null,
   ...over,
 });
 
-const web = pack("web", {
-  requested: [{ plugin: "web_search", asks: "network access to search providers" }],
-});
-const workflows = pack("dynamic_workflows", {
-  turns_on: ["Workflow scripts the model writes can start agents."],
-});
-const notes = pack("notes", { state: "ready" });
+const web = pack("web");
+const workflows = pack("dynamic_workflows", { state: "not_enabled" });
+const notes = pack("notes");
 const ocr = pack("ocr", {
   state: "unavailable",
-  digest: null,
   version: null,
   reason: "The registry could not be reached.",
 });
@@ -93,55 +85,58 @@ beforeEach(() => {
 });
 
 describe("the starter packs card", () => {
-  it("lists each pending pack with its permissions, what approving turns on and the cost of declining", async () => {
+  it("lists each pack not installed and on, with what the Engineer lacks and Install or Turn on", async () => {
     const { api, listDefaultPacks } = harness(ALL);
     renderIn(local(api), <StarterPacksCard />);
     const dialog = await card();
     expect(within(dialog).getByText("Starter packs")).toBeInTheDocument();
-    expect(within(dialog).getByText(/Installing them needs the network/)).toBeTruthy();
+    expect(within(dialog).getByText("The packs the Engineer starts with. They come with Gents.")).toBeTruthy();
     const rows = within(within(dialog).getByRole("list", { name: "Starter packs" }))
       .getAllByRole("listitem")
       .filter((row) => row.parentElement?.getAttribute("aria-label"));
     expect(
       rows.map((row) => within(row).getAllByText(/^doing /)[0]!.textContent),
     ).toEqual(["doing web", "doing dynamic_workflows", "doing notes", "doing ocr"]);
-    expect(within(rows[0]!).getByText("web_search")).toBeInTheDocument();
-    expect(
-      within(rows[0]!).getByText("network access to search providers"),
-    ).toBeInTheDocument();
     expect(
       within(rows[0]!).getByText("Without it the Engineer cannot do web."),
     ).toBeInTheDocument();
     expect(
-      within(rows[1]!).getByText("Workflow scripts the model writes can start agents."),
-    ).toBeInTheDocument();
+      within(rows[0]!).getByRole("button", { name: "Install gents/web" }),
+    ).toBeEnabled();
+    expect(
+      within(rows[1]!).getByRole("button", { name: "Turn on gents/dynamic_workflows" }),
+    ).toBeEnabled();
     expect(
       within(rows[2]!).getByRole("button", { name: "Install gents/notes" }),
     ).toBeEnabled();
     expect(
       within(rows[3]!).getByText("The registry could not be reached."),
     ).toBeTruthy();
+    expect(within(rows[3]!).queryByRole("button")).toBeNull();
+    expect(within(dialog).queryByText(/Permissions/)).toBeNull();
     expect(within(dialog).queryByText(/authority/i)).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Install all" })).toBeEnabled();
     expect(listDefaultPacks).toHaveBeenCalledTimes(1);
   });
 
-  it("approves one pack with the digest it showed", async () => {
+  it("installs one missing pack by name, and turns one on the same way", async () => {
     const { api, approveDefaultPacks } = harness(ALL);
     renderIn(local(api), <StarterPacksCard />);
     const dialog = await card();
-    await click(within(dialog).getByRole("button", { name: "Approve gents/web" }));
-    expect(approveDefaultPacks).toHaveBeenCalledWith([
-      { pack: "gents/web", digest: "sha256:web" },
-    ]);
+    await click(within(dialog).getByRole("button", { name: "Install gents/web" }));
+    expect(approveDefaultPacks).toHaveBeenCalledWith([{ pack: "gents/web" }]);
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Approve gents/web" })).toBeNull(),
+      expect(screen.queryByRole("button", { name: "Install gents/web" })).toBeNull(),
     );
-    expect(
-      screen.getByRole("button", { name: "Approve gents/dynamic_workflows" }),
-    ).toBeEnabled();
+    await click(
+      screen.getByRole("button", { name: "Turn on gents/dynamic_workflows" }),
+    );
+    expect(approveDefaultPacks).toHaveBeenLastCalledWith([
+      { pack: "gents/dynamic_workflows" },
+    ]);
   });
 
-  it("approves every pending pack at once, and closes once they are installed", async () => {
+  it("installs every missing pack at once, leaves the one to turn on, and closes once they are installed", async () => {
     const { api, approveDefaultPacks, listDefaultPacks } = harness([
       web,
       workflows,
@@ -150,17 +145,16 @@ describe("the starter packs card", () => {
       ocr,
     ]);
     renderIn(local(api), <StarterPacksCard />);
-    await click(within(await card()).getByRole("button", { name: "Approve all" }));
+    await click(within(await card()).getByRole("button", { name: "Install all" }));
     expect(approveDefaultPacks).toHaveBeenCalledWith([
-      { pack: "gents/web", digest: "sha256:web" },
-      { pack: "gents/dynamic_workflows", digest: "sha256:dynamic_workflows" },
-      { pack: "gents/notes", digest: "sha256:notes" },
+      { pack: "gents/web" },
+      { pack: "gents/notes" },
     ]);
     await waitFor(() => expect(screen.queryByTestId("starter-packs-card")).toBeNull());
     expect(listDefaultPacks).toHaveBeenCalledTimes(1);
   });
 
-  it("says the node restarts while an approval runs, and holds the buttons", async () => {
+  it("says the node restarts while an install runs, and holds the buttons", async () => {
     let finish!: (result: DefaultPacksApproval) => void;
     const { api } = harness(ALL);
     api.approveDefaultPacks = vi.fn(
@@ -168,25 +162,27 @@ describe("the starter packs card", () => {
     );
     renderIn(local(api), <StarterPacksCard />);
     const dialog = await card();
-    await click(within(dialog).getByRole("button", { name: "Approve all" }));
+    await click(within(dialog).getByRole("button", { name: "Install all" }));
     const restarting = () =>
       within(dialog).queryByText(
-        "The local node restarts for a moment while the packs install.",
+        "The local node restarts for a moment while the packs are set up.",
       );
     expect(restarting()).toBeInTheDocument();
     for (const button of within(dialog).getAllByRole("button", {
-      name: /^(Approve|Install|Retry|Not now)/,
+      name: /^(Install|Turn on|Not now)/,
     }))
       expect(button).toBeDisabled();
     await act(async () => finish({ packs: ALL, failed: [] }));
     expect(restarting()).toBeNull();
   });
 
-  it("says a pack that installed without finishing is installed", async () => {
+  it("says a pack that installed without finishing is installed, and offers to turn it on again", async () => {
     const { api } = harness(ALL, (asked) => ({
       packs: installed(
         ALL,
         asked.filter((p) => p !== "gents/web"),
+      ).map((p) =>
+        p.pack === "gents/web" ? { ...p, state: "not_enabled" as const } : p,
       ),
       failed: [
         {
@@ -198,14 +194,16 @@ describe("the starter packs card", () => {
     }));
     renderIn(local(api), <StarterPacksCard />);
     const dialog = await card();
-    await click(within(dialog).getByRole("button", { name: "Approve all" }));
+    await click(within(dialog).getByRole("button", { name: "Install all" }));
     const alert = await within(dialog).findByRole("alert");
-    expect(alert).toHaveTextContent("web is installed with its permissions granted");
-    expect(alert).toHaveTextContent("Approve it again to finish");
+    expect(alert).toHaveTextContent(
+      "web is installed, but setting it up for the Engineer didn't finish",
+    );
+    expect(alert).toHaveTextContent("Select Turn on again to finish");
     expect(alert).not.toHaveTextContent("Nothing changed");
   });
 
-  it("shows what could not be installed and keeps the pack", async () => {
+  it("shows what could not be installed and keeps the pack to install", async () => {
     const { api } = harness(ALL, (asked) => ({
       packs: installed(
         ALL,
@@ -217,7 +215,7 @@ describe("the starter packs card", () => {
     }));
     renderIn(local(api), <StarterPacksCard />);
     const dialog = await card();
-    await click(within(dialog).getByRole("button", { name: "Approve all" }));
+    await click(within(dialog).getByRole("button", { name: "Install all" }));
     const alert = await within(dialog).findByRole("alert");
     expect(alert).toHaveTextContent("Couldn't install web");
     await click(within(alert).getByText("Details"));
@@ -225,10 +223,10 @@ describe("the starter packs card", () => {
       within(alert).getByText("digest mismatch for gents/web"),
     ).toBeInTheDocument();
     expect(
-      within(dialog).getByRole("button", { name: "Approve gents/web" }),
+      within(dialog).getByRole("button", { name: "Install gents/web" }),
     ).toBeEnabled();
     expect(
-      within(dialog).queryByRole("button", { name: "Approve gents/dynamic_workflows" }),
+      within(dialog).queryByRole("button", { name: "Install gents/notes" }),
     ).toBeNull();
   });
 
@@ -268,8 +266,8 @@ describe("the starter packs card", () => {
     expect(screen.queryByTestId("starter-packs-card")).toBeNull();
   });
 
-  it("doesn't open for packs that could only be retried", async () => {
-    const { api, listDefaultPacks } = harness([ocr, git]);
+  it("doesn't open for packs that are unavailable or installed and not turned on", async () => {
+    const { api, listDefaultPacks } = harness([ocr, workflows, git]);
     renderIn(local(api), <StarterPacksCard />);
     await waitFor(() => expect(listDefaultPacks).toHaveBeenCalled());
     await act(async () => {});
@@ -289,10 +287,10 @@ describe("starter packs on the Packs page", () => {
     page(api);
     const section = await screen.findByRole("region", { name: "Starter packs" });
     expect(within(section).queryByRole("button", { name: "Not now" })).toBeNull();
-    await click(within(section).getByRole("button", { name: "Approve all" }));
+    await click(within(section).getByRole("button", { name: "Install all" }));
     expect(approveDefaultPacks).toHaveBeenCalledWith([
-      { pack: "gents/web", digest: "sha256:web" },
-      { pack: "gents/notes", digest: "sha256:notes" },
+      { pack: "gents/web" },
+      { pack: "gents/notes" },
     ]);
     await waitFor(() =>
       expect(screen.queryByRole("region", { name: "Starter packs" })).toBeNull(),
@@ -309,20 +307,23 @@ describe("starter packs on the Packs page", () => {
       </>,
     );
     await click(
-      within(await card()).getByRole("button", { name: "Approve gents/web" }),
+      within(await card()).getByRole("button", { name: "Install gents/web" }),
     );
     await waitFor(() => expect(screen.queryByTestId("starter-packs-card")).toBeNull());
     expect(screen.queryByRole("region", { name: "Starter packs" })).toBeNull();
     expect(listDefaultPacks).toHaveBeenCalledTimes(1);
   });
 
-  it("re-reads the list from an unavailable pack's Retry", async () => {
+  it("shows an unavailable pack's reason with no button to act on it", async () => {
     const { api, listDefaultPacks } = harness([ocr, git]);
     page(api);
     const section = await screen.findByRole("region", { name: "Starter packs" });
-    expect(within(section).queryByRole("button", { name: "Approve all" })).toBeNull();
-    await click(within(section).getByRole("button", { name: "Retry gents/ocr" }));
-    expect(listDefaultPacks).toHaveBeenCalledTimes(2);
+    expect(
+      within(section).getByText("The registry could not be reached."),
+    ).toBeInTheDocument();
+    expect(within(section).queryByRole("button", { name: "Install all" })).toBeNull();
+    expect(within(section).queryByRole("button", { name: /^(Install|Turn on) / })).toBeNull();
+    expect(listDefaultPacks).toHaveBeenCalledTimes(1);
   });
 
   it("shows nothing when every starter pack is installed", async () => {

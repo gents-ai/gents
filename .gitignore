@@ -1,5 +1,6 @@
 /target
 /target-check/
+/core-packs/*/target/
 /apps/gents-desktop/src-tauri/binaries/gents-*
 .DS_Store
 /crates/gents/proofs/.lake

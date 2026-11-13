@@ -30,10 +30,12 @@ pub(super) fn validate_source_pack_path(path: &Path) -> Result<()> {
 
 pub(super) fn read_distribution_manifest(root: &Path) -> Result<gents_pack::pack::PackManifest> {
     let path = root.join("manifest.json");
-    serde_json::from_slice(
+    let manifest: gents_pack::pack::PackManifest = serde_json::from_slice(
         &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
     )
-    .with_context(|| format!("parsing {}", path.display()))
+    .with_context(|| format!("parsing {}", path.display()))?;
+    gents_pack::pack::core_packs::check_plugin_interface(&manifest)?;
+    Ok(manifest)
 }
 
 pub(super) async fn resolve_scenario_dir(

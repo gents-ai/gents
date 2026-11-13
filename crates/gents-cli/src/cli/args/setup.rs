@@ -219,21 +219,9 @@ pub(crate) struct InitArgs {
     #[arg(
         long,
         default_value_t = false,
-        requires = "engineer",
-        conflicts_with = "no_default_packs",
-        help = "With --engineer: approve the permissions the default packs' plugins request, without being asked. Without it and without a terminal, a pack that requests permissions is listed, not installed"
-    )]
-    pub(crate) approve_default_packs: bool,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "With --engineer: do not install the Engineer's default packs"
+        help = "With --engineer: do not install the Engineer's core packs (install them later with `gents config pack starter --enable <pack>`)"
     )]
     pub(crate) no_default_packs: bool,
-    /// The caller owns no terminal to ask on (the desktop's first run), so
-    /// init never prompts.
-    #[arg(skip)]
-    pub(crate) unattended: bool,
 }
 
 impl InitArgs {

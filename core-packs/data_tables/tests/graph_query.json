@@ -1,0 +1,49 @@
+{
+  "runtime": {
+    "repository": {
+      "files": {
+        "data/sales.csv": "region,units,price\nnorth,10,2.5\nsouth,7,3\nnorth,5,4\n",
+        "data/regions.csv": "region,boss\nnorth,Ann\nsouth,Bo\n"
+      }
+    },
+    "seed": {
+      "collection": "DataJob",
+      "fields": {
+        "run_id": "run-${ATTEMPT}",
+        "path": "${REPOSITORY}/data",
+        "sql": "SELECT region, sum(units) AS units FROM sales GROUP BY region"
+      }
+    },
+    "taken": {
+      "collection": "DataResult",
+      "fields": {
+        "mode": "query"
+      }
+    },
+    "expect": [
+      {
+        "collection": "DataResult",
+        "fields": {
+          "mode": "query",
+          "complete": true,
+          "row_count": 2,
+          "order": "columns"
+        }
+      },
+      {
+        "collection": "DataRow",
+        "fields": {
+          "row": 0,
+          "values": "[\"north\",15]"
+        }
+      },
+      {
+        "collection": "DataRow",
+        "fields": {
+          "row": 1,
+          "values": "[\"south\",7]"
+        }
+      }
+    ]
+  }
+}

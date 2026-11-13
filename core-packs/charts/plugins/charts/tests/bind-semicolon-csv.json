@@ -1,0 +1,38 @@
+{
+  "input": {
+    "chart": "horizontal_bar",
+    "file": "semicolon.csv",
+    "x": "city",
+    "y": [
+      "population"
+    ],
+    "sort": "value_desc",
+    "output": "svg",
+    "width": 560,
+    "height": 360
+  },
+  "bind": "fixtures/data",
+  "expect": {
+    "response": {
+      "alt": "Horizontal bar chart. 6 categories of city, from Oslo to Tromso. Value axis: population, from 0 to 800. 1 series. \"population\" (bar): highest 709 at Oslo, lowest 78 at Tromso.",
+      "chart": "bar",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 709.0,
+          "min": 78.0,
+          "name": "population",
+          "points": 6,
+          "sum": 1531.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">bar chart</title><desc id=\"chart-desc\">Horizontal bar chart. 6 categories of city, from Oslo to Tromso. Value axis: population, from 0 to 800. 1 series. &quot;population&quot; (bar): highest 709 at Oslo, lowest 78 at Tromso.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><line x1=\"204.5\" y1=\"20\" x2=\"204.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"314.5\" y1=\"20\" x2=\"314.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"425.5\" y1=\"20\" x2=\"425.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"93.58\" y=\"26.6\" width=\"391.05\" height=\"33.96\" fill=\"#0072b2\"><title>population, Oslo: 709</title></rect><text x=\"488.63\" y=\"47.08\" font-size=\"10\" fill=\"#1f2328\">709</text><rect x=\"93.58\" y=\"73.77\" width=\"157.75\" height=\"33.96\" fill=\"#0072b2\"><title>population, Bergen: 286</title></rect><text x=\"255.32\" y=\"94.25\" font-size=\"10\" fill=\"#1f2328\">286</text><rect x=\"93.58\" y=\"120.94\" width=\"116.93\" height=\"33.96\" fill=\"#0072b2\"><title>population, Trondheim: 212</title></rect><text x=\"214.51\" y=\"141.42\" font-size=\"10\" fill=\"#1f2328\">212</text><rect x=\"93.58\" y=\"168.1\" width=\"79.42\" height=\"33.96\" fill=\"#0072b2\"><title>population, Stavanger: 144</title></rect><text x=\"177\" y=\"188.58\" font-size=\"10\" fill=\"#1f2328\">144</text><rect x=\"93.58\" y=\"215.27\" width=\"56.26\" height=\"33.96\" fill=\"#0072b2\"><title>population, Drammen: 102</title></rect><text x=\"153.84\" y=\"235.75\" font-size=\"10\" fill=\"#1f2328\">102</text><rect x=\"93.58\" y=\"262.44\" width=\"43.02\" height=\"33.96\" fill=\"#0072b2\"><title>population, Tromso: 78</title></rect><text x=\"140.6\" y=\"282.92\" font-size=\"10\" fill=\"#1f2328\">78</text><line x1=\"93.58\" y1=\"303.5\" x2=\"534.82\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"93.08\" y1=\"20\" x2=\"93.08\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"94.5\" y1=\"303\" x2=\"94.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"93.58\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">0</text><line x1=\"204.5\" y1=\"303\" x2=\"204.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"203.89\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">200</text><line x1=\"314.5\" y1=\"303\" x2=\"314.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"314.2\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">400</text><line x1=\"425.5\" y1=\"303\" x2=\"425.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"424.51\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">600</text><line x1=\"535.5\" y1=\"303\" x2=\"535.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"534.82\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">800</text><line x1=\"89.58\" y1=\"44.5\" x2=\"93.58\" y2=\"44.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"85.58\" y=\"47.58\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Oslo</text><line x1=\"89.58\" y1=\"91.5\" x2=\"93.58\" y2=\"91.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"85.58\" y=\"94.75\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Bergen</text><line x1=\"89.58\" y1=\"138.5\" x2=\"93.58\" y2=\"138.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"85.58\" y=\"141.92\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Trondheim</text><line x1=\"89.58\" y1=\"185.5\" x2=\"93.58\" y2=\"185.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"85.58\" y=\"189.08\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Stavanger</text><line x1=\"89.58\" y1=\"232.5\" x2=\"93.58\" y2=\"232.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"85.58\" y=\"236.25\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Drammen</text><line x1=\"89.58\" y1=\"279.5\" x2=\"93.58\" y2=\"279.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"85.58\" y=\"283.42\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">Tromso</text><text x=\"314.2\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">population</text><text x=\"27\" y=\"161.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 161.5)\">city</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

@@ -1,0 +1,235 @@
+{
+  "input": {
+    "chart": "pie",
+    "title": "Fifteen slices",
+    "output": "svg",
+    "width": 560,
+    "height": 420,
+    "data": {
+      "columns": [
+        "name",
+        "count"
+      ],
+      "rows": [
+        [
+          "s1",
+          1
+        ],
+        [
+          "s2",
+          2
+        ],
+        [
+          "s3",
+          3
+        ],
+        [
+          "s4",
+          4
+        ],
+        [
+          "s5",
+          5
+        ],
+        [
+          "s6",
+          6
+        ],
+        [
+          "s7",
+          7
+        ],
+        [
+          "s8",
+          8
+        ],
+        [
+          "s9",
+          9
+        ],
+        [
+          "s10",
+          10
+        ],
+        [
+          "s11",
+          11
+        ],
+        [
+          "s12",
+          12
+        ],
+        [
+          "s13",
+          13
+        ],
+        [
+          "s14",
+          14
+        ],
+        [
+          "s15",
+          15
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Pie chart titled \"Fifteen slices\". 12 slices of count, total 120. \"s5\" 5 (4.2%). \"s6\" 6 (5.0%). \"s7\" 7 (5.8%). \"s8\" 8 (6.7%). \"s9\" 9 (7.5%). \"s10\" 10 (8.3%). \"s11\" 11 (9.2%). \"s12\" 12 (10%). \"s13\" 13 (11%). \"s14\" 14 (12%). \"s15\" 15 (12%). \"Other\" 10 (8.3%).",
+      "chart": "pie",
+      "height": 420,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 5.0,
+          "min": 5.0,
+          "name": "s5",
+          "points": 1,
+          "share": 0.041667,
+          "value": 5.0
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 6.0,
+          "min": 6.0,
+          "name": "s6",
+          "points": 1,
+          "share": 0.05,
+          "value": 6.0
+        },
+        {
+          "axis": "left",
+          "color": "#009e73",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 7.0,
+          "min": 7.0,
+          "name": "s7",
+          "points": 1,
+          "share": 0.058333,
+          "value": 7.0
+        },
+        {
+          "axis": "left",
+          "color": "#d55e00",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 8.0,
+          "min": 8.0,
+          "name": "s8",
+          "points": 1,
+          "share": 0.066667,
+          "value": 8.0
+        },
+        {
+          "axis": "left",
+          "color": "#56b4e9",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 9.0,
+          "min": 9.0,
+          "name": "s9",
+          "points": 1,
+          "share": 0.075,
+          "value": 9.0
+        },
+        {
+          "axis": "left",
+          "color": "#cc79a7",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 10.0,
+          "min": 10.0,
+          "name": "s10",
+          "points": 1,
+          "share": 0.083333,
+          "value": 10.0
+        },
+        {
+          "axis": "left",
+          "color": "#f0e442",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 11.0,
+          "min": 11.0,
+          "name": "s11",
+          "points": 1,
+          "share": 0.091667,
+          "value": 11.0
+        },
+        {
+          "axis": "left",
+          "color": "#999999",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 12.0,
+          "min": 12.0,
+          "name": "s12",
+          "points": 1,
+          "share": 0.1,
+          "value": 12.0
+        },
+        {
+          "axis": "left",
+          "color": "#66aad1",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 13.0,
+          "min": 13.0,
+          "name": "s13",
+          "points": 1,
+          "share": 0.108333,
+          "value": 13.0
+        },
+        {
+          "axis": "left",
+          "color": "#f0c566",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 14.0,
+          "min": 14.0,
+          "name": "s14",
+          "points": 1,
+          "share": 0.116667,
+          "value": 14.0
+        },
+        {
+          "axis": "left",
+          "color": "#66c5ab",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 15.0,
+          "min": 15.0,
+          "name": "s15",
+          "points": 1,
+          "share": 0.125,
+          "value": 15.0
+        },
+        {
+          "axis": "left",
+          "color": "#e69e66",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 10.0,
+          "min": 10.0,
+          "name": "Other",
+          "points": 4,
+          "share": 0.083333,
+          "value": 10.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"420\" viewBox=\"0 0 560 420\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Fifteen slices</title><desc id=\"chart-desc\">Pie chart titled &quot;Fifteen slices&quot;. 12 slices of count, total 120. &quot;s5&quot; 5 (4.2%). &quot;s6&quot; 6 (5.0%). &quot;s7&quot; 7 (5.8%). &quot;s8&quot; 8 (6.7%). &quot;s9&quot; 9 (7.5%). &quot;s10&quot; 10 (8.3%). &quot;s11&quot; 11 (9.2%). &quot;s12&quot; 12 (10%). &quot;s13&quot; 13 (11%). &quot;s14&quot; 14 (12%). &quot;s15&quot; 15 (12%). &quot;Other&quot; 10 (8.3%).</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"420\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Fifteen slices</text><path d=\"M 234.16,215.5 L 234.16,52 A 163.5,163.5 0 0 1 276.47,57.57 Z\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s5: 5 (4.2%)</title></path><path d=\"M 234.16,215.5 L 276.47,57.57 A 163.5,163.5 0 0 1 323.2,78.38 Z\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s6: 6 (5.0%)</title></path><text x=\"278.05\" y=\"120.92\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">5.0%</text><path d=\"M 234.16,215.5 L 323.2,78.38 A 163.5,163.5 0 0 1 366.43,119.4 Z\" fill=\"#009e73\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s7: 7 (5.8%)</title></path><text x=\"308.44\" y=\"141.22\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffffff\">5.8%</text><path d=\"M 234.16,215.5 L 366.43,119.4 A 163.5,163.5 0 0 1 394.08,181.51 Z\" fill=\"#d55e00\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s8: 8 (6.7%)</title></path><text x=\"332.74\" y=\"175.61\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffffff\">6.7%</text><path d=\"M 234.16,215.5 L 394.08,181.51 A 163.5,163.5 0 0 1 392.08,257.82 Z\" fill=\"#56b4e9\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s9: 9 (7.5%)</title></path><text x=\"342.03\" y=\"222.32\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">7.5%</text><path d=\"M 234.16,215.5 L 392.08,257.82 A 163.5,163.5 0 0 1 349.77,331.11 Z\" fill=\"#cc79a7\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s10: 10 (8.3%)</title></path><text x=\"327.61\" y=\"273.45\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">8.3%</text><path d=\"M 234.16,215.5 L 349.77,331.11 A 163.5,163.5 0 0 1 268.15,375.43 Z\" fill=\"#f0e442\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s11: 11 (9.2%)</title></path><text x=\"285.65\" y=\"314.33\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">9.2%</text><path d=\"M 234.16,215.5 L 268.15,375.43 A 163.5,163.5 0 0 1 167.65,364.86 Z\" fill=\"#999999\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s12: 12 (10%)</title></path><text x=\"222.88\" y=\"326.82\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">10%</text><path d=\"M 234.16,215.5 L 167.65,364.86 A 163.5,163.5 0 0 1 88.48,289.73 Z\" fill=\"#66aad1\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s13: 13 (11%)</title></path><text x=\"159.87\" y=\"297.78\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">11%</text><path d=\"M 234.16,215.5 L 88.48,289.73 A 163.5,163.5 0 0 1 76.23,173.18 Z\" fill=\"#f0c566\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s14: 14 (12%)</title></path><text x=\"126.84\" y=\"230.78\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">12%</text><path d=\"M 234.16,215.5 L 76.23,173.18 A 163.5,163.5 0 0 1 152.41,73.9 Z\" fill=\"#66c5ab\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>s15: 15 (12%)</title></path><text x=\"148.54\" y=\"153.81\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">12%</text><path d=\"M 234.16,215.5 L 152.41,73.9 A 163.5,163.5 0 0 1 234.16,52 Z\" fill=\"#e69e66\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>Other: 10 (8.3%)</title></path><text x=\"206.23\" y=\"115.27\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">8.3%</text><rect x=\"457.31\" y=\"49\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"477.31\" y=\"59\" font-size=\"12\" fill=\"#1f2328\">s5 (4.2%)</text><rect x=\"457.31\" y=\"67\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"477.31\" y=\"77\" font-size=\"12\" fill=\"#1f2328\">s6 (5.0%)</text><rect x=\"457.31\" y=\"85\" width=\"12\" height=\"12\" fill=\"#009e73\"/><text x=\"477.31\" y=\"95\" font-size=\"12\" fill=\"#1f2328\">s7 (5.8%)</text><rect x=\"457.31\" y=\"103\" width=\"12\" height=\"12\" fill=\"#d55e00\"/><text x=\"477.31\" y=\"113\" font-size=\"12\" fill=\"#1f2328\">s8 (6.7%)</text><rect x=\"457.31\" y=\"121\" width=\"12\" height=\"12\" fill=\"#56b4e9\"/><text x=\"477.31\" y=\"131\" font-size=\"12\" fill=\"#1f2328\">s9 (7.5%)</text><rect x=\"457.31\" y=\"139\" width=\"12\" height=\"12\" fill=\"#cc79a7\"/><text x=\"477.31\" y=\"149\" font-size=\"12\" fill=\"#1f2328\">s10 (8.3%)</text><rect x=\"457.31\" y=\"157\" width=\"12\" height=\"12\" fill=\"#f0e442\"/><text x=\"477.31\" y=\"167\" font-size=\"12\" fill=\"#1f2328\">s11 (9.2%)</text><rect x=\"457.31\" y=\"175\" width=\"12\" height=\"12\" fill=\"#999999\"/><text x=\"477.31\" y=\"185\" font-size=\"12\" fill=\"#1f2328\">s12 (10%)</text><rect x=\"457.31\" y=\"193\" width=\"12\" height=\"12\" fill=\"#66aad1\"/><text x=\"477.31\" y=\"203\" font-size=\"12\" fill=\"#1f2328\">s13 (11%)</text><rect x=\"457.31\" y=\"211\" width=\"12\" height=\"12\" fill=\"#f0c566\"/><text x=\"477.31\" y=\"221\" font-size=\"12\" fill=\"#1f2328\">s14 (12%)</text><rect x=\"457.31\" y=\"229\" width=\"12\" height=\"12\" fill=\"#66c5ab\"/><text x=\"477.31\" y=\"239\" font-size=\"12\" fill=\"#1f2328\">s15 (12%)</text><rect x=\"457.31\" y=\"247\" width=\"12\" height=\"12\" fill=\"#e69e66\"/><text x=\"477.31\" y=\"257\" font-size=\"12\" fill=\"#1f2328\">Other (8.3%)</text></svg>",
+      "warnings": [
+        "there are 15 slices; the 4 smallest are grouped as \"Other\""
+      ],
+      "width": 560
+    }
+  }
+}

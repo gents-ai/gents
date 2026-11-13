@@ -5021,6 +5021,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
             data_unique_keys: Default::default(),
             data_collection_fields: Default::default(),
             data_collection_schemas: Default::default(),
+            plugin_interface: None,
         },
     )
     .unwrap();

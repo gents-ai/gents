@@ -1,0 +1,8 @@
+{
+  "defs": "def tool($id): .config.tools[] | select(.tools_id == $id);",
+  "jq": [
+    {"name": "compute configuration grants no tool calls", "expr": "tool(\"script-compute\").integrations.plugins[0] | .plugin == \"gents/script\" and (.tool_calls // false) == false"},
+    {"name": "tool configuration explicitly enables composition", "expr": "tool(\"script-tools\").integrations.plugins[0] | .plugin == \"gents/script\" and .tool_calls == true"},
+    {"name": "script executes in WASM through a generic host import", "expr": ".manifest.plugins[0] | .language == \"rust\" and .host_imports == [\"host_call\"] and (.job // false) == false and .manifold == null"}
+  ]
+}

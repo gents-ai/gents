@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "file": "empty.csv"
+  },
+  "bind": "fixtures/hostile",
+  "expect": {
+    "chart": "bar",
+    "error": "empty.csv is empty; it needs a header row and data",
+    "warnings": []
+  }
+}

@@ -1396,13 +1396,19 @@ async fn wire_sources_in_fixture_home() -> Result<()> {
 
 const STARTER_HOME_ENV: &str = "GENTS_TEST_STARTER_HOME";
 const STARTER_STEP_ENV: &str = "GENTS_TEST_STARTER_STEP";
+const STARTER_ARCHIVES_ENV: &str = "GENTS_TEST_STARTER_ARCHIVES";
 
-/// A copy of the job fixture pack renamed to the starter pack `gents/<name>`,
+/// The directory the fixture core pack archives are written to, one
+/// `<name>.pack` per core pack `gents/<name>`.
+fn starter_archives(scratch: &std::path::Path) -> std::path::PathBuf {
+    scratch.join("core-packs")
+}
+
+/// A copy of the job fixture pack renamed to the core pack `gents/<name>`,
 /// shipping the plugin `gents/<plugin>` (which requests an environment
-/// variable) and one skill, admitted to `home`'s pack store.
-fn admit_starter_fixture(
+/// variable) and one skill, written as a release archive.
+fn release_starter_fixture(
     scratch: &std::path::Path,
-    home: &std::path::Path,
     name: &str,
     plugin: &str,
     job: bool,
@@ -1463,15 +1469,21 @@ fn admit_starter_fixture(
     }
     edit_pack_config(&dir, |existing| *existing = config)?;
     run_cli_text(scratch, &["config", "pack", "build", dir_arg(&dir)])?;
-    gents_pack::pack::local::open(&gents_pack::pack::local::LocalName::Path(&dir), home)
-        .with_context(|| format!("admitting {name} to the home's pack store"))?;
+    let mut archive = Vec::new();
+    gents_pack::pack::archive::write_pack(&dir, &mut archive)
+        .with_context(|| format!("packing {name}"))?;
+    std::fs::create_dir_all(starter_archives(scratch))?;
+    std::fs::write(
+        starter_archives(scratch).join(format!("{name}.pack")),
+        archive,
+    )?;
     Ok(())
 }
 
 fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -> Result<()> {
     let output = std::process::Command::new(std::env::current_exe()?)
         .args([
-            "cli_pack::starter_packs_in_fixture_home",
+            "cli_pack::core_packs_in_fixture_home",
             "--exact",
             "--include-ignored",
             "--nocapture",
@@ -1480,6 +1492,7 @@ fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -
         .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
         .env(STARTER_HOME_ENV, home)
         .env(STARTER_STEP_ENV, step)
+        .env(STARTER_ARCHIVES_ENV, starter_archives(fixture))
         .output()?;
     anyhow::ensure!(
         output.status.success(),
@@ -1491,14 +1504,14 @@ fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -
 }
 
 /// What the desktop's starter packs card does, against a real runtime. The
-/// list is read while the runtime serves the home. An approval installs
-/// through the home's own store, so it is refused, writing nothing, while
-/// the runtime runs, and the desktop restarts the node around it: here the
-/// runtime is stopped, the packs approved (twice: approving again changes
-/// nothing) and the runtime started again, where the Engineer's surface has
-/// the packs' plugin tools and its Context their skills.
+/// list is read while the runtime serves the home. Enabling installs through
+/// the home's own store, so it is refused, writing nothing, while the runtime
+/// runs, and the desktop restarts the node around it: here the runtime is
+/// stopped, the packs enabled (twice: enabling again changes nothing) and the
+/// runtime started again, where the Engineer's surface has the packs' plugin
+/// tools and its Context their skills.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn starter_packs_are_approved_around_a_running_runtime() -> Result<()> {
+async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let scratch = tempdir.path();
     let home = scratch.join("agent-home");
@@ -1521,8 +1534,8 @@ async fn starter_packs_are_approved_around_a_running_runtime() -> Result<()> {
         .as_str()
         .context("init output missing default_agent_did")?
         .to_owned();
-    admit_starter_fixture(scratch, &home, "dynamic_workflows", "job_fixture", true)?;
-    admit_starter_fixture(scratch, &home, "script", "script", false)?;
+    release_starter_fixture(scratch, "dynamic_workflows", "job_fixture", true)?;
+    release_starter_fixture(scratch, "script", "script", false)?;
 
     let serve = |port: u16| spawn_server_with_ready_json(scratch, port, &["--home", home_arg], &[]);
     let port = allocate_port()?;
@@ -1593,25 +1606,40 @@ async fn starter_packs_are_approved_around_a_running_runtime() -> Result<()> {
     let workflow = selected("gents/job_fixture");
     anyhow::ensure!(
         workflow.len() == 1 && workflow[0]["job"]["policy"]["dynamic"] == "run",
-        "approving gents/dynamic_workflows did not set its job block to run, once: {tools}"
+        "enabling gents/dynamic_workflows did not set its job block to run, once: {tools}"
     );
     let script = selected("gents/script");
     anyhow::ensure!(
         script.len() == 1 && script[0]["tool_calls"] == true,
-        "approving gents/script did not wire it with tool_calls, once: {tools}"
+        "enabling gents/script did not wire it with tool_calls, once: {tools}"
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "run by starter_packs_are_approved_around_a_running_runtime in the fixture's HOME"]
-async fn starter_packs_in_fixture_home() -> Result<()> {
+#[ignore = "run by core_packs_are_enabled_around_a_running_runtime in the fixture's HOME"]
+async fn core_packs_in_fixture_home() -> Result<()> {
     let home = std::path::PathBuf::from(
         std::env::var_os(STARTER_HOME_ENV).context("fixture home is not set")?,
     );
     let step = std::env::var(STARTER_STEP_ENV).context("fixture step is not set")?;
-    let registry = Some(UNROUTABLE_REGISTRY.to_owned());
-    let listed = gents_server::packs::default_packs(home.clone(), registry.clone()).await?;
+    let archive_dir = std::path::PathBuf::from(
+        std::env::var_os(STARTER_ARCHIVES_ENV).context("fixture archives are not set")?,
+    );
+    let mut archives = Vec::new();
+    for entry in std::fs::read_dir(&archive_dir)? {
+        let path = entry?.path();
+        let name = path
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .context("an archive file is not named for its pack")?;
+        archives.push((format!("gents/{name}"), std::fs::read(&path)?));
+    }
+    let archives: Vec<(&str, &[u8])> = archives
+        .iter()
+        .map(|(coordinate, bytes)| (coordinate.as_str(), bytes.as_slice()))
+        .collect();
+    let listed = gents_server::packs::core_packs_from(home.clone(), &archives).await?;
     let state = |pack: &str| {
         listed["packs"]
             .as_array()
@@ -1620,39 +1648,28 @@ async fn starter_packs_in_fixture_home() -> Result<()> {
             .find(|listed| listed["pack"] == pack)
             .map(|listed| listed["state"].clone())
     };
-    let fixtures = ["gents/dynamic_workflows", "gents/script"];
-    let approved = || {
-        fixtures
-            .iter()
-            .map(|pack| {
-                let digest = listed["packs"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|listed| listed["pack"] == *pack)
-                    .and_then(|listed| listed["digest"].as_str())
-                    .with_context(|| format!("{pack} lists no digest: {listed}"))?;
-                Ok(((*pack).to_owned(), digest.to_owned()))
-            })
-            .collect::<Result<Vec<_>>>()
+    let fixtures = || {
+        ["gents/dynamic_workflows", "gents/script"]
+            .map(str::to_owned)
+            .to_vec()
     };
     anyhow::ensure!(
         listed["packs"].as_array().map(Vec::len) == Some(6)
             && state("gents/web") == Some("unavailable".into()),
-        "{step}: every starter pack is listed, and one nothing publishes is unavailable: {listed}"
+        "{step}: every core pack is listed, and one this build does not carry is unavailable: {listed}"
     );
     match step.as_str() {
         "running" => {
             anyhow::ensure!(
-                fixtures
+                fixtures()
                     .iter()
-                    .all(|pack| state(pack) == Some("needs_approval".into())),
-                "the running node's packs wait on an approval: {listed}"
+                    .all(|pack| state(pack) == Some("missing".into())),
+                "the running node's packs are missing and installable: {listed}"
             );
             let refused =
-                gents_server::packs::approve_default_packs(home.clone(), approved()?, registry)
+                gents_server::packs::enable_core_packs_from(home.clone(), fixtures(), &archives)
                     .await
-                    .expect_err("an approval while the runtime serves the home");
+                    .expect_err("enabling while the runtime serves the home");
             anyhow::ensure!(
                 format!("{refused:#}").contains("a runtime is serving this home"),
                 "{refused:#}"
@@ -1660,24 +1677,24 @@ async fn starter_packs_in_fixture_home() -> Result<()> {
             anyhow::ensure!(
                 gents_pack::pack::read_home_install(&home, "gents/script")?.is_none()
                     && gents_pack::plugin::store::list_records(&home)?.is_empty(),
-                "a refused approval installed something"
+                "a refused enable installed something"
             );
         }
         "stopped" => {
             for _ in 0..2 {
-                let report = gents_server::packs::approve_default_packs(
+                let report = gents_server::packs::enable_core_packs_from(
                     home.clone(),
-                    approved()?,
-                    registry.clone(),
+                    fixtures(),
+                    &archives,
                 )
                 .await?;
                 anyhow::ensure!(
                     report["failed"] == serde_json::json!([])
-                        && report["installed"].as_array().map(Vec::len) == Some(2),
-                    "the approval did not install both packs: {report}"
+                        && report["enabled"].as_array().map(Vec::len) == Some(2),
+                    "enabling did not install both packs: {report}"
                 );
                 anyhow::ensure!(
-                    report["installed"]
+                    report["enabled"]
                         .as_array()
                         .into_iter()
                         .flatten()
@@ -1688,10 +1705,10 @@ async fn starter_packs_in_fixture_home() -> Result<()> {
             }
         }
         "restarted" => anyhow::ensure!(
-            fixtures
+            fixtures()
                 .iter()
                 .all(|pack| state(pack) == Some("installed".into())),
-            "the restarted node lists the approved packs as installed: {listed}"
+            "the restarted node lists the enabled packs as installed: {listed}"
         ),
         other => anyhow::bail!("unknown step {other}"),
     }

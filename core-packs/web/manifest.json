@@ -1,0 +1,559 @@
+{
+  "assets": [
+    "README.md",
+    "agent_behaviors/web_researcher/system_prompt.md",
+    "browser.md",
+    "evals/README.md",
+    "evals/cases/error_recovery.json",
+    "evals/cases/form_tabs.json",
+    "evals/cases/native_help.json",
+    "evals/cases/pagination.json",
+    "evals/cases/timeout_recovery.json",
+    "evals/cases/upload.json",
+    "evals/manifest.json",
+    "evals/oracle.py",
+    "evals/run_live.py",
+    "evals/pack_config.json",
+    "evals/subject/README.md",
+    "evals/subject/manifest.json",
+    "evals/subject/pack_config.json",
+    "evals/subject/system_prompt.txt",
+    "evals/test_oracle.py",
+    "license.txt",
+    "pack_config.json",
+    "plugins/browser_exec.afb",
+    "plugins/browser_exec/TOOL.md",
+    "plugins/web_crawl.afb",
+    "plugins/web_crawl/TOOL.md",
+    "plugins/web_fetch.afb",
+    "plugins/web_fetch/TOOL.md",
+    "plugins/web_runtime/Cargo.lock",
+    "plugins/web_runtime/Cargo.toml",
+    "plugins/web_runtime/build.rs",
+    "plugins/web_runtime/donsetch_core/Cargo.toml",
+    "plugins/web_runtime/donsetch_core/README.md",
+    "plugins/web_runtime/donsetch_core/license.txt",
+    "plugins/web_runtime/donsetch_core/src/crawl/mod.rs",
+    "plugins/web_runtime/donsetch_core/src/crawl/sitemap.rs",
+    "plugins/web_runtime/donsetch_core/src/detect/mod.rs",
+    "plugins/web_runtime/donsetch_core/src/detect/walls.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/blocks.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/charset.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/fallback.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/feed.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/focus.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/hn.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/inline.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/jsdata.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/junk.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/language.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/math.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/metadata.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/mod.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/nesting.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/quality.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/reddit.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/render.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/score.rs",
+    "plugins/web_runtime/donsetch_core/src/extract/tests.rs",
+    "plugins/web_runtime/donsetch_core/src/lib.rs",
+    "plugins/web_runtime/donsetch_core/src/portable_tests.rs",
+    "plugins/web_runtime/donsetch_core/src/search/authority.rs",
+    "plugins/web_runtime/donsetch_core/src/search/coverage.rs",
+    "plugins/web_runtime/donsetch_core/src/search/engines.rs",
+    "plugins/web_runtime/donsetch_core/src/search/engines/google_wml.rs",
+    "plugins/web_runtime/donsetch_core/src/search/intent.rs",
+    "plugins/web_runtime/donsetch_core/src/search/mod.rs",
+    "plugins/web_runtime/donsetch_core/src/search/query.rs",
+    "plugins/web_runtime/donsetch_core/src/search/rank.rs",
+    "plugins/web_runtime/donsetch_core/src/search/verticals.rs",
+    "plugins/web_runtime/donsetch_core/tests/fixtures/bing_serp.html",
+    "plugins/web_runtime/donsetch_core/tests/fixtures/cf_challenge_interstitial.html",
+    "plugins/web_runtime/donsetch_core/tests/fixtures/cf_challenge_solved.html",
+    "plugins/web_runtime/donsetch_core/tests/fixtures/mojeek_captcha.html",
+    "plugins/web_runtime/donsetch_core/upstream.md",
+    "plugins/web_runtime/source/main.rs",
+    "plugins/web_runtime/src/browser.rs",
+    "plugins/web_runtime/src/browser_help.json",
+    "plugins/web_runtime/src/compact.rs",
+    "plugins/web_runtime/src/lib.rs",
+    "plugins/web_runtime/tests/review.rs",
+    "plugins/web_search.afb",
+    "plugins/web_search/TOOL.md",
+    "tests/content.json",
+    "tests/install.json",
+    "worker/browser_connection.py",
+    "worker/browser_worker.py",
+    "worker/managed_run.py",
+    "worker/pyproject.toml",
+    "worker/tests/live_browser.py",
+    "worker/tests/live_fallback.py",
+    "worker/tests/live_gents.py",
+    "worker/tests/live_model.py",
+    "worker/tests/live_regressions.py",
+    "worker/tests/live_service.py",
+    "worker/tests/model_fixture.py",
+    "worker/tests/test_connection.py",
+    "worker/tests/test_managed_run.py",
+    "worker/tests/test_worker.py",
+    "worker/uv.lock"
+  ],
+  "authors": [
+    "gents contributors"
+  ],
+  "config": "pack_config.json",
+  "dependencies": [],
+  "description": "Web research and browser interaction: Rust search, extraction and crawl, with managed or user-connected Chrome sessions.",
+  "inference_slots": [
+    {
+      "agents": [
+        "web-researcher"
+      ],
+      "description": "Researches web sources with the pack's search, fetch, and bounded crawl tools, then answers with linked evidence.",
+      "name": "web_researcher"
+    }
+  ],
+  "kind": "documents",
+  "manifest_version": 1,
+  "name": "web",
+  "namespace": "gents",
+  "plugins": [
+    {
+      "artifact": "plugins/web_search.afb",
+      "description": "Search supported keyless web sources and return a bounded set of candidate pages.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "Focused web search query.",
+            "type": "string",
+            "minLength": 1
+          },
+          "query_variants": {
+            "description": "Up to two alternative focused queries.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2
+          },
+          "max_results": {
+            "description": "Maximum results to return, capped by the implementation.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12,
+            "default": 7
+          },
+          "deadline_ms": {
+            "description": "Cooperative overall deadline in milliseconds, checked between host HTTP request rounds; one request can take up to 10 seconds.",
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 120000
+          },
+          "intent": {
+            "description": "Search intent.",
+            "type": "string",
+            "enum": [
+              "auto",
+              "web",
+              "code",
+              "paper",
+              "news",
+              "entity"
+            ],
+            "default": "auto"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "instructions": "plugins/web_search/TOOL.md",
+      "language": "rust",
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 512,
+        "wall_clock_secs": 120
+      },
+      "name": "web_search",
+      "source": "plugins/web_runtime",
+      "manifold": {
+        "fs": "None",
+        "net": {
+          "OutboundHttp": null
+        },
+        "env": "None",
+        "crypto": false,
+        "child_process": false,
+        "http_timeout_ms": 10000
+      }
+    },
+    {
+      "artifact": "plugins/web_fetch.afb",
+      "description": "Fetch a URL and extract readable text and optional page structure.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "description": "HTTPS URL to fetch, or an array of 1 to 12 HTTPS URLs.",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uri",
+                "minLength": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uri",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "maxItems": 12
+              }
+            ]
+          },
+          "focus": {
+            "description": "A focus phrase to guide extraction.",
+            "type": "string"
+          },
+          "mode": {
+            "description": "Default text budget: scan 800 bytes, read 4000, deep 16000. max_chars overrides this budget.",
+            "type": "string",
+            "enum": [
+              "scan",
+              "read",
+              "deep"
+            ],
+            "default": "deep"
+          },
+          "max_chars": {
+            "description": "Maximum extracted UTF-8 bytes per result.",
+            "type": "integer",
+            "minimum": 200,
+            "default": 16000,
+            "maximum": 500000
+          },
+          "offset": {
+            "description": "UTF-8 byte offset from which to return extracted text.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "section": {
+            "description": "A named section to focus extraction on.",
+            "type": "string"
+          },
+          "toc": {
+            "description": "Include a table of contents when available.",
+            "type": "boolean",
+            "default": false
+          },
+          "deadline_ms": {
+            "description": "Cooperative overall deadline in milliseconds, checked between host HTTP request rounds; one request can take up to 10 seconds.",
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 120000
+          },
+          "must_contain": {
+            "description": "Return a match probe instead of page text (substring or /regex/). Omit this field to read and cite the content.",
+            "type": "string"
+          },
+          "selector": {
+            "description": "A supported selector used to focus page extraction.",
+            "type": "string"
+          },
+          "links": {
+            "description": "Include extracted links.",
+            "type": "boolean",
+            "default": false
+          },
+          "media": {
+            "description": "Include extracted media references.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "instructions": "plugins/web_fetch/TOOL.md",
+      "language": "rust",
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 512,
+        "wall_clock_secs": 120
+      },
+      "name": "web_fetch",
+      "source": "plugins/web_runtime",
+      "manifold": {
+        "fs": "None",
+        "net": {
+          "OutboundHttp": null
+        },
+        "env": "None",
+        "crypto": false,
+        "child_process": false,
+        "http_timeout_ms": 10000
+      }
+    },
+    {
+      "artifact": "plugins/web_crawl.afb",
+      "description": "Explore a bounded set of pages starting at a URL using host-mediated HTTP.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "description": "HTTPS URL from which to begin.",
+            "type": "string",
+            "format": "uri",
+            "minLength": 1
+          },
+          "mode": {
+            "description": "Crawl output mode.",
+            "type": "string",
+            "enum": [
+              "full",
+              "map",
+              "content"
+            ],
+            "default": "full"
+          },
+          "focus": {
+            "description": "A focus phrase for page selection or extraction.",
+            "type": "string"
+          },
+          "max_pages": {
+            "description": "Maximum pages to fetch, capped by the implementation.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 10
+          },
+          "map_limit": {
+            "description": "Maximum URL inventory entries to return, capped at 1000.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 120
+          },
+          "max_depth": {
+            "description": "Maximum link depth from the starting URL, capped by the implementation.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8,
+            "default": 2
+          },
+          "max_total_chars": {
+            "description": "Maximum UTF-8 bytes extracted across all pages, capped by the implementation.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500000,
+            "default": 60000
+          },
+          "per_page_max": {
+            "description": "Maximum UTF-8 bytes of extracted text per page, capped by the implementation.",
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 40000,
+            "default": 8000
+          },
+          "same_host": {
+            "description": "Keep traversal on the starting host; false is not supported.",
+            "type": "boolean",
+            "const": true,
+            "default": true
+          },
+          "respect_robots": {
+            "description": "Honor available robots.txt guidance.",
+            "type": "boolean",
+            "default": true
+          },
+          "deadline_s": {
+            "description": "Cooperative overall deadline in seconds, checked between host HTTP request rounds; one request can take up to 10 seconds.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "instructions": "plugins/web_crawl/TOOL.md",
+      "language": "rust",
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 512,
+        "wall_clock_secs": 120
+      },
+      "name": "web_crawl",
+      "source": "plugins/web_runtime",
+      "manifold": {
+        "fs": "None",
+        "net": {
+          "OutboundHttp": null
+        },
+        "env": "None",
+        "crypto": false,
+        "child_process": false,
+        "http_timeout_ms": 10000
+      }
+    },
+    {
+      "name": "browser_exec",
+      "description": "Operate websites or connect to the user's running Chrome. For \"my browser\": discover, tell the user to approve Chrome's Allow dialog, then connect and select a returned target_id. For a public URL: exec Python goto_url(url), wait for content, then read in the same session. read never navigates. Print observations; reuse a task session. op=help provides recipes.",
+      "artifact": "plugins/browser_exec.afb",
+      "source": "plugins/web_runtime",
+      "language": "rust",
+      "instructions": "plugins/browser_exec/TOOL.md",
+      "bind_dir": {
+        "input_field": "connection",
+        "access": "read",
+        "description": "Private connection.json written by browser worker setup; grants access to host Python execution in that operator environment."
+      },
+      "manifold": {
+        "fs": "None",
+        "net": {
+          "OutboundHttp": [
+            "http://127.0.0.1:18765"
+          ]
+        },
+        "env": "None",
+        "crypto": false,
+        "child_process": true,
+        "http_timeout_ms": 20000
+      },
+      "limits": {
+        "memory_mib": 256,
+        "wall_clock_secs": 600,
+        "max_output_mib": 2
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection": {
+            "type": "string",
+            "description": "Optional external worker connection.json. Omit for the native Gents-managed worker."
+          },
+          "code": {
+            "type": "string",
+            "description": "Python with preloaded browser helpers; print observations. 1\u201365536 UTF-8 bytes; required for exec.",
+            "maxLength": 65536
+          },
+          "session": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "description": "Unique task name, reused across calls. Default is for sequential use only.",
+            "default": "default"
+          },
+          "timeout_s": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300,
+            "default": 120
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "exec",
+              "doctor",
+              "close",
+              "help",
+              "discover",
+              "connect",
+              "status",
+              "tabs",
+              "disconnect",
+              "read"
+            ],
+            "default": "exec",
+            "description": "discover checks local browser setup without connecting; connect requests access to running Chrome and lists tabs; tabs refreshes tabs; status shows binding; disconnect releases it; exec runs Python; help is offline. read extracts the current rendered page with the shared Rust reader."
+          },
+          "topic": {
+            "type": "string",
+            "enum": [
+              "overview",
+              "interaction",
+              "tabs",
+              "files",
+              "recovery",
+              "setup",
+              "connection"
+            ],
+            "description": "Help topic; used only with op=help. Omit connection for help."
+          },
+          "browser": {
+            "type": "string",
+            "description": "Browser ID from discover, e.g. chrome. Used by connect; never a profile name. Default chrome."
+          },
+          "target_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "description": "Tab ID from connect/tabs. Selects and pins a tab in isolated or live sessions; required before the first live exec/read. Supplying another ID changes the pin."
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 100000,
+            "default": 16000,
+            "description": "read: maximum extracted UTF-8 bytes."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000000,
+            "default": 0,
+            "description": "read: extraction byte offset. Page is read live on each call."
+          },
+          "focus": {
+            "type": "string",
+            "description": "read: focus phrase for extraction."
+          },
+          "selector": {
+            "type": "string",
+            "description": "read: CSS selector to scope extracted content."
+          }
+        }
+      },
+      "service": {
+        "argv": [
+          "uv",
+          "run",
+          "--python",
+          "3.13",
+          "--locked",
+          "--project",
+          "{pack}/worker",
+          "python",
+          "{pack}/worker/browser_worker.py",
+          "managed",
+          "--state",
+          "{state}/worker",
+          "--allow-host-execution"
+        ],
+        "startup_timeout_secs": 120,
+        "skip_when": {
+          "op": "help"
+        },
+        "optional": true
+      }
+    }
+  ],
+  "tags": [
+    "web",
+    "research",
+    "search",
+    "plugin",
+    "browser",
+    "automation"
+  ],
+  "version": "1.1.2",
+  "plugin_interface": 1
+}
