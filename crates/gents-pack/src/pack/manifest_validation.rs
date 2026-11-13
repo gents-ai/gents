@@ -17,6 +17,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
         manifest.manifest_version == 1,
         "unsupported pack manifest version"
     );
+    super::core_packs::check_plugin_interface(manifest)?;
     anyhow::ensure!(
         manifest.metadata.kind == PackKind::Documents || manifest.metadata.dependencies.is_empty(),
         "only document packs support package dependencies; nested dependencies are unsupported"

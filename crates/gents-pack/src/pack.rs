@@ -14,6 +14,7 @@ pub use agent_bindings::{
     PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
 };
 pub mod authoring;
+pub mod core_packs;
 pub mod home_install;
 pub mod home_removal;
 mod inference;
@@ -200,6 +201,11 @@ pub struct PackManifest {
     )]
     #[schemars(transform = gents_documents::accepts_null)]
     pub external_dependencies: Vec<PackageExternalDependency>,
+    /// The plugin interface the pack was built for (Lean
+    /// `Pack.CorePacks.builtFor`): absent is interface 1, from before the
+    /// interface had a version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_interface: Option<u32>,
 }
 
 impl PackManifest {
