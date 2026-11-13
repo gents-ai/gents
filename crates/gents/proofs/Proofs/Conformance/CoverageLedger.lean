@@ -2299,8 +2299,16 @@ def caseCoverage : List CoverageEntry :=
       "workspace_path_alias_admission")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_claimed_publication_cases"
-      "GoalClaimedPublicationCases")
+      "family"
+      "goal_claimed_publication_contracts_historical")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_claimed_publication_contracts_running_wait")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_claimed_publication_contracts_wait_observation")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

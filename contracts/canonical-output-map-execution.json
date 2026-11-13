@@ -80,7 +80,7 @@
   },
   {
     "id":"execution.trace-goal","constructors":["SessionComposition.Trace.activateGoal","SessionComposition.Trace.goal"],"model_symbols":[{"file":"crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/GoalContinuation.lean","symbol":"CanonicalOutput.Execution.GoalContinuation.publishGoalChild?"},{"file":"crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/GoalContinuation.lean","symbol":"CanonicalOutput.Execution.GoalContinuation.childActivation"}],
-    "generated_groups":["goal_claimed_publication_cases"],"fixture_status":"summary_only","native_owner_paths":["crates/gents-automation/src/goal/claimed_publication.rs","crates/gents-automation/src/goal/continuation.rs"],"consumer_paths":["crates/gents-automation/src/goal/claimed_publication/contract_tests.rs","crates/gents-automation/src/goal/pushdown_tests.rs"],"native_status":"pending",
+    "generated_groups":[],"fixture_status":"not_exported","native_owner_paths":["crates/gents-automation/src/goal/claimed_publication.rs","crates/gents-automation/src/goal/continuation.rs"],"consumer_paths":["crates/gents-automation/src/goal/claimed_publication/contract_tests.rs","crates/gents-automation/src/goal/pushdown_tests.rs"],"native_status":"pending",
     "required_cases":["Fresh publication requires idle queue and exact terminal predecessor; replay is inert while paused.","Goal activation consumes actual publication proof and fresh retry ownership."],"retired_bindings":[]
   },
   {

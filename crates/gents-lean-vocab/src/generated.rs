@@ -1120,7 +1120,6 @@ pub struct LeanContractSnapshot {
     pub generated_by: String,
     pub vocabularies: Vec<LeanVocabularyContract>,
     pub state_machines: Vec<LeanStateMachineContract>,
-    pub goal_claimed_publication_cases: Vec<LeanGoalClaimedPublicationCase>,
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
     pub trigger_delivery_latest_admission_cases: serde_json::Value,
     pub workspace_path_capability_cases: Vec<LeanWorkspacePathCapabilityCase>,
@@ -1145,7 +1144,6 @@ pub struct LeanContractSnapshot {
     pub identity_readiness_recovery_cases: Vec<serde_json::Value>,
     pub identity_readiness_observation_cases: Vec<serde_json::Value>,
     pub identity_readiness_settled_cases: Vec<LeanIdentityReadinessSettledCase>,
-    pub goal_link_cases: Vec<LeanGoalLinkCase>,
     pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
     pub client_request_closure_cases: Vec<serde_json::Value>,
@@ -1419,159 +1417,6 @@ pub struct LeanFoldQueueEntry {
     pub requester_id: Option<u64>,
     pub turn_context: u64,
     pub fresh: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCase {
-    pub before: LeanGoalClaimedPublicationCaseBefore,
-    pub commit: bool,
-    pub expected: LeanGoalClaimedPublicationCaseExpected,
-    pub name: String,
-    pub observation: LeanGoalClaimedPublicationCaseObservation,
-    pub outcome: String,
-    pub request: LeanGoalClaimedPublicationCaseRequest,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseBefore {
-    pub blocked_audits: u64,
-    pub children: Vec<LeanGoalClaimedPublicationCaseBeforeChildrenItem>,
-    pub last_continued_from: u64,
-    pub latest_request: u64,
-    pub sequence: u64,
-    pub status: String,
-    pub token_budget: u64,
-    pub tokens_used: u64,
-    pub wrapup_completed: bool,
-    pub wrapup_requested: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseBeforeChildrenItem {
-    pub child: u64,
-    pub correlation: String,
-    pub goal: u64,
-    pub owner: String,
-    pub predecessor: u64,
-    pub predecessor_doc: u64,
-    pub semantic_fingerprint: String,
-    pub sequence: u64,
-    pub session: String,
-    pub source_document: String,
-    pub trigger_context: String,
-    pub workspace_fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseExpected {
-    pub blocked_audits: u64,
-    pub children: Vec<LeanGoalClaimedPublicationCaseExpectedChildrenItem>,
-    pub last_continued_from: u64,
-    pub latest_request: u64,
-    pub sequence: u64,
-    pub status: String,
-    pub token_budget: u64,
-    pub tokens_used: u64,
-    pub wrapup_completed: bool,
-    pub wrapup_requested: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseExpectedChildrenItem {
-    pub child: u64,
-    pub correlation: String,
-    pub goal: u64,
-    pub owner: String,
-    pub predecessor: u64,
-    pub predecessor_doc: u64,
-    pub semantic_fingerprint: String,
-    pub sequence: u64,
-    pub session: String,
-    pub source_document: String,
-    pub trigger_context: String,
-    pub workspace_fingerprint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseObservation {
-    pub backgrounds: Option<
-        Vec<LeanGoalClaimedPublicationCaseObservationBackgroundsItem>,
-    >,
-    pub storage_failed: bool,
-    pub waits: Vec<LeanGoalClaimedPublicationCaseObservationWaitsItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseObservationBackgroundsItem {
-    pub doc_id: u64,
-    pub handle: String,
-    pub origin: LeanGoalClaimedPublicationCaseObservationBackgroundsItemOrigin,
-    pub owner: String,
-    pub requester: String,
-    pub session: String,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseObservationBackgroundsItemOrigin {
-    pub kind: String,
-    pub parent_tool_doc: Option<u64>,
-    pub stable_key: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseObservationWaitsItem {
-    pub accepted_handle: String,
-    pub accepted_tool: String,
-    pub doc_id: u64,
-    pub owner: String,
-    pub parent_request_doc: u64,
-    pub replied: bool,
-    pub reply: String,
-    pub reply_handle: String,
-    pub requester: String,
-    pub session: String,
-    pub terminal: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseRequest {
-    pub authorized: bool,
-    pub binding: LeanGoalClaimedPublicationCaseRequestBinding,
-    pub expected_last_continued_from: u64,
-    pub expected_sequence: u64,
-    pub expected_status: String,
-    pub parent_belongs_to_goal: bool,
-    pub requester: String,
-    pub session_idle: bool,
-    pub terminal_parent: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalClaimedPublicationCaseRequestBinding {
-    pub child: u64,
-    pub correlation: String,
-    pub goal: u64,
-    pub owner: String,
-    pub predecessor: u64,
-    pub predecessor_doc: u64,
-    pub semantic_fingerprint: String,
-    pub sequence: u64,
-    pub session: String,
-    pub source_document: String,
-    pub trigger_context: String,
-    pub workspace_fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2005,38 +1850,6 @@ pub struct LeanGoalCreateCase {
     pub existing: bool,
     pub existing_matches: bool,
     pub expected: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalLinkCase {
-    pub collection: String,
-    pub actor: String,
-    pub mode: String,
-    pub commit: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub owner: Option<String>,
-    pub initial: LeanGoalLinkState,
-    pub steps: Vec<LeanGoalLinkStep>,
-    pub after_revocation: LeanGoalLinkState,
-    pub repair_allowed: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalLinkState {
-    pub parent: bool,
-    pub worker: bool,
-    pub linked: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalLinkStep {
-    pub parent_ok: bool,
-    pub worker_ok: bool,
-    pub mark_ok: bool,
-    pub after: LeanGoalLinkState,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

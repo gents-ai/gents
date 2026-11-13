@@ -1,8 +1,5 @@
 use super::*;
 use crate::goal::continuation::goal_continuation_identity;
-use gents_lean_vocab::{
-    LeanGoalClaimedPublicationCaseBefore, LeanGoalClaimedPublicationCaseExpected,
-};
 use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
 use gents_store::identity::NodeIdentity;
@@ -47,53 +44,39 @@ async fn verified_client_lifecycle(
     lifecycle
 }
 
-macro_rules! snapshot_value {
-    ($snapshot:expr) => {{
-        let snapshot = $snapshot;
-        json!({
-            "status": snapshot.status,
-            "blocked_audits": snapshot.blocked_audits,
-            "wrapup_requested": snapshot.wrapup_requested,
-            "wrapup_completed": snapshot.wrapup_completed,
-            "sequence": snapshot.sequence,
-            "last_continued_from": snapshot.last_continued_from,
-            "latest_request": snapshot.latest_request,
-            "children": snapshot.children.iter().map(|child| json!({
-                "goal": child.goal,
-                "owner": child.owner,
-                "session": child.session,
-                "predecessor": child.predecessor,
-                "predecessor_doc": child.predecessor_doc,
-                "correlation": child.correlation,
-                "source_document": child.source_document,
-                "trigger_context": child.trigger_context,
-                "workspace_fingerprint": child.workspace_fingerprint,
-                "semantic_fingerprint": child.semantic_fingerprint,
-                "child": child.child,
-                "sequence": child.sequence,
-            })).collect::<Vec<_>>(),
-            "tokens_used": snapshot.tokens_used,
-            "token_budget": snapshot.token_budget,
-        })
-    }};
+fn claimed_goal_state() -> serde_json::Value {
+    json!({"status":"active","blocked_audits":2,"wrapup_requested":false,
+        "wrapup_completed":false,"sequence":1,"last_continued_from":10,"latest_request":10,
+        "children":[],"tokens_used":37,"token_budget":1000})
 }
 
-fn before_value(before: &LeanGoalClaimedPublicationCaseBefore) -> serde_json::Value {
-    snapshot_value!(before)
-}
-
-fn expected_value(expected: &LeanGoalClaimedPublicationCaseExpected) -> serde_json::Value {
-    snapshot_value!(expected)
+fn publication_outcome(result: &Result<ClaimedPublication>, commit: bool) -> String {
+    match result {
+        Ok(ClaimedPublication::Created(_)) if !commit => "rolled_back",
+        Ok(ClaimedPublication::Created(_)) => "created",
+        Ok(ClaimedPublication::Recovered(_)) => "recovered",
+        Ok(ClaimedPublication::Stale) => "stale",
+        Ok(ClaimedPublication::Illegal) => "illegal",
+        Ok(ClaimedPublication::Deferred) => "deferred",
+        Ok(ClaimedPublication::InvalidEvidence(_)) => "invalid_evidence",
+        Err(error) if gents_store::config_client::is_transaction_step_unavailable(error) => {
+            "unavailable"
+        }
+        Err(error) => match gents_protocol::error_chain::find_map_source(&**error, |cause| {
+            cause.downcast_ref::<crate::goal::continuation::ContinuationRefusal>()
+        }) {
+            Some(crate::goal::continuation::ContinuationRefusal::Denied(_)) => "denied",
+            Some(crate::goal::continuation::ContinuationRefusal::Illegal(_)) => "illegal",
+            Some(crate::goal::continuation::ContinuationRefusal::Conflict(_)) => "conflict",
+            None => panic!("untyped claimed publication failure: {error:#}"),
+        },
+    }
+    .to_owned()
 }
 
 #[tokio::test]
 async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
-    let located = gents_lean_vocab::lean_contract_snapshot()
-        .goal_claimed_publication_cases
-        .iter()
-        .find(|case| case.name == "claimed_active_publishes_without_reclaim")
-        .unwrap();
-    let before = before_value(&located.before);
+    let before = claimed_goal_state();
     for case in
         gents_lean_vocab::families::goal_claimed_publication_contracts_claimed_target::cases()
     {
@@ -165,7 +148,6 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
             PARENT,
             "Original signed continuation",
             false,
-            &std::sync::Mutex::new(None),
         )
         .await;
         if forged {
@@ -175,7 +157,10 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
             );
             txn.discard().await.unwrap();
         } else {
-            let receipt = result.unwrap().expect("matching claimed publication");
+            let receipt = result
+                .unwrap()
+                .receipt()
+                .expect("matching claimed publication");
             assert_eq!(receipt.created, !duplicate);
             let row = txn
                 .execute(&format!(
@@ -250,12 +235,7 @@ fn generated_claimed_identity_candidates_follow_the_session_agent() {
 
 #[tokio::test]
 async fn generated_claimed_identity_cases_drive_real_transactions() {
-    let located = gents_lean_vocab::lean_contract_snapshot()
-        .goal_claimed_publication_cases
-        .iter()
-        .find(|case| case.name == "claimed_active_publishes_without_reclaim")
-        .unwrap();
-    let before = before_value(&located.before);
+    let before = claimed_goal_state();
     for case in
         gents_lean_vocab::families::goal_claimed_publication_contracts_identity_staged::cases()
     {
@@ -310,7 +290,6 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
             PARENT,
             "Original signed continuation",
             false,
-            &std::sync::Mutex::new(None),
         )
         .await;
         case.check(
@@ -324,114 +303,116 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
 }
 
 async fn run_generated_running_wait() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .goal_claimed_publication_cases
-        .iter()
-        .find(|case| case.name == "claimed_wait_running_defers")
-        .expect("generated running wait case");
-    assert_eq!(case.outcome, "deferred");
-    assert_eq!(case.request.binding.predecessor_doc, 100);
-    assert_eq!(case.observation.waits[0].reply, "timed_out_running");
-    assert_eq!(
-        case.observation.backgrounds.as_ref().unwrap()[0].state,
-        "running"
-    );
-    let fixture = Fixture::new_with_parent_state(&before_value(&case.before), false).await;
-    let mut request = verified_client_lifecycle(&fixture, fixture.parent.clone()).await;
-    assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let mut spawn = publish_accepted_on_claimed_request(
-        fixture.node.clone(),
-        &mut request,
-        fixture.identity.did(),
-        0,
-        "spawn_process",
-        "goal-spawn",
-        json!({"tool_name":"bash","args":{"command":"sleep 1"}}),
-        AwaitMode::Foreground,
-        true,
-    )
-    .await
-    .unwrap();
-    let handle = format!("spawned:{}", spawn.doc_id().unwrap());
-    let mut background = spawn
-        .admit_spawned_background(
-            SpawnedBackgroundToolAdmission {
-                tool_name: "bash".into(),
-                deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
-                selected_tool_identity: None,
-            },
-            &json!({"ok":true,"tool_call_id":handle,"status":"running"}).to_string(),
+    for generated in
+        gents_lean_vocab::families::goal_claimed_publication_contracts_running_wait::cases::<
+            String,
+            String,
+            GoalStatus,
+            String,
+        >()
+    {
+        let case = &generated.input;
+        assert_eq!(case.request.binding.predecessor_doc, 100);
+        assert_eq!(case.observation.waits[0].reply, "timed_out_running");
+        assert_eq!(
+            case.observation.backgrounds.as_ref().unwrap()[0].state,
+            "running"
+        );
+        let before = serde_json::to_value(&case.before).unwrap();
+        let fixture = Fixture::new_with_parent_state(&before, false).await;
+        let mut request = verified_client_lifecycle(&fixture, fixture.parent.clone()).await;
+        assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
+        let mut spawn = publish_accepted_on_claimed_request(
+            fixture.node.clone(),
+            &mut request,
+            fixture.identity.did(),
+            0,
+            "spawn_process",
+            "goal-spawn",
+            json!({"tool_name":"bash","args":{"command":"sleep 1"}}),
+            AwaitMode::Foreground,
+            true,
         )
         .await
         .unwrap();
-    background.start_running().await.unwrap();
-    let mut wait = publish_accepted_on_claimed_request(
-        fixture.node.clone(),
-        &mut request,
-        fixture.identity.did(),
-        1,
-        "wait_process",
-        "goal-wait",
-        json!({"tool_call_id":handle,"timeout_secs":1}),
-        AwaitMode::Foreground,
-        true,
-    )
-    .await
-    .unwrap();
-    let terminal_header = wait.accepted_header_doc_id().unwrap().to_owned();
-    wait.complete(
-        &json!({"ok":false,"tool_call_id":handle,"tool_name":"bash",
-            "await_mode":"background","status":"running","result":"",
-            "error":{"reason":"wait_timeout","failure_class":"external"}})
-        .to_string(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        request
-            .terminalize_owned(
-                RequestTerminalOutcome::Completed,
-                gents_protocol::output::TerminalOutput::Message {
-                    message_doc_id: terminal_header,
+        let handle = format!("spawned:{}", spawn.doc_id().unwrap());
+        let mut background = spawn
+            .admit_spawned_background(
+                SpawnedBackgroundToolAdmission {
+                    tool_name: "bash".into(),
+                    deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                    selected_tool_identity: None,
                 },
-                None,
+                &json!({"ok":true,"tool_call_id":handle,"status":"running"}).to_string(),
             )
             .await
-            .unwrap(),
-        TerminalizeResult::Won
-    );
-    assert_eq!(
-        fixture.observe().await,
-        before_value(&case.before),
-        "running wait prestate"
-    );
-    let observed = fixture.current_goal().await;
-    let result = publish_claimed_continuation_with_identity(
-        &fixture.node,
-        fixture.agent.as_ref(),
-        &observed,
-        PARENT,
-        "Original signed continuation",
-        false,
-    )
-    .await
-    .unwrap();
-    assert!(result.is_none(), "generated intentional wait must defer");
-    assert_eq!(fixture.observe().await, expected_value(&case.expected));
-    background.complete("finished").await.unwrap();
-    assert!(publish_claimed_continuation_with_identity(
-        &fixture.node,
-        fixture.agent.as_ref(),
-        &observed,
-        PARENT,
-        "Original signed continuation",
-        false,
-    )
-    .await
-    .unwrap()
-    .is_none());
-    assert_eq!(fixture.observe().await, expected_value(&case.expected));
-    let report =
+            .unwrap();
+        background.start_running().await.unwrap();
+        let mut wait = publish_accepted_on_claimed_request(
+            fixture.node.clone(),
+            &mut request,
+            fixture.identity.did(),
+            1,
+            "wait_process",
+            "goal-wait",
+            json!({"tool_call_id":handle,"timeout_secs":1}),
+            AwaitMode::Foreground,
+            true,
+        )
+        .await
+        .unwrap();
+        let terminal_header = wait.accepted_header_doc_id().unwrap().to_owned();
+        wait.complete(
+            &json!({"ok":false,"tool_call_id":handle,"tool_name":"bash",
+            "await_mode":"background","status":"running","result":"",
+            "error":{"reason":"wait_timeout","failure_class":"external"}})
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            request
+                .terminalize_owned(
+                    RequestTerminalOutcome::Completed,
+                    gents_protocol::output::TerminalOutput::Message {
+                        message_doc_id: terminal_header,
+                    },
+                    None,
+                )
+                .await
+                .unwrap(),
+            TerminalizeResult::Won
+        );
+        assert_eq!(fixture.observe().await, before, "running wait prestate");
+        let observed = fixture.current_goal().await;
+        let result = publish_claimed_continuation(
+            &fixture.node,
+            fixture.agent.as_ref(),
+            &observed,
+            PARENT,
+            "Original signed continuation",
+            false,
+        )
+        .await;
+        let deferred = fixture.observe().await;
+        generated.check(gents_lean_vocab::families::goal_claimed_publication_contracts_running_wait::PublicationOutput {
+        expected: gents_lean_vocab::family::recode(&deferred),
+        outcome: publication_outcome(&result, case.commit),
+    });
+        background.complete("finished").await.unwrap();
+        assert!(publish_claimed_continuation_with_identity(
+            &fixture.node,
+            fixture.agent.as_ref(),
+            &observed,
+            PARENT,
+            "Original signed continuation",
+            false,
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert_eq!(fixture.observe().await, deferred);
+        let report =
         gents_toolcalls::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
             &fixture.node,
             fixture.identity.did(),
@@ -439,31 +420,32 @@ async fn run_generated_running_wait() {
         )
         .await
         .unwrap();
-    assert_eq!(report.side_effects_converged, 1);
-    assert!(publish_claimed_continuation_with_identity(
-        &fixture.node,
-        fixture.agent.as_ref(),
-        &observed,
-        PARENT,
-        "Original signed continuation",
-        false,
-    )
-    .await
-    .unwrap()
-    .is_none());
-    let after = fixture.current_goal().await;
-    assert_eq!(
-        (
-            after.continuation_sequence(),
-            after.last_continued_from_request_id
-        ),
-        (
-            observed.continuation_sequence(),
-            observed.last_continued_from_request_id.clone()
-        ),
-        "the old-parent claim publishes nothing once the wake is the latest request"
-    );
-    fixture.node.shutdown().await.expect("node shutdown");
+        assert_eq!(report.side_effects_converged, 1);
+        assert!(publish_claimed_continuation_with_identity(
+            &fixture.node,
+            fixture.agent.as_ref(),
+            &observed,
+            PARENT,
+            "Original signed continuation",
+            false,
+        )
+        .await
+        .unwrap()
+        .is_none());
+        let after = fixture.current_goal().await;
+        assert_eq!(
+            (
+                after.continuation_sequence(),
+                after.last_continued_from_request_id
+            ),
+            (
+                observed.continuation_sequence(),
+                observed.last_continued_from_request_id.clone()
+            ),
+            "the old-parent claim publishes nothing once the wake is the latest request"
+        );
+        fixture.node.shutdown().await.expect("node shutdown");
+    }
 }
 
 async fn discharge_completion_obligation(
@@ -500,45 +482,19 @@ async fn discharge_completion_obligation(
     assert_eq!(updated["_docID"], doc_id);
 }
 
-const ABANDONED_RESCAN: &str = "abandoned_wrapup_rescan_makes_no_write";
-const ABANDONED_CLEARED: &str = "abandoned_wrapup_never_publishes_after_evidence_clears";
-
 async fn run_generated_wait_observations() {
-    let contracts = gents_lean_vocab::lean_contract_snapshot();
-    let follow_up = |name: &str| {
-        contracts
-            .goal_claimed_publication_cases
-            .iter()
-            .find(|case| case.name == name)
-            .map(|case| (expected_value(&case.expected), case.outcome.clone()))
-            .expect("generated abandoned wrap-up follow-up")
-    };
-    let (rescan_expected, rescan_outcome) = follow_up(ABANDONED_RESCAN);
-    let (cleared_expected, cleared_outcome) = follow_up(ABANDONED_CLEARED);
-    assert_eq!(
-        (rescan_outcome.as_str(), cleared_outcome.as_str()),
-        ("illegal", "illegal")
-    );
-    let cases: Vec<_> = contracts
-        .goal_claimed_publication_cases
-        .iter()
-        .filter(|case| {
-            case.name != ABANDONED_RESCAN
-                && case.name != ABANDONED_CLEARED
-                && (case.name == "launched_without_wait_publishes"
-                    || (!case.observation.waits.is_empty()
-                        && case.name != "claimed_wait_running_defers"))
-        })
-        .collect();
-    let mut abandoned_follow_ups = 0;
-    assert_eq!(
-        cases.len(),
-        25,
-        "every new generated wait case is owner-bound"
-    );
-    for case in cases {
+    for generated in
+        gents_lean_vocab::families::goal_claimed_publication_contracts_wait_observation::cases::<
+            String,
+            String,
+            GoalStatus,
+            String,
+        >()
+    {
+        let case = &generated.input;
+        let before = serde_json::to_value(&case.before).unwrap();
         let fixture = Fixture::new_with_earlier_request(
-            &before_value(&case.before),
+            &before,
             false,
             (case.name == "unrelated_wait_cannot_suppress").then_some("older-wait-parent"),
         )
@@ -843,12 +799,7 @@ async fn run_generated_wait_observations() {
             "{}",
             case.name
         );
-        assert_eq!(
-            fixture.observe().await,
-            before_value(&case.before),
-            "{} prestate",
-            case.name
-        );
+        assert_eq!(fixture.observe().await, before, "{} prestate", case.name);
         if case.name == "unreadable_target_fails_closed" {
             let target_doc = target_doc.as_deref().unwrap();
             execute(&fixture.agent_access(), &format!(
@@ -884,7 +835,7 @@ async fn run_generated_wait_observations() {
         }
         let observed = fixture.current_goal().await;
         let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
-        let publication = publish_claimed_continuation_with_identity(
+        let publication = publish_claimed_continuation(
             &fixture.node,
             fixture.agent.as_ref(),
             &observed,
@@ -901,29 +852,10 @@ async fn run_generated_wait_observations() {
         } else {
             publication.await
         };
-        match case.outcome.as_str() {
-            "created" => {
-                let receipt = result.unwrap().expect(&case.name);
-                assert!(
-                    receipt.created,
-                    "{} recovered instead of creating",
-                    case.name
-                );
-            }
-            "deferred" => assert!(result.unwrap().is_none(), "{}", case.name),
-            "unavailable" => {
-                let error = result.expect_err(&case.name);
-                assert!(
-                    gents_store::config_client::is_transaction_step_unavailable(&error),
-                    "{}: {error:#}",
-                    case.name
-                );
-                assert_eq!(
-                    fixture.observe().await,
-                    expected_value(&case.expected),
-                    "{}",
-                    case.name
-                );
+        let outcome = publication_outcome(&result, case.commit);
+        let published = fixture.observe().await;
+        match result {
+            Err(error) if gents_store::config_client::is_transaction_step_unavailable(&error) => {
                 let retried = publish_claimed_continuation_with_identity(
                     &fixture.node,
                     fixture.agent.as_ref(),
@@ -940,8 +872,7 @@ async fn run_generated_wait_observations() {
                     case.name
                 );
             }
-            "invalid_evidence" => {
-                assert!(result.unwrap().is_none(), "{}", case.name);
+            Ok(ClaimedPublication::InvalidEvidence(_)) => {
                 let stopped = fixture.current_goal().await;
                 assert!(
                     stopped
@@ -963,20 +894,14 @@ async fn run_generated_wait_observations() {
                             wrapup,
                         )
                     };
-                    assert!(
-                        rescan(wrapup).await.unwrap().is_none(),
-                        "{ABANDONED_RESCAN}"
-                    );
-                    assert_eq!(
-                        fixture.observe().await,
-                        rescan_expected,
-                        "{ABANDONED_RESCAN}"
-                    );
+                    assert!(rescan(wrapup).await.unwrap().is_none(), "{}", case.name);
+                    assert_eq!(fixture.observe().await, published, "{}", case.name);
                     let rescanned = fixture.current_goal().await;
                     assert_eq!(
                         (&rescanned.updated_at, &rescanned.last_failure),
                         (&stopped.updated_at, &stopped.last_failure),
-                        "{ABANDONED_RESCAN}: a rescan must not write the Goal again"
+                        "{}: a rescan must not write the Goal again",
+                        case.name
                     );
                     for wait_doc in &wait_docs {
                         execute(&fixture.agent_access(), &format!(
@@ -984,32 +909,18 @@ async fn run_generated_wait_observations() {
                             escape_graphql_string(wait_doc),
                         )).await;
                     }
-                    assert!(
-                        rescan(wrapup).await.unwrap().is_none(),
-                        "{ABANDONED_CLEARED}"
-                    );
-                    assert_eq!(
-                        fixture.observe().await,
-                        cleared_expected,
-                        "{ABANDONED_CLEARED}"
-                    );
-                    abandoned_follow_ups += 1;
+                    assert!(rescan(wrapup).await.unwrap().is_none(), "{}", case.name);
+                    assert_eq!(fixture.observe().await, published, "{}", case.name);
                 }
             }
-            outcome => panic!("unmapped generated wait outcome {outcome}"),
+            _ => {}
         }
-        assert_eq!(
-            fixture.observe().await,
-            expected_value(&case.expected),
-            "{}",
-            case.name
-        );
+        generated.check(gents_lean_vocab::families::goal_claimed_publication_contracts_wait_observation::PublicationOutput {
+            expected: gents_lean_vocab::family::recode(&published),
+            outcome,
+        });
         fixture.node.shutdown().await.expect("node shutdown");
     }
-    assert_eq!(
-        abandoned_follow_ups, 1,
-        "the budget wrap-up case drives its follow-up scans"
-    );
 }
 
 #[tokio::test]
@@ -1020,38 +931,33 @@ async fn generated_goal_claimed_publication_cases_drive_real_transactions() {
 }
 
 async fn run_historical_publication_cases() {
-    let contracts = gents_lean_vocab::lean_contract_snapshot();
-    let mut seen = std::collections::BTreeSet::new();
-    for case in contracts
-        .goal_claimed_publication_cases
-        .iter()
-        .filter(|case| {
-            case.observation.waits.is_empty()
-                && case.name != "launched_without_wait_publishes"
-                && case.name != ABANDONED_CLEARED
-        })
+    for generated in
+        gents_lean_vocab::families::goal_claimed_publication_contracts_historical::cases::<
+            String,
+            String,
+            GoalStatus,
+            String,
+        >()
     {
-        assert!(seen.insert(case.name.clone()), "duplicate generated case");
-        let fixture = Fixture::new(&before_value(&case.before)).await;
-        if !case.before.children.is_empty() {
-            fixture.seed_child(case.outcome == "conflict").await;
+        let case = &generated.input;
+        let before = serde_json::to_value(&case.before).unwrap();
+        let fixture = Fixture::new(&before).await;
+        if let Some(child) = case.before.children.first() {
+            fixture
+                .seed_child(child.semantic_fingerprint != case.request.binding.semantic_fingerprint)
+                .await;
         }
         if case.before.latest_request == 40 {
             fixture
                 .other_request("claimed-later-request", "2030-01-01T00:00:00Z", "completed")
                 .await;
         }
-        assert_eq!(
-            fixture.observe().await,
-            before_value(&case.before),
-            "{} initial",
-            case.name
-        );
+        assert_eq!(fixture.observe().await, before, "{} initial", case.name);
         let mut observed = fixture.current_goal().await;
-        observed.status = case.request.expected_status.clone();
+        observed.status = case.request.expected_status.as_str().to_owned();
         observed.continuation_sequence = i64::try_from(case.request.expected_sequence).ok();
         observed.last_continued_from_request_id = match case.request.expected_last_continued_from {
-            10 => Some(PARENT.into()),
+            Some(10) => Some(PARENT.into()),
             value => panic!("unmapped observed watermark {value:?}"),
         };
         let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
@@ -1070,18 +976,17 @@ async fn run_historical_publication_cases() {
             PARENT,
             "Original signed continuation",
             wrapup,
-            &std::sync::Mutex::new(None),
         )
         .await;
-        match case.outcome.as_str() {
-            "created" | "rolled_back" => {
-                let receipt = result.unwrap().expect("current claim must stage a child");
+        let outcome = publication_outcome(&result, case.commit);
+        match result {
+            Ok(ClaimedPublication::Created(receipt)) => {
                 assert!(receipt.created);
                 let staged_goal = load_canonical_goal_in_txn(&txn, fixture.identity.did(), SESSION)
                     .await
                     .unwrap()
                     .unwrap();
-                assert_eq!(staged_goal.status, case.before.status);
+                assert_eq!(staged_goal.status, case.before.status.as_str());
                 assert_eq!(
                     staged_goal.continuation_sequence(),
                     i64::try_from(case.before.sequence).unwrap()
@@ -1122,8 +1027,7 @@ async fn run_historical_publication_cases() {
                     txn.discard().await.unwrap();
                 }
             }
-            "recovered" => {
-                let receipt = result.unwrap().expect("existing child must recover");
+            Ok(ClaimedPublication::Recovered(receipt)) => {
                 assert!(!receipt.created);
                 assert_eq!(
                     receipt.request_id,
@@ -1133,40 +1037,14 @@ async fn run_historical_publication_cases() {
                 );
                 txn.discard().await.unwrap();
             }
-            "stale" => {
-                assert!(
-                    result.unwrap().is_none(),
-                    "{} must not publish from stale observation",
-                    case.name
-                );
-                txn.discard().await.unwrap();
-            }
-            "conflict" => {
-                let error = format!("{:#}", result.unwrap_err());
-                assert!(
-                    error.contains("binding")
-                        || error.contains("receipt")
-                        || error.contains("immutable"),
-                    "{}: {error}",
-                    case.name
-                );
-                txn.discard().await.unwrap();
-            }
-            outcome => panic!("unmapped generated publication outcome {outcome}"),
+            _ => txn.discard().await.unwrap(),
         }
-        assert_eq!(
-            fixture.observe().await,
-            expected_value(&case.expected),
-            "{} durable result",
-            case.name
-        );
+        generated.check(gents_lean_vocab::families::goal_claimed_publication_contracts_historical::PublicationOutput {
+            expected: gents_lean_vocab::family::recode(&fixture.observe().await),
+            outcome,
+        });
         fixture.node.shutdown().await.expect("node shutdown");
     }
-    assert_eq!(
-        seen.len(),
-        8,
-        "all historical generated publications must bind"
-    );
 }
 
 #[tokio::test]
