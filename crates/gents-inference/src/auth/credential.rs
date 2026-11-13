@@ -6,7 +6,7 @@ mod document;
 mod labels;
 mod resolve;
 mod rows;
-mod runtime_account;
+pub(crate) mod runtime_account;
 mod serving;
 mod serving_accounts;
 mod sign_in;

@@ -25,3 +25,6 @@ mod documents_desired_state_tests;
 
 #[cfg(test)]
 mod config_store_pushdown_tests;
+
+#[cfg(test)]
+mod access_classification_tests;

@@ -53,4 +53,5 @@ libc = "0.2"
 
 [dev-dependencies]
 gents-lean-vocab.workspace = true
+gents-store = { workspace = true, features = ["test-fixtures"] }
 gents = { path = "../gents", features = ["test-home-guard"] }
