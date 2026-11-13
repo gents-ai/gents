@@ -64,9 +64,7 @@ where
             ) {
                 Ok(()) => Ok(Launched::Started),
                 Err(error) => {
-                    match error
-                        .downcast::<gents_service::native_service::BackgroundApprovalPending>()
-                    {
+                    match gents_service::native_service::BackgroundApprovalPending::take(error) {
                         Ok(pending) => Ok(Launched::ApprovalPending(pending.detail)),
                         Err(error) => Err(error),
                     }
