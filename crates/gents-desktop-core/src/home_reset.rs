@@ -1004,7 +1004,7 @@ impl HomeResetPlan {
                 scope,
                 path: store.data_path.to_string_lossy().into_owned(),
                 detail: store.to_string(),
-                older: store.kind.is_older(),
+                older: store.kind.made_by_older_version(),
                 unsafe_key: store.kind
                     == gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey,
             }

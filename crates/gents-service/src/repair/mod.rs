@@ -918,7 +918,7 @@ async fn older_refused(home: &Path, last_exit: Option<&ServiceExit>) -> Option<I
         .and_then(Result::ok)
         .flatten();
     let kind = on_disk.unwrap_or(reported);
-    kind.is_older().then_some(IncompatibleStore {
+    kind.made_by_older_version().then_some(IncompatibleStore {
         kind,
         data_path: data,
     })

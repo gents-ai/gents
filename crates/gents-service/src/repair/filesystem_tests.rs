@@ -198,7 +198,7 @@ async fn an_older_home_is_reported_and_left_exactly_as_it_was() {
         assert_eq!(checksum(temp.path()), before);
         match receipt.outcome {
             RepairOutcome::Blocked(Blocker::StoreRefused { kind, message }) => {
-                assert!(kind.is_older(), "{kind:?}");
+                assert!(kind.made_by_older_version(), "{kind:?}");
                 assert_ne!(kind, IncompatibleStoreKind::ForeignVersion);
                 assert!(message.contains("older version of Gents"), "{message}");
                 assert!(message.contains("Nothing in it was changed"), "{message}");

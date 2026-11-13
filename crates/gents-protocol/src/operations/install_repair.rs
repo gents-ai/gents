@@ -18,11 +18,19 @@ pub enum IncompatibleStoreKind {
 }
 
 impl IncompatibleStoreKind {
+    /// Whether starting fresh may be offered for a store refused as this
+    /// kind (Lean `StoreKeyCustody.Outcome.older`): never for one a newer or
+    /// unknown version wrote, which that version may still want.
+    pub fn is_older(self) -> bool {
+        !matches!(self, Self::ForeignVersion)
+    }
+
     /// A store an earlier Gents made that this release cannot open. This
     /// release is fresh-init only (migrations begin after 1.0), so such a
-    /// home is reported and left as it is. A key others can read, a missing key and a
-    /// damaged store are not about a version, and are named as what they are.
-    pub fn is_older(self) -> bool {
+    /// home is reported and left as it is. A key others can read, a missing
+    /// key and a damaged store are not about a version, and are named as
+    /// what they are.
+    pub fn made_by_older_version(self) -> bool {
         matches!(
             self,
             Self::LegacyRocksDb
@@ -601,7 +609,7 @@ impl StoreVerdict {
             IncompatibleStoreKind::InsecureKey => Self::InsecureKey,
             IncompatibleStoreKind::MissingStoreKey => Self::MissingKey,
             IncompatibleStoreKind::UnsupportedOrCorrupt => Self::Corrupt,
-            kind if kind.is_older() => Self::Older,
+            kind if kind.made_by_older_version() => Self::Older,
             _ => Self::Corrupt,
         }
     }

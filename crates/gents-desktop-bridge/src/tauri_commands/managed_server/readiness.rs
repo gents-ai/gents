@@ -337,7 +337,7 @@ struct RefusedStoreKind(gents_protocol::operations::install_repair::Incompatible
 impl std::fmt::Display for RefusedStoreKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
-            kind if kind.is_older() => f.write_str("the store is from an older Gents version"),
+            kind if kind.made_by_older_version() => f.write_str("the store is from an older Gents version"),
             _ => f.write_str("the store is from a different Gents version"),
         }
     }
