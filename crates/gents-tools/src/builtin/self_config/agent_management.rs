@@ -506,7 +506,7 @@ async fn agent_apply(
 
 /// The model's preview text: the receipt when admitted; when refused, the
 /// refusal with the message and next call the commit's guidance carries.
-pub async fn model_agent_outcome(
+pub(super) async fn model_agent_outcome(
     core: &SelfConfigCore,
     args: &ConfigureAgentParams,
 ) -> Result<AgentOutcome<String>, AgentApplyError> {
@@ -545,7 +545,7 @@ pub async fn model_agent_outcome(
     }
 }
 
-pub async fn model_agent_create_preview(
+pub(super) async fn model_agent_create_preview(
     core: &SelfConfigCore,
     input: &AgentCreateInput,
 ) -> Result<AgentOutcome<String>, AgentApplyError> {
@@ -581,7 +581,7 @@ pub async fn model_agent_mutate(
     receipt_text(&model_agent_apply(core, identity, args.clone()).await?)
 }
 
-pub async fn model_agent_create(
+pub(super) async fn model_agent_create(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     input: &AgentCreateInput,

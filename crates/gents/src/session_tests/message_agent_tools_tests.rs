@@ -1,12 +1,7 @@
 use gents_protocol::request_lifecycle::SessionMessageTarget;
+use gents_session::session::message::MessageContent;
 use gents_session::session::message::*;
 use gents_toolcalls::call::lifecycle::admission_fixture::{owner, set_state, started};
-
-/// A User starts Agent A; A starts Agent B through `agent_new`. B lists A's
-/// session, which the User requested, from B's own verified creation receipt;
-/// A lists B's; an unrelated Agent C lists neither.
-
-/// The calling Agent's DID, which signs the session-message interrupt checks.
 
 #[tokio::test]
 async fn steer_reachability_matches_lean() {
@@ -108,11 +103,13 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
             &NoSessionMessageGoals,
             &cause,
             &target,
-            RenderedBody {
-                content: "change course".to_owned(),
-                goal: None,
+            MessageContent {
+                rendered: RenderedBody {
+                    content: "change course".to_owned(),
+                    goal: None,
+                },
+                title: None,
             },
-            None,
             AgentMessageDelivery::Steer,
             &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
         )
@@ -145,11 +142,13 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        RenderedBody {
-            content: "queued turn".to_owned(),
-            goal: None,
+        MessageContent {
+            rendered: RenderedBody {
+                content: "queued turn".to_owned(),
+                goal: None,
+            },
+            title: None,
         },
-        None,
         AgentMessageDelivery::Queue,
         &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )

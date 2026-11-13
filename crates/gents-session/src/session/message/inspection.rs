@@ -486,7 +486,6 @@ pub async fn agent_session_read(
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
     use serde_json::json;
 
     use super::*;

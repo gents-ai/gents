@@ -119,8 +119,7 @@ pub(crate) use shared::validate_command_policy;
 pub use shared::ToolContext;
 pub(crate) use shared::{
     admit_host_executable, current_managed_command_credential_snapshot, default_lsp_network_mode,
-    effective_command_policy, lsp_sandbox_for_effective, normalize_workspace_lifecycle_state,
-    prepare_managed_command,
+    effective_command_policy, lsp_sandbox_for_effective, prepare_managed_command,
 };
 pub use shared::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,

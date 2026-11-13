@@ -22,14 +22,12 @@ pub fn test_agent_identity() -> std::sync::Arc<dyn gents_store::identity::NodeId
 }
 
 pub fn test_agent_did() -> String {
-    use gents_store::identity::NodeIdentity as _;
     test_agent_identity().did().to_owned()
 }
 
 pub fn test_agent_access(
     node: &std::sync::Arc<defra_node::Node>,
 ) -> gents_store::config_client::ConfigAccess {
-    use gents_store::identity::NodeIdentity as _;
     let agent = test_agent_identity();
     gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),

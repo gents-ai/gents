@@ -44,8 +44,10 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         &NoSessionMessageGoals,
         &cause,
         &target,
-        body,
-        None,
+        MessageContent {
+            rendered: body,
+            title: None,
+        },
         false,
         &signer(&message),
     )
@@ -148,8 +150,10 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         &NoSessionMessageGoals,
         &stale_cause,
         &target,
-        body,
-        None,
+        MessageContent {
+            rendered: body,
+            title: None,
+        },
         false,
         &signer(&message),
     )
@@ -162,11 +166,13 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         &NoSessionMessageGoals,
         &ahead_cause,
         &target,
-        RenderedBody {
-            content: "ahead".to_owned(),
-            goal: None,
+        MessageContent {
+            rendered: RenderedBody {
+                content: "ahead".to_owned(),
+                goal: None,
+            },
+            title: None,
         },
-        None,
         false,
         &signer(&message),
     )

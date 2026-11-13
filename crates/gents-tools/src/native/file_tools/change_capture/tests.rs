@@ -1,12 +1,8 @@
 use super::*;
-use crate::native::args::WriteFileArgs;
 use crate::native::file_tools::file_mutation_lock_for;
-use crate::native::file_tools::write_file::WriteFileTool;
 use crate::native::shared::ToolContext;
 use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_loop::tool::Tool;
-use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 fn decoded_image(value: &Value) -> Vec<u8> {

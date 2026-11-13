@@ -1,5 +1,5 @@
 use gents::runtime::agent::session_commands::run_session_command_reconciler;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::QueueDelivery;
 use gents_protocol::session_input_edit::SessionInputEditReceipt;
 use gents_session::request::lifecycle::{
@@ -10,52 +10,6 @@ use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 
 use crate::support::{self, test_db, TestDb};
-
-pub(super) async fn insert_signed_as(
-    fixture: &support::ManagedAgentFixture,
-    mut request: AgentRequestCreate,
-) -> String {
-    request.session_doc_id = Some(
-        gents_session::request::lifecycle::reserve_goal_session(&fixture.access, &request)
-            .await
-            .unwrap(),
-    );
-    request.agent_doc_id = Some(
-        fixture
-            .access
-            .transact_readonly("test.queue.selected_agent", |txn| {
-                Box::pin(async {
-                    Ok::<_, anyhow::Error>(
-                        gents_documents::read_desired_state_record_in_txn(
-                            txn,
-                            gents_store::collection::Collection::Agent,
-                            &request.node_did,
-                            &request.agent_did,
-                        )
-                        .await?
-                        .expect("selected Agent")
-                        .0,
-                    )
-                })
-            })
-            .await
-            .unwrap(),
-    );
-    gents_session::request::admission::sign_agent_request_create(&fixture.user, &mut request)
-        .await
-        .unwrap();
-    gents_session::request::lifecycle::submit_client_request(&fixture.access, &request)
-        .await
-        .unwrap();
-    let response = fixture.access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-        escape_graphql_string(&request.request_id),
-    )).await.unwrap();
-    response["data"]["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .into()
-}
 
 pub(super) async fn enqueue_owned(
     db: &TestDb,

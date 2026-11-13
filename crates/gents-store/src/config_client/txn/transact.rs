@@ -55,7 +55,7 @@ pub(super) enum TransactionMode {
     SignedConflictRebuild,
     SingleAttempt,
     Idempotent(IdempotentTransactionRetry),
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     ObserveConflict,
 }
 
@@ -67,7 +67,7 @@ impl TransactionMode {
             }
             Self::SingleAttempt => 1,
             Self::Idempotent(policy) => policy.max_attempts(),
-            #[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(test)]
             Self::ObserveConflict => 1,
         }
     }
@@ -78,7 +78,7 @@ impl TransactionMode {
             Self::ConflictRetry | Self::SignedConflictRebuild | Self::SingleAttempt => {
                 RetryOwner::GentsTransaction
             }
-            #[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(test)]
             Self::ObserveConflict => RetryOwner::GentsTransaction,
         }
     }
@@ -90,7 +90,7 @@ impl TransactionMode {
         match self {
             Self::ConflictRetry | Self::SignedConflictRebuild | Self::Idempotent(_) => true,
             Self::SingleAttempt => false,
-            #[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(test)]
             Self::ObserveConflict => false,
         }
     }
@@ -101,7 +101,7 @@ impl TransactionMode {
 
     const fn observes_conflicts(self) -> bool {
         match self {
-            #[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(test)]
             Self::ObserveConflict => true,
             Self::ConflictRetry
             | Self::SignedConflictRebuild

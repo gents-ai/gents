@@ -284,5 +284,5 @@ async fn load_pending(
     Ok(pending)
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 mod tests;

@@ -340,6 +340,11 @@ async fn ask(
     ))
 }
 
+type MoveBack = for<'a> fn(
+    HomeChoice,
+    &'a mut TerminalProgress,
+) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>;
+
 /// `prepare` already moved the node away from the folder it was serving when
 /// `start` asks, so that folder gets its node back first: a question left
 /// unanswered (Ctrl-C, no terminal) leaves it working.
@@ -347,10 +352,7 @@ async fn restore_then_ask(
     decision: HomeDecision,
     terminal: bool,
     progress: &mut TerminalProgress,
-    move_back: for<'a> fn(
-        HomeChoice,
-        &'a mut TerminalProgress,
-    ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
+    move_back: MoveBack,
 ) -> Result<(HomeChoice, Option<PathBuf>)> {
     give_back(decision.serving_home.as_deref(), progress, move_back).await;
     ask(decision, terminal, progress).await
@@ -362,10 +364,7 @@ async fn restore_then_ask(
 async fn give_back(
     serving: Option<&Path>,
     progress: &mut TerminalProgress,
-    move_back: for<'a> fn(
-        HomeChoice,
-        &'a mut TerminalProgress,
-    ) -> Pin<Box<dyn Future<Output = Result<RepairReceipt>> + Send + 'a>>,
+    move_back: MoveBack,
 ) {
     let Some(serving) = serving else {
         return;
@@ -572,12 +571,8 @@ mod tests {
     #[test]
     fn printed_commands_quote_a_home_with_spaces() {
         let home = Path::new("/srv/my home");
-        for (message, command) in [(
-            ignored_client_setting_notice(&home.join("client.json")),
-            "'/srv/my home/client.json'",
-        )] {
-            assert!(message.contains(command), "{message}");
-        }
+        let message = ignored_client_setting_notice(&home.join("client.json"));
+        assert!(message.contains("'/srv/my home/client.json'"), "{message}");
     }
 
     #[test]

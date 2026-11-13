@@ -177,7 +177,7 @@ async fn set_profile(
                 "account {label:?} is {}; {}",
                 state.as_str(),
                 gents_inference::auth::credential::enabled_accounts_note(
-                    &provider,
+                    provider,
                     &before.accounts
                 )
             );

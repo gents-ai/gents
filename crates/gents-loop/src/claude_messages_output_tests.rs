@@ -1,6 +1,6 @@
 use gents_protocol::message::Message;
 use rig::completion::CompletionRequest;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use super::*;
 use gents_lean_vocab::families::compaction_checkpoint_claude_output_config as family;

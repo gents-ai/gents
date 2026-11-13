@@ -84,13 +84,6 @@ pub(super) fn find_request_in_scope(
     Ok(Some(row.clone()))
 }
 
-fn agent_did_for_write(requested_agent_did: Option<&str>) -> Option<String> {
-    requested_agent_did
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
 /// A chat write refused before any request was saved. The cause is the Lean
 /// `ClientChatReadiness.Cause` the fence observed at send time.
 #[derive(Debug, thiserror::Error)]

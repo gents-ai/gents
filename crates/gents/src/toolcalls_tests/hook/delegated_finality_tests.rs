@@ -1,3 +1,4 @@
+use gents_session::session::message::MessageContent;
 use std::sync::Arc;
 
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -215,11 +216,13 @@ async fn fixture(name: &str) -> Fixture {
         &gents_automation::goal::session_message::SessionGoals,
         &cause,
         &target,
-        RenderedBody {
-            content: "work".into(),
-            goal: None,
+        MessageContent {
+            rendered: RenderedBody {
+                content: "work".into(),
+                goal: None,
+            },
+            title: None,
         },
-        None,
         AgentMessageDelivery::Queue,
         &signer,
     )
@@ -653,11 +656,13 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 &gents_automation::goal::session_message::SessionGoals,
                 &forged,
                 &target,
-                RenderedBody {
-                    content: "forged".into(),
-                    goal: None,
+                MessageContent {
+                    rendered: RenderedBody {
+                        content: "forged".into(),
+                        goal: None,
+                    },
+                    title: None,
                 },
-                None,
                 AgentMessageDelivery::Queue,
                 &signer,
             )
@@ -684,11 +689,13 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             &gents_automation::goal::session_message::SessionGoals,
             &cause,
             &target,
-            RenderedBody {
-                content: "follow up".into(),
-                goal: None,
+            MessageContent {
+                rendered: RenderedBody {
+                    content: "follow up".into(),
+                    goal: None,
+                },
+                title: None,
             },
-            None,
             if active {
                 AgentMessageDelivery::Steer
             } else {

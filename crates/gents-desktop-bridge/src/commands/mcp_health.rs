@@ -80,11 +80,13 @@ pub async fn probe_mcp_service(
         &core.operator_access(node_did)?,
         node_did,
         service_id,
-        core.node_identity().did(),
-        gents_tools::mcp::probe::default_timeout(),
-        &local_hostname,
-        None,
         &McpPool::new(),
+        gents_tools::mcp::probe::ProbeOptions {
+            actor: core.node_identity().did(),
+            timeout: gents_tools::mcp::probe::default_timeout(),
+            local_hostname: &local_hostname,
+            local_subnet: None,
+        },
     )
     .await;
     Ok(McpServiceProbeResult {

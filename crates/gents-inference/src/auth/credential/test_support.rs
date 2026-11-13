@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
+#[cfg(test)]
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
+#[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[cfg(test)]
 pub(crate) static TOKEN_URL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub async fn test_node() -> Arc<EmbeddedNode> {
@@ -19,6 +22,7 @@ pub async fn test_node() -> Arc<EmbeddedNode> {
     node
 }
 
+#[cfg(test)]
 pub(crate) fn bound_bearer(
     credential_id: &str,
 ) -> Option<std::sync::Arc<super::DbCredentialBearer>> {
@@ -29,6 +33,7 @@ pub(crate) fn bound_bearer(
         .and_then(std::sync::Weak::upgrade)
 }
 
+#[cfg(test)]
 pub(crate) async fn seed_credential(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
@@ -39,6 +44,7 @@ pub(crate) async fn seed_credential(
         .await;
 }
 
+#[cfg(test)]
 pub(crate) async fn seed_credential_with_refresh_token(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
@@ -70,6 +76,7 @@ pub(crate) async fn seed_credential_with_refresh_token(
         .expect("seed credential");
 }
 
+#[cfg(test)]
 pub(crate) fn unsigned_jwt(payload: serde_json::Value) -> String {
     use base64::Engine;
     let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
@@ -78,6 +85,7 @@ pub(crate) fn unsigned_jwt(payload: serde_json::Value) -> String {
     format!("{header}.{payload}.sig")
 }
 
+#[cfg(test)]
 pub(crate) async fn one_shot_token_server(
     status: u16,
     body: &'static str,
@@ -85,6 +93,7 @@ pub(crate) async fn one_shot_token_server(
     gated_token_server(status, body, None).await
 }
 
+#[cfg(test)]
 pub(crate) async fn gated_token_server(
     status: u16,
     body: &'static str,
@@ -141,6 +150,7 @@ pub(crate) async fn gated_token_server(
 
 /// Reads a credential row as the node's runtime identity, the actor the
 /// credential owner writes it under.
+#[cfg(test)]
 pub(crate) async fn lookup_oauth_credential_by_id(
     node: &Arc<EmbeddedNode>,
     credential_id: &str,

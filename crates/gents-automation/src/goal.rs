@@ -142,12 +142,6 @@ fn mutation_returned_rows(value: &serde_json::Value) -> bool {
     value.as_array().is_some_and(|rows| !rows.is_empty()) || value.get("_docID").is_some()
 }
 
-fn optional_int_graphql_field(name: &str, value: Option<i64>) -> String {
-    value
-        .map(|value| format!("{name}: {value},"))
-        .unwrap_or_else(|| format!("{name}: null,"))
-}
-
 fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
     value
         .map(|value| format!(r#"{name}: "{}","#, escape_graphql_string(value)))
