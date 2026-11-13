@@ -2039,20 +2039,8 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-session/src/session/request_output.rs", 2),
     // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
     ("crates/gents-store/src/local/storage_backend.rs", 3),
-    // GuestTrap in try_step_on; RecordError in try_step_on
-    ("crates/gents-toolcalls/src/background/job/driver/step.rs", 2),
     // ReconstructionError in caused_request_terminals_in_txn
     ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
-    // BackgroundSlotRefusal in DefraSessionHook::persist_background_tool_call
-    ("crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", 1),
-    // BackgroundSlotRefusal in DefraSessionHook::session_message_commit
-    ("crates/gents-toolcalls/src/call/hook/persistence/session_message.rs", 1),
-    // RecordError in write_terminal_progress
-    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminal_effects.rs", 1),
-    // PluginWritesFailed in ToolCallLifecycle::terminalize_with_options_at
-    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
-    // GuestTrap in PluginExecutor::run; PluginAttemptError in plugin_attempt_error
-    ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
     // EnrollmentDecisionRefusal in P2pTool::call_one
     ("crates/gents-tools/src/builtin/p2p.rs", 1),
     // BatchFailure in ConfigCommandTool::call
@@ -2090,6 +2078,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-eval/src/runner/mod.rs", &["provider_down"]),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
     ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
+    ("crates/gents-pack/src/plugin.rs", &["GuestTrap::in_chain", "GuestTrap::raised_by"]),
     ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
     ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
@@ -2102,6 +2091,8 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-store/src/local/home.rs", &["store_lock_held"]),
     ("crates/gents-store/src/local/storage_backend.rs", &["find_incompatible", "find_insecure_key"]),
     ("crates/gents-store/src/local/store_key.rs", &["store_key_unavailable"]),
+    ("crates/gents-toolcalls/src/background/job/records.rs", &["RecordError::in_error"]),
+    ("crates/gents-toolcalls/src/call/hook/persistence/helpers.rs", &["BackgroundSlotRefusal::in_failure"]),
     ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["auth_refusal_of"]),
     ("crates/gents/src/eval/documents.rs", &["already_completed", "already_invalidated", "feedback_off_train"]),
     ("crates/gents/src/runtime/agent/daemon.rs", &["ShutdownDrainFailure::occurs_in"]),
