@@ -56,13 +56,4 @@ def cases : List Case :=
   , ⟨"commit-failed", some "user", "promoted", true, true, true, false⟩
   , ⟨"missing-actor", none, "promoted", true, true, true, true⟩ ]
 
-def caseJson (c : Case) : Json :=
-  let before : State := ⟨"before", []⟩
-  let after := transition before c.actor c.action "after" c.targetAllowed c.journalAllowed c.expectedLength c.commit
-  Json.mkObj [("name", toJson c.name), ("actor", toJson c.actor), ("action", toJson c.action),
-    ("target_allowed", toJson c.targetAllowed), ("journal_allowed", toJson c.journalAllowed),
-    ("expected_length", toJson c.expectedLength), ("commit", toJson c.commit),
-    ("expected_target", toJson after.target), ("expected_journal", toJson after.journal)]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
 end Identity.OptimizationPromotion

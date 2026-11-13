@@ -1,8 +1,6 @@
-use std::collections::BTreeSet;
-
 use gents::eval::{classify, subject_causable, EvidenceClass, OutcomeKind, ProviderReason};
 
-use gents_lean_vocab::{lean_eval_outcome_cases, lean_vocabulary_values};
+use gents_lean_vocab::lean_vocabulary_values;
 
 pub(super) fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
     assert_eq!(
@@ -18,43 +16,12 @@ pub(super) fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
         EvidenceClass::ALL.map(EvidenceClass::as_str)
     );
 
-    let cases = lean_eval_outcome_cases();
-    assert_eq!(
-        cases.len(),
-        OutcomeKind::ALL.len() * (ProviderReason::ALL.len() + 1),
-        "Lean must emit every (outcome kind, optional provider reason) pair"
+    gents_lean_vocab::families::eval_classification::replay::<
+        EvidenceClass,
+        OutcomeKind,
+        ProviderReason,
+    >(|input| classify(input.kind, input.provider_reason));
+    gents_lean_vocab::families::eval_subject_causability::replay::<OutcomeKind, ProviderReason>(
+        |input| subject_causable(input.kind, input.provider_reason),
     );
-    let emitted: BTreeSet<(&str, Option<&str>)> = cases
-        .iter()
-        .map(|case| (case.kind.as_str(), case.provider_reason.as_deref()))
-        .collect();
-    let expected: BTreeSet<(&str, Option<&str>)> = OutcomeKind::ALL
-        .into_iter()
-        .flat_map(|kind| {
-            ProviderReason::ALL
-                .into_iter()
-                .map(ProviderReason::as_str)
-                .map(Some)
-                .chain(std::iter::once(None))
-                .map(move |reason| (kind.as_str(), reason))
-        })
-        .collect();
-    assert_eq!(
-        emitted, expected,
-        "the emitted table must be exactly OutcomeKind::ALL x (ProviderReason::ALL + none)"
-    );
-
-    for case in cases {
-        let kind = OutcomeKind::parse(&case.kind).expect("kind");
-        let reason = case
-            .provider_reason
-            .as_deref()
-            .map(|reason| ProviderReason::parse(reason).expect("reason"));
-        assert_eq!(classify(kind, reason).as_str(), case.class, "{case:?}");
-        assert_eq!(
-            subject_causable(kind, reason),
-            case.subject_causable,
-            "{case:?}"
-        );
-    }
 }

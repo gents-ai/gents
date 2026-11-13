@@ -294,9 +294,7 @@ pub(crate) mod tests {
 
     #[test]
     fn task_seed_coverage_matches_lean_for_canonical_pack_and_definition_inputs() {
-        let rows = &gents_lean_vocab::lean_optimization_cases().seed_coverage;
-        assert!(!rows.is_empty());
-        for row in rows {
+        gents_lean_vocab::families::optimization_seed_coverage::replay::<String>(|row| {
             let triggers: Vec<Value> = row
                 .triggers
                 .iter()
@@ -322,7 +320,7 @@ pub(crate) mod tests {
                     json!({
                         "node_did": OWNER,
                         "event_source_id": source.event_source_id,
-                        "source_collection": source.source_collection,
+                        "source_collection": source.collection,
                         "event_kind": source.event_kind,
                     })
                 })
@@ -371,14 +369,12 @@ pub(crate) mod tests {
                 .target_task
                 .as_ref()
                 .map_or(JobTarget::Context, |task| JobTarget::Task(task.clone()));
-            assert_eq!(
+            serde_json::from_value(
                 serde_json::to_value(missing_task_seed_splits(&config, &target, &definition))
                     .unwrap(),
-                json!(row.missing_splits),
-                "{}",
-                row.name,
-            );
-        }
+            )
+            .unwrap()
+        });
     }
 
     pub(crate) fn write_task_fixture_pack(root: &Path, inline: bool) {

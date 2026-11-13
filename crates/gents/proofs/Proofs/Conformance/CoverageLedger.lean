@@ -487,6 +487,16 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "family" "network_protocol_resource")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "identity_secret_publication_creation")
+  , tagged (consumerCoverage "family" "eval_records_published")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "eval_records_published_unreached"
+      "model-production-gap: no production path lets the Node parent relationship fail or the commit fail after an eval record create is staged.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "optimization_promotion_held_transition")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "optimization_promotion_held_transition_unreached"
+      "model-production-gap: no production path withholds target update permission from a caller that may update the job, forces a stale journal compare-and-set, or fails the commit after both writes are staged.")
+      "identity-permission" [Surface.runtimeInternal]
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"
@@ -937,8 +947,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_pack_installation_identity_reference")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pack_eval_subject_cases"
-      "PackEvalSubjectCases")
+      "family"
+      "contracts_pack_installation_eval_subject")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -970,29 +980,27 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "apply_reconcile_contract_cases_publish_if_cases")
       "apply-reconcile" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "eval_outcome_cases"
-      "EvalOutcomeCases")
+  , tagged (consumerCoverage "family" "eval_classification")
       "eval" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "eval_subject_causability")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "eval_document_capture")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "optimization_alpha_effective")
       "optimization" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_gate")
       "optimization" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_cost")
       "optimization" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_decision")
       "optimization" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "optimization_cases"
-      "OptimizationCases")
+  , tagged (consumerCoverage "family" "optimization_seed_coverage")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "optimization_seed_coverage_refused")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "optimization_seed_rendering")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage "family" "optimization_seed_rendering_candidate")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
       "family"

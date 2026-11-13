@@ -142,8 +142,8 @@ import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
 import Proofs.Store.Identity.OperationsConformance
-import Proofs.Store.Identity.EvalRecords
-import Proofs.Store.Identity.OptimizationPromotion
+import Proofs.Conformance.Identity.EvalRecords
+import Proofs.Conformance.Identity.OptimizationPromotion
 import Proofs.Store.Identity.DirectoryPublication
 import Proofs.Conformance.Identity.StartupReadiness
 import Proofs.Store.Identity.NodeProvisioningConformance
@@ -582,10 +582,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.NodeProvisioningConformance.runtimeNacCasesJson ++ ","
     ++ "\"identity_parent_publication_cases\":"
       ++ Identity.PublicationConformance.parentCasesJson ++ ","
-    ++ "\"identity_eval_record_cases\":"
-      ++ Identity.EvalRecords.casesJson ++ ","
-    ++ "\"identity_optimization_promotion_cases\":"
-      ++ Identity.OptimizationPromotion.casesJson ++ ","
     ++ "\"identity_readiness_preflight_cases\":"
       ++ Identity.OperationsConformance.preflightCasesJson ++ ","
     ++ "\"identity_pairing_partition_cases\":"
@@ -624,7 +620,6 @@ def snapshotClientCasesJson : String :=
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
     ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
     ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","
-    ++ "\"pack_eval_subject_cases\":" ++ PackInstallation.evalSubjectCasesJson ++ ","
     ++ "\"snapshot_demotion_cases\":"
       ++ snapshotDemotionCasesJson ++ ","
     ++ "\"startup_readiness_cases\":"
@@ -635,12 +630,6 @@ def snapshotClientCasesJson : String :=
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"client_agent_readiness_cases\":"
       ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
-    ++ "\"eval_outcome_cases\":"
-      ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
-    ++ "\"eval_document_capture_cases\":"
-      ++ Conformance.Eval.evalDocumentCaptureCasesJson ++ ","
-    ++ "\"optimization_cases\":"
-      ++ Conformance.Optimization.optimizationCasesJson ++ ","
     ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","
     ++ "\"self_config_field_tables\":"
       ++ selfConfigFieldTablesJson ++ ","
