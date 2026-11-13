@@ -430,7 +430,8 @@ export function PackPage({
                       ? `Not installed · ${version}`
                       : "Not installed",
                 fromFile && `From ${requestedName(request!)}`,
-                request?.source === "link" && "From a link",
+                /* a link that names a digest installs that archive or nothing */
+                request?.source === "link" && request.digest && "pinned by the link",
               ]
                 .filter(Boolean)
                 .join(" · ")}

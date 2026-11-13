@@ -210,7 +210,8 @@ describe("a pack's page before it's installed", () => {
     show(installPack, { name: "packs", review: packPreviewKey(linked) });
     const adds = await wouldAdd();
     await within(adds).findByText("Writer");
-    expect(screen.getByText(/From a link/)).toBeInTheDocument();
+    expect(screen.getByText(/pinned by the link/)).toBeInTheDocument();
+    expect(screen.queryByText(/From a link/)).toBeNull();
     expect(previews(installPack)[0]).toMatchObject({
       package: "acme/docs@2.0.0",
       expectDigest: DIGEST,
@@ -222,6 +223,13 @@ describe("a pack's page before it's installed", () => {
       .click(within(page).getByRole("button", { name: "Install" }));
     expect(await screen.findByTestId("pack-install-review")).toBeInTheDocument();
     expect(installs(installPack)).toEqual([]);
+  });
+
+  it("says nothing of a link that pins no version", async () => {
+    const linked: PackReviewRequest = { package: "acme/docs", source: "link" };
+    show(bridge(), { name: "packs", review: packPreviewKey(linked) });
+    await within(await wouldAdd()).findByText("Writer");
+    expect(screen.queryByText(/pinned by the link|From a link/)).toBeNull();
   });
 
   it("says a link's pack isn't the one it names, and offers no Install", async () => {
