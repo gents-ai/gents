@@ -5,6 +5,7 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use gents_documents::apply_desired_state_plan;
@@ -180,6 +181,14 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
 /// Normal completion drains the embedded node before releasing its store claim;
 /// aborting background tasks without awaiting them can retain the database.
 pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
+    let started = Instant::now();
+    let stage = |name: &'static str| {
+        tracing::info!(
+            stage = name,
+            elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "init stage"
+        );
+    };
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
@@ -197,6 +206,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         .next_entry()
         .await?
         .is_none();
+    stage("store_locked");
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -292,6 +302,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         .sign(b"gents init identity")
         .await
         .context("creating or loading node identity key")?;
+    stage("identity_ready");
 
     gents_store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
@@ -323,6 +334,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             )
             .await?;
     }
+    stage("store_key_initialized");
     let mut node_builder =
         gents_store::local::store_key::persistent_builder(&data_dir, &store_key)?;
     let ceiling = gents_host::tool_ceiling::host_tool_ceiling(
@@ -345,6 +357,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             .await
             .context("building embedded DefraDB node for init")?,
     );
+    stage("embedded_node_built");
     let client_paths = gents_service::home_state::cli_identity_paths()?;
     client_paths.ensure_root_dirs().await?;
     let client_identity =
@@ -372,6 +385,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     let result: Result<Value> = async {
         gents_store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
         gents_store::local::store_key::upgrade::finish(&data_dir)?;
+        stage("migrations_complete");
         let binding = if fresh_store {
             Some(provision_fresh_home(&init_node, initialized_identity.identity.as_ref(), client_identity.did()).await?)
         } else {
@@ -385,6 +399,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
                 None
             }
         };
+        stage("home_provisioned");
         let summary = initialize_runtime_home(
             &access,
             &init_node,
@@ -395,6 +410,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             None,
         )
         .await?;
+        stage("runtime_home_initialized");
         if fresh_store
             && matches!(tool_package, ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo)
         {
@@ -411,6 +427,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             ).await.context("publishing the initial workspace root")?;
         }
         write_init_config(&home_dir, &stored)?;
+        stage("configuration_written");
         let runtime_state_reset = if args.reset {
             clear_runtime_state(&home_dir)?
         } else {
@@ -494,6 +511,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     if let Err(error) = init_node.shutdown().await {
         tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
     }
+    stage("embedded_node_drained");
     let mut output = result?;
     // The pack installer opens the home itself, so the store claim and the
     // node this init held are released first: the node's database lock goes

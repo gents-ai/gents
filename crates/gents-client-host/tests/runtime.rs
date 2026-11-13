@@ -170,21 +170,7 @@ async fn editor_recovers_goal_commands_after_lost_replies_and_reload() -> Result
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalDelivery)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
 }
 
@@ -198,21 +184,7 @@ async fn editor_recovers_the_original_message_after_a_lost_helper_reply() -> Res
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorDelivery)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-delivery-canonical.json")?;
     copy_editor_evidence(temp.path(), "editor-fork-canonical.json")
 }
@@ -221,21 +193,7 @@ async fn editor_recovers_the_original_message_after_a_lost_helper_reply() -> Res
 async fn native_client_submits_signed_input_and_observes_live_and_durable_output() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let result = exercise(temp.path(), Journey::Conversation).await;
-    result.with_context(|| {
-        [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "client-host-restart.log",
-        ]
-        .map(|name| {
-            format!(
-                "{name}:\n{}",
-                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-            )
-        })
-        .join("\n")
-    })
+    result.with_context(|| support::fixture_logs(temp.path(), &[]))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -244,36 +202,15 @@ async fn managed_runtime_replacement_preserves_running_input_enrollment_and_tran
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::RuntimeReplacement)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "runtime-replacement.err",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })
+        .with_context(|| support::fixture_logs(temp.path(), &["runtime-replacement.err"]))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::Goal).await.with_context(|| {
-        ["runtime.log", "runtime.err", "client-host.log"]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-    })
+    exercise(temp.path(), Journey::Goal)
+        .await
+        .with_context(|| support::fixture_logs(temp.path(), &[]))
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -282,9 +219,7 @@ async fn editor_preserves_live_session_and_draft_across_window_reload() -> Resul
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Editor)
         .await
-        .with_context(|| {
-            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
-        })
+        .with_context(|| support::fixture_logs(temp.path(), &[]))
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -293,9 +228,7 @@ async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorSteering)
         .await
-        .with_context(|| {
-            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
 
@@ -305,11 +238,7 @@ async fn editor_steers_pending_input_and_continues_the_same_goal() -> Result<()>
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalSteering)
         .await
-        .with_context(|| {
-            ["editor.log", "runtime.log", "runtime.err"]
-                .map(|name| std::fs::read_to_string(temp.path().join(name)).unwrap_or_default())
-                .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
 
@@ -325,21 +254,13 @@ async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Res
         evidence.finish(temp.path(), &result)?;
     }
     result.with_context(|| {
-        [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "editor.log",
-            "editor-history-seed-progress.json",
-            "editor-history-seed-failure.json",
-        ]
-        .map(|name| {
-            format!(
-                "{name}:\n{}",
-                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-            )
-        })
-        .join("\n")
+        support::fixture_logs(
+            temp.path(),
+            &[
+                "editor-history-seed-progress.json",
+                "editor-history-seed-failure.json",
+            ],
+        )
     })
 }
 
@@ -349,21 +270,7 @@ async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorWorkspace)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-workspace-canonical.json")
 }
 
@@ -372,21 +279,7 @@ async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result
 async fn editor_preserves_image_bytes_through_submission_and_reload() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let result = exercise(temp.path(), Journey::EditorImages).await;
-    result.with_context(|| {
-        [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "editor.log",
-        ]
-        .map(|name| {
-            format!(
-                "{name}:\n{}",
-                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-            )
-        })
-        .join("\n")
-    })?;
+    result.with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-images-canonical.json")
 }
 
@@ -396,21 +289,7 @@ async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> Re
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRetry)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-retry-canonical.json")
 }
 
@@ -420,21 +299,7 @@ async fn editor_reviews_retained_file_images_without_reading_the_working_copy() 
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorReview)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-review-canonical.json")
 }
 
@@ -445,21 +310,7 @@ async fn editor_restores_and_saves_recorded_edits_without_overwriting_later_chan
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorUndo)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-undo-canonical.json")
 }
 
@@ -468,19 +319,7 @@ async fn editor_restores_and_saves_recorded_edits_without_overwriting_later_chan
 async fn editor_pages_real_file_captures_across_reload_and_new_activity() -> Result<()> {
     let temp = tempfile::tempdir()?;
     if let Err(error) = exercise(temp.path(), Journey::EditorInventory).await {
-        let mut logs = Vec::new();
-        for name in [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "editor.log",
-        ] {
-            let contents = tokio::fs::read_to_string(temp.path().join(name))
-                .await
-                .unwrap_or_default();
-            logs.push(format!("{name}:\n{contents}"));
-        }
-        return Err(error.context(logs.join("\n")));
+        return Err(error.context(support::fixture_logs(temp.path(), &[])));
     }
     let root = temp.path().to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -495,21 +334,7 @@ async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft(
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRecovery)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-goal-recovery-canonical.json")
 }
 
@@ -534,21 +359,7 @@ async fn editor_removes_goals_without_cancelling_current_work_or_queued_input() 
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRemoval)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-goal-removal-canonical.json")
 }
 
@@ -558,21 +369,7 @@ async fn editor_replaces_goals_in_the_same_chat_without_losing_work_or_drafts() 
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalReplacement)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-goal-replacement-canonical.json")
 }
 
@@ -582,21 +379,7 @@ async fn editor_answers_a_native_question_and_uses_the_edited_worker_prompt() ->
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorQuestions)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-questions-canonical.json")
 }
 
@@ -606,21 +389,7 @@ async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRelatedWork)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
 
@@ -631,21 +400,7 @@ async fn editor_observes_related_worker_failure_without_losing_completed_work_or
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRelatedWorkFailure)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
 
@@ -895,6 +650,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     init.current_dir(root)
         .envs(homes.env())
         .env_remove("GENTS_SYSTEM_LOG")
+        .env("RUST_LOG", "warn,gents_server::commands::init=info")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
         .args([
@@ -921,6 +677,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let output = initialization::Initialization::spawn(&mut init, root)?
         .wait(Duration::from_secs(30))
         .await?;
+    let init_stages = std::fs::read_to_string(root.join("init.stderr"))?;
+    ensure!(
+        init_stages.contains(r#""embedded_node_drained""#),
+        "initialization must record its stage boundaries so a timed-out run can be attributed: {init_stages}"
+    );
     let init: Value = serde_json::from_slice(&output)?;
     let node_did = init["node_did"].as_str().context("initialized node DID")?;
     let identity = gents_store::identity::KeyIdentity::load_or_create(

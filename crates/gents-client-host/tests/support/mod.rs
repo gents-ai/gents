@@ -165,3 +165,73 @@ impl Attachment {
         assert!(status.success());
     }
 }
+
+const FIXTURE_LOGS: [&str; 7] = [
+    "init.stdout",
+    "init.stderr",
+    "runtime.log",
+    "runtime.err",
+    "client-host.log",
+    "client-host-restart.log",
+    "editor.log",
+];
+
+pub fn fixture_logs(root: &Path, extra: &[&str]) -> String {
+    let mut seen = rapidhash::RapidHashSet::default();
+    FIXTURE_LOGS
+        .iter()
+        .copied()
+        .chain(extra.iter().copied())
+        .filter(|name| seen.insert(*name))
+        .map(|name| match std::fs::read_to_string(root.join(name)) {
+            Ok(contents) if contents.is_empty() => format!("{name}: <empty>"),
+            Ok(contents) => format!("{name}:\n{contents}"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                format!("{name}: <absent>")
+            }
+            Err(error) => format!("{name}: <unreadable: {error}>"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_logs_separate_absent_empty_and_captured_sections() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("init.stdout"),
+            br#"{"status":"initialized"}"#,
+        )
+        .unwrap();
+        std::fs::write(root.path().join("init.stderr"), b"").unwrap();
+        std::fs::write(root.path().join("runtime-replacement.err"), b"replaced").unwrap();
+        let report = fixture_logs(
+            root.path(),
+            &[
+                "runtime-replacement.err",
+                "editor.log",
+                "runtime-replacement.err",
+            ],
+        );
+        assert!(
+            report.contains("init.stdout:\n{\"status\":\"initialized\"}"),
+            "{report}"
+        );
+        assert!(report.contains("init.stderr: <empty>"), "{report}");
+        assert!(report.contains("runtime.log: <absent>"), "{report}");
+        assert!(
+            report.contains("runtime-replacement.err:\nreplaced"),
+            "{report}"
+        );
+        assert_eq!(report.matches("editor.log:").count(), 1, "{report}");
+        assert_eq!(
+            report.matches("runtime-replacement.err:").count(),
+            1,
+            "{report}"
+        );
+    }
+}
