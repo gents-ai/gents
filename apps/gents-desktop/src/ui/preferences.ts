@@ -62,6 +62,8 @@ export type Preferences = {
   /** local nodes whose starter packs card was put off with Not now, by
       node DID; the Packs page still offers them */
   starterPacksDismissed: string[];
+  /** local nodes whose things to try were shown and closed, by node DID */
+  thingsToTrySeen: string[];
 };
 
 /** The side nav's items and sections in the order chosen, and which are
@@ -127,6 +129,7 @@ const initial = (): Preferences => ({
   notify: { ...NOTIFY_ALL },
   pluginNotify: [],
   starterPacksDismissed: [],
+  thingsToTrySeen: [],
 });
 
 /* only flags this build knows survive, so an unknown id is dropped on the
@@ -224,6 +227,9 @@ export function restorePreferences(
     starterPacksDismissed: Array.isArray(saved.starterPacksDismissed)
       ? storedStrings(saved.starterPacksDismissed)
       : defaults.starterPacksDismissed,
+    thingsToTrySeen: Array.isArray(saved.thingsToTrySeen)
+      ? storedStrings(saved.thingsToTrySeen)
+      : defaults.thingsToTrySeen,
   };
 }
 
@@ -324,6 +330,11 @@ export const preferences = {
       ),
     });
   },
+  closeThingsToTry(nodeDid: string) {
+    store.setState({
+      thingsToTrySeen: toggled(store.getState().thingsToTrySeen, nodeDid, true),
+    });
+  },
   setPluginNotify(key: string, kind: string, on: boolean) {
     store.setState({
       pluginNotify: toggled(
@@ -402,6 +413,8 @@ export const useNavLayout = () => usePreferences((p) => p.navLayout);
 export const useOpenOn = () => usePreferences((p) => p.openOn);
 export const useStarterPacksDismissed = (nodeDid: string | null) =>
   usePreferences((p) => nodeDid !== null && p.starterPacksDismissed.includes(nodeDid));
+export const useThingsToTrySeen = (nodeDid: string | null) =>
+  usePreferences((p) => nodeDid !== null && p.thingsToTrySeen.includes(nodeDid));
 export const openOnNode = () => store.getState().openOn;
 export const useHiddenNodes = () => usePreferences((p) => p.hiddenNodes);
 export const useHiddenAgents = () => usePreferences((p) => p.hiddenAgents);

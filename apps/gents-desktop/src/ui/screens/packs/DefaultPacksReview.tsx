@@ -20,8 +20,16 @@ import type {
   DefaultPack,
   DefaultPackApproval,
 } from "@source-inc/gents-desktop-client";
-import { preferences, useStarterPacksDismissed } from "@/preferences";
-import { href } from "@/lib/router";
+import {
+  preferences,
+  useFlag,
+  useStarterPacksDismissed,
+  useThingsToTrySeen,
+} from "@/preferences";
+import { useApp } from "@/app/AppContext";
+import { href, navigate } from "@/lib/router";
+import { writeDraft } from "../../../hooks/draftStore";
+import { ThingsToTry } from "../ThingsToTry";
 import { shortName } from "./model";
 import { ErrorDetail, Section } from "./PackCard";
 import {
@@ -267,22 +275,37 @@ const PageList = ({ children }: { children: ReactNode }) => (
   <div className="grid grid-cols-[minmax(0,1fr)] gap-4">{children}</div>
 );
 
-/** The starter packs offered once over the shell on the desktop's own node,
-    until they are installed or put off with Not now. Putting them off is
-    remembered on this device for that node; the Packs page keeps offering
-    them. Packs that could not be resolved don't open it by themselves. */
+/** What opens over the shell, unasked, on the desktop's own node. First the
+    starter packs, until they are installed or put off with Not now; putting
+    them off is remembered on this device for that node, and the Packs page
+    keeps offering them. Then, where that is turned on, a few things to try,
+    once: choosing a message leaves it in a new chat's composer, unsent.
+    Packs that could not be resolved don't open it by themselves. */
 export function StarterPacksCard() {
+  const { drafts, view } = useApp();
   const review = useDefaultPacks();
   const dismissed = useStarterPacksDismissed(review.nodeDid);
-  /* the card opens unasked, so it takes focus itself and marks no pack */
+  const trying = useFlag("get-started");
+  const tried = useThingsToTrySeen(review.nodeDid);
+  /* the card opens unasked, so it takes focus itself and marks nothing */
   const card = useRef<HTMLDivElement>(null);
-  const { nodeDid, busy } = review;
-  const open = nodeDid !== null && !dismissed && review.packs.some(isPending);
+  const { nodeDid, busy, settled } = review;
+  const offering = nodeDid !== null && !dismissed && review.packs.some(isPending);
+  const suggesting = trying && nodeDid !== null && settled && !tried && !offering;
   const dismiss = () => {
-    if (nodeDid !== null && !busy) preferences.dismissStarterPacks(nodeDid);
+    if (nodeDid === null || busy) return;
+    if (offering) preferences.dismissStarterPacks(nodeDid);
+    else preferences.closeThingsToTry(nodeDid);
+  };
+  const start = (message: string) => {
+    if (nodeDid === null) return;
+    preferences.closeThingsToTry(nodeDid);
+    navigate({ name: "session", sessionId: null });
+    /* the new chat's draft is known once the shell has turned to it */
+    window.setTimeout(() => writeDraft(drafts, view.getState().draftKey, message), 0);
   };
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && dismiss()}>
+    <Dialog open={offering || suggesting} onOpenChange={(next) => !next && dismiss()}>
       <DialogContent
         ref={card}
         initialFocus={card}
@@ -291,13 +314,34 @@ export function StarterPacksCard() {
           className: "bg-black/10 supports-backdrop-filter:backdrop-blur-[1.5px]",
         }}
         className="outline-none sm:max-w-xl"
-        data-testid="starter-packs-card"
+        data-testid={offering ? "starter-packs-card" : "things-to-try-card"}
       >
-        <DialogHeader>
-          <DialogTitle>{TITLE}</DialogTitle>
-          <DialogDescription>{INTRO}</DialogDescription>
-        </DialogHeader>
-        <DefaultPacksReview review={review} onDismiss={dismiss} />
+        {offering ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{TITLE}</DialogTitle>
+              <DialogDescription>{INTRO}</DialogDescription>
+            </DialogHeader>
+            <DefaultPacksReview review={review} onDismiss={dismiss} />
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Things to try</DialogTitle>
+              <DialogDescription className="text-pretty">
+                What the Engineer can do on a node of your own. Pick a message to start.
+              </DialogDescription>
+            </DialogHeader>
+            <CardList>
+              <ThingsToTry onPick={start} />
+            </CardList>
+            <div className="flex justify-end">
+              <Button variant="brand" onClick={dismiss}>
+                Get started <ArrowRight />
+              </Button>
+            </div>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
