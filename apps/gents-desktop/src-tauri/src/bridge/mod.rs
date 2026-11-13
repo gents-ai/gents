@@ -184,6 +184,7 @@ pub fn run() {
             let action = window_close::close_action(
                 cfg!(target_os = "macos"),
                 window.label() == "main",
+                plugin_window::is_page_window(window.label()),
                 active,
                 other_views,
                 main_hidden,

@@ -1,8 +1,10 @@
 //! A UX plugin's page in a window of its own. The window loads the app
 //! with a start address the UI reads, and gets only the `plugin-window`
-//! capability: the client's snapshot and lifecycle, the node list, the
-//! page's own plugin reads and calls, and the notifications its plugin
-//! raises while this window speaks for it.
+//! capability: the client's snapshot and start, the node list, the page's
+//! own plugin reads and calls, a place it opens in the main view, and the
+//! notifications its plugin raises while this window speaks for it. It can
+//! neither quit the app nor shut its client down, and closing it closes
+//! only that window.
 use std::fmt::Write;
 
 use std::collections::BTreeMap;
@@ -503,7 +505,9 @@ mod tests {
             .map(|p| p.as_str().unwrap())
             .collect();
         for needed in [
-            "gents-desktop-bridge:default",
+            "gents-desktop-bridge:core",
+            "gents-desktop-bridge:allow-desktop-client-start",
+            "gents-desktop-bridge:allow-desktop-set-selected-node",
             "gents-desktop-bridge:ux-plugins-read",
             "gents-desktop-bridge:ux-plugins-call",
             "notification:default",
@@ -517,6 +521,13 @@ mod tests {
             .unwrap()
             .contains(&serde_json::json!("gents-plugin-*")));
         for withheld in [
+            /* the bridge's default and its client lifecycle carry quitting
+            the app and shutting the client down, which stay with the app's
+            own views */
+            "gents-desktop-bridge:default",
+            "gents-desktop-bridge:client-lifecycle",
+            "gents-desktop-bridge:allow-desktop-app-quit",
+            "gents-desktop-bridge:allow-desktop-client-shutdown",
             "gents-desktop-bridge:full",
             "gents-desktop-bridge:runtime-admin",
             "gents-desktop-bridge:config-write",
