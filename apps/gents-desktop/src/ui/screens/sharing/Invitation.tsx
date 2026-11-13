@@ -78,8 +78,10 @@ function InvitationCard({
   const { copied, copy } = useCopied();
   const until = shortTime(invitation.expiresAt);
   return (
-    <FieldRows>
-      <div className="grid gap-3 px-5 py-4">
+    <FieldRows className="min-w-0">
+      {/* the column may not grow to the link's width, so the link shortens
+          and its buttons stay in view */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-3 px-5 py-4">
         <p className="text-sm font-medium">Invitation to {name}</p>
         <div className="flex items-center gap-2">
           <code
@@ -89,7 +91,12 @@ function InvitationCard({
           >
             {invitation.link}
           </code>
-          <Button size="sm" disabled={expired} onClick={() => copy(invitation.link)}>
+          <Button
+            size="sm"
+            className="shrink-0"
+            disabled={expired}
+            onClick={() => copy(invitation.link)}
+          >
             {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
             {copied ? "Copied" : "Copy link"}
           </Button>
