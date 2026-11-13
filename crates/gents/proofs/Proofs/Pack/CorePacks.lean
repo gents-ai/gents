@@ -9,11 +9,12 @@ the seam they need. `init` installs them from the release itself, with no
 registry and no network.
 
 A pack's plugins are built against the plugin interface: the host imports,
-the call ABI and the manifest fields the runtime reads. The interface carries
-a version, a pack manifest declares the version it was built for, and a
-runtime loads only the versions it implements. The registry remains the
-source of other packs and of newer builds of core packs, and its archives
-pass the same check.
+the call ABI and the manifest fields the runtime reads. The interface's version
+is the Gents release (maintainer decision 2026-11-13): a pack manifest
+declares the release it was built for, and a runtime loads a pack built for
+its own major version and a release not newer than itself. The registry
+remains the source of other packs and of newer builds of core packs, and its
+archives pass the same check.
 -/
 
 namespace Pack.CorePacks
@@ -105,52 +106,82 @@ theorem only_script_calls_tools (pack : CorePack) :
 theorem enabling_consents_dynamic :
     (enabledWiring .dynamicWorkflows).consentDynamic = true := rfl
 
-/-- The plugin interface this runtime implements, and the oldest version it
-still loads. Raise `current` when a host import, the call ABI or a manifest
-field the runtime reads changes incompatibly; raise `oldest` when the runtime
-stops serving an older version. -/
-def currentInterface : Nat := 1
-def oldestInterface : Nat := 1
+/-- A Gents release version. Pre-release builds are release candidates,
+`MAJOR.MINOR.PATCH-rcN`; `rc` is `none` for the release itself. -/
+structure Release where
+  major : Nat
+  minor : Nat
+  patch : Nat
+  rc : Option Nat
+  deriving DecidableEq, Repr
 
-/-- A manifest that declares no interface was built before the interface had
-a version, which is interface 1. -/
-def builtFor (declared : Option Nat) : Nat := declared.getD 1
+/-- Candidates of one triple in numeric order, all before the release. -/
+def preLe : Option Nat → Option Nat → Bool
+  | _, none => true
+  | none, some _ => false
+  | some a, some b => decide (a ≤ b)
+
+/-- Release precedence: by major, minor and patch, then `preLe`. -/
+def Release.le (a b : Release) : Bool :=
+  decide (a.major < b.major) || (a.major == b.major &&
+    (decide (a.minor < b.minor) || (a.minor == b.minor &&
+      (decide (a.patch < b.patch) || (a.patch == b.patch && preLe a.rc b.rc)))))
+
+theorem Release.le_refl (r : Release) : r.le r = true := by
+  cases r with
+  | mk major minor patch rc => cases rc <;> simp [Release.le, preLe]
+
+/-- The release a manifest without a declaration counts as built for: 1.0.0-rc2,
+the latest release before manifests carried the field, whose plugin interface
+the runtime still implements unchanged. -/
+def baseline : Release := ⟨1, 0, 0, some 2⟩
+
+def builtFor (declared : Option Release) : Release := declared.getD baseline
 
 inductive InterfaceAdmission
   | compatible
-  /-- Built for a version this runtime no longer serves: a newer build of the
-  pack is the next step. -/
-  | tooOld
-  /-- Built for a version newer than this runtime: a newer runtime, or an
-  older build of the pack, is the next step. -/
+  /-- Built for an earlier major version: after a breaking release the pack
+  needs a build for this one. -/
+  | olderMajor
+  /-- Built for a release newer than this runtime, or a later major version:
+  a newer runtime, or an older build of the pack, is the next step. -/
   | tooNew
   deriving DecidableEq, Repr
 
-/-- Whether this runtime loads a pack built for `declared`. Every archive is
-checked when it is opened, whatever its origin. -/
-def interfaceAdmission (declared : Option Nat) : InterfaceAdmission :=
-  let version := builtFor declared
-  if version < oldestInterface then .tooOld
-  else if currentInterface < version then .tooNew
-  else .compatible
+/-- Whether `runtime` loads a pack built for `declared`: the same major
+version and a release not newer than the runtime. Pre-releases follow release
+precedence, so a candidate runtime loads packs built for its own or an
+earlier candidate of the same major, and the release loads its candidates'
+packs. Every archive is checked when it is opened, whatever its origin. -/
+def interfaceAdmission (runtime : Release) (declared : Option Release) : InterfaceAdmission :=
+  let built := builtFor declared
+  if built.major < runtime.major then .olderMajor
+  else if runtime.major < built.major then .tooNew
+  else if built.le runtime then .compatible
+  else .tooNew
 
-theorem undeclared_is_compatible : interfaceAdmission none = .compatible := rfl
-
-theorem current_is_compatible : interfaceAdmission (some currentInterface) = .compatible := rfl
-
-theorem compatible_within_range (declared : Option Nat)
-    (h : interfaceAdmission declared = .compatible) :
-    oldestInterface ≤ builtFor declared ∧ builtFor declared ≤ currentInterface := by
+theorem compatible_has_the_runtime_major (runtime : Release) (declared : Option Release)
+    (h : interfaceAdmission runtime declared = .compatible) :
+    (builtFor declared).major = runtime.major ∧ (builtFor declared).le runtime = true := by
   unfold interfaceAdmission at h
-  by_cases low : builtFor declared < oldestInterface
-  · simp [low] at h
-  · by_cases high : currentInterface < builtFor declared
-    · simp [low, high] at h
-    · omega
+  by_cases h1 : (builtFor declared).major < runtime.major
+  · simp [h1] at h
+  · by_cases h2 : runtime.major < (builtFor declared).major
+    · simp [h1, h2] at h
+    · by_cases h3 : (builtFor declared).le runtime = true
+      · exact ⟨by omega, h3⟩
+      · simp [h1, h2, h3] at h
+
+theorem own_release_is_compatible (runtime : Release) :
+    interfaceAdmission runtime (some runtime) = .compatible := by
+  simp [interfaceAdmission, builtFor, Release.le_refl]
+
+theorem undeclared_loads_on_the_baseline :
+    interfaceAdmission baseline none = .compatible := by decide
 
 /-- What an update from the registry does with the archive it resolved. It
 replaces the installed pack only when this runtime loads it; otherwise the
-installed version stays and the refusal names the interface. -/
+installed version stays and the refusal names the release. -/
 inductive UpdateDecision | take | keepInstalled
   deriving DecidableEq, Repr
 
