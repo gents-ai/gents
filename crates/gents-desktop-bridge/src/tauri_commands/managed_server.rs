@@ -623,7 +623,7 @@ where
         Ok((ready, lifecycle)) => match validate_ready_runtime(&ready, &authority, &node_home) {
             Ok(()) => Ok(lifecycle),
             Err(error) => Err(LaunchFailure {
-                error,
+                error: error.into(),
                 attempted_start: true,
                 preserve_runtime: false,
                 lifecycle: Some(lifecycle),

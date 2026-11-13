@@ -98,7 +98,7 @@ async fn a_start_still_booting_at_the_bound_is_not_rolled_back() {
         !failure.attempted_start,
         "a job that may be migrating is left running"
     );
-    assert!(failure.error.is::<RuntimeStillBooting>());
+    assert!(matches!(failure.error, StartError::StillBooting(_)));
 }
 
 #[tokio::test]

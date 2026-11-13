@@ -188,6 +188,12 @@ impl BridgeError {
             "Storage is full. Free disk space, then restart Gents to reopen the same store. Your saved chats and pending message are kept.")
     }
 
+    /// The bridge error an application error carries as its root or as a
+    /// context value; a source-chain walk does not see a context value.
+    pub fn carried_by(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+
     pub fn classify_transport_error(error: anyhow::Error) -> Self {
         if gents_store::graphql::is_storage_full(error.as_ref()) {
             return Self::storage_full();

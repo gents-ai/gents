@@ -1999,12 +1999,10 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
     // TryLockError in reserve_client_listener
     ("crates/gents-desktop-bridge/src/tauri_commands/lifecycle/single_flight.rs", 1),
-    // BackgroundApprovalPending in NativeLaunch::start; BridgeError in settle_launch_failure; RuntimeStillBooting in launch_managed_server; RuntimeStillBooting in settle_launch_failure
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
+    // BackgroundApprovalPending in NativeLaunch::start
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 1),
     // UnsupportedNativeServicePlatform in native_error
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
-    // BridgeError in settle_adoption; RefusedStoreKind in refused_kind; RuntimeStillBooting in settle_adoption
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     // RemoteP2pAdminError in ClientRouteManager::reconcile_route
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
     // ModelDiscoveryHttpError in classify_discovery_failure
@@ -2080,7 +2078,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 /// a new entry is a reviewed addition.
 #[rustfmt::skip]
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
-    ("crates/gents-desktop-core/src/error.rs", &["BridgeError::classify_transport_error"]),
+    ("crates/gents-desktop-core/src/error.rs", &["BridgeError::carried_by", "BridgeError::classify_transport_error"]),
     ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
     ("crates/gents-eval/src/optimization/driver.rs", &["job_refused"]),
     ("crates/gents-eval/src/optimization/job.rs", &["journal_conflict"]),

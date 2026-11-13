@@ -183,7 +183,7 @@ impl ManagedLaunch for FakeLaunch {
             .unwrap_or(Ok(Launched::Started))
     }
 
-    async fn await_ready(&self) -> anyhow::Result<Readiness> {
+    async fn await_ready(&self) -> Result<Readiness, StartError> {
         let next = self.readiness.lock().unwrap().pop_front();
         match next {
             Some(readiness) => Ok(readiness),

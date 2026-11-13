@@ -1,7 +1,7 @@
 use super::native::service_action;
 use super::native::{launchable_native_service, native_service, run_native};
 use super::readiness::{
-    refused_kind, refused_runtime_store, wait_for_managed_server, Readiness, RuntimeStillBooting,
+    refused_kind, refused_runtime_store, wait_for_managed_server, Readiness, StartError,
     BACKGROUND_APPROVAL_TIMEOUT, MANAGED_SERVER_POLL_INTERVAL,
 };
 use super::start_wait::{
@@ -21,7 +21,7 @@ pub(super) trait ManagedLaunch {
     async fn requires_approval(&self) -> Result<bool, BridgeError>;
     async fn await_approval(&self) -> anyhow::Result<()>;
     async fn start(&self) -> Result<Launched, BridgeError>;
-    async fn await_ready(&self) -> anyhow::Result<Readiness>;
+    async fn await_ready(&self) -> Result<Readiness, StartError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,13 +79,13 @@ where
         Ok(launched)
     }
 
-    async fn await_ready(&self) -> anyhow::Result<Readiness> {
+    async fn await_ready(&self) -> Result<Readiness, StartError> {
         wait_for_managed_server(self.app, self.state, self.node_home).await
     }
 }
 
 pub(super) struct LaunchFailure<'a> {
-    pub(super) error: anyhow::Error,
+    pub(super) error: StartError,
     pub(super) attempted_start: bool,
     pub(super) preserve_runtime: bool,
     pub(super) lifecycle: Option<LifecycleGuard<'a>>,
@@ -103,7 +103,7 @@ where
     let mut lifecycle = Some(lifecycle);
     let mut attempted_start = false;
     let mut preserve_runtime = false;
-    let result: anyhow::Result<ManagedServerStatus> = async {
+    let result: Result<ManagedServerStatus, StartError> = async {
         if launch.requires_approval().await? {
             lifecycle = None;
             wait_unlocked(token, launch.await_approval()).await?;
@@ -122,7 +122,7 @@ where
                 }
                 Readiness::Outdated { message, selected } => {
                     preserve_runtime = selected;
-                    anyhow::bail!(message);
+                    return Err(anyhow::anyhow!(message).into());
                 }
                 Readiness::ApprovalRequired if !resumed_after_approval => {
                     resumed_after_approval = true;
@@ -132,7 +132,10 @@ where
                     start_when_approved(state, token, &mut lifecycle, launch).await?;
                 }
                 Readiness::ApprovalRequired => {
-                    anyhow::bail!(gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED)
+                    return Err(anyhow::anyhow!(
+                        gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED
+                    )
+                    .into())
                 }
             }
         }
@@ -142,7 +145,7 @@ where
         (Ok(ready), Some(lifecycle)) => Ok((ready, lifecycle)),
         (Ok(_), None) => unreachable!("readiness relocks before it returns"),
         (Err(error), lifecycle) => Err(LaunchFailure {
-            attempted_start: attempted_start && !error.is::<RuntimeStillBooting>(),
+            attempted_start: attempted_start && !matches!(error, StartError::StillBooting(_)),
             preserve_runtime,
             error,
             lifecycle,
@@ -212,16 +215,16 @@ where
     if token.is_cancelled() {
         return Err(cancelled());
     }
-    let still_booting = error.is::<RuntimeStillBooting>();
+    let still_booting = matches!(error, StartError::StillBooting(_));
     let typed_error = if still_booting {
         Some(BridgeError::new(
             BridgeErrorCode::RuntimeStillBooting,
             error.to_string(),
         ))
     } else {
-        error.downcast_ref::<BridgeError>().cloned()
+        error.bridge().cloned()
     };
-    let mut message = format!("{error:#}");
+    let mut message = error.message();
     let _lifecycle = match lifecycle {
         Some(lifecycle) => lifecycle,
         None => relock_start(state, token).await.map_err(|_| cancelled())?,
