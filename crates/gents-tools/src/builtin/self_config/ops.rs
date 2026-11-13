@@ -88,10 +88,24 @@ pub(super) struct MissingConfigDocument {
     pub id: String,
 }
 
+impl MissingConfigDocument {
+    /// The missing config document an erased error carries as its root or as a context value.
+    pub(super) fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(super) struct MissingAgent {
     pub agent_did: String,
     pub suggestions: Vec<String>,
+}
+
+impl MissingAgent {
+    /// Whether an erased error carries an unknown agent as its root or as a context value.
+    pub(super) fn in_error(error: &anyhow::Error) -> bool {
+        error.downcast_ref::<Self>().is_some()
+    }
 }
 
 impl std::fmt::Display for MissingAgent {

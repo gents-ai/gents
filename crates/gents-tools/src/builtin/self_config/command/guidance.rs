@@ -53,7 +53,7 @@ impl ConfigCommandTool {
         argv: &[String],
         deleting: bool,
     ) -> (String, Value) {
-        let missing = error.downcast_ref::<gents_documents::MissingReference>();
+        let missing = gents_documents::MissingReference::in_error(error);
         let message = missing.map_or_else(
             || format!("{error:#}"),
             |missing| {
@@ -63,10 +63,10 @@ impl ConfigCommandTool {
                 )
             },
         );
-        if let Some(hint) = error.downcast_ref::<CommandGuidance>() {
+        if let Some(hint) = CommandGuidance::in_error(error) {
             return (message, json!({"next_call":hint.next_call}));
         }
-        if let Some(schema) = error.downcast_ref::<gents_documents::OutcomeSourceSchemaError>() {
+        if let Some(schema) = gents_documents::OutcomeSourceSchemaError::in_error(error) {
             let next = if schema.missing_handoff {
                 json!({"argv":["collection","preview","update",schema.collection],"options":{"patch":[{"op":"add","path":format!("/{}/Fields/-",schema.collection),"value":{"Name":"handoff_id","Kind":"String"}}]}})
             } else {
@@ -74,7 +74,7 @@ impl ConfigCommandTool {
             };
             return (message, json!({"tool":"schema","next_call":next}));
         }
-        if let Some(missing) = error.downcast_ref::<super::ops::MissingConfigDocument>() {
+        if let Some(missing) = super::ops::MissingConfigDocument::in_error(error) {
             if let Some((resource, _)) = HELP_INDEX
                 .iter()
                 .find(|(r, _)| crud::resource_target(r) == Some(missing.target))
@@ -83,9 +83,7 @@ impl ConfigCommandTool {
             }
         }
         let resources = model_resources(&self.categories, self.core.held_grants().pack_install);
-        if error.downcast_ref::<super::ops::MissingAgent>().is_some()
-            && self.categories.contains("node")
-        {
+        if super::ops::MissingAgent::in_error(error) && self.categories.contains("node") {
             return (message, json!({"next_call":{"argv":["agent","list"]}}));
         }
         if let Some(missing) = missing {

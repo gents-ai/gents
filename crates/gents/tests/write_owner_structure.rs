@@ -2039,12 +2039,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
     // EnrollmentDecisionRefusal in P2pTool::call_one
     ("crates/gents-tools/src/builtin/p2p.rs", 1),
-    // BatchFailure in ConfigCommandTool::call
-    ("crates/gents-tools/src/builtin/self_config/command.rs", 1),
-    // CommandGuidance in ConfigCommandTool::failure_guidance; MissingAgent in ConfigCommandTool::failure_guidance; MissingConfigDocument in ConfigCommandTool::failure_guidance; MissingReference in ConfigCommandTool::failure_guidance; OutcomeSourceSchemaError in ConfigCommandTool::failure_guidance
-    ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
-    // MissingReference in ConfigCommandTool::validate_saved
-    ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
 ];
 
 /// Owner classifiers: the functions through which an owner asks an erased
@@ -2058,6 +2052,8 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-desktop-core/src/error.rs", &["BridgeError::classify_transport_error"]),
     ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
+    ("crates/gents-documents/src/desired_state/validate.rs", &["OutcomeSourceSchemaError::in_error"]),
+    ("crates/gents-documents/src/references.rs", &["MissingReference::in_error"]),
     ("crates/gents-eval/src/optimization/driver.rs", &["job_refused"]),
     ("crates/gents-eval/src/optimization/job.rs", &["journal_conflict"]),
     ("crates/gents-eval/src/optimization/promote.rs", &["promote_refused"]),
@@ -2085,6 +2081,9 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-store/src/local/home.rs", &["store_lock_held"]),
     ("crates/gents-store/src/local/storage_backend.rs", &["find_incompatible", "find_insecure_key"]),
     ("crates/gents-store/src/local/store_key.rs", &["store_key_unavailable"]),
+    ("crates/gents-tools/src/builtin/self_config/command.rs", &["CommandGuidance::in_error"]),
+    ("crates/gents-tools/src/builtin/self_config/command/crud.rs", &["BatchFailure::in_error"]),
+    ("crates/gents-tools/src/builtin/self_config/ops.rs", &["MissingAgent::in_error", "MissingConfigDocument::in_error"]),
     ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["auth_refusal_of"]),
     ("crates/gents/src/eval/documents.rs", &["already_completed", "already_invalidated", "feedback_off_train"]),
     ("crates/gents/src/runtime/agent/daemon.rs", &["ShutdownDrainFailure::occurs_in"]),
