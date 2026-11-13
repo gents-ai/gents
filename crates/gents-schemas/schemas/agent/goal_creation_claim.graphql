@@ -1,4 +1,4 @@
-type GoalCreationClaim @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "children") @index(fields: ["session_doc_id", "creation_key"], unique: true) {
+type GoalCreationClaim @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "children") @index(fields: ["session_doc_id", "creation_key"], unique: true) {
     creation_key: String @index @immutable
     goal_id: String @index @immutable
     session_id: String @index @immutable

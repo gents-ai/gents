@@ -1,4 +1,4 @@
-type Schedule @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "configuration") @index(fields: ["node_did", "schedule_id"], unique: true) {
+type Schedule @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "configuration") @index(fields: ["node_did", "schedule_id"], unique: true) {
     schedule_id: String
     node_did: String @index
     display_name: String

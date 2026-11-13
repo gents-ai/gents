@@ -2,7 +2,7 @@
 # member (Lean `Identity.EnrollmentGrant.Receipt`). Native relations carry no
 # provenance, so revocation withdraws exactly the recorded tuples. Deliberately
 # NOT branchable: it accounts for this node's own relations only.
-type NetworkEnrollmentGrant @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "operations") {
+type NetworkEnrollmentGrant @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "operations") {
     request_id: String @index(unique: true) @immutable
     member_did: String @index @immutable
     tuples: [String]

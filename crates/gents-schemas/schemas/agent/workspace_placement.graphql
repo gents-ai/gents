@@ -1,6 +1,6 @@
 # Local-only placement for an IsolatedWorkspace on this host. NEVER @branchable:
 # host_path, adapter observation, and dirty-base must not replicate.
-type WorkspacePlacement @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "workspace_children") @index(fields: ["owner_node_did", "workspace_id"], unique: true) {
+type WorkspacePlacement @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "workspace_children") @index(fields: ["owner_node_did", "workspace_id"], unique: true) {
     workspace_id: String @index
     owner_node_did: String @index
     host_path: String
