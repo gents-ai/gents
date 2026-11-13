@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use super::test_support::*;
 use super::*;
 use crate::identity::NodeIdentity;
