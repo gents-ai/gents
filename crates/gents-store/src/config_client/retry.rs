@@ -93,7 +93,12 @@ pub(super) fn access_error_in<'a>(
     })
 }
 
-/// The first request to run again in an erased error's chain.
+/// The first request to run again in an erased error's chain. It is found by
+/// its own type rather than by asking a `ConfigClientError`: the request rides
+/// one level below the store's error (`RerunRequest` as the source of
+/// `ConfigClientError::RerunRequested`), so a transparent owner variant, which
+/// hides only the error it wraps, cannot hide it (maintainer decision of
+/// 2026-11-11, recorded on `Hooks.rerunSurvives` in `MustCommit.lean`).
 pub(super) fn rerun_request_in<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a super::RerunNote> {
