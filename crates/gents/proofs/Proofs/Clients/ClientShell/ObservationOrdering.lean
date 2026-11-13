@@ -667,15 +667,15 @@ def failedStreamEnd (error : AccessClassification.Error) : StreamEnd :=
 (`AccessClassification.Error.classification_survives_every_wrapping`). -/
 theorem classified_refusal_is_refused (holdings : List AccessClassification.Holding)
     (failure : AccessClassification.Failure) (refused : failure.classification = .refused) :
-    streamEndEvent (failedStreamEnd (AccessClassification.Error.wrapAll holdings
-      (.wrapper .sourced (.access failure)))) = some .refused := by
+    streamEndEvent (failedStreamEnd (AccessClassification.Chain.wrapAll holdings
+      (.wrapper .sourced (.owner failure)))) = some .refused := by
   simp [failedStreamEnd, AccessClassification.Error.classification_survives_every_wrapping,
     refused, streamEndEvent]
 
 /-- The premise of `classified_refusal_is_refused`: a denial held by a
 transparent variant is published as a transport failure. -/
 theorem hidden_refusal_reads_as_an_outage :
-    streamEndEvent (failedStreamEnd (.wrapper .transparent (.access .forbidden)))
+    streamEndEvent (failedStreamEnd (.wrapper .transparent (.owner .forbidden)))
       = some .transportFailed := by
   rfl
 
