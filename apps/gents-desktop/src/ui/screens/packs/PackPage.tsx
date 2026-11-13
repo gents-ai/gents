@@ -364,7 +364,11 @@ export function PackPage({
   const versions = versionsOf(registry);
   const latest = text(registry?.latest) ?? versions[0]?.version ?? null;
   const version = report?.version ?? latest;
-  const blocked = elsewhere(local, name);
+  /* a pack that couldn't be read for its review isn't offered: its review
+     would fail the same way, and a link's pack may not be the one named */
+  const unreadable =
+    previewing && preview?.state === "unread" ? readFailure(preview.error) : null;
+  const blocked = elsewhere(local, name) ?? unreadable;
   const description = text(registry?.description) ?? text(report?.description);
   const namespace = namespaceOf(pack);
   /* what it added that the configuration lists; its pages have a section

@@ -864,7 +864,7 @@ describe("a pack link", () => {
     expect(installs(installPack)[0]).toMatchObject({ expectDigest: linked });
   });
 
-  it("says when the pack isn't the one the link names, and offers no install", async () => {
+  it("says on the pack's page when the pack isn't the one the link names, and offers no install", async () => {
     const linked = `sha256:${"1".repeat(64)}`;
     const installPack = bridge(() => {
       throw new Error(
@@ -872,11 +872,12 @@ describe("a pack link", () => {
       );
     });
     show(installPack, { package: "acme/docs", source: "link", digest: linked });
-    const { review } = await reviewFromPage();
-    expect(await within(review).findByRole("alert")).toHaveTextContent(
+    const page = await screen.findByTestId("pack-page");
+    expect(await within(page).findByRole("alert")).toHaveTextContent(
       "This isn't the pack the link names",
     );
-    expect(installButton(review)).toBeDisabled();
+    expect(within(page).getByRole("button", { name: "Install" })).toBeDisabled();
+    expect(screen.queryByTestId("pack-install-review")).toBeNull();
     expect(installs(installPack)).toEqual([]);
   });
 });

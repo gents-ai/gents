@@ -122,6 +122,8 @@ export function readFailure(error: string): string {
     return "This pack was made for an older version of Gents, so it can't be installed. Its publisher needs to update it.";
   if (error.includes("has no published version"))
     return "This pack has no version to install yet.";
+  if (refusalOf(error) === "changed")
+    return "This isn't the pack the link names: its digest is different, so it isn't offered.";
   return "Couldn't read this pack.";
 }
 

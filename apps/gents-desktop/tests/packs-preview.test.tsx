@@ -224,6 +224,27 @@ describe("a pack's page before it's installed", () => {
     expect(installs(installPack)).toEqual([]);
   });
 
+  it("says a link's pack isn't the one it names, and offers no Install", async () => {
+    const linked: PackReviewRequest = {
+      package: "acme/docs",
+      source: "link",
+      digest: "sha256:0000",
+    };
+    const installPack = bridge(() => {
+      throw new Error(
+        `the pack's digest is ${DIGEST}, not the expected sha256:0000. Nothing was installed.`,
+      );
+    });
+    show(installPack, { name: "packs", review: packPreviewKey(linked) });
+    const adds = await wouldAdd();
+    expect(
+      await within(adds).findByText(/This isn't the pack the link names/),
+    ).toBeVisible();
+    const page = screen.getByTestId("pack-page");
+    expect(within(page).getByRole("button", { name: "Install" })).toBeDisabled();
+    expect(installs(installPack)).toEqual([]);
+  });
+
   it("previews a file by a key, not its path", async () => {
     const file: PackReviewRequest = { package: "/Users/me/docs.pack", source: "file" };
     const installPack = bridge(() => preview({ source: "local" }));
