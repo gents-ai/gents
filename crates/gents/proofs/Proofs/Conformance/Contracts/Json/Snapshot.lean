@@ -131,7 +131,7 @@ import Proofs.Conformance.StorageWriteGateStreamWaiter
 import Proofs.Conformance.NativeCompletion
 import Proofs.Conformance.NativeClaimLifetime
 import Proofs.Conformance.UpdateHandoff
-import Proofs.Runtime.CanonicalOutput.Execution.AdmissionHandoffCases
+import Proofs.Conformance.AdmissionHandoff
 import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
@@ -400,8 +400,6 @@ def snapshotGoalCasesJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
-    ++ "\"tool_admission_handoff_cases\":"
-      ++ CanonicalOutput.Execution.AdmissionHandoff.Cases.casesJson ++ ","
     ++ "\"delegated_publication_cases\":"
       ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
 

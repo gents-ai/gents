@@ -960,101 +960,97 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
             ToolFootprint::Read
         }
     }
-    let model_case = tokio::task::spawn_blocking(|| {
-        let value: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        value["tool_admission_handoff_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == "cancel-waiting-unknown")
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap();
-    for count in [1, 2] {
-        let mut choices = Vec::new();
-        for index in 0..count {
-            let RawStreamingChoice::ToolCall(mut call) = scripted_tool_call() else {
-                unreachable!()
+    for case in gents_lean_vocab::families::admission_handoff_owned_loop::cases() {
+        let mut invocations = Vec::new();
+        for count in [1, 2] {
+            let mut choices = Vec::new();
+            for index in 0..count {
+                let RawStreamingChoice::ToolCall(mut call) = scripted_tool_call() else {
+                    unreachable!()
+                };
+                call.id = format!("call-{index}");
+                call.internal_call_id = format!("call-{index}");
+                call.call_id = Some(format!("call-{index}"));
+                call.arguments = serde_json::json!({"text": format!("input-{index}")});
+                choices.push(RawStreamingChoice::ToolCall(call));
+            }
+            choices.push(RawStreamingChoice::FinalResponse(()));
+            let model = ScriptedModel::new(vec![choices]);
+            let invoked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let tools: Arc<Vec<Box<dyn ToolDyn>>> =
+                Arc::new(vec![Box::new(ReadTool(invoked.clone()))]);
+            let gate = Arc::new(AdmissionGate::default());
+            let hook = RecordingHook {
+                admission_gate: Some(gate.clone()),
+                ..Default::default()
             };
-            call.id = format!("call-{index}");
-            call.internal_call_id = format!("call-{index}");
-            call.call_id = Some(format!("call-{index}"));
-            call.arguments = serde_json::json!({"text": format!("input-{index}")});
-            choices.push(RawStreamingChoice::ToolCall(call));
-        }
-        choices.push(RawStreamingChoice::FinalResponse(()));
-        let model = ScriptedModel::new(vec![choices]);
-        let invoked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(ReadTool(invoked.clone()))]);
-        let gate = Arc::new(AdmissionGate::default());
-        let hook = RecordingHook {
-            admission_gate: Some(gate.clone()),
-            ..Default::default()
-        };
-        let observed = hook.clone();
-        let scope = test_scope(
-            crate::rendered_request::RenderedRequestContext {
-                request_doc_id: "handoff-doc".into(),
-                request_commit_cid: "handoff-cid".into(),
-                request_id: "handoff-request".into(),
-                node_did: "did:test:node".into(),
-                requester_did: "did:test:user".into(),
-                agent_did: "did:test:agent".into(),
-                session_id: "handoff-session".into(),
-                model_name: "scripted".into(),
-                provider_family: None,
-            },
-            Arc::new(|_| Box::pin(async { Ok(()) })),
-        );
-        let mut config = test_loop_config();
-        config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
-        scope_request(scope, async {
-            let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
-                model,
-                Some(hook),
-                TaggedMessage::unassociated(Message::user("work")),
-                Vec::new(),
-                tools,
-                config,
-            ));
-            loop {
-                match stream
-                    .next()
-                    .await
-                    .expect("stream item")
-                    .expect("stream succeeds")
-                {
-                    crate::loop_stream::LoopStreamItem::AuthoredInputReady { reply, .. }
-                    | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
-                        reply.send(Ok(Vec::new())).unwrap();
-                    }
-                    crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
-                    _ => {}
-                }
-            }
-            assert!(
-                !observed
-                    .calls()
-                    .iter()
-                    .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
-                "turn publication precedes admission"
+            let observed = hook.clone();
+            let scope = test_scope(
+                crate::rendered_request::RenderedRequestContext {
+                    request_doc_id: "handoff-doc".into(),
+                    request_commit_cid: "handoff-cid".into(),
+                    request_id: "handoff-request".into(),
+                    node_did: "did:test:node".into(),
+                    requester_did: "did:test:user".into(),
+                    agent_did: "did:test:agent".into(),
+                    session_id: "handoff-session".into(),
+                    model_name: "scripted".into(),
+                    provider_family: None,
+                },
+                Arc::new(|_| Box::pin(async { Ok(()) })),
             );
-            let mut next = Box::pin(stream.next());
-            tokio::select! {
-                () = gate.entered.notified() => {},
-                result = &mut next => panic!("hook did not hold admission: {result:?}"),
-            }
-            drop(next);
-            drop(stream);
-            gate.release.notify_one();
-        })
-        .await;
-        assert_eq!(
-            invoked.load(std::sync::atomic::Ordering::SeqCst) != 0,
-            model_case["expected_invoked"]
+            let mut config = test_loop_config();
+            config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
+            scope_request(scope, async {
+                let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
+                    model,
+                    Some(hook),
+                    TaggedMessage::unassociated(Message::user("work")),
+                    Vec::new(),
+                    tools,
+                    config,
+                ));
+                loop {
+                    match stream
+                        .next()
+                        .await
+                        .expect("stream item")
+                        .expect("stream succeeds")
+                    {
+                        crate::loop_stream::LoopStreamItem::AuthoredInputReady {
+                            reply, ..
+                        }
+                        | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                            reply.send(Ok(Vec::new())).unwrap();
+                        }
+                        crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
+                        _ => {}
+                    }
+                }
+                assert!(
+                    !observed
+                        .calls()
+                        .iter()
+                        .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
+                    "turn publication precedes admission"
+                );
+                let mut next = Box::pin(stream.next());
+                tokio::select! {
+                    () = gate.entered.notified() => {},
+                    result = &mut next => panic!("hook did not hold admission: {result:?}"),
+                }
+                drop(next);
+                drop(stream);
+                gate.release.notify_one();
+            })
+            .await;
+            invocations.push(invoked.load(std::sync::atomic::Ordering::SeqCst) != 0);
+        }
+        assert!(
+            invocations.windows(2).all(|pair| pair[0] == pair[1]),
+            "{invocations:?}"
         );
+        case.check(invocations[0]);
     }
 }
 
