@@ -774,6 +774,7 @@ impl PluginExecutor {
     }
 
     fn admit(&self, record: &InstalledPlugin) -> Result<Arc<Admitted>> {
+        record.check_interface()?;
         if let Some(admitted) = self.cached_admission(record) {
             return Ok(admitted);
         }

@@ -31,6 +31,7 @@ pub fn installed_plugin(
         data_unique_keys: Default::default(),
         data_collection_fields: Default::default(),
         data_collection_schemas: Default::default(),
+        plugin_interface: None,
     };
     store::write_record(home.path(), &record).unwrap();
     (home, record)

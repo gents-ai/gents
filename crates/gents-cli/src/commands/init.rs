@@ -179,9 +179,18 @@ pub(crate) async fn init(args: InitArgs) -> Result<()> {
     print_json(&init_home(args).await?)
 }
 
-/// Normal completion drains the embedded node before releasing its store claim;
-/// aborting background tasks without awaiting them can retain the database.
-pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
+pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
+    init_home_with_core_packs(args, gents_core_packs::archives()).await
+}
+
+/// [`init_home`], installing the Engineer's core packs from `core_packs`.
+/// Normal completion drains the embedded node before releasing its store
+/// claim; aborting background tasks without awaiting them can retain the
+/// database.
+pub(crate) async fn init_home_with_core_packs(
+    mut args: InitArgs,
+    core_packs: default_packs::Archives<'_>,
+) -> Result<Value> {
     let started = Instant::now();
     let stage = |name: &'static str| {
         tracing::info!(
@@ -532,14 +541,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             .as_str()
             .context("init reports no default agent")?
             .to_owned();
-        output["default_packs"] = default_packs::install(
-            &home_dir,
-            &engineer,
-            default_packs::ENGINEER_DEFAULT_PACKS,
-            None,
-            default_packs::Approval::resolve(args.approve_default_packs, !args.unattended),
-        )
-        .await;
+        output["default_packs"] = default_packs::install(&home_dir, &engineer, core_packs).await;
     }
     Ok(output)
 }
@@ -3057,9 +3059,7 @@ mod tests {
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
-            approve_default_packs: false,
             no_default_packs: true,
-            unattended: false,
         }
     }
 }
