@@ -1,7 +1,7 @@
 import Proofs.Runtime.CanonicalOutput.Execution.GateCases
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Family
-import Proofs.Conformance.Contracts.Json.ClientRuntime
+import Proofs.Conformance.CanonicalOutputWire
 
 /-!
 # Payload presentation before provider projection (#1571)
@@ -21,7 +21,7 @@ namespace Conformance.PayloadPresentationContracts
 open CanonicalOutput
 open CanonicalOutput.Execution.Examples
 open CanonicalOutput.Execution.Gate.Cases
-open Conformance.Contracts
+open Lean Conformance.Contracts
 
 structure PayloadLengths where
   storedStreamBytes : Nat
@@ -84,19 +84,68 @@ def cases : List Case :=
   , mkCase "head_tail_window_presents_less_than_stored" [windowedOutput] windowedResult
   , mkCase "missing_dependency_has_no_payload_measurement" [] windowedResult ]
 
-def payloadLengthsJson : Option PayloadLengths → String
-  | none => "null"
-  | some value =>
-      "{\"stored_payload_bytes\":" ++ toString value.storedStreamBytes ++
-        ",\"presented_payload_bytes\":" ++ toString value.presentedBytes ++ "}"
+structure MeasureInput where
+  name : String
+  segments : Json
+  message : Json
+  deriving ToJson
 
-def caseJson (value : Case) : String :=
-  "{" ++ "\"name\":" ++ jsonString value.name ++ ","
-    ++ "\"segments\":" ++ jsonArray (value.segments.map canonicalSegmentJson) ++ ","
-    ++ "\"message\":" ++ canonicalMessageJson value.message ++ ","
-    ++ "\"expected\":" ++ payloadLengthsJson value.expected ++ "}"
+structure Measurement where
+  verdict : String
+  storedPayloadBytes : Option Nat
+  presentedPayloadBytes : Option Nat
+  deriving ToJson
 
-def casesJson : String := jsonArray (cases.map caseJson)
+/-- `missing` is an incomplete dependency, which leaves the message
+unmeasured; any other reconstruction failure rejects it. -/
+def verdict (records : List Segment) (message : MessageEnvelope) : String :=
+  match reconstructMessage records [] message with
+  | .ok _ => "measured"
+  | .error (.reconstruction (.lookup .unavailable)) => "missing"
+  | .error (.reconstruction (.extent (.missingOrdinal _))) => "missing"
+  | .error _ => "rejected"
+
+def measure (records : List Segment) (message : MessageEnvelope) : Measurement :=
+  let lengths := payloadLengths records message
+  { verdict := verdict records message
+    storedPayloadBytes := lengths.map (·.storedStreamBytes)
+    presentedPayloadBytes := lengths.map (·.presentedBytes) }
+
+def measureInput (name : String) (records : List Segment) (message : MessageEnvelope) :
+    MeasureInput :=
+  { name, segments := CanonicalOutputWire.segments records
+    message := CanonicalOutputWire.message message }
+
+def caseNamed (name : String) : Option Case := cases.find? (·.name == name)
+
+theorem case_names_are_unique : (cases.map (·.name)).eraseDups.length = cases.length := by
+  native_decide
+
+@[conformance_family]
+def lengths : Family MeasureInput (Option Measurement) where
+  inputs := cases.map fun value => measureInput value.name value.segments value.message
+  model := fun i => (caseNamed i.name).map fun value => measure value.segments value.message
+
+/-- One byte appended to the first stored flush breaks its run extent. -/
+def malformed : List Segment → List Segment
+  | [] => []
+  | first :: rest =>
+      { first with flush := first.flush.map fun flush =>
+          { flush with payload := flush.payload ++ [120] } } :: rest
+
+/-- Only a measurable message has stored payload to corrupt. -/
+def malformedCases : List Case := cases.filter (·.expected.isSome)
+
+@[conformance_family]
+def malformedLengths : Family MeasureInput (Option Measurement) where
+  inputs := malformedCases.map fun value =>
+    measureInput value.name (malformed value.segments) value.message
+  model := fun i => (caseNamed i.name).map fun value =>
+    measure (malformed value.segments) value.message
+
+example : malformedCases.all fun value =>
+    verdict (malformed value.segments) value.message == "rejected" := by
+  native_decide
 
 example : (cases.map (·.expected)) =
     [some ⟨3, 3⟩, some ⟨1, 3⟩, some ⟨10, 7⟩, none] := by native_decide

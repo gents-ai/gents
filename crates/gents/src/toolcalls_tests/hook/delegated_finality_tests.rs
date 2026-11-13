@@ -530,25 +530,6 @@ async fn dropped_commit_ack_recovery_matches_the_lean_model() {
 
 #[tokio::test]
 async fn existing_child_message_uses_calling_agent_native_claim() {
-    let modeled = gents_lean_vocab::lean_contract_snapshot();
-    let allowed = modeled
-        .cross_actor_authorization_cases
-        .iter()
-        .find(|case| case.name == "committed_claim")
-        .unwrap();
-    let denied = modeled
-        .cross_actor_authorization_cases
-        .iter()
-        .find(|case| case.name == "node_denied_at_check")
-        .unwrap();
-    assert_eq!(
-        allowed.decision,
-        gents_lean_vocab::LeanCrossActorDecision::Claimed
-    );
-    assert_eq!(
-        denied.decision,
-        gents_lean_vocab::LeanCrossActorDecision::Denied
-    );
     for (active, deny) in [(false, false), (false, true), (true, true)] {
         let mut fixture = fixture(if active {
             "existing-active"

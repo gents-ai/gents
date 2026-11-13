@@ -58,117 +58,110 @@ async fn queue_snapshot(
 
 #[tokio::test]
 async fn generated_background_completion_queue_case_uses_accepted_session_messages() {
-    let case = gents_lean_vocab::lean_queue_deadline_case(
-        "background_completion_notification_creates_no_agent_request",
-    );
-    assert_eq!(case.group, "completion_delivery");
-    assert_eq!(case.action, "appendNotification");
-    assert!(case.legal);
-    assert_eq!(case.pre_active_request_id, case.post_active_request_id);
-    let db = gents_inference::test_support::test_db(
-        "queue-scope",
-        gents_session::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = db.node.clone();
-    let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
-    let node_did = db.node_identity.did();
-    gents_inference::test_support::install_test_agent(&node, node_did, "general").await;
-    let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
-    let session_id = case.session_id.to_string();
-    let mut parent = claimed_signed_request(&node, &parent_id, &session_id, &identity, None).await;
-    let parent_doc_id = parent.request().doc_id.clone();
-    let queue_key = case.queue_key.as_deref();
-    let owner = parent.access().unwrap();
-    let pre = queue_snapshot(&owner, &session_id, queue_key).await;
-    assert_eq!(
-        pre.0.len(),
-        case.pre_pending_request_ids.len(),
-        "{} pre pending queue drifted",
-        case.name
-    );
-    assert_eq!(pre.1, 0, "{} pre coalesced count drifted", case.name);
-
-    let mut children = Vec::new();
-    let mut agent_signer = None;
-    for turn in 0..2 {
-        let tool_id = format!("queue-deadline-coalesce-{}-{turn}", uuid::Uuid::new_v4());
-        let mut row = publish_accepted_on_claimed_request(
-            node.clone(),
-            &mut parent,
-            node_did,
-            turn,
-            gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
-            &tool_id,
-            serde_json::json!({"agent": "general", "prompt": format!("prompt for {tool_id}")}),
-            AwaitMode::Background,
-            false,
-        )
-        .await
-        .unwrap();
-        agent_signer = row.access().unwrap().managed_agent_signer();
-        let receipt = materialize_session_message(
-            &node,
-            &parent,
-            &mut row,
-            node_did,
-            &format!("prompt for {tool_id}"),
-        )
-        .await
-        .unwrap();
-        let tool_doc_id = row.doc_id().unwrap().to_owned();
-        assert_eq!(row.request_doc_id.as_deref(), Some(parent_doc_id.as_str()));
-        let persisted = scope_row(&owner, "AgentToolCall", &tool_doc_id).await;
-        assert_eq!(persisted["request_doc_id"], parent_doc_id);
-        assert_eq!(persisted["node_did"], node_did);
-        assert_eq!(persisted["lifecycle_state"], "running");
-        children.push(receipt.request_id);
-    }
-    let escaped_parent_doc = gents_store::graphql::escape_graphql_string(&parent_doc_id);
-    exec(&owner, &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_parent_doc}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
-    let agent_signer = agent_signer.expect("session-message fixture managed signer");
-    let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
-        node.clone(),
-        identity::Did::new(agent_signer.did()).unwrap(),
-        agent_signer.clone(),
-    )
-    .unwrap();
-    for (index, caused_request_id) in children.iter().enumerate() {
-        complete_child_managed_verified(
-            &node,
-            caused_request_id,
-            &format!("child {} complete", index + 1),
-            &agent_signer,
-            Arc::new(gents_store::test_support::held_runtime_identity(
-                db.node_identity.did(),
-            )),
+    for case in gents_lean_vocab::families::contracts_queue_deadline_completion_delivery::cases() {
+        let input = &case.input;
+        let db = gents_inference::test_support::test_db(
+            "queue-scope",
+            gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let node = db.node.clone();
+        let identity = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+        let node_did = db.node_identity.did();
+        gents_inference::test_support::install_test_agent(&node, node_did, "general").await;
+        let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
+        let session_id = input.session_id.to_string();
+        let mut parent =
+            claimed_signed_request(&node, &parent_id, &session_id, &identity, None).await;
+        let parent_doc_id = parent.request().doc_id.clone();
+        let queue_key = input.queue_key.as_deref();
+        let owner = parent.access().unwrap();
+        let pre = queue_snapshot(&owner, &session_id, queue_key).await;
+        assert_eq!(
+            pre.0.len(),
+            input.pre_pending_request_ids.len(),
+            "{} pre pending queue drifted",
+            input.name
+        );
+        assert_eq!(pre.1, 0, "{} pre coalesced count drifted", input.name);
+
+        let mut children = Vec::new();
+        let mut agent_signer = None;
+        for turn in 0..2 {
+            let tool_id = format!("queue-deadline-coalesce-{}-{turn}", uuid::Uuid::new_v4());
+            let mut row = publish_accepted_on_claimed_request(
+                node.clone(),
+                &mut parent,
+                node_did,
+                turn,
+                gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
+                &tool_id,
+                serde_json::json!({"agent": "general", "prompt": format!("prompt for {tool_id}")}),
+                AwaitMode::Background,
+                false,
+            )
+            .await
+            .unwrap();
+            agent_signer = row.access().unwrap().managed_agent_signer();
+            let receipt = materialize_session_message(
+                &node,
+                &parent,
+                &mut row,
+                node_did,
+                &format!("prompt for {tool_id}"),
+            )
+            .await
+            .unwrap();
+            let tool_doc_id = row.doc_id().unwrap().to_owned();
+            assert_eq!(row.request_doc_id.as_deref(), Some(parent_doc_id.as_str()));
+            let persisted = scope_row(&owner, "AgentToolCall", &tool_doc_id).await;
+            assert_eq!(persisted["request_doc_id"], parent_doc_id);
+            assert_eq!(persisted["node_did"], node_did);
+            assert_eq!(persisted["lifecycle_state"], "running");
+            children.push(receipt.request_id);
+        }
+        let escaped_parent_doc = gents_store::graphql::escape_graphql_string(&parent_doc_id);
+        exec(&owner, &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_parent_doc}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
+        let agent_signer = agent_signer.expect("session-message fixture managed signer");
+        let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
+            node.clone(),
+            identity::Did::new(agent_signer.did()).unwrap(),
+            agent_signer.clone(),
+        )
+        .unwrap();
+        for (index, caused_request_id) in children.iter().enumerate() {
+            complete_child_managed_verified(
+                &node,
+                caused_request_id,
+                &format!("child {} complete", index + 1),
+                &agent_signer,
+                Arc::new(gents_store::test_support::held_runtime_identity(
+                    db.node_identity.did(),
+                )),
+            )
+            .await;
+        }
+        let settled =
+            crate::background::completion::settle_running_session_message_rows_with_access(
+                &node,
+                &access,
+                &gents_session::session::message::NoSessionMessageGoals,
+                node_did,
+            )
+            .await
+            .unwrap();
+        assert_eq!(settled, 2);
+        let post = queue_snapshot(&owner, &session_id, queue_key).await;
+        assert_eq!(
+            post.0.len(),
+            1,
+            "two caused-request completions must enqueue one wake request"
+        );
+        node.shutdown().await.expect("shut down test node");
+        case.check(
+        gents_lean_vocab::families::contracts_queue_deadline_completion_delivery::CompletionDeliveryOutput {
+            post_coalesced_pending_count: post.1 as u64,
+        },
+    );
     }
-    let settled = crate::background::completion::settle_running_session_message_rows_with_access(
-        &node,
-        &access,
-        &gents_session::session::message::NoSessionMessageGoals,
-        node_did,
-    )
-    .await
-    .unwrap();
-    assert_eq!(settled, 2);
-    let post = queue_snapshot(&owner, &session_id, queue_key).await;
-    assert!(
-        case.post_pending_request_ids.is_empty(),
-        "{} generated notification must add no modeled request",
-        case.name
-    );
-    assert_eq!(
-        post.0.len(),
-        1,
-        "two caused-request completions must enqueue one wake request"
-    );
-    assert_eq!(
-        post.1, case.post_coalesced_pending_count,
-        "{} coalesced count drifted",
-        case.name
-    );
-    node.shutdown().await.expect("shut down test node");
 }

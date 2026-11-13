@@ -109,3 +109,11 @@ pub enum LeanMediaData<T> {
     String { payload: T },
     Unknown,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeanMessageRole {
+    System,
+    User,
+    Assistant,
+}

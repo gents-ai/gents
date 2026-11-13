@@ -129,35 +129,25 @@ fn test_state() -> (tempfile::TempDir, DesktopAppState) {
 
 #[tokio::test]
 async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_returns() {
-    let cases = tokio::task::spawn_blocking(|| {
-        &gents_lean_vocab::lean_contract_snapshot().native_claim_lifetime_cases
-    })
-    .await
-    .expect("Lean snapshot load");
-    let case = cases
-        .iter()
-        .find(|case| case.name == "client_shutdown_cancel_retains_claim_until_return")
-        .expect("Lean client shutdown cancellation case");
-    let expected_events = [
-        "native_started",
-        "caller_cancelled",
-        "native_returned",
-        "access_released",
-        "lifecycle_guard_released",
-        "gate_release_requested",
-    ];
-    assert_eq!(case.events, expected_events);
-    let observation_for = |event: &str| {
-        let index = case
-            .events
-            .iter()
-            .position(|candidate| candidate == event)
-            .expect("event in generated trace");
-        &case.observations[index]
-    };
-    let lifecycle_guard_held_for = |event: &str| observation_for(event).lifecycle_guard_held;
-    let claim_held_for = |event: &str| observation_for(event).claim_held;
+    for case in gents_lean_vocab::families::native_claim_lifetime_client_exclusion_scenario::cases::<
+        String,
+        String,
+    >() {
+        case.check(
+            cancelled_exclusion_waiter_observations()
+                .await
+                .into_iter()
+                .map(|(claim_held, lifecycle_guard_held)| gents_lean_vocab::families::native_claim_lifetime_client_exclusion_scenario::ExclusionView {
+                    claim_held,
+                    lifecycle_guard_held,
+                })
+                .collect(),
+        );
+    }
+}
 
+async fn cancelled_exclusion_waiter_observations() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let (_temp, state) = test_state();
     let state = Arc::new(state);
     let paths = state.policy.desktop_paths.clone();
@@ -199,16 +189,12 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
         .expect("owned exclusion shutdown task started");
     waiter.abort();
     assert!(waiter.await.unwrap_err().is_cancelled());
-    assert_eq!(
+    observed.push((
         gents_store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("caller_cancelled")
-    );
-    assert_eq!(
         Arc::clone(&state.client_lifecycle)
             .try_lock_owned()
             .is_err(),
-        lifecycle_guard_held_for("caller_cancelled")
-    );
+    ));
 
     allow_shutdown.notify_one();
     tokio::time::timeout(
@@ -217,16 +203,12 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
     )
     .await
     .expect("client shutdown releases the store claim before exclusion ends");
-    assert_eq!(
+    observed.push((
         gents_store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("access_released")
-    );
-    assert_eq!(
         Arc::clone(&state.client_lifecycle)
             .try_lock_owned()
             .is_err(),
-        lifecycle_guard_held_for("access_released")
-    );
+    ));
 
     allow_owner_return.notify_one();
     let lifecycle_guard = tokio::time::timeout(
@@ -236,17 +218,14 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
     .await
     .expect("exclusion guard releases after its shutdown owner returns");
     drop(lifecycle_guard);
-    assert_eq!(
-        Arc::clone(&state.client_lifecycle)
-            .try_lock_owned()
-            .is_err(),
-        lifecycle_guard_held_for("lifecycle_guard_released")
-    );
-    assert_eq!(
+    let lifecycle_guard_held = Arc::clone(&state.client_lifecycle)
+        .try_lock_owned()
+        .is_err();
+    observed.push((
         gents_store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("lifecycle_guard_released"),
-        "the native store claim is released before the lifecycle guard"
-    );
+        lifecycle_guard_held,
+    ));
+    observed
 }
 
 #[tokio::test]

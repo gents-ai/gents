@@ -1,23 +1,22 @@
 import Proofs.Documents.ScopeTemplates
-import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Family
 
 namespace Conformance.FileReviewRouteContracts
 
-open Conformance.Contracts
-
-private def boolJson (value : Bool) := if value then "true" else "false"
-
-def subscriptionCasesJson := jsonArray (
-  ScopeTemplates.transcriptCollections.map fun collection =>
-    "{\"collection\":" ++ jsonString collection ++
-    ",\"replicated\":" ++ boolJson false ++ "}")
-
-end Conformance.FileReviewRouteContracts
-
-namespace Conformance.FileReviewRouteContracts
-
 open Lean
+
+structure SubscriptionInput where
+  collection : String
+  deriving ToJson
+
+structure SubscriptionOutput where
+  replicated : Bool
+  deriving ToJson
+
+@[conformance_family]
+def subscription : Family SubscriptionInput SubscriptionOutput where
+  inputs := ScopeTemplates.transcriptCollections.map fun collection => { collection }
+  model := fun i => { replicated := Identity.collectionReplicates i.collection }
 
 deriving instance ToJson for ScopeTemplates.RouteDirection, ScopeTemplates.FilterClause,
   ScopeTemplates.CollectionPredicate

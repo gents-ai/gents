@@ -498,6 +498,24 @@ mod conformance {
     }
 
     #[test]
+    fn lifecycle_terminal_partition_matches_the_lean_request_states() {
+        let mut nonterminal = Vec::new();
+        for case in
+            gents_lean_vocab::families::request_state_terminal::cases::<RequestLifecycleState>()
+        {
+            let terminal = case.input.state.is_terminal();
+            if !terminal {
+                nonterminal.push(case.input.state);
+            }
+            case.check(terminal);
+        }
+        assert_eq!(
+            RequestLifecycleState::nonterminal_graphql_list(),
+            RequestLifecycleState::graphql_list(nonterminal)
+        );
+    }
+
+    #[test]
     fn transitions_follow_the_lean_request_transition_model() {
         gents_lean_vocab::families::request_transition_classification::replay::<
             RequestLifecycleState,

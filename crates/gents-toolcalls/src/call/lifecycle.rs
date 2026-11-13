@@ -651,34 +651,6 @@ mod tests {
         assert_eq!(kind_of("tool"), ToolRowKind::Native);
         node.shutdown().await.expect("shut down test node");
     }
-
-    use gents_lean_vocab::{
-        assert_state_machine_contract_is_complete, lean_state_machine_contract,
-    };
-
-    #[test]
-    fn tool_call_state_machine_contract_is_complete() {
-        assert_state_machine_contract_is_complete("ToolCall");
-    }
-
-    #[test]
-    fn tool_call_terminal_partition_matches_lean_contract() {
-        let machine = lean_state_machine_contract("ToolCall");
-        let terminal = ToolCallState::ALL
-            .iter()
-            .copied()
-            .filter(|s| s.is_terminal())
-            .map(ToolCallState::as_str)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            terminal,
-            machine
-                .terminal_states
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        );
-    }
 }
 #[cfg(test)]
 mod pushdown_tests_toolcalls_19;

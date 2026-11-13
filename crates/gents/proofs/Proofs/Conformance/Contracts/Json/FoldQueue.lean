@@ -150,17 +150,6 @@ def inputEditCasesJson : String :=
     ",\"after\":" ++ editStateJson result.1 ++ ",\"receipt\":" ++
     (match result.2 with | none => "null" | some r => editReceiptJson r) ++ "}")
 
-def inputEditClientObservationCasesJson : String :=
-  jsonArray (SessionQueue.InputEditCases.clientObservationCases.map fun c =>
-    let observation := SessionQueue.InputEditCases.runClientObservation c
-    "{\"name\":" ++ jsonString c.name ++
-    ",\"receipt_outcome\":" ++ jsonString (match c.receiptOutcome with
-      | .applied => "applied" | .rejected => "rejected") ++
-    ",\"projection_refresh_succeeded\":" ++ jsonOptionalBool (some c.projectionRefreshSucceeded) ++
-    ",\"command_outcome\":" ++ jsonString (match observation.commandOutcome with
-      | .applied => "applied" | .rejected => "rejected") ++
-    ",\"projection_fresh\":" ++ jsonOptionalBool (some observation.projectionFresh) ++ "}")
-
 section Families
 
 open Lean
@@ -612,6 +601,34 @@ example : roundTrips (SessionQueue.ManagementCases.cases.flatMap fun c =>
   native_decide
 
 end Management
+
+section InputEditClientObservation
+
+open SessionQueue.InputEdit
+
+deriving instance ToJson for SessionQueue.InputEdit.Outcome
+
+structure InputEditClientObservationInput where
+  receiptOutcome : SessionQueue.InputEdit.Outcome
+  projectionRefreshSucceeded : Bool
+  deriving ToJson
+
+structure InputEditClientObservationOutput where
+  commandOutcome : SessionQueue.InputEdit.Outcome
+  projectionFresh : Bool
+  deriving ToJson
+
+@[conformance_family]
+def inputEditClientObservation :
+    Family InputEditClientObservationInput InputEditClientObservationOutput where
+  inputs := SessionQueue.InputEditCases.clientObservationCases.map fun c =>
+    { receiptOutcome := c.receiptOutcome, projectionRefreshSucceeded := c.projectionRefreshSucceeded }
+  model := fun i =>
+    let observation := SessionQueue.InputEditCases.runClientObservation
+      ⟨"", i.receiptOutcome, i.projectionRefreshSucceeded⟩
+    { commandOutcome := observation.commandOutcome, projectionFresh := observation.projectionFresh }
+
+end InputEditClientObservation
 
 end Families
 

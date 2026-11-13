@@ -104,26 +104,15 @@ async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSigner
 
 #[tokio::test]
 async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .native_completion_cases
-            .clone()
-    })
-    .await
-    .expect("Lean snapshot load");
-    let mut exercised = 0;
-    for case in cases.into_iter().filter(|case| {
-        !case.initial.cleanup_required && case.events.iter().any(|event| event == "native_returned")
-    }) {
-        exercised += 1;
-        assert_eq!(case.initial.native_outstanding, 0);
-        assert!(case.initial.gate_held);
-        assert_eq!(case.events.len(), case.observations.len());
+    for case in
+        gents_lean_vocab::families::native_completion_auto_commit_scenario::cases::<String>()
+    {
+        let mut observed = Vec::new();
         let (node, signer, _release_on_panic) = signed_node().await;
         let gate = mutation_write_gate(&node);
         let mut capacity_fillers = Vec::new();
         let mut caller = None;
-        for (event, expected) in case.events.iter().zip(&case.observations) {
+        for event in &case.input.events {
             match event.as_str() {
                 "native_started" => {
                     signer.armed.store(true, Ordering::Release);
@@ -159,7 +148,7 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
                     assert!(
                         crate::config_client::is_transaction_step_unavailable(&error),
                         "{}: unfinished storage work remains an availability failure",
-                        case.name
+                        case.input.name
                     );
                 }
                 "caller_cancelled" => {
@@ -185,13 +174,15 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
                 "gate_release_requested" => {}
                 other => panic!("unsupported native auto-commit action {other}"),
             }
-            let held = gate_owns_operation(&gate, "test.native_completion.actual_signer");
-            assert_eq!(held, expected.gate_held, "{} after {event}", case.name);
+            observed.push(gate_owns_operation(
+                &gate,
+                "test.native_completion.actual_signer",
+            ));
         }
         assert!(
             caller.is_none(),
             "{} must account for its caller",
-            case.name
+            case.input.name
         );
         let data = ConfigAccess::local(node.clone())
             .execute("{ NativeCompletionProbe { value } }")
@@ -209,8 +200,8 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
             "persisted"
         );
         node.shutdown().await.expect("node shutdown");
+        case.check(observed);
     }
-    assert!(exercised >= 2, "Lean must cover timeout and cancellation");
 }
 
 async fn wait_for_native_count(tracker: &NativeOperationTracker, expected: usize) {
@@ -229,23 +220,19 @@ async fn wait_for_native_count(tracker: &NativeOperationTracker, expected: usize
 
 #[tokio::test]
 async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drains() {
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .native_completion_cases
-            .clone()
-    })
-    .await
-    .expect("Lean snapshot load");
-    let concurrent = cases
-        .iter()
-        .find(|case| case.name == "registry_abandonment_retains_gate_until_all_native_returns")
-        .unwrap();
-    let expected = &concurrent.observations[6];
-    let operation_count = concurrent
-        .events
+    for case in gents_lean_vocab::families::native_completion_registry_scenario::cases::<String>() {
+        case.check(abandoned_registry_observations(&case.input.events).await);
+    }
+}
+
+async fn abandoned_registry_observations(
+    events: &[String],
+) -> gents_lean_vocab::families::native_completion_registry_scenario::RegistryOutput {
+    let operation_count = events
         .iter()
         .filter(|event| event.as_str() == "native_started")
         .count();
+    let mut checkpoints = Vec::new();
     let (node, _signer, _release_on_panic) = signed_node().await;
     let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
     txn.execute(
@@ -289,42 +276,35 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     tokio::time::resume();
     assert!(results.iter().all(Result::is_err));
 
-    let abandoned = &concurrent.observations[4];
-    assert!(abandoned.registry_abandoned);
-    assert!(!abandoned.rollback_returned);
-    assert_eq!(
-        tracker.state.lock().unwrap().in_flight,
-        usize::try_from(abandoned.native_outstanding).unwrap()
-    );
-    assert_eq!(
-        gate_owns_operation(&gate, "test.begin_local"),
-        abandoned.gate_held
-    );
     let response = node
         .execute_request_in_txn(
             defra_node::QueryRequest::new("{ NativeCompletionProbe { value } }"),
             &handle,
         )
         .await;
-    assert_eq!(response.has_errors(), abandoned.registry_abandoned);
+    checkpoints.push(
+        gents_lean_vocab::families::native_completion_registry_scenario::RegistryView {
+            native_outstanding: tracker.state.lock().unwrap().in_flight as u64,
+            gate_held: gate_owns_operation(&gate, "test.begin_local"),
+            registry_abandoned: response.has_errors(),
+        },
+    );
 
     release.notify_one();
-    wait_for_native_count(
-        &tracker,
-        usize::try_from(expected.native_outstanding).unwrap(),
-    )
-    .await;
-    assert_eq!(
-        gate_owns_operation(&gate, "test.begin_local"),
-        expected.gate_held
-    );
+    wait_for_native_count(&tracker, operation_count - 1).await;
     let response = node
         .execute_request_in_txn(
             defra_node::QueryRequest::new("{ NativeCompletionProbe { value } }"),
             &handle,
         )
         .await;
-    assert_eq!(response.has_errors(), expected.registry_abandoned);
+    checkpoints.push(
+        gents_lean_vocab::families::native_completion_registry_scenario::RegistryView {
+            native_outstanding: tracker.state.lock().unwrap().in_flight as u64,
+            gate_held: gate_owns_operation(&gate, "test.begin_local"),
+            registry_abandoned: response.has_errors(),
+        },
+    );
 
     release.notify_one();
     let acquire_after_drain =
@@ -336,18 +316,15 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
     drop(acquired);
     assert!(!gate_owns_operation(&gate, "test.begin_local"));
     drop(capacity_fillers);
-    assert_eq!(
-        gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY,
-        concurrent.observations.last().unwrap().gate_held
+    let native_outstanding = tracker.state.lock().unwrap().in_flight as u64;
+    checkpoints.push(
+        gents_lean_vocab::families::native_completion_registry_scenario::RegistryView {
+            native_outstanding,
+            gate_held: gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY,
+            registry_abandoned: tracker.is_abandoned(),
+        },
     );
-    let drained = concurrent.observations.last().unwrap();
-    assert_eq!(
-        tracker.state.lock().unwrap().in_flight,
-        usize::try_from(drained.native_outstanding).unwrap()
-    );
-    assert!(drained.registry_abandoned);
-    assert!(!drained.rollback_returned);
-    assert!(!drained.retry_started);
+    let retry_started = tracker.start().is_ok();
     let response = ConfigAccess::local(node.clone())
         .execute("{ NativeCompletionProbe { value } }")
         .await
@@ -360,4 +337,8 @@ async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drain
         0
     );
     node.shutdown().await.expect("node shutdown");
+    gents_lean_vocab::families::native_completion_registry_scenario::RegistryOutput {
+        checkpoints,
+        retry_started,
+    }
 }

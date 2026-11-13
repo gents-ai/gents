@@ -965,12 +965,6 @@ fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
 }
 
 #[cfg(test)]
-use gents_protocol as test_protocol;
-#[cfg(test)]
-#[path = "../../gents-lean-contract/tests/support/rendered_reasoning.rs"]
-mod rendered_reasoning_contract;
-
-#[cfg(test)]
 mod tests {
     use super::AssistantTurnAccumulator;
     use super::{render_reasoning_text, AssistantMessageContent, CompletionMessage};
@@ -1043,21 +1037,25 @@ mod tests {
     }
 
     #[test]
-    fn generated_reasoning_visibility_matches_live_preview() {
-        for case in super::rendered_reasoning_contract::generated_reasoning_cases() {
-            let CompletionMessage::Assistant { content, .. } = &case.message else {
-                panic!("{}: expected generated assistant message", case.name);
+    fn live_reasoning_preview_follows_the_lean_model() {
+        use gents_lean_vocab::canonical_wire::{self as wire, Reconstructed};
+
+        gents_lean_vocab::families::canonical_output_projection_preview::replay(|input| {
+            let native: Reconstructed = wire::decode(&input.native.0);
+            let CompletionMessage::Assistant { content, .. } = wire::native_assistant(&native)
+            else {
+                panic!("{}: expected modeled assistant message", input.name);
             };
             let [AssistantMessageContent::Reasoning(reasoning)] = content.as_slice() else {
-                panic!("{}: expected generated reasoning block", case.name);
+                panic!("{}: expected one modeled reasoning block", input.name);
             };
-            assert_eq!(
-                render_reasoning_text(reasoning),
-                case.expected_text,
-                "{}",
-                case.name
-            );
-        }
+            let rendered = render_reasoning_text(reasoning);
+            if rendered.is_empty() {
+                Vec::new()
+            } else {
+                rendered.split('\n').map(str::to_owned).collect()
+            }
+        });
     }
 
     #[test]

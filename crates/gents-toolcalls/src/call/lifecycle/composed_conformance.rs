@@ -122,10 +122,9 @@ async fn teardown(admission: PublishedAdmission) {
 }
 
 #[tokio::test]
-async fn generated_composed_invariants_use_canonical_admission_owner() {
-    let witnesses = gents_lean_vocab::lean_composed_invariant_witnesses();
-    assert_eq!(witnesses.len(), 4);
-    for witness in witnesses {
+async fn composed_terminations_use_canonical_admission_owner() {
+    for case in gents_lean_vocab::families::composed_termination_linked::cases() {
+        let witness = &case.input;
         let running = witness.tool_pre_state == "running";
         let mut admission = published_admission(PublishedAdmissionOptions {
             name: format!("composed-{}", witness.tool_call_id),
@@ -138,14 +137,6 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let request_doc_id = admission.tool.request_doc_id().unwrap().to_owned();
 
-        assert!(
-            witness.pre_tool_persisted,
-            "canonical tool_spawn acceptance persists the pending physical row"
-        );
-        assert_eq!(
-            witness.deadline_exceeded,
-            witness.tool_current_time > witness.tool_deadline
-        );
         if witness.deadline_exceeded {
             if running {
                 prepare_expired_composed_boundary(&admission, &tool_doc_id, &request_doc_id).await;
@@ -194,16 +185,6 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         .await
         .expect("persisted tool must resolve through its canonical accepted header");
         assert!(!arguments.is_empty(), "{}", witness.scenario);
-        assert_eq!(
-            request["lifecycle_state"], witness.pre_request_state,
-            "{}: request transition premise",
-            witness.scenario
-        );
-        match witness.pre_request_admission.as_str() {
-            "executing" => assert_eq!(witness.pre_request_state, "processing"),
-            "released" => assert_eq!(witness.pre_request_state, "interrupted"),
-            other => panic!("unsupported composed request admission {other}"),
-        }
         assert!(
             request["execution_generation"]
                 .as_str()
@@ -224,14 +205,16 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
             "{}: composed tool/request deadlines must remain coherent",
             witness.scenario
         );
-        assert_eq!(row["lifecycle_state"], witness.tool_post_state);
-        assert_eq!(
-            row["cancel_cause"].as_str(),
-            witness.cancel_cause.as_deref()
-        );
-        assert_eq!(
-            row["tool_failure_class"].as_str(),
-            (witness.deadline_exceeded && running).then_some("external")
+        case.check(
+            gents_lean_vocab::families::composed_termination_linked::Output {
+                pre_request_state: request["lifecycle_state"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                tool_post_state: row["lifecycle_state"].as_str().map(str::to_owned),
+                cancel_cause: row["cancel_cause"].as_str().map(str::to_owned),
+                tool_failure_class: row["tool_failure_class"].as_str().map(str::to_owned),
+            },
         );
         teardown(admission).await;
     }

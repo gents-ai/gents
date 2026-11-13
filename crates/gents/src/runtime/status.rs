@@ -195,13 +195,6 @@ impl RuntimeStatusHandle {
         self.record_readiness_write(self.readiness.set_process_state(state).await)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn set_process_state(&self, state: ProcessLifecycleState) {
-        if let Err(error) = self.set_process_state_durable(state).await {
-            tracing::error!(?state, error = %error, "agent readiness publisher stopped");
-        }
-    }
-
     pub(crate) async fn set_reconcile_phase(&self, phase: ReconcilePhase) {
         let reconcile_phase = phase.as_str().to_string();
         self.update(|row| {

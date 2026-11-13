@@ -12,6 +12,31 @@ use gents_store::config_client::ConfigApplyTxn;
 use gents_store::identity::request_receipt::verify_runtime_local_control_receipt;
 use gents_store::identity::NodeIdentity;
 
+/// What one claimed continuation publication did.
+#[derive(Debug, Clone)]
+pub enum ClaimedPublication {
+    Created(GoalResumeReceipt),
+    Recovered(GoalResumeReceipt),
+    /// The Goal or its continuation watermark changed since the claim observed it.
+    Stale,
+    /// The Goal's current state or session forbids this continuation.
+    Illegal,
+    /// The parent turn still owes the session a question reply or a waited result.
+    Deferred,
+    /// The parent's wait evidence is invalid; carries the reason the Goal was
+    /// stopped with, when this publication stopped it.
+    InvalidEvidence(Option<String>),
+}
+
+impl ClaimedPublication {
+    pub fn receipt(self) -> Option<GoalResumeReceipt> {
+        match self {
+            Self::Created(receipt) | Self::Recovered(receipt) => Some(receipt),
+            Self::Stale | Self::Illegal | Self::Deferred | Self::InvalidEvidence(_) => None,
+        }
+    }
+}
+
 pub async fn publish_claimed_continuation_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
@@ -20,14 +45,30 @@ pub async fn publish_claimed_continuation_with_identity(
     content: &str,
     wrapup: bool,
 ) -> Result<Option<GoalResumeReceipt>> {
-    let stopped = std::sync::Mutex::new(None);
-    let stopped_ref = &stopped;
+    let publication =
+        publish_claimed_continuation(node, identity, observed, parent_request_id, content, wrapup)
+            .await?;
+    if let ClaimedPublication::InvalidEvidence(Some(reason)) = &publication {
+        tracing::warn!(goal_id = %observed.goal_id, %parent_request_id, %reason,
+            "stopped Goal automation on invalid wait evidence");
+    }
+    Ok(publication.receipt())
+}
+
+pub(crate) async fn publish_claimed_continuation(
+    node: &std::sync::Arc<EmbeddedNode>,
+    identity: &dyn NodeIdentity,
+    observed: &GoalDocument,
+    parent_request_id: &str,
+    content: &str,
+    wrapup: bool,
+) -> Result<ClaimedPublication> {
     let access = gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
         node.clone(),
         identity::Did::new(identity.did())?,
         identity.managed_agent_signer(),
     )?;
-    let receipt = access
+    access
         .transact_write("goal.publish_claimed_continuation", move |txn| {
             Box::pin(async move {
                 stage_claimed_continuation(
@@ -37,20 +78,11 @@ pub async fn publish_claimed_continuation_with_identity(
                     parent_request_id,
                     content,
                     wrapup,
-                    stopped_ref,
                 )
                 .await
             })
         })
-        .await?;
-    if let Some(reason) = stopped
-        .into_inner()
-        .unwrap_or_else(|poison| poison.into_inner())
-    {
-        tracing::warn!(goal_id = %observed.goal_id, %parent_request_id, %reason,
-            "stopped Goal automation on invalid wait evidence");
-    }
-    Ok(receipt)
+        .await
 }
 
 pub async fn stop_claimed_continuation_for_unavailable_agent_from_access(
@@ -132,8 +164,6 @@ pub async fn stop_claimed_continuation_for_unavailable_agent_from_access(
         .await
 }
 
-type StoppedReason = std::sync::Mutex<Option<String>>;
-
 async fn stage_claimed_continuation(
     txn: &ConfigApplyTxn<'_>,
     identity: &dyn NodeIdentity,
@@ -141,9 +171,7 @@ async fn stage_claimed_continuation(
     parent_request_id: &str,
     content: &str,
     wrapup: bool,
-    stopped: &StoppedReason,
-) -> Result<Option<GoalResumeReceipt>> {
-    *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+) -> Result<ClaimedPublication> {
     anyhow::ensure!(
         txn.actor_did() == Some(identity.did()),
         "claimed publication transaction must act as its signing agent"
@@ -151,10 +179,10 @@ async fn stage_claimed_continuation(
     let Some(goal) =
         load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id).await?
     else {
-        return Ok(None);
+        return Ok(ClaimedPublication::Stale);
     };
     if goal.doc_id != observed.doc_id {
-        return Ok(None);
+        return Ok(ClaimedPublication::Stale);
     }
     let fields = super::request_head::request_selection_fields();
     let did = escape_graphql_string(&goal.node_did);
@@ -272,11 +300,13 @@ async fn stage_claimed_continuation(
         )?;
         let actual: GoalBackedRequestFingerprint =
             serde_json::from_value(serde_json::to_value(child)?)?;
-        anyhow::ensure!(
-            actual == expected,
-            "claimed continuation receipt conflicts with the observed publication"
-        );
-        return Ok(Some(GoalResumeReceipt {
+        if actual != expected {
+            return Err(crate::goal::continuation::ContinuationRefusal::Conflict(
+                "claimed continuation receipt conflicts with the observed publication",
+            )
+            .into());
+        }
+        return Ok(ClaimedPublication::Recovered(GoalResumeReceipt {
             goal_status: goal.parsed_status().context("goal has an unknown status")?,
             goal_id: goal.goal_id,
             request_id: child.request_id.clone(),
@@ -291,7 +321,7 @@ async fn stage_claimed_continuation(
         || goal.continuation_sequence() != sequence
         || goal.last_continued_from_request_id != observed.last_continued_from_request_id
     {
-        return Ok(None);
+        return Ok(ClaimedPublication::Stale);
     }
     if !matches!(
         goal.parsed_status(),
@@ -304,10 +334,10 @@ async fn stage_claimed_continuation(
         || !goal_session_is_idle(&requests)
         || !latest_goal_request(&goal, &requests).is_some_and(|row| row.doc_id == parent_row.doc_id)
     {
-        return Ok(None);
+        return Ok(ClaimedPublication::Illegal);
     }
     if gents_session::session::mailbox::required_question_in_txn(txn, parent_row).await? {
-        return Ok(None);
+        return Ok(ClaimedPublication::Deferred);
     }
     match wait_observation::observe_intentional_wait(
         txn,
@@ -322,21 +352,20 @@ async fn stage_claimed_continuation(
     .await
     {
         wait_observation::WaitEvidence::Absent => {}
-        wait_observation::WaitEvidence::Running => return Ok(None),
+        wait_observation::WaitEvidence::Running => return Ok(ClaimedPublication::Deferred),
         wait_observation::WaitEvidence::Unavailable(error) => return Err(error),
         wait_observation::WaitEvidence::Invalid(error) => {
-            *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) =
-                stop_claimed_continuation_in_txn(
-                    txn,
-                    &goal,
-                    sequence,
-                    parent_request_id,
-                    &format!("invalid Goal wait evidence: {error:#}"),
-                    true,
-                    now,
-                )
-                .await?;
-            return Ok(None);
+            let stopped = stop_claimed_continuation_in_txn(
+                txn,
+                &goal,
+                sequence,
+                parent_request_id,
+                &format!("invalid Goal wait evidence: {error:#}"),
+                true,
+                now,
+            )
+            .await?;
+            return Ok(ClaimedPublication::InvalidEvidence(stopped));
         }
     }
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
@@ -357,7 +386,7 @@ async fn stage_claimed_continuation(
         .pointer("/data/update_Goal")
         .is_some_and(mutation_returned_rows)
     {
-        return Ok(None);
+        return Ok(ClaimedPublication::Stale);
     }
     let child_doc = gents_session::request::lifecycle::stage_runtime_request_in_txn(
         txn,
@@ -375,7 +404,7 @@ async fn stage_claimed_continuation(
         )
         .await?;
     }
-    Ok(Some(GoalResumeReceipt {
+    Ok(ClaimedPublication::Created(GoalResumeReceipt {
         goal_status: goal.parsed_status().context("goal has an unknown status")?,
         goal_id: goal.goal_id,
         request_id: create.request_id,

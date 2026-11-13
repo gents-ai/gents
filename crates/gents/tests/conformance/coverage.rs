@@ -1,58 +1,5 @@
 use super::*;
 
-#[test]
-fn lean_deviation_metadata_is_empty_or_explicitly_classified() {
-    let snapshot = lean_contract_snapshot();
-    let mut deviation_ids = BTreeSet::new();
-    let mut deviation_subjects = BTreeSet::new();
-
-    for deviation in &snapshot.deviations {
-        assert!(
-            !deviation.id.trim().is_empty(),
-            "deviation id must be non-empty: {:?}",
-            deviation
-        );
-        assert!(
-            !deviation.domain.trim().is_empty(),
-            "deviation domain must be non-empty: {:?}",
-            deviation
-        );
-        assert!(
-            !deviation.subject.trim().is_empty(),
-            "deviation subject must be non-empty: {:?}",
-            deviation
-        );
-        assert!(
-            !deviation.statement.trim().is_empty(),
-            "deviation statement must be non-empty: {:?}",
-            deviation
-        );
-        assert!(
-            deviation
-                .accepted_failure_mode
-                .as_deref()
-                .is_some_and(|text| !text.trim().is_empty())
-                || deviation
-                    .accepted_follow_up
-                    .as_deref()
-                    .is_some_and(|text| !text.trim().is_empty()),
-            "active deviations must carry accepted_failure_mode or accepted_follow_up text: {:?}",
-            deviation
-        );
-        assert!(
-            deviation_ids.insert(deviation.id.clone()),
-            "duplicate deviation id: {:?}",
-            deviation
-        );
-        assert!(
-            deviation_subjects.insert((deviation.domain.clone(), deviation.subject.clone())),
-            "duplicate deviation subject in domain {:?}: {:?}",
-            deviation.domain,
-            deviation
-        );
-    }
-}
-
 const REQUIRE_FEATURE_TAG_FOR_ALL_ROWS: bool = true;
 
 #[test]

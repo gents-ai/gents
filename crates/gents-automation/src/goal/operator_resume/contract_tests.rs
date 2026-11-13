@@ -3,75 +3,23 @@ use super::*;
 use serde_json::json;
 use support::*;
 
-pub(crate) fn resume_state_value(
-    state: &gents_lean_vocab::LeanGoalOperatorResumeCaseBefore,
-) -> serde_json::Value {
-    json!({
-        "status": state.status,
-        "blocked_audits": state.blocked_audits,
-        "wrapup_requested": state.wrapup_requested,
-        "wrapup_completed": state.wrapup_completed,
-        "sequence": state.sequence,
-        "last_continued_from": state.last_continued_from,
-        "latest_request": state.latest_request,
-        "children": state.children.iter().map(|child| json!({
-            "goal": child.goal,
-            "owner": child.owner,
-            "session": child.session,
-            "predecessor": child.predecessor,
-            "predecessor_doc": child.predecessor_doc,
-            "correlation": child.correlation,
-            "source_document": child.source_document,
-            "trigger_context": child.trigger_context,
-            "workspace_fingerprint": child.workspace_fingerprint,
-            "semantic_fingerprint": child.semantic_fingerprint,
-            "child": child.child,
-            "sequence": child.sequence,
-        })).collect::<Vec<_>>(),
-        "tokens_used": state.tokens_used,
-        "token_budget": state.token_budget,
-    })
-}
-
-fn resume_expected_value(
-    state: &gents_lean_vocab::LeanGoalOperatorResumeCaseExpected,
-) -> serde_json::Value {
-    json!({
-        "status": state.status,
-        "blocked_audits": state.blocked_audits,
-        "wrapup_requested": state.wrapup_requested,
-        "wrapup_completed": state.wrapup_completed,
-        "sequence": state.sequence,
-        "last_continued_from": state.last_continued_from,
-        "latest_request": state.latest_request,
-        "children": state.children.iter().map(|child| json!({
-            "goal": child.goal,
-            "owner": child.owner,
-            "session": child.session,
-            "predecessor": child.predecessor,
-            "predecessor_doc": child.predecessor_doc,
-            "correlation": child.correlation,
-            "source_document": child.source_document,
-            "trigger_context": child.trigger_context,
-            "workspace_fingerprint": child.workspace_fingerprint,
-            "semantic_fingerprint": child.semantic_fingerprint,
-            "child": child.child,
-            "sequence": child.sequence,
-        })).collect::<Vec<_>>(),
-        "tokens_used": state.tokens_used,
-        "token_budget": state.token_budget,
-    })
+pub(crate) fn paused_goal_state() -> serde_json::Value {
+    json!({"status":"paused","blocked_audits":2,"wrapup_requested":false,
+        "wrapup_completed":false,"sequence":0,"last_continued_from":null,"latest_request":10,
+        "children":[],"tokens_used":37,"token_budget":1000})
 }
 
 #[tokio::test]
 async fn generated_goal_operator_resume_cases_drive_real_transactions() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_operator_resume_cases;
-    assert_eq!(cases.len(), 11);
     let mut opening_allowed = None;
-    let mut seen = std::collections::BTreeSet::new();
-    for case in cases {
-        assert!(seen.insert(case.name.clone()), "duplicate generated case");
-        let before = resume_state_value(&case.before);
+    for generated in
+        gents_lean_vocab::families::goal_operator_resume_contracts_resume_transaction::cases::<
+            String,
+            GoalStatus,
+        >()
+    {
+        let case = &generated.input;
+        let before = serde_json::to_value(&case.before).unwrap();
         let f = Fixture::new(&before).await;
         let conflict = case.name == "foreign_fingerprint_conflicts";
         if !case.before.children.is_empty() {
@@ -91,7 +39,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
         }
         assert_eq!(f.observe().await, before, "{} initial", case.name);
         let access = f.user_access();
-        if !case.commit {
+        let (outcome, goal_status) = if !case.commit {
             assert_eq!(case.name, "staging_failure_rolls_back");
             let txn = ConfigApplyTxn::begin_local_with_signer(
                 &f.node,
@@ -119,7 +67,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                 .unwrap();
             assert_eq!(staged["data"]["AgentRequest"].as_array().unwrap().len(), 1);
             txn.discard().await.unwrap();
-            assert_eq!(case.outcome, "rolled_back");
+            ("rolled_back".to_owned(), None)
         } else {
             let foreign_temp = tempfile::tempdir().unwrap();
             let foreign = gents_store::identity::KeyIdentity::load_or_create(
@@ -140,18 +88,8 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
             let result =
                 resume_goal_request(&access, identity, f.identity.did(), SESSION, predecessor)
                     .await;
-            match case.outcome.as_str() {
-                "created" | "recovered" => {
-                    let receipt = result.unwrap();
-                    assert_eq!(receipt.created, case.outcome == "created");
-                    assert_eq!(
-                        Some(receipt.goal_status.as_str()),
-                        case.goal_status.as_deref()
-                    );
-                    if case.name == "retry_after_later_progress" {
-                        assert_eq!(receipt.goal_status, GoalStatus::Paused);
-                        assert!(!receipt.created);
-                    }
+            match result {
+                Ok(receipt) => {
                     let expected = goal_continuation_identity(&f.goal.goal_id, PARENT, 1).unwrap();
                     assert_eq!(receipt.request_id, expected.request_id);
                     assert_eq!(receipt.goal_id, f.goal.goal_id);
@@ -206,9 +144,19 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             allowed == gents_session::request::hooks::claim::ClaimVerdict::Allow,
                         );
                     }
+                    let outcome = if receipt.created {
+                        "created"
+                    } else {
+                        "recovered"
+                    };
+                    (outcome.to_owned(), Some(receipt.goal_status))
                 }
-                "denied" | "illegal" | "conflict" => {
-                    let error = format!("{:#}", result.unwrap_err());
+                Err(error) => {
+                    let refusal = gents_protocol::error_chain::find_map_source(&*error, |cause| {
+                        cause.downcast_ref::<crate::goal::continuation::ContinuationRefusal>()
+                    })
+                    .unwrap_or_else(|| panic!("{}: untyped refusal {error:#}", case.name));
+                    let error = format!("{error:#}");
                     let expected_reason = match case.name.as_str() {
                         "unauthorized_cannot_publish" => "signer must match",
                         "foreign_parent_cannot_recover" => "predecessor must uniquely belong",
@@ -220,22 +168,25 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                         name => panic!("unmapped rejection {name}"),
                     };
                     assert!(error.contains(expected_reason), "{}: {error}", case.name);
+                    let outcome = match refusal {
+                        crate::goal::continuation::ContinuationRefusal::Denied(_) => "denied",
+                        crate::goal::continuation::ContinuationRefusal::Illegal(_) => "illegal",
+                        crate::goal::continuation::ContinuationRefusal::Conflict(_) => "conflict",
+                    };
+                    (outcome.to_owned(), None)
                 }
-                outcome => panic!("unmapped outcome {outcome}"),
             }
-        }
-        assert_eq!(
-            f.observe().await,
-            resume_expected_value(&case.expected),
-            "{} durable result",
-            case.name
-        );
+        };
+        generated.check(gents_lean_vocab::families::goal_operator_resume_contracts_resume_transaction::ResumeOutput {
+            expected: gents_lean_vocab::family::recode(&f.observe().await),
+            outcome,
+            goal_status,
+        });
         f.node.shutdown().await.expect("node shutdown");
     }
     for opening in
-        gents_lean_vocab::families::goal_wake_ancestry_contracts_continuation_opening::cases::<
-            String,
-        >()
+        gents_lean_vocab::families::goal_wake_ancestry_contracts_continuation_opening::cases::<String>(
+        )
     {
         opening.check(opening_allowed.expect("the atomic publication reached the claim fence"));
     }
@@ -281,15 +232,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
 
 #[tokio::test]
 async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_children() {
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let initial = resume_state_value(
-        &snapshot
-            .goal_operator_resume_cases
-            .iter()
-            .find(|case| case.name == "atomic_publication")
-            .unwrap()
-            .before,
-    );
+    let initial = paused_goal_state();
     for state in [RequestLifecycleState::WorkspaceBindingPending] {
         assert!(!state.is_terminal());
         let f = Fixture::new(&initial).await;
@@ -338,15 +281,7 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
         assert!(!result.has_errors(), "{:?}", result.errors);
         result.data.unwrap()
     }
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let initial = resume_state_value(
-        &snapshot
-            .goal_operator_resume_cases
-            .iter()
-            .find(|case| case.name == "atomic_publication")
-            .unwrap()
-            .before,
-    );
+    let initial = paused_goal_state();
     for resume_first in [false, true] {
         let f = Fixture::new(&initial).await;
         let remote = f.node.begin_transaction(false).await.unwrap();

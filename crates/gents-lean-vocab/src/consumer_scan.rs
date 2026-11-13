@@ -6,21 +6,22 @@ use serde_json::Value;
 
 const CONTRACT_METADATA: &[&str] = &[
     "coverage_ledger",
-    "deviations",
     "feature_matrix",
     "feature_surface_requirements",
 ];
 
-const DOMAIN_FAMILIES: &[(&str, &str)] = &[
-    ("vocabularies", "vocabulary"),
-    ("state_machines", "state_machine"),
-];
+const DOMAIN_FAMILIES: &[(&str, &str)] = &[];
 
 const DERIVED_FAMILIES: &str = "families";
 const DERIVED_VOCABULARIES: &str = "family_vocabularies";
 const DERIVED_LEDGER_CATEGORY: &str = "family";
 
-const UNSCANNED_CATEGORIES: &[&str] = &["follow_up_hook", "state_machine", "premise", "Proofs.Conformance."];
+const UNSCANNED_CATEGORIES: &[&str] = &[
+    "follow_up_hook",
+    "state_machine",
+    "premise",
+    "Proofs.Conformance.",
+];
 
 const SOURCE_ROOTS: &[&str] = &["crates", "apps", "packages"];
 const SKIPPED_DIRECTORIES: &[&str] = &["target", "node_modules", "proofs", "dist", "gen"];
