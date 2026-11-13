@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { ToolServiceRegistry } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
@@ -14,6 +15,8 @@ import {
   TagsRow,
 } from "./editors";
 import { newId, problemOf, requiredInteger, useDraft, type Problems } from "./draft";
+import { NEW_ITEM } from "./draftItems";
+import { NewItemPage, type ItemDraft } from "./NewItemPage";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
@@ -23,9 +26,12 @@ import { errorText } from "../../../lib/errorText";
 function Editor({
   deployment,
   service,
+  draft,
 }: {
   deployment: NodeView;
   service: ToolServiceRegistry;
+
+  draft?: ItemDraft;
 }) {
   const {
     actions: { changeConfig, testToolService },
@@ -86,7 +92,7 @@ function Editor({
         },
       });
     },
-    { problems: endpointProblems },
+    { isNew: draft !== undefined, problems: endpointProblems },
   );
   const test = async () => {
     const problem = Object.values(d.problems).find(Boolean);
@@ -193,18 +199,27 @@ function Editor({
       <DraftActions
         draft={d}
         fields={{ hostname: id("host"), mcpPort: id("port"), mcpPath: id("path") }}
+        {...(draft && {
+          saveLabel: "Add remote tools",
+          onSave: async () => {
+            if (await d.save()) draft.onSaved(service.service_id);
+          },
+          onCancel: draft.onCancel,
+        })}
       />
-      <DeleteButton
-        label={service.display_name ?? service.service_id}
-        warning={dependentsWarning(deployment, "tool-service", service.service_id)}
-        base={base}
-        onDelete={() =>
-          changeConfig("deleteToolServiceConfig", {
-            serviceId: service.service_id,
-            nodeDid: deployment.nodeDid,
-          })
-        }
-      />
+      {!draft && (
+        <DeleteButton
+          label={service.display_name ?? service.service_id}
+          warning={dependentsWarning(deployment, "tool-service", service.service_id)}
+          base={base}
+          onDelete={() =>
+            changeConfig("deleteToolServiceConfig", {
+              serviceId: service.service_id,
+              nodeDid: deployment.nodeDid,
+            })
+          }
+        />
+      )}
     </>
   );
 }
@@ -222,6 +237,13 @@ export function ToolServicesPanel({
     nodeDid: deployment.nodeDid,
     section: "tool-services",
   };
+  if (
+    item === NEW_ITEM &&
+    !deployment.toolServiceRegistries.some((s) => s.service_id === NEW_ITEM)
+  )
+    return (
+      <NewServicePage key={deployment.nodeDid} deployment={deployment} base={base} />
+    );
   return (
     <ListDetail
       base={base}
@@ -247,25 +269,7 @@ export function ToolServicesPanel({
       }))}
       createLabel="New remote tools"
       empty="No remote tools. Add an MCP connection, then select its tools in a Tools document."
-      onCreate={async () => {
-        const service_id = newId("mcp");
-        await changeConfig("saveToolServiceConfig", {
-          document: {
-            service_id,
-            node_did: deployment.nodeDid,
-            display_name: "New service",
-            hostname: "127.0.0.1",
-            mcp_port: 3333,
-            enabled: false,
-          },
-        });
-        navigate({
-          name: "agent",
-          nodeDid: deployment.nodeDid,
-          section: "tool-services",
-          item: service_id,
-        });
-      }}
+      onCreate={() => navigate({ ...base, item: NEW_ITEM })}
       detail={(id) => {
         const service = deployment.toolServiceRegistries.find(
           (s) => s.service_id === id,
@@ -275,5 +279,27 @@ export function ToolServicesPanel({
         );
       }}
     />
+  );
+}
+
+function NewServicePage({
+  deployment,
+  base,
+}: {
+  deployment: NodeView;
+  base: { name: "agent"; nodeDid: string; section: string };
+}) {
+  const [service] = useState<ToolServiceRegistry>(() => ({
+    service_id: newId("mcp"),
+    node_did: deployment.nodeDid,
+    display_name: "New service",
+    hostname: "127.0.0.1",
+    mcp_port: 3333,
+    enabled: false,
+  }));
+  return (
+    <NewItemPage base={base} back="Remote tools">
+      {(draft) => <Editor deployment={deployment} service={service} draft={draft} />}
+    </NewItemPage>
   );
 }

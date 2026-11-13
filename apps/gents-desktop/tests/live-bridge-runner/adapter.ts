@@ -1,6 +1,8 @@
+import type { AgentWorkspaceRoot } from "@source-inc/gents-desktop-client/generated/AgentWorkspaceRoot";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import type {
+  AgentIdentityBinding,
   AgentSaveRequest,
   ChatSendResult,
   DesktopClientSnapshot,
@@ -57,7 +59,16 @@ export function createBridgeHttpAdapter(
       throw new Error("Native picker is unavailable in the live browser bridge");
     },
     requestAttachments: unsupported("requestAttachments"),
-    provisionAgentIdentity: unsupported("provisionAgentIdentity"),
+    provisionAgentIdentity: (nodeDid) =>
+      client.postJson<AgentIdentityBinding>("/desktop/agent/identity", {
+        node_did: nodeDid,
+      }),
+    selectAgentWorkspaceRoot: (nodeDid, agentDid, path) =>
+      client.postJson<AgentWorkspaceRoot>("/desktop/agent/workspace-root", {
+        nodeDid,
+        agentDid,
+        path,
+      }),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
     dismissEndedAccess: unsupported("dismissEndedAccess"),
