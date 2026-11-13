@@ -15,7 +15,7 @@ pub mod homes;
 
 pub struct Attachment {
     child: Child,
-    installation_build: Option<String>,
+    pub(super) installation_build: Option<String>,
     input: Option<FramedWrite<ChildStdin, LengthDelimitedCodec>>,
     output: FramedRead<ChildStdout, LengthDelimitedCodec>,
 }
@@ -165,31 +165,6 @@ impl Attachment {
             .await
             .expect("native attachment process exit deadline")
             .unwrap()
-    }
-
-    pub async fn retire(mut self) -> Result<()> {
-        let build = self
-            .installation_build
-            .as_ref()
-            .context("native installation does not support retirement")?;
-        self.send(json!({"kind":"retire", "id":u32::MAX, "expectedBuild":build}))
-            .await;
-        loop {
-            let response = self.next().await;
-            if response["kind"] == "response" {
-                ensure!(
-                    response["id"] == u32::MAX && response["error"].is_null(),
-                    "native retirement failed: {response}"
-                );
-                break;
-            }
-        }
-        self.wait_for_output_eof().await;
-        ensure!(
-            self.wait_for_exit().await.success(),
-            "retired attachment failed"
-        );
-        Ok(())
     }
 
     pub async fn close(mut self) {
