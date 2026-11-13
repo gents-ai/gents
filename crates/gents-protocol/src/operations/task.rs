@@ -87,7 +87,9 @@ pub enum TaskOperationError {
     ArgsNotObject(serde_json::Value),
     #[error("Task {0} declares a durable goal; pass --session-id with a stable invocation identity so retries converge")]
     StableKeyRequired(String),
-    #[error("ordinary Tasks accept either a session label or an existing session to continue, not both")]
+    #[error(
+        "ordinary Tasks accept either a session label or an existing session to continue, not both"
+    )]
     SessionLabelAndContinue,
     #[error("schedule {schedule_id} was not found for {node_did}")]
     ScheduleMissing {

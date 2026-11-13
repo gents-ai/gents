@@ -71,7 +71,9 @@ pub(super) fn compaction_reducers_follow_the_lean_model() {
             },
         );
     }
-    for case in gents_lean_vocab::families::contracts_compaction_reducer_gate_open::cases::<String>() {
+    for case in
+        gents_lean_vocab::families::contracts_compaction_reducer_gate_open::cases::<String>()
+    {
         let input = compaction_messages_for_rows(&gents_lean_vocab::family::recode::<
             _,
             Vec<gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionRowWire>,

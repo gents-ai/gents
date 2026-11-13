@@ -132,7 +132,11 @@ fn delivery_json(delivery: &LeanPluginApprovalCaseScopedDeliveriesItem) -> serde
         .collect();
     serde_json::json!([
         available,
-        grant_json(received.action, received.scope.workspace, received.scope.revision),
+        grant_json(
+            received.action,
+            received.scope.workspace,
+            received.scope.revision
+        ),
         expected,
     ])
 }

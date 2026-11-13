@@ -371,7 +371,10 @@ mod tests {
         let number = |value: &str, prefix: &str| -> u64 {
             value.strip_prefix(prefix).unwrap().parse().unwrap()
         };
-        gents_lean_vocab::families::goal_session_observation_contracts_presentation::replay::<String, String>(|case: &wire::Case<String>| {
+        gents_lean_vocab::families::goal_session_observation_contracts_presentation::replay::<
+            String,
+            String,
+        >(|case: &wire::Case<String>| {
             let session = match case.session.as_str() {
                 "absent" => AgentSessionRowRead::Absent,
                 "present" => AgentSessionRowRead::Present(Box::new(row.clone())),
@@ -380,11 +383,11 @@ mod tests {
             let projection = match case.projection.kind.as_str() {
                 "missing" => gents_automation::goal::SessionGoalProjectionRead::Missing,
                 "unverified" => gents_automation::goal::SessionGoalProjectionRead::Unverified,
-                "verified" => gents_automation::goal::SessionGoalProjectionRead::Verified(
-                    Box::new(modeled_observation(
-                        &serde_json::to_value(&case.projection.goal).unwrap(),
-                    )),
-                ),
+                "verified" => {
+                    gents_automation::goal::SessionGoalProjectionRead::Verified(Box::new(
+                        modeled_observation(&serde_json::to_value(&case.projection.goal).unwrap()),
+                    ))
+                }
                 other => panic!("unmodeled projection read {other}"),
             };
             let state = gents_automation::goal::observe_session_goal(&session, projection);

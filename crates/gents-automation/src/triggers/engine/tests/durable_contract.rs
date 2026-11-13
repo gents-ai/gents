@@ -137,24 +137,21 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             reason,
         }
     });
-    gents_lean_vocab::families::trigger_delivery_retained_outcome_classification::replay(
-        |input| {
-            let request: Request = gents_lean_vocab::family::recode(&input.request);
-            let mut fire = receipt(&request.fire, 0);
-            fire.goal_assignment_applied = request.goal_assignment_applied;
-            let retained: Option<GoalBinding> = input
-                .retained
-                .as_ref()
-                .map(gents_lean_vocab::family::recode);
-            let current: Option<GoalBinding> = input
-                .current
-                .as_ref()
-                .map(gents_lean_vocab::family::recode);
-            let retained = retained.as_ref().map(GoalBinding::observation);
-            let current = current.as_ref().map(GoalBinding::observation);
-            let binding =
-                durable::select_goal_outcome_binding(&fire, retained.as_ref(), current.as_ref());
-            gents_lean_vocab::families::trigger_delivery_retained_outcome_classification::RetainedClassification {
+    gents_lean_vocab::families::trigger_delivery_retained_outcome_classification::replay(|input| {
+        let request: Request = gents_lean_vocab::family::recode(&input.request);
+        let mut fire = receipt(&request.fire, 0);
+        fire.goal_assignment_applied = request.goal_assignment_applied;
+        let retained: Option<GoalBinding> = input
+            .retained
+            .as_ref()
+            .map(gents_lean_vocab::family::recode);
+        let current: Option<GoalBinding> =
+            input.current.as_ref().map(gents_lean_vocab::family::recode);
+        let retained = retained.as_ref().map(GoalBinding::observation);
+        let current = current.as_ref().map(GoalBinding::observation);
+        let binding =
+            durable::select_goal_outcome_binding(&fire, retained.as_ref(), current.as_ref());
+        gents_lean_vocab::families::trigger_delivery_retained_outcome_classification::RetainedClassification {
                 classification: durable::fire_outcome_reason(
                     &fire,
                     request.terminal,
@@ -162,8 +159,7 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
                     binding.as_ref(),
                 ),
             }
-        },
-    );
+    });
     gents_lean_vocab::families::trigger_delivery_queue_claims::replay(|input| {
         let identity: FireIdentity = gents_lean_vocab::family::recode(&input.identity);
         let rows: Vec<gents_session::request::lifecycle::arrival_order::ClaimObservation> =
@@ -182,10 +178,9 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
 
 #[tokio::test]
 async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_work() {
-    for (case_index, case) in
-        gents_lean_vocab::families::trigger_delivery_latest_admission::cases()
-            .iter()
-            .enumerate()
+    for (case_index, case) in gents_lean_vocab::families::trigger_delivery_latest_admission::cases()
+        .iter()
+        .enumerate()
     {
         let pending_state =
             gents_protocol::request_lifecycle::RequestLifecycleState::parse(&case.input.seeded)
@@ -500,10 +495,7 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
             request_id: identity.request_id(),
             session_id: session.clone(),
             goal_id: request.fire.goal_backed.then(|| "recovery-goal".into()),
-            goal_objective: request
-                .fire
-                .goal_backed
-                .then(|| "finish assignment".into()),
+            goal_objective: request.fire.goal_backed.then(|| "finish assignment".into()),
             goal_token_budget: None,
             goal_assignment_applied: request.goal_assignment_applied,
             emit_outcome: request.fire.emit_outcome,
@@ -662,9 +654,9 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         .await;
         case.check(
             gents_lean_vocab::families::trigger_delivery_outcome_recovery::OutcomeRecoveryOutput {
-            post: gents_lean_vocab::family::recode(&post),
-            recovered: recovered as u64,
-            recovered_again: recovered_again as u64,
+                post: gents_lean_vocab::family::recode(&post),
+                recovered: recovered as u64,
+                recovered_again: recovered_again as u64,
             },
         );
         node.shutdown().await.expect("node shutdown");
@@ -1202,10 +1194,9 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             if id.owner_did == owner {
                 id.owner_did = source[0].identity.owner_did.clone();
             }
-            if let Some(entry) = source
-                .iter()
-                .find(|entry| documents.get(&entry.identity.source_doc_id) == Some(&id.source_doc_id))
-            {
+            if let Some(entry) = source.iter().find(|entry| {
+                documents.get(&entry.identity.source_doc_id) == Some(&id.source_doc_id)
+            }) {
                 id.source_doc_id = entry.identity.source_doc_id.clone();
             }
             id
@@ -1424,7 +1415,8 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         }
         let pre_seeded = arrival_cursor_seeded(&agent_access, owner, &handoff_binding()).await;
         let pre_after = saved().await;
-        for receipt in gents_lean_vocab::family::recode::<_, Vec<FireIdentity>>(&input.pre_receipts) {
+        for receipt in gents_lean_vocab::family::recode::<_, Vec<FireIdentity>>(&input.pre_receipts)
+        {
             admit_callback_arrival(
                 &node,
                 &agent_access,

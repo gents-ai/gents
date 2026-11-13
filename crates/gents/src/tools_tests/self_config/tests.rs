@@ -1069,10 +1069,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             .is_admin(&actor)
             .await
             .unwrap());
-        let mut patch = vec![(
-            "integrations".into(),
-            Some(candidate_integrations.clone()),
-        )];
+        let mut patch = vec![("integrations".into(), Some(candidate_integrations.clone()))];
         if case.input.add_schema_tool {
             let mut built_ins = before
                 .get("built_ins")
@@ -1128,7 +1125,11 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             case.input.name
         );
         if case.input.add_schema_tool {
-            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.input.name);
+            assert_eq!(
+                after["built_ins"], before["built_ins"],
+                "{}",
+                case.input.name
+            );
             assert!(!fixture
                 .db
                 .node

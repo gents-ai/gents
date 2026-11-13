@@ -1129,10 +1129,11 @@ fn generated_interrupt_dispositions_follow_the_lean_model() {
     gents_lean_vocab::families::contracts_interrupt_disposition::replay::<String, String, String>(
         |case| {
             let state = ToolCallState::from_persisted(&case.state).expect("modeled state");
-            let await_mode =
-                AwaitMode::from_persisted(&case.await_mode).expect("modeled mode");
+            let await_mode = AwaitMode::from_persisted(&case.await_mode).expect("modeled mode");
             gents_lean_vocab::families::contracts_interrupt_disposition::Output {
-                disposition: InterruptDisposition::of(state, await_mode).as_str().to_owned(),
+                disposition: InterruptDisposition::of(state, await_mode)
+                    .as_str()
+                    .to_owned(),
             }
         },
     );
@@ -1148,13 +1149,10 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     .await;
     let node = node_db.node.clone();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
-    for case in gents_lean_vocab::families::contracts_interrupt_in_flight::cases::<
-        String,
-        String,
-        String,
-    >() {
-        let await_mode =
-            AwaitMode::from_persisted(&case.input.await_mode).expect("modeled mode");
+    for case in
+        gents_lean_vocab::families::contracts_interrupt_in_flight::cases::<String, String, String>()
+    {
+        let await_mode = AwaitMode::from_persisted(&case.input.await_mode).expect("modeled mode");
         let name = format!("interrupt_{}_{}", case.input.state, case.input.await_mode);
         let hook = signed_hook(&node, FailurePolicy::default()).await;
         hook.on_completion_call(&user_text_message(&name), &[])

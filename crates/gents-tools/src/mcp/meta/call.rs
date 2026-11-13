@@ -402,7 +402,8 @@ mod tests {
 
     #[tokio::test]
     async fn generated_tool_preflight_cases_match_health_and_schema_gates() {
-        for case in gents_lean_vocab::families::contracts_tool_preflight::cases::<String, String>() {
+        for case in gents_lean_vocab::families::contracts_tool_preflight::cases::<String, String>()
+        {
             let (decision, failure_class) = actual_preflight_contract(&case.input).await;
             case.check(preflight::ToolPreflightOutput {
                 decision,

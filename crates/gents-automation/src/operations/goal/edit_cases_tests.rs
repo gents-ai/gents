@@ -2,8 +2,8 @@ use crate::goal::{
     create_goal_for_session_from_access, load_canonical_goal_in_txn, CreateGoalForSessionOutcome,
     GoalDocument,
 };
-use gents_protocol::goal_status::GoalStatus;
 use gents_lean_vocab::families::goal_edit_contracts_edit as edit_family;
+use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::operations::goal::{GoalExpected, GoalOperationError, GoalSetInput};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
@@ -139,7 +139,11 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             "{} durable input",
             row.name
         );
-        assert_eq!(current.auto_resume_at_reset, row.stored_auto_resume, "{}", row.name);
+        assert_eq!(
+            current.auto_resume_at_reset, row.stored_auto_resume,
+            "{}",
+            row.name
+        );
         let before = durable_rows(&access).await;
         let edit = match row.origin {
             Origin::Agent => {

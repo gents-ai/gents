@@ -324,19 +324,15 @@ impl Driver {
         }
         let access = self.fixture.user_access();
         let doc_id = persist_command(&access, &command).await;
-        self.commands
-            .insert(model.id(), (model.digest(), doc_id.clone(), command.clone()));
+        self.commands.insert(
+            model.id(),
+            (model.digest(), doc_id.clone(), command.clone()),
+        );
         (doc_id, command)
     }
 
-    async fn apply<C, F>(
-        &mut self,
-        command: &C,
-        facts: &F,
-        now: u64,
-        next: &str,
-        commit: bool,
-    ) where
+    async fn apply<C, F>(&mut self, command: &C, facts: &F, now: u64, next: &str, commit: bool)
+    where
         C: ReceiptCommandModel,
         F: ReceiptFactsModel,
     {
@@ -402,25 +398,24 @@ impl Driver {
         G: GoalState,
     {
         assert_eq!(
-            self.fixture.observe().await, goal.execution(),
+            self.fixture.observe().await,
+            goal.execution(),
             "{name}: execution"
         );
         let current_goal = self.fixture.current_goal().await;
         assert_eq!(
-            current_goal.objective, goal.objective(),
+            current_goal.objective,
+            goal.objective(),
             "{name}: objective"
         );
         assert_eq!(
             current_goal.doc_id, self.fixture.goal.doc_id,
             "{name}: goal identity"
         );
-        let current = self
-            .fixture
-            .goal_commit(&current_goal.doc_id)
-            .await
-            .cid;
+        let current = self.fixture.goal_commit(&current_goal.doc_id).await.cid;
         assert_eq!(
-            current, self.revisions[goal.composite()],
+            current,
+            self.revisions[goal.composite()],
             "{name}: goal revision"
         );
         let access = self.fixture.agent_access();

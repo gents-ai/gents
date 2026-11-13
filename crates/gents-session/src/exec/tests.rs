@@ -445,10 +445,12 @@ async fn managed_exec_spawn_outcome_matches_the_lean_model() {
         let executor_registered = crate::exec::status::active_native_executors()
             .iter()
             .any(|snapshot| snapshot.tool_name.as_deref() == Some("spawn-failure"));
-        case.check(gents_lean_vocab::families::managed_exec_spawn_outcome::SpawnOutput {
-            state: state.as_str().to_string(),
-            executor_registered,
-        });
+        case.check(
+            gents_lean_vocab::families::managed_exec_spawn_outcome::SpawnOutput {
+                state: state.as_str().to_string(),
+                executor_registered,
+            },
+        );
     }
 }
 

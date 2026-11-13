@@ -262,13 +262,9 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         .await.unwrap();
     let public_doc = gents_store::graphql::created_doc_id(&created, "PeerRegistry").unwrap();
     let (_, owner_address) =
-        gents_p2p::test_support::enrollment::wait_for_peer_identity(&fixture.node)
-            .await;
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&fixture.node).await;
     let (_, peer_address) =
-        gents_p2p::test_support::enrollment::wait_for_peer_identity(
-            &fixture.peer.node,
-        )
-        .await;
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&fixture.peer.node).await;
     let owner_admin = EmbeddedRemoteP2pAdmin::new(fixture.node.clone());
     let peer_admin = EmbeddedRemoteP2pAdmin::new(fixture.peer.node.clone());
     peer_admin.connect(&[owner_address]).await.unwrap();

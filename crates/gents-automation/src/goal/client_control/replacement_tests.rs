@@ -1,6 +1,6 @@
 use super::*;
-use gents_protocol::request_admission::RequestPurpose;
 use crate::goal::operator_resume::support::{Fixture, PARENT, SESSION};
+use gents_protocol::request_admission::RequestPurpose;
 use std::sync::Arc;
 
 pub(super) async fn run(case: &Value) {

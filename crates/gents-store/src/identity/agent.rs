@@ -285,7 +285,10 @@ pub async fn provision_agent_identity_for_agent(
                 .render();
                 let response = txn.run(&rendered).await?;
                 Ok::<_, crate::config_client::ConfigClientError>(
-                    response["data"]["Agent"].as_array().cloned().unwrap_or_default(),
+                    response["data"]["Agent"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
                 )
             })
         })
