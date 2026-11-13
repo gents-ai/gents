@@ -92,8 +92,8 @@ values cannot be confused with request or response `status` strings.
 ## Reserved Vocabulary And Boundaries
 
 See `Proofs/Conformance/Boundaries.lean` for server-side product boundaries.
-`Proofs/Conformance/Deviations.lean` is only for active unresolved mismatches
-and currently has none.
+An unresolved mismatch is stated as a model definition that drives
+conformance cases.
 
 | Server state | Client mapping | Note |
 |---|---|---|

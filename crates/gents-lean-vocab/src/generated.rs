@@ -1176,7 +1176,6 @@ pub struct LeanContractSnapshot {
     pub managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub deviations: Vec<LeanDeviation>,
     pub request_progress_cases: Vec<LeanRequestProgressCase>,
     pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
@@ -1299,16 +1298,6 @@ pub struct LeanCrossActorObservation {
 pub struct LeanDependencyDenial {
     pub root_close_id: u64,
     pub denied_doc_id: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanDeviation {
-    pub id: String,
-    pub domain: String,
-    pub subject: String,
-    pub statement: String,
-    pub accepted_failure_mode: Option<String>,
-    pub accepted_follow_up: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

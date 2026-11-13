@@ -6,7 +6,6 @@ use serde_json::Value;
 
 const CONTRACT_METADATA: &[&str] = &[
     "coverage_ledger",
-    "deviations",
     "feature_matrix",
     "feature_surface_requirements",
 ];
