@@ -108,10 +108,7 @@ fn offline_pack_error(
         Some(version) => format!("{coordinate}@{version}"),
         None => coordinate.to_owned(),
     };
-    match error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<RegistryError>())
-    {
+    match RegistryError::in_chain(&error) {
         Some(RegistryError::Unreachable { .. }) => anyhow::anyhow!(
             "{pinned} is not in the pack store of {} and the registry at {registry_url} \
              could not be reached; fetch it while online with `gents config pack fetch {pinned} \
