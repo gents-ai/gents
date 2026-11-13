@@ -1,47 +1,14 @@
 use super::*;
 use gents_session::request::lifecycle::RequestTerminalOutcome;
 
-use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::request_lifecycle::{
+    RequestLifecycleState, RequestTransitionAction, RequestTransitionClassification,
+};
 
 fn parsed_request_state(value: &str) -> RequestLifecycleState {
     RequestLifecycleState::parse(value).unwrap_or_else(|error| {
         panic!("invalid generated request lifecycle state {value:?}: {error}")
     })
-}
-
-fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> {
-    match (from, to) {
-        ("workspaceBindingPending", "pending") => Some("bindWorkspace"),
-        ("pending", "claimed") => Some("claim"),
-        ("pending", "failed") => Some("admissionReject"),
-        ("pending" | "workspaceBindingPending", "superseded") => Some("dedupLose"),
-        ("claimed", "processing") => Some("beginInference"),
-        ("processing", "processing") => Some("continueProcessing"),
-        ("processing", "waitingForBackend") => Some("parkBackendClosed"),
-        ("waitingForBackend", "resumingBackend") => Some("resumeBackendReady"),
-        ("waitingForBackend", "failed") => Some("expireBackendWait"),
-        ("waitingForBackend", "interrupted") => Some("interruptBackendWait"),
-        ("resumingBackend", "processing") => Some("beginResumed"),
-        ("resumingBackend", "failed") => Some("expireResuming"),
-        ("resumingBackend", "interrupted") => Some("interruptResuming"),
-        ("processing", "completed") => Some("finish"),
-        ("processing", "failed") => Some("fail"),
-        ("claimed", "failed") => Some("failBeforeStream"),
-        ("pending", "dead") => Some("expire"),
-        ("pending", "interrupted") => Some("interruptBeforeClaim"),
-        ("claimed", "interrupted") => Some("interruptClaimed"),
-        ("processing", "interrupted") => Some("interruptProcessing"),
-        _ => None,
-    }
-}
-
-fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static str> {
-    match (from, to) {
-        ("claimed", "dead") | ("processing", "dead") => {
-            Some("RequestLifecycle::repair_terminal_requests")
-        }
-        _ => None,
-    }
 }
 
 #[tokio::test]
@@ -314,22 +281,24 @@ fn request_lifecycle_for_case(
     )
 }
 
-async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) {
+async fn drive_request_legal_transition(
+    from: RequestLifecycleState,
+    to: RequestLifecycleState,
+    action: RequestTransitionAction,
+) {
     let db = test_db("generated-request-transition").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = support::agent_requests::canonical_now();
-    let action = case
-        .action
-        .as_deref()
-        .expect("legal Request transition case must carry an action");
+    let name = format!("{from} -> {to}");
+    let action = action.as_str();
     let valid_until = (action == "expire").then(|| {
         support::agent_requests::canonical_at(chrono::Utc::now() - chrono::Duration::seconds(1))
     });
     let request_input =
         (action == "dedupLose").then(|| coalesce_input(&format!("dedup-{request_id}")));
-    let initial_state = if case.from == "workspaceBindingPending" {
+    let initial_state = if from == RequestLifecycleState::WorkspaceBindingPending {
         "workspaceBindingPending"
     } else {
         "pending"
@@ -341,7 +310,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             .valid_until(valid_until.as_deref())
     };
     let mut create = actors.request_create(&seed);
-    if action == "dedupLose" && case.from == "workspaceBindingPending" {
+    if action == "dedupLose" && from == RequestLifecycleState::WorkspaceBindingPending {
         create.caused_by_trigger_id = Some("conformance-trigger".into());
     }
     let doc_id = actors.create_signed(create).await;
@@ -363,7 +332,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
         }
         "dedupLose" => {
-            if case.from == "workspaceBindingPending" {
+            if from == RequestLifecycleState::WorkspaceBindingPending {
                 let node_did = actors.node_did();
                 actors
                     .agent_access
@@ -602,92 +571,30 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 .await
                 .unwrap();
         }
-        other => panic!(
-            "generated Request transition {} has unsupported action {other:?}",
-            case.name
-        ),
+        other => panic!("request transition {name} has unsupported action {other:?}"),
     }
 
     let evidence = actors.request_row(&doc_id, "stopped_before_running").await;
     let certified = evidence["stopped_before_running"].as_bool() == Some(true);
-    assert_eq!(certified, case.stopped_before_running, "{}", case.name);
+    assert_eq!(
+        certified,
+        from.certifies_stopped_before_running(to, true),
+        "{name}"
+    );
     let snap = fetch_request_snapshot(&actors, &doc_id).await;
     assert_eq!(
-        snap.lifecycle_state,
-        parsed_request_state(&case.to),
-        "generated Request transition {} expected {} -> {} classified as {} via {:?}, got persisted lifecycle_state={}",
-        case.name,
-        case.from,
-        case.to,
-        case.classification,
-        case.action,
+        snap.lifecycle_state, to,
+        "request transition {name} via {action} persisted lifecycle_state={}",
         snap.lifecycle_state
     );
 }
 
-pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() {
-    for case in lean_request_transition_cases() {
-        let source = parsed_request_state(&case.from);
-        let target = parsed_request_state(&case.to);
-        assert_eq!(
-            source.certifies_stopped_before_running(target, true),
-            case.stopped_before_running
-        );
-        assert!(!source.certifies_stopped_before_running(target, false));
-        match case.classification.as_str() {
-            "legal" => {
-                assert_eq!(
-                    case.action.as_deref(),
-                    rust_request_transition_action(&case.from, &case.to),
-                    "Request transition {} legal writer action drifted for {} -> {}",
-                    case.name,
-                    case.from,
-                    case.to
-                );
-                assert!(
-                    rust_request_recovery_sweep_writer(&case.from, &case.to).is_none(),
-                    "Request transition {} is legal but a Rust recovery sweep also claims {} -> {}",
-                    case.name,
-                    case.from,
-                    case.to
-                );
-                drive_generated_request_legal_case(case).await;
+pub(super) async fn legal_request_transitions_reach_their_target_through_production_writers() {
+    for from in RequestLifecycleState::ALL {
+        for to in RequestLifecycleState::ALL {
+            if let RequestTransitionClassification::Legal(action) = from.classify_transition(to) {
+                drive_request_legal_transition(from, to, action).await;
             }
-            "illegal" => {
-                assert!(
-                    rust_request_transition_action(&case.from, &case.to).is_none()
-                        && rust_request_recovery_sweep_writer(&case.from, &case.to).is_none(),
-                    "Request transition {} is ordinary illegal but Rust has a writer path for {} -> {}",
-                    case.name,
-                    case.from,
-                    case.to
-                );
-            }
-            "recoveryReachable" => {
-                assert!(
-                    case.action.is_none(),
-                    "Request transition {} is recovery-reachable and must be taken by no single action, got {:?}",
-                    case.name,
-                    case.action
-                );
-                assert!(
-                    rust_request_recovery_sweep_writer(&case.from, &case.to).is_some(),
-                    "Request transition {} is recovery-reachable but no Rust sweep writer is registered for {} -> {}",
-                    case.name,
-                    case.from,
-                    case.to
-                );
-                assert_eq!(
-                    case.boundary.as_deref(),
-                    Some("boundary.request.recovery-sweep-reachable"),
-                    "Request transition {} must cite the recovery-sweep boundary",
-                    case.name
-                );
-            }
-            other => panic!(
-                "generated Request transition {} has unknown classification {other:?}",
-                case.name
-            ),
         }
     }
 }
@@ -985,18 +892,13 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "production writers stopped reaching edges this test is supposed to cover: {missing:?}"
     );
 
-    let contract = lean_request_transition_cases();
     for (from, to) in &observed {
-        let case = contract
-            .iter()
-            .find(|case| &case.from == from && &case.to == to)
-            .unwrap_or_else(|| {
-                panic!("production reached {from} -> {to}, absent from the Lean contract entirely")
-            });
+        let classification =
+            parsed_request_state(from).classify_transition(parsed_request_state(to));
         assert!(
-            matches!(case.classification.as_str(), "legal" | "recoveryReachable"),
-            "production writers reached {from} -> {to}, which the Lean contract classifies {}",
-            case.classification
+            classification != RequestTransitionClassification::Illegal,
+            "production writers reached {from} -> {to}, which the request transition owner classifies {}",
+            classification.as_str()
         );
     }
 }

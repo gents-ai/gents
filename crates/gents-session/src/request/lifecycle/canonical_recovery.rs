@@ -556,14 +556,15 @@ async fn recover_expired_generation_with_access_and_facts(
             if expected_outcome.is_some_and(|expected| target_state != expected) {
                 return Err(RecoverySelectionRejected.into());
             }
+            let transition = state.transition_to(target_state)?;
             let response = {
                 use gents_protocol::document_query::{fields::agent_request as fields, Filter, Input, Selection, Update};
                 let filter = Filter::eq(fields::DOC_ID, request_doc_id.as_str())
-                    .and(Filter::eq(fields::LIFECYCLE_STATE, state.as_str()))
+                    .and(Filter::eq(fields::LIFECYCLE_STATE, transition.from().as_str()))
                     .and(Filter::eq(fields::EXECUTION_GENERATION, expected_generation))
                     .and(Filter::eq(fields::EXECUTION_LEASE_EXPIRES_AT, expected_expiry));
                 let input = Input::new()
-                    .set(fields::LIFECYCLE_STATE, target_state.as_str())
+                    .set(fields::LIFECYCLE_STATE, transition.to().as_str())
                     .set(fields::EXECUTION_GENERATION, fresh_generation.as_str())
                     .set(fields::EXECUTION_LEASE_EXPIRES_AT, timestamp.as_str())
                     .set(fields::FAILURE_REASON, "execution lease expired")

@@ -689,7 +689,7 @@ async fn background_completion_transaction_attempt(
                         &request_id,
                         &doc_id,
                         "raised to the hop of a later completion",
-                    ))
+                    )?)
                     .await?;
                 if superseded
                     .get("data")

@@ -465,11 +465,6 @@ async fn malformed_row_without_selected_agent_stays_pending_without_blocking_val
 
 #[tokio::test]
 async fn unresolved_agent_request_stays_pending_until_identity_is_available() {
-    let model = gents_lean_vocab::lean_contract_snapshot()
-        .watcher_scoped_scan_cases
-        .iter()
-        .find(|case| case["name"] == "unresolved-agent-is-not-scanned")
-        .expect("modeled unresolved agent");
     let fixture = ScopedWatcherFixture::new().await;
     let doc = fixture
         .create_request(fixture.request_input("req-unresolved", "sess-unresolved"))
@@ -477,10 +472,7 @@ async fn unresolved_agent_request_stays_pending_until_identity_is_available() {
     let unresolved = DefraWatcher::for_agents(fixture.node.clone(), &fixture.node_did, vec![])
         .expect("watcher without a resolved identity");
     let pending = unresolved.pending_requests().await.unwrap();
-    assert_eq!(
-        pending.len(),
-        model["expected"]["rows"].as_array().unwrap().len()
-    );
+    assert!(pending.is_empty());
     assert_eq!(
         fixture.request_row(&doc).await["lifecycle_state"],
         "pending"

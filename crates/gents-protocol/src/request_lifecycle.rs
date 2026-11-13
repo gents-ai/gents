@@ -206,6 +206,189 @@ impl<'de> Deserialize<'de> for RequestLifecycleState {
     }
 }
 
+/// The single request action that takes a request between two lifecycle
+/// states. Mirrors Lean `Conformance.RequestTransition.action?`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestTransitionAction {
+    BindWorkspace,
+    Claim,
+    DedupLose,
+    AdmissionReject,
+    BeginInference,
+    ContinueProcessing,
+    ParkBackendClosed,
+    ResumeBackendReady,
+    BeginResumed,
+    InterruptResuming,
+    ExpireResuming,
+    InterruptBackendWait,
+    ExpireBackendWait,
+    Finish,
+    Fail,
+    FailBeforeStream,
+    Expire,
+    InterruptBeforeClaim,
+    InterruptClaimed,
+    InterruptProcessing,
+}
+
+impl RequestTransitionAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BindWorkspace => "bindWorkspace",
+            Self::Claim => "claim",
+            Self::DedupLose => "dedupLose",
+            Self::AdmissionReject => "admissionReject",
+            Self::BeginInference => "beginInference",
+            Self::ContinueProcessing => "continueProcessing",
+            Self::ParkBackendClosed => "parkBackendClosed",
+            Self::ResumeBackendReady => "resumeBackendReady",
+            Self::BeginResumed => "beginResumed",
+            Self::InterruptResuming => "interruptResuming",
+            Self::ExpireResuming => "expireResuming",
+            Self::InterruptBackendWait => "interruptBackendWait",
+            Self::ExpireBackendWait => "expireBackendWait",
+            Self::Finish => "finish",
+            Self::Fail => "fail",
+            Self::FailBeforeStream => "failBeforeStream",
+            Self::Expire => "expire",
+            Self::InterruptBeforeClaim => "interruptBeforeClaim",
+            Self::InterruptClaimed => "interruptClaimed",
+            Self::InterruptProcessing => "interruptProcessing",
+        }
+    }
+}
+
+/// Mirrors Lean `Conformance.RequestTransition.classify`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestTransitionClassification {
+    Legal(RequestTransitionAction),
+    /// Taken by no single request action, only by an execution-lease
+    /// authority: the expired-generation recovery sweep, latest-only trigger
+    /// supersession of a running or parked request, or the re-park of an
+    /// expired resume.
+    RecoveryReachable,
+    Illegal,
+}
+
+impl RequestTransitionClassification {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Legal(_) => "legal",
+            Self::RecoveryReachable => "recoveryReachable",
+            Self::Illegal => "illegal",
+        }
+    }
+
+    pub const fn action(self) -> Option<RequestTransitionAction> {
+        match self {
+            Self::Legal(action) => Some(action),
+            Self::RecoveryReachable | Self::Illegal => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RequestTransitionError {
+    #[error("request lifecycle may not change from {from} to {to}")]
+    Illegal {
+        from: RequestLifecycleState,
+        to: RequestLifecycleState,
+    },
+}
+
+/// A lifecycle change the transition owner permits. Every writer of
+/// `AgentRequest.lifecycle_state` filters on `from` and writes `to`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestTransition {
+    from: RequestLifecycleState,
+    to: RequestLifecycleState,
+    classification: RequestTransitionClassification,
+}
+
+impl RequestTransition {
+    pub const fn from(self) -> RequestLifecycleState {
+        self.from
+    }
+
+    pub const fn to(self) -> RequestLifecycleState {
+        self.to
+    }
+
+    pub const fn classification(self) -> RequestTransitionClassification {
+        self.classification
+    }
+}
+
+impl RequestLifecycleState {
+    pub const fn transition_action(self, target: Self) -> Option<RequestTransitionAction> {
+        use RequestTransitionAction as Action;
+        Some(match (self, target) {
+            (Self::WorkspaceBindingPending, Self::Pending) => Action::BindWorkspace,
+            (Self::Pending, Self::Claimed) => Action::Claim,
+            (Self::Pending | Self::WorkspaceBindingPending, Self::Superseded) => Action::DedupLose,
+            (Self::Pending, Self::Failed) => Action::AdmissionReject,
+            (Self::Claimed, Self::Processing) => Action::BeginInference,
+            (Self::Processing, Self::Processing) => Action::ContinueProcessing,
+            (Self::Processing, Self::WaitingForBackend) => Action::ParkBackendClosed,
+            (Self::WaitingForBackend, Self::ResumingBackend) => Action::ResumeBackendReady,
+            (Self::ResumingBackend, Self::Processing) => Action::BeginResumed,
+            (Self::ResumingBackend, Self::Interrupted) => Action::InterruptResuming,
+            (Self::ResumingBackend, Self::Failed) => Action::ExpireResuming,
+            (Self::WaitingForBackend, Self::Interrupted) => Action::InterruptBackendWait,
+            (Self::WaitingForBackend, Self::Failed) => Action::ExpireBackendWait,
+            (Self::Processing, Self::Completed) => Action::Finish,
+            (Self::Processing, Self::Failed) => Action::Fail,
+            (Self::Claimed, Self::Failed) => Action::FailBeforeStream,
+            (Self::Pending, Self::Dead) => Action::Expire,
+            (Self::Pending, Self::Interrupted) => Action::InterruptBeforeClaim,
+            (Self::Claimed, Self::Interrupted) => Action::InterruptClaimed,
+            (Self::Processing, Self::Interrupted) => Action::InterruptProcessing,
+            _ => return None,
+        })
+    }
+
+    const fn lease_authority_reaches(self, target: Self) -> bool {
+        matches!(
+            (self, target),
+            (
+                Self::Claimed | Self::Processing | Self::ResumingBackend,
+                Self::Dead | Self::Superseded
+            ) | (Self::ResumingBackend, Self::WaitingForBackend)
+                | (Self::WaitingForBackend, Self::Superseded)
+        )
+    }
+
+    pub const fn classify_transition(self, target: Self) -> RequestTransitionClassification {
+        match self.transition_action(target) {
+            Some(action) => RequestTransitionClassification::Legal(action),
+            None if self.lease_authority_reaches(target) => {
+                RequestTransitionClassification::RecoveryReachable
+            }
+            None => RequestTransitionClassification::Illegal,
+        }
+    }
+
+    /// The owner every request lifecycle writer consults before it writes;
+    /// an illegal change is refused rather than written.
+    pub const fn transition_to(
+        self,
+        target: Self,
+    ) -> Result<RequestTransition, RequestTransitionError> {
+        match self.classify_transition(target) {
+            RequestTransitionClassification::Illegal => Err(RequestTransitionError::Illegal {
+                from: self,
+                to: target,
+            }),
+            classification => Ok(RequestTransition {
+                from: self,
+                to: target,
+                classification,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EnqueuedAgentRequest {
     pub doc_id: String,
@@ -306,12 +489,42 @@ mod tests {
 mod conformance {
     use super::{
         next_request_hop, request_hop_within_bound, RequestHopCapObservation, RequestHopCause,
-        RequestLifecycleState,
+        RequestLifecycleState, RequestTransition, RequestTransitionClassification,
     };
 
     #[test]
     fn lifecycle_states_are_the_lean_request_states() {
         gents_lean_vocab::families::request_state_vocabulary::replay(&RequestLifecycleState::ALL);
+    }
+
+    #[test]
+    fn transitions_follow_the_lean_request_transition_model() {
+        gents_lean_vocab::families::request_transition_classification::replay::<
+            RequestLifecycleState,
+        >(|case| {
+            let classification = case.from_state.classify_transition(case.to_state);
+            assert_eq!(
+                case.from_state
+                    .transition_to(case.to_state)
+                    .ok()
+                    .map(RequestTransition::classification),
+                (classification != RequestTransitionClassification::Illegal)
+                    .then_some(classification),
+                "{case:?}"
+            );
+            gents_lean_vocab::families::request_transition_classification::TransitionOutput {
+                action: classification
+                    .action()
+                    .map(|action| action.as_str().to_owned()),
+                classification: classification.as_str().to_owned(),
+                stopped_before_running: case
+                    .from_state
+                    .certifies_stopped_before_running(case.to_state, true),
+                stopped_before_running_unowned: case
+                    .from_state
+                    .certifies_stopped_before_running(case.to_state, false),
+            }
+        });
     }
 
     #[test]

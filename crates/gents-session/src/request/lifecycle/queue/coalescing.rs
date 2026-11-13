@@ -105,7 +105,7 @@ pub async fn reconcile_coalesced_pending_request_for_with_access(
             &survivor.request_id,
             &survivor.doc_id,
             "coalesced into earlier queued request",
-        );
+        )?;
         anyhow::ensure!(
             duplicate.agent_did.as_deref() == Some(agent_did),
             "coalesced request selects another agent"
@@ -169,8 +169,10 @@ pub fn supersede_pending_mutation(
     survivor_request_id: &str,
     survivor_doc_id: &str,
     reason: &str,
-) -> String {
-    format!(
+) -> Result<String, gents_protocol::request_lifecycle::RequestTransitionError> {
+    let transition =
+        RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Superseded)?;
+    Ok(format!(
         r#"mutation {{
             update_AgentRequest(
                 docID: "{physical_doc_id}",
@@ -196,9 +198,9 @@ pub fn supersede_pending_mutation(
         escape_graphql_string(reason),
         escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
         physical_doc_id = escape_graphql_string(doc_id),
-        pending = RequestLifecycleState::Pending.as_str(),
-        superseded = RequestLifecycleState::Superseded.as_str()
-    )
+        pending = transition.from().as_str(),
+        superseded = transition.to().as_str()
+    ))
 }
 
 async fn matching_coalesced_pending_requests(

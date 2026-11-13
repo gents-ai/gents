@@ -45,6 +45,7 @@ pub(crate) struct IsolatedWorkspaceRecord {
     pub owner_node_did: String,
     pub writer_principal: String,
     pub integrator_principal: String,
+    pub creation_policy: super::action_plan::CreationPolicy,
     pub lifecycle_state: String,
     pub seal_hash: Option<String>,
     pub instruction_manifest: String,
@@ -639,11 +640,16 @@ async fn ensure_request_binding(
     )
     .await?;
     match admit_workspace_binding(
-        &workspace.workspace_id,
-        &workspace.lifecycle_state,
-        optional_id(workspace.seal_hash.as_deref()),
+        super::binding::BindingWorkspace {
+            workspace_id: &workspace.workspace_id,
+            owner_node_did: &workspace.owner_node_did,
+            lifecycle_state: &workspace.lifecycle_state,
+            seal_hash: optional_id(workspace.seal_hash.as_deref()),
+            creation_policy: workspace.creation_policy,
+        },
         &existing,
         candidate,
+        authority.may_write_git_metadata(),
         release_previous,
     )? {
         AdmitBinding::Reuse(_) => Ok(()),
@@ -929,6 +935,7 @@ pub(super) struct IsolatedWorkspaceRow {
     owner_node_did: Option<String>,
     writer_principal: Option<String>,
     integrator_principal: Option<String>,
+    creation_policy: Option<String>,
     lifecycle_state: Option<String>,
     seal_hash: Option<String>,
     instruction_manifest: Option<String>,
@@ -958,6 +965,7 @@ pub(crate) fn isolated_workspace_record_query(workspace_id: &str, node_did: &str
                 owner_node_did
                 writer_principal
                 integrator_principal
+                creation_policy
                 lifecycle_state
                 seal_hash
                 instruction_manifest
@@ -984,6 +992,11 @@ pub(super) fn decode_isolated_workspace_record(
     let integrator_principal = optional_id(row.integrator_principal.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} is missing integrator_principal"))?
         .to_string();
+    let creation_policy = optional_id(row.creation_policy.as_deref())
+        .and_then(super::action_plan::CreationPolicy::parse)
+        .ok_or_else(|| {
+            anyhow!("IsolatedWorkspace {workspace_id} has no known creation_policy")
+        })?;
     Ok(IsolatedWorkspaceRecord {
         workspace_id,
         work_unit_id: row.work_unit_id,
@@ -991,6 +1004,7 @@ pub(super) fn decode_isolated_workspace_record(
         owner_node_did,
         writer_principal,
         integrator_principal,
+        creation_policy,
         lifecycle_state,
         seal_hash: optional_id(row.seal_hash.as_deref()).map(str::to_string),
         instruction_manifest: optional_id(row.instruction_manifest.as_deref())

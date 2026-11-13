@@ -170,6 +170,9 @@ import Proofs.Conformance.Identity.AgentBlockSigning
 import Proofs.Conformance.Identity.WorkspaceDatastoreWrite
 import Proofs.ToolCalls.Identity.ClientAgentJournal
 import Proofs.Conformance.Identity.NodeFileRequests
+import Proofs.Conformance.RequestTransition
+import Proofs.Conformance.TriggerDeliveryLatestAdmission
+import Proofs.Conformance.WatcherScopedScan
 import Proofs.Conformance.Identity.RevokeFollowsGrant
 import Proofs.Conformance.PairingOwnedDiff
 import Proofs.Conformance.PairingDataPlane
@@ -365,9 +368,6 @@ def snapshotCaptureTailJson : String :=
 def snapshotCoverageTailJson : String :=
   ""
     ++ "\"trigger_delivery_callback_visibility_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryCallbackVisibilityCasesJson ++ ","
-    ++ "\"trigger_delivery_latest_admission_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryLatestAdmissionCasesJson ++ ","
-    ++ "\"watcher_scoped_scan_cases\":"
-      ++ EventDelivery.WatcherConformance.casesJson ++ ","
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
     ++ ",\"feature_surface_requirements\":"
@@ -421,8 +421,6 @@ def snapshotGoalMutationCasesJson : String :=
 
 def snapshotRequestCasesJson : String :=
   ""
-    ++ "\"request_transition_cases\":"
-      ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","

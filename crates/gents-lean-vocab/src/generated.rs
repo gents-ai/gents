@@ -129,10 +129,6 @@ pub fn lean_request_progress_cases() -> &'static [LeanRequestProgressCase] {
     &lean_contract_snapshot().request_progress_cases
 }
 
-pub fn lean_request_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
-    &lean_contract_snapshot().request_transition_cases
-}
-
 pub fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
     &lean_contract_snapshot().runtime_reconcile_cases
 }
@@ -1124,7 +1120,6 @@ pub struct LeanContractSnapshot {
     pub goal_operator_resume_cases: Vec<LeanGoalOperatorResumeCase>,
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
     pub trigger_delivery_callback_visibility_cases: serde_json::Value,
-    pub trigger_delivery_latest_admission_cases: serde_json::Value,
     pub workspace_path_capability_cases: Vec<LeanWorkspacePathCapabilityCase>,
     pub file_inventory_direct_reader_cases: Vec<serde_json::Value>,
     pub file_inventory_fork_cases: Vec<serde_json::Value>,
@@ -1139,7 +1134,6 @@ pub struct LeanContractSnapshot {
     pub identity_publication_cases: Vec<LeanIdentityPublicationCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub client_publication_protected_collection: String,
-    pub watcher_scoped_scan_cases: Vec<serde_json::Value>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_readiness_preflight_cases: Vec<serde_json::Value>,
     pub identity_pairing_partition_cases: Vec<LeanIdentityPairingPartitionCase>,
@@ -1153,7 +1147,6 @@ pub struct LeanContractSnapshot {
     pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
     pub client_data_publication_cases: LeanClientDataPublicationCases,
     pub client_request_closure_cases: Vec<serde_json::Value>,
-    pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
     pub request_input_cases: Vec<serde_json::Value>,

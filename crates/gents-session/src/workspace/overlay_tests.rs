@@ -30,6 +30,7 @@ fn ready_workspace() -> IsolatedWorkspaceRecord {
         owner_node_did: "dep-1".into(),
         writer_principal: "did:key:zWriter".into(),
         integrator_principal: "did:key:zIntegrator".into(),
+        creation_policy: crate::workspace::CreationPolicy::GitWorktreeDiff,
         lifecycle_state: "ready".into(),
         seal_hash: None,
         instruction_manifest: "{}".into(),
