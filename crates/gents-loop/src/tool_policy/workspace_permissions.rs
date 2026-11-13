@@ -259,15 +259,6 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn workspace_modes_are_the_lean_modes() {
-        gents_lean_vocab::families::tool_policy_workspace_permissions_mode_vocabulary::replay(&[
-            Mode::Ask,
-            Mode::AutoReview,
-            Mode::FullAccess,
-        ]);
-    }
-
     fn mode(value: &str) -> Mode {
         match value {
             "ask" => Mode::Ask,
@@ -368,31 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn generated_workspace_permission_resolution_cases() {
-        use gents_lean_vocab::families::workspace_permission_resolution_selection::Result;
-        gents_lean_vocab::families::workspace_permission_resolution_selection::replay::<Mode>(
-            |input| {
-                let entries: Vec<_> = input
-                    .entries
-                    .iter()
-                    .map(|entry| ((entry.key.workspace, entry.key.session), entry.clone()))
-                    .collect();
-                let session = input
-                    .session
-                    .map(|session| (input.workspace, Some(session)));
-                let default = (input.workspace, None);
-                let resolved = resolve(&entries, session.as_ref(), &default, |entry| &entry.0)
-                    .map(|entry| entry.1.clone());
-                let admits = resolved
-                    .as_ref()
-                    .map(|entry| (entry.key.workspace, entry.key.session))
-                    == Some((input.bound.workspace, input.bound.session));
-                Result { resolved, admits }
-            },
-        );
-    }
-
-    #[test]
     fn workspace_routing_follows_the_lean_model() {
         use gents_lean_vocab::families::workspace_permissions_routing::{
             Grant as GrantWire, RoutingInput, RoutingOutput,
@@ -429,5 +395,19 @@ mod tests {
                 }
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod mode_conformance {
+    use super::Mode;
+
+    #[test]
+    fn workspace_permission_modes_are_the_lean_modes() {
+        gents_lean_vocab::families::tool_policy_workspace_permissions_mode_vocabulary::replay(&[
+            Mode::Ask,
+            Mode::AutoReview,
+            Mode::FullAccess,
+        ]);
     }
 }

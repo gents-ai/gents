@@ -410,9 +410,17 @@ mod tests {
 
     #[test]
     fn malformed_timestamp_is_rejected_by_full_and_shape_inspection() {
-        let input =
-            &gents_lean_vocab::families::open_output_shape_inspect::cases::<String>()[1].input[0];
-        let mut record = segment(input);
+        let input: gents_lean_vocab::families::open_output_shape_inspect::RecordInput<String> =
+            serde_json::from_value(serde_json::json!({
+                "id": 1, "request": 1, "source": 1, "writer": 1, "ordinal": 0,
+                "runs": [{
+                    "stream": 0, "bytes": 3,
+                    "declaration": { "block": 0, "part": 0, "kind": "tool_output" },
+                }],
+                "payload": "one", "close": false, "created_at": 0,
+            }))
+            .unwrap();
+        let mut record = segment(&input);
         record.created_at = "yesterday".into();
         assert!(inspect_open_source(
             &[ObservedSegment {
