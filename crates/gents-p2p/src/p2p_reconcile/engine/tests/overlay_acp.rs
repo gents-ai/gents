@@ -7,7 +7,6 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
     use gents_store::identity::NodeIdentity as _;
     use gents_store::graphql::escape_graphql_string;
-    use anyhow::Context as _;
 
     let directory = tempfile::tempdir()?;
     let runtime_path = directory.path().join("runtime");

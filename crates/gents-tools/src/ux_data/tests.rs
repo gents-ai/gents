@@ -22,11 +22,6 @@ const BOARD: &str = "acme/board/board";
 
 #[test]
 fn operator_ux_surface_checks_follow_model() {
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    assert_eq!(model.configuration_ux_datastore_cases.len(), 5);
     let initial: DatastoreToolSurfaceDocument =
         serde_json::from_value(board_surface(NODE, "board", true)).unwrap();
     let expected = initial
@@ -37,9 +32,9 @@ fn operator_ux_surface_checks_follow_model() {
         .find(|entry| entry.tool_name() == "list_tasks")
         .unwrap()
         .clone();
-    for case in &model.configuration_ux_datastore_cases {
+    gents_lean_vocab::families::household_ux_datastore::replay(|case| {
         let home = tempfile::tempdir().unwrap();
-        let tools = if case["declared"] == true {
+        let tools = if case.declared {
             vec!["list_tasks"]
         } else {
             vec!["add_task"]
@@ -48,19 +43,17 @@ fn operator_ux_surface_checks_follow_model() {
         let listing = gents_pack::plugin::ux::find(home.path(), BOARD).unwrap();
         let allowed = manifest_allows_tool(&listing, "board", "list_tasks");
         let mut surface = initial.clone();
-        surface.enabled = case["enabled"].as_bool().unwrap();
-        if case["unchanged"] == false {
+        surface.enabled = case.enabled;
+        if !case.unchanged {
             surface
                 .entries
                 .as_mut()
                 .unwrap()
                 .retain(|entry| entry.tool_name() != "list_tasks");
         }
-        let visible = case["visible"].as_bool().unwrap().then_some(&surface);
-        let usable =
-            allowed && gents_documents::confirm_visible_datastore_tool(visible, &expected).is_ok();
-        assert_eq!(usable, case["expected"].as_bool().unwrap(), "{case}");
-    }
+        let visible = case.visible.then_some(&surface);
+        allowed && gents_documents::confirm_visible_datastore_tool(visible, &expected).is_ok()
+    });
 }
 
 struct Fixture {

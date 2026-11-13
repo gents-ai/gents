@@ -2900,6 +2900,19 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_pairing_overlay")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_fresh_backend_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_affected")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ux_datastore")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_datastore_tool_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_claim_recorded")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_fresh_backend_admission_unreached"
+      "model-production-gap: a fresh-store admission cannot observe a missing or broken private binding; FreshBackendStore::initialize installs the private legacy schema itself, and a store whose binding is absent or altered is refused only on reopen (household_fresh_backend_reopen).")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "household_destructive_decision_unreached"
       "model-production-gap: production has no complete-inventory read; every Gents read is filtered by document ACP for its actor, so InventoryRead has only AcpFiltered and a destructive decision over a complete inventory cannot be driven.")
       "identity-permission" [Surface.runtimeInternal]

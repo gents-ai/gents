@@ -1043,47 +1043,10 @@ def datastoreWriteCaseJson (name : String) (sourceValid responseConfirmed commit
     ("response_confirmed", toJson responseConfirmed), ("commit", toJson commit),
     ("expected", toJson (Configuration.cachedDatastoreWriteCommitted sourceValid responseConfirmed commit))]
 
-def uxDatastoreCaseJson (name : String) (visible enabled declared unchanged : Bool) : Json :=
-  Json.mkObj [("name", toJson name), ("visible", toJson visible), ("enabled", toJson enabled),
-    ("declared", toJson declared), ("unchanged", toJson unchanged),
-    ("expected", toJson (Configuration.cachedUxDatastoreToolUsable visible enabled declared unchanged))]
-
 def uxCreateCaseJson (name : String) (remote signed : Bool) : Json :=
   Json.mkObj [("name", toJson name), ("remote", toJson remote), ("signed_graph", toJson signed),
     ("expected", toJson (Configuration.uxCreateTransportSupported remote signed))]
 
-def affectedCaseJson (name : String) (documents : List _root_.Configuration.Affected.Document)
-    (changed : List String) : Json :=
-  Json.mkObj [("name", toJson name),
-    ("documents", toJson (documents.map fun document => document.key)),
-    ("changed", toJson changed),
-    ("expected", toJson (_root_.Configuration.Affected.accepted documents changed))]
-
-def affectedCases : List Json :=
-  let docs := [_root_.Configuration.Affected.missingSchedule, _root_.Configuration.Affected.task,
-    _root_.Configuration.Affected.agent, _root_.Configuration.Affected.tools]
-  let collision : _root_.Configuration.Affected.Document :=
-    ⟨"tools-collision", ["surface-a", "surface-b"],
-      _root_.Configuration.Affected.uniqueToolNames ["duplicate", "duplicate"]⟩
-  let surfaceA : _root_.Configuration.Affected.Document := ⟨"surface-a", [], true⟩
-  let surfaceB : _root_.Configuration.Affected.Document := ⟨"surface-b", [], true⟩
-  let registry : _root_.Configuration.Registry :=
-    { tasks := fun _ _ => none,
-      agents := fun scope id => if scope == "owner" && id == "disabled-agent" then
-        some ⟨"owner", ⟨none, "profile", false⟩⟩ else none,
-      contexts := fun _ _ => none, profiles := fun _ _ => none, backends := fun _ _ => none }
-  let defaultNode : _root_.Configuration.Affected.Document :=
-    ⟨"default-node", ["disabled-agent"],
-      _root_.Configuration.defaultAgentPublishable registry "owner" (some "disabled-agent")⟩
-  let disabledAgent : _root_.Configuration.Affected.Document := ⟨"disabled-agent", ["profile"], true⟩
-  let profile : _root_.Configuration.Affected.Document := ⟨"profile", ["backend"], true⟩
-  [affectedCaseJson "unrelated-edit" docs ["tools"],
-   affectedCaseJson "changed-referrer" docs ["trigger"],
-   affectedCaseJson "shared-target-edit" docs ["task"],
-   affectedCaseJson "removed-target" docs ["schedule"],
-   affectedCaseJson "visible-reference" (docs ++ [_root_.Configuration.Affected.schedule]) ["trigger"],
-   affectedCaseJson "shared-surface-collision" [collision, surfaceA, surfaceB] ["surface-a"],
-   affectedCaseJson "disabled-default" [defaultNode, disabledAgent, profile] ["disabled-agent"]]
 def pluginDeleteCase (name : String) (installed selected managed pinnedSame : Bool) : Json :=
   let root : Configuration.PluginDeleteRoot := ⟨"team/worker", "digest-a"⟩
   let selection : Configuration.PluginDeleteSelection :=
@@ -1669,11 +1632,6 @@ def json : Json := Json.mkObj
         ("observation", toJson observation), ("credential", toJson credential)])),
    ("backend_genesis_distinct", toJson (Configuration.backendGenesis "backend" "credential" "nonce-a" !=
       Configuration.backendGenesis "backend" "credential" "nonce-b")),
-   ("fresh_backend_admission_cases", toJson ([(true, true, true), (false, true, true),
-       (true, false, true), (true, true, false)].map fun (origin, binding, intact) =>
-      Json.mkObj [("origin", toJson origin), ("binding", toJson binding),
-        ("intact", toJson intact),
-        ("allowed", toJson (Configuration.freshBackendAdmissionAllowed origin binding intact))])),
    ("fresh_backend_origin_cases", toJson ([(true, true, true, true), (false, true, true, true),
        (true, false, true, true), (true, true, false, true), (true, true, true, false)].map
       fun (locked, empty, unexposed, committed) => Json.mkObj
@@ -1866,17 +1824,10 @@ def json : Json := Json.mkObj
        datastoreWriteCaseJson "mutation-failed" true false false,
        datastoreWriteCaseJson "unconfirmed" true false true,
        datastoreWriteCaseJson "source-revoked" false true true]),
-   ("configuration_ux_datastore_cases", toJson
-      [uxDatastoreCaseJson "allowed" true true true true,
-       uxDatastoreCaseJson "revoked" false true true true,
-       uxDatastoreCaseJson "disabled" true false true true,
-       uxDatastoreCaseJson "not-declared" true true false true,
-       uxDatastoreCaseJson "changed" true true true false]),
    ("configuration_ux_create_cases", toJson
       [uxCreateCaseJson "embedded-held" false false,
        uxCreateCaseJson "remote-unsigned" true false,
        uxCreateCaseJson "remote-approved-graph" true true]),
-   ("configuration_affected_cases", toJson affectedCases),
    ("projection_binding_cases", toJson
       ([false, true].flatMap fun revoked =>
         let state := if revoked then apply Configuration.projectionBindingFixture

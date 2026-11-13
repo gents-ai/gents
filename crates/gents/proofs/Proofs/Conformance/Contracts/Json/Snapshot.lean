@@ -346,6 +346,7 @@ import Proofs.Conformance.ScopeCollectionRules
 import Proofs.Conformance.Identity.SecretPublication
 import Proofs.Conformance.Identity.HouseholdStore
 import Proofs.Conformance.Identity.HouseholdP2p
+import Proofs.Conformance.Identity.HouseholdDocuments
 import Proofs.Conformance.LspServerStart
 import Proofs.Conformance.WorkspacePermissions
 

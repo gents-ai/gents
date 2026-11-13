@@ -382,4 +382,31 @@ def eventCursorAccess : Family EventCursorInput Bool where
       (.revoke ⟨"configuration", "cursor", "writer", .actor agentDid⟩) else created
     Household.allowed 5 state i.actor "configuration" "cursor" i.permission
 
+structure FreshAdmissionInput where
+  origin : Bool
+  binding : Bool
+  intact : Bool
+  deriving ToJson
+
+def freshAdmissionInputs : List FreshAdmissionInput :=
+  [⟨true, true, true⟩, ⟨false, true, true⟩, ⟨true, false, true⟩, ⟨true, true, false⟩]
+
+/-- A fresh store is driven through `FreshBackendStore::observe` and
+`initialize`: the origin knob is whether the data directory is empty when it
+is observed. Initialization installs the private legacy schema itself, so a
+fresh admission always starts bound and intact. -/
+@[conformance_family]
+def freshBackendAdmission : Family FreshAdmissionInput Bool where
+  inputs := freshAdmissionInputs.filter fun i => i.binding && i.intact
+  model := fun i => Configuration.freshBackendAdmissionAllowed i.origin i.binding i.intact
+
+/-- model-production-gap: a fresh-store admission cannot observe a missing or
+broken private binding; `FreshBackendStore::initialize` installs the private
+legacy schema itself, and a store whose binding is absent or altered is refused
+only on reopen (`household_fresh_backend_reopen`). -/
+@[conformance_family]
+def freshBackendAdmissionUnreached : Family FreshAdmissionInput Bool where
+  inputs := freshAdmissionInputs.filter fun i => !(i.binding && i.intact)
+  model := fun i => Configuration.freshBackendAdmissionAllowed i.origin i.binding i.intact
+
 end Conformance.Household
