@@ -2203,8 +2203,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_restart_plugin_job")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases")
+      "family"
+      "contracts_r6_native_lifecycle")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -2510,23 +2510,27 @@ def caseCoverage : List CoverageEntry :=
       "contracts_restart_session_message")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases"
+      "family"
+      "contracts_r6_process_control"
       "The scope comparator preserves absent-versus-empty behavior for retained history. Native signed admission rejects a requester-less local-self request before any hook effect; accepted hook envelopes use a real admitted requester, and a forged requester fails against its immutable physical header.")
       "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_goal_owner_publication")
+      "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases"
+      "family"
+      "contracts_r6_goal_owner_side_effects"
       "Binds all seven completion_continuation_owner cases through accepted native tool output, durable notification and redrive owners. Parent completion is an imported model observation; this consumer does not establish the parent terminalization transition or the separate continuation-publication family.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases"
+      "family"
+      "contracts_r6_wait_dispatch"
       "The generated caller-interrupt observer-completion case derives the completed foreground wait through the tool owner and the unchanged Running background process through the observation owner. The native consumer binds both states and the persisted structured result. This deterministic observer path does not decide the competing request-cancellation winner.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases"
+      "family"
+      "contracts_r6_wait_settlement"
       "The generated caller-interrupt dispatch case supplies the accepted Running foreground wait's cancelled state and unchanged background state; the native test separately asserts exact canonical cancellation text. The observer case supplies the only structured alternative. This finite race check does not establish a deterministic winner or scheduler fairness.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -2562,8 +2566,42 @@ def caseCoverage : List CoverageEntry :=
       "RecoverySweepCases")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases")
+      "family"
+      "contracts_r6_admission")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_recovery_transfer")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_restart")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_queue_source")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_continuation")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_redrive")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_wake_admission")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_wait_boundary")
+      "background-tools" [Surface.agentFacing]
+  , tagged (followUpCoverage "family" "contracts_r6_acknowledgement_unreached"
+      "model-production-gap: production records a claimed wake's notification cutoff and assembles provider input up to it, but exposes no projection of attempted and acknowledged notification bindings by the wake's terminal state for a test to observe.")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "contracts_r6_crash_boundary_unreached"
+      "model-production-gap: the wake delivery crash boundaries (before claim, during inference, during acknowledgement projection) need a restart between the claim snapshot and the terminal write; production has no recovery reader that projects acknowledgement from the snapshot for a test to observe.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "composed_invariant_witnesses"

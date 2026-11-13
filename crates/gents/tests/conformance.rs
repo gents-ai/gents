@@ -25,9 +25,8 @@ use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
 use gents_lean_vocab::{
-    assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    lean_contract_snapshot, lean_queue_deadline_cases, lean_r6_backgrounding_case,
-    lean_r6_backgrounding_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
+    assert_lean_transition_is_illegal, assert_lean_transition_is_legal, lean_contract_snapshot,
+    lean_queue_deadline_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
     LeanLifecycleTransitionCase,
 };
 use support::snapshots::{
@@ -36,8 +35,6 @@ use support::snapshots::{
 };
 use support::{build_request, first_optional_row, first_row, test_db, BACKEND_ID, DEADLINE_SECS};
 
-#[path = "conformance/background.rs"]
-mod background;
 #[path = "conformance/compaction_gate.rs"]
 mod compaction_gate;
 #[path = "conformance/coverage.rs"]
@@ -99,11 +96,6 @@ async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 #[tokio::test]
 async fn drain_wakeups_never_interrupts_foreign_replica() {
     request_owner_scope::drain_wakeups_never_interrupts_foreign_replica().await;
-}
-
-#[tokio::test]
-async fn generated_r6_backgrounding_case_metadata_matches_export() {
-    background::generated_r6_backgrounding_case_metadata_matches_export().await;
 }
 
 #[test]

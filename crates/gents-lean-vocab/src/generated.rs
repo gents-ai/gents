@@ -109,10 +109,6 @@ pub fn lean_queue_deadline_cases() -> &'static [LeanQueueDeadlineConformanceCase
     &lean_contract_snapshot().queue_deadline_conformance_cases
 }
 
-pub fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
-    &lean_contract_snapshot().r6_backgrounding_cases
-}
-
 pub fn lean_reasoning_audit_cases() -> &'static [LeanReasoningAuditCase] {
     &lean_contract_snapshot().reasoning_audit_cases
 }
@@ -1180,7 +1176,6 @@ pub struct LeanContractSnapshot {
     pub request_progress_cases: Vec<LeanRequestProgressCase>,
     pub queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
-    pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
@@ -3683,57 +3678,6 @@ pub struct LeanQueueManagementState {
     pub pending: Vec<LeanFoldQueueEntry>,
     pub folding: Vec<LeanFoldQueueEntry>,
     pub terminal: Vec<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanR6BackgroundingCase {
-    pub name: String,
-    pub group: String,
-    pub action: String,
-    pub legal: bool,
-    pub pre_live_count: usize,
-    pub max_backgrounded: usize,
-    pub await_mode: String,
-    pub terminal_state: String,
-    pub result: Option<String>,
-    pub reason: Option<String>,
-    pub error_code: Option<String>,
-    pub queue_source: Option<String>,
-    pub queue_key: Option<String>,
-    #[serde(default)]
-    pub retry_count: Option<usize>,
-    #[serde(default)]
-    pub max_retries: Option<usize>,
-    #[serde(default)]
-    pub post_retry_count: Option<usize>,
-    #[serde(default)]
-    pub redrive_source_request_id: Option<u64>,
-    #[serde(default)]
-    pub pre_depth: Option<u64>,
-    #[serde(default)]
-    pub post_depth: Option<u64>,
-    #[serde(default)]
-    pub pre_parent_request_id: Option<u64>,
-    #[serde(default)]
-    pub post_parent_request_id: Option<u64>,
-    #[serde(default)]
-    pub pre_execution_deadline: Option<u64>,
-    #[serde(default)]
-    pub post_execution_deadline: Option<u64>,
-    #[serde(default)]
-    pub retry_delay_seconds: Option<usize>,
-    #[serde(default)]
-    pub is_latest: Option<bool>,
-    #[serde(default)]
-    pub goal_status: Option<String>,
-    #[serde(default)]
-    pub notification_persisted: Option<bool>,
-    #[serde(default)]
-    pub wake_created: Option<bool>,
-    #[serde(default)]
-    pub redrive_allowed: Option<bool>,
-    #[serde(default)]
-    pub operation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
