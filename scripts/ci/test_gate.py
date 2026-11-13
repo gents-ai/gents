@@ -31,6 +31,8 @@ class Selection(unittest.TestCase):
         selected = groups(selection)
         self.assertEqual(selected["cli"], ["gents-cli"])
         self.assertEqual(set(selected), {"cli", "desktop"})
+        self.assertEqual(selected["desktop"], ["gents-desktop-bridge", "gents-client-host", "gents-fixture-host",
+                                               "gents-desktop-tauri"])
         self.assertNotIn("gents", selection["built"])
         self.assertTrue(selection["contract"]["ratchets"])
         self.assertFalse(any(job.startswith("ts-") for job in selection["jobs"]))
@@ -50,6 +52,15 @@ class Selection(unittest.TestCase):
         self.assertIn("contract", selection["jobs"])
         self.assertNotIn("lint", selection["jobs"])
         self.assertTrue(selection["contract"]["ts_lean"])
+
+    def test_a_draft_tests_what_it_changes_and_lints_what_depends_on_it(self):
+        selection = select("crates/gents-store/src/graphql.rs", tier="draft")
+        self.assertEqual(groups(selection), {"store": ["gents-store"]})
+        self.assertIn("gents-cli", selection["built"])
+        self.assertIn("lint", selection["jobs"])
+        self.assertTrue(selection["contract"]["ratchets"])
+        proofs = select("crates/gents/proofs/Proofs.lean", tier="draft")
+        self.assertEqual(set(groups(proofs)), {group.name for group in gate.GROUPS})
 
     def test_prose_selects_nothing(self):
         selection = select("docs/upgrade-from-rc1.md", "CHANGELOG.md", "AGENTS.md")

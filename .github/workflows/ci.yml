@@ -2,9 +2,10 @@ name: CI
 
 # The pull request gate. `plan` maps the change to the crates it touches and
 # their reverse dependents and selects jobs; every job runs a `make gate-run`
-# recipe, so `make gate` runs the same commands locally. Hosted jobs run on
-# every pull request. Self-hosted jobs run once a pull request is ready for
-# review, and on every push to main with everything selected.
+# recipe, so `make gate` runs the same commands locally. A draft is linted
+# across the changed crates and their dependents and tested on the crates it
+# changes; a pull request that is ready for review also tests the dependents;
+# a push to main selects everything.
 on:
   push:
     branches:
@@ -28,9 +29,11 @@ on:
         type: string
         default: ""
 
+# A run in progress finishes; GitHub keeps only the newest waiting run per
+# group, so a branch that is pushed every few minutes still gets results.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   # Each 32-core Studio runs at most two gents jobs concurrently. Keep eight
@@ -65,24 +68,10 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       jobs: ${{ steps.plan.outputs.jobs }}
       tests: ${{ steps.plan.outputs.tests }}
-      heavy: ${{ steps.scope.outputs.heavy }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      # A pull request into the default branch is gated itself; inside a stack
-      # only the top is, because lower layers may be intentionally red.
-      - name: Decide whether self-hosted jobs run
-        id: scope
-        env:
-          HEAVY: >-
-            ${{ github.event_name != 'pull_request' ||
-            (github.event.pull_request.draft == false &&
-            (github.event.pull_request.base.ref == github.event.repository.default_branch ||
-            github.event.pull_request.stack == null ||
-            github.event.pull_request.stack.position == github.event.pull_request.stack.size)) }}
-        run: echo "heavy=${HEAVY}" >> "$GITHUB_OUTPUT"
 
       - name: List the files the pull request changes
         if: github.event_name == 'pull_request'
@@ -110,6 +99,15 @@ jobs:
           GATE_ONLY: ${{ inputs.only }}
           GATE_PORTABLE_RUNNER: ${{ vars.GENTS_CI_PORTABLE_RUNNER }}
           GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
+          # Inside a stack only the top is tested in full: lower layers may be
+          # intentionally red. A pull request into the default branch always is.
+          GATE_TIER: >-
+            ${{ (github.event_name != 'pull_request' ||
+            (github.event.pull_request.draft == false &&
+            (github.event.pull_request.base.ref == github.event.repository.default_branch ||
+            github.event.pull_request.stack == null ||
+            github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
+            && 'full' || 'draft' }}
         run: python3 scripts/ci/gate.py plan --files "${RUNNER_TEMP}/changed-files.txt"
 
   repository-guard:
@@ -233,7 +231,7 @@ jobs:
   # the changed crates and their dependents.
   lint:
     needs: [plan, repository-guard]
-    if: needs.plan.outputs.heavy == 'true' && contains(fromJSON(needs.plan.outputs.jobs), 'lint')
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'lint')
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.studio }}
     timeout-minutes: 90
     env:
@@ -279,7 +277,7 @@ jobs:
   # and, when the runtime group does not run them, the structure ratchets.
   contract:
     needs: [plan, repository-guard]
-    if: needs.plan.outputs.heavy == 'true' && contains(fromJSON(needs.plan.outputs.jobs), 'contract')
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'contract')
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.studio }}
     timeout-minutes: 90
     env:
@@ -316,7 +314,7 @@ jobs:
   test:
     name: test (${{ matrix.group }})
     needs: [plan, repository-guard]
-    if: needs.plan.outputs.heavy == 'true' && needs.plan.outputs.tests == 'true'
+    if: needs.plan.outputs.tests == 'true'
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
@@ -463,7 +461,7 @@ jobs:
 
   desktop-ui-bombadil:
     needs: plan
-    if: needs.plan.outputs.heavy == 'true' && contains(fromJSON(needs.plan.outputs.jobs), 'ts-fuzz')
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'ts-fuzz')
     # Bombadil's exact Linux failure trace passes on macOS, so this smoke
     # stays on a Studio while the portable UI suite runs on hosted Linux.
     runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-cli]
@@ -543,8 +541,7 @@ jobs:
           "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-rc1-notary-auth.py
           "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-release-signing-mode.py
 
-  # The one check to require. It fails when any job failed or was cancelled,
-  # and when the self-hosted jobs this change selects did not run.
+  # The one check to require: every job the plan selected succeeded.
   gate:
     if: always()
     needs:
@@ -574,12 +571,5 @@ jobs:
           bad = {name: job["result"] for name, job in needs.items() if job["result"] not in ("success", "skipped")}
           for name, result in sorted(bad.items()):
               print(f"::error::{name}: {result}")
-          outputs = needs["plan"].get("outputs") or {}
-          selected = json.loads(outputs.get("jobs") or "[]")
-          heavy = [job for job in selected if job in ("lint", "contract", "ts-fuzz") or job.startswith("test:")]
-          if not bad and outputs.get("heavy") != "true" and heavy:
-              print("::error::Not gated: this pull request is a draft or below the top of its stack, so "
-                    f"{', '.join(heavy)} did not run. Mark it ready for review to run the gate.")
-              sys.exit(1)
           sys.exit(1 if bad else 0)
           PYTHON

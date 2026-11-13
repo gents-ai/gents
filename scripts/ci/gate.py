@@ -4,6 +4,7 @@
   gate.py plan [--base REF | --files FILE]   select jobs for a change
   gate.py run JOB                            run one job (fmt, lint, contract, ts-*, test:<group>)
   gate.py all [--base REF]                   plan, then run every selected job
+  gate.py packages GROUP...                  list the crates of test groups
 
 `run` reads the plan from GATE_PLAN (CI passes the plan job's output) or
 computes it against --base.
@@ -28,12 +29,11 @@ STUDIO = ["self-hosted", "macOS", "ARM64", "studio"]
 
 
 class Group:
-    def __init__(self, name, runner, packages, joint=False, threads=None, nocapture=False,
+    def __init__(self, name, runner, packages, threads=None, nocapture=False,
                  isolate_target=False, timeout=120):
         self.name = name
         self.runner = runner
         self.packages = packages
-        self.joint = joint
         self.threads = threads
         self.nocapture = nocapture
         self.isolate_target = isolate_target
@@ -62,19 +62,17 @@ GROUPS = [
     # not inherit the job's target directory.
     Group("cli", "cli", ["gents-cli", "gents-service", "gents-host"],
           threads=1, nocapture=True, isolate_target=True, timeout=180),
-    # One feature graph: notify/macos_kqueue reaches every desktop test only
-    # when gents-desktop-bridge is built with them.
     Group("desktop", "desktop", [
         "gents-desktop-core", "gents-desktop", "gents-desktop-bridge", "gents-client-host",
         "gents-media-host", "fixture-domain-plugin", "gents-fixture-host", "gents-desktop-tauri",
-    ], joint=True, timeout=150),
+    ], timeout=150),
 ]
 
 PACKAGE_FEATURES = {
     "gents-claude": "gents-claude/transport",
     "gents-protocol": "gents-protocol/typescript",
+    "gents-desktop-bridge": "notify/macos_kqueue",
 }
-JOINT_FEATURES = {"desktop": "notify/macos_kqueue"}
 
 # Packages with no test of their own. The list only shrinks: a listed package
 # that runs a test fails the gate, as does an unlisted one that runs none.
@@ -240,7 +238,7 @@ def runner(kind):
     return STUDIO
 
 
-def plan(files, members, everything=False, only=None):
+def plan(files, members, everything=False, only=None, tier="full"):
     check_groups(members)
     tags, reasons = set(), {}
     for path in files:
@@ -253,6 +251,9 @@ def plan(files, members, everything=False, only=None):
     rust = bool(changed)
     # Proofs change what the contract's consumers replay, not what compiles.
     affected = dependents(members, changed | {"gents-lean-contract"}) if "proofs" in tags else built
+    # A draft tests the crates it changes; their dependents are still compiled
+    # and linted, and tested once the pull request is ready for review.
+    tested = affected if tier == "full" or "proofs" in tags else changed
     ts = everything or "ts" in tags
     proofs = everything or "proofs" in tags
     jobs = {
@@ -266,14 +267,14 @@ def plan(files, members, everything=False, only=None):
     }
     matrix = []
     for group in GROUPS:
-        selected = [package for package in group.packages if package in affected]
+        selected = [package for package in group.packages if package in tested]
         if not selected:
             continue
         jobs[f"test:{group.name}"] = True
         matrix.append({
             "group": group.name,
             "runs_on": runner(group.runner),
-            "packages": " ".join(group.packages if group.joint else selected),
+            "packages": " ".join(selected),
             "timeout": group.timeout,
             "go": group.name == "cli",
         })
@@ -281,6 +282,7 @@ def plan(files, members, everything=False, only=None):
         jobs = {job: wanted and job in only for job, wanted in jobs.items()}
         matrix = [entry for entry in matrix if f"test:{entry['group']}" in only]
     return {
+        "tier": tier,
         "everything": everything,
         "reason": reasons.get("all", ""),
         "changed": sorted(changed),
@@ -291,7 +293,7 @@ def plan(files, members, everything=False, only=None):
         "contract": {
             # write_owner_structure scans every crate's sources but is a
             # gents test target, which the runtime group runs when selected.
-            "ratchets": rust and "gents" not in affected,
+            "ratchets": rust and "gents" not in tested,
             "ts_lean": ts or proofs,
         },
         "core_packs": everything or "core-packs" in tags,
@@ -320,7 +322,8 @@ def resolve_plan(arguments):
         files = [line.strip() for line in Path(arguments.files).read_text().splitlines() if line.strip()]
     else:
         files = changed_files(arguments.base)
-    return plan(files, workspace(), everything, only)
+    tier = "draft" if os.environ.get("GATE_TIER") == "draft" else "full"
+    return plan(files, workspace(), everything, only, tier)
 
 
 # ---- running ----
@@ -512,18 +515,14 @@ def run_test(selection, name):
     if group.nocapture:
         harness.append("--nocapture")
     options = {"harness": harness, "capture": not group.nocapture, "isolate_target": group.isolate_target}
-    if group.joint:
-        arguments = [flag for package in packages for flag in ("-p", package)]
-        if name in JOINT_FEATURES:
-            arguments += ["--features", JOINT_FEATURES[name]]
-        cargo_test(name, arguments, **options)
-    else:
-        for package in packages:
-            arguments = ["-p", package]
-            if package in PACKAGE_FEATURES:
-                arguments += ["--features", PACKAGE_FEATURES[package]]
-            cargo_test(package, arguments, expect_tests=package not in NO_TESTS, **options)
-    if name == "desktop":
+    # One crate per build: a crate that compiles only through the features
+    # another selected crate turns on must fail here.
+    for package in packages:
+        arguments = ["-p", package]
+        if package in PACKAGE_FEATURES and (package != "gents-desktop-bridge" or sys.platform == "darwin"):
+            arguments += ["--features", PACKAGE_FEATURES[package]]
+        cargo_test(package, arguments, expect_tests=package not in NO_TESTS, **options)
+    if name == "desktop" and {"gents-client-host", "gents-media-host"} & set(packages):
         if os.environ.get("GITHUB_ACTIONS") and os.environ.get("CARGO_TARGET_DIR"):
             sh(["python3", ".github/scripts/ensure-rust-build-space.py", os.environ["CARGO_TARGET_DIR"]])
         if sh([".github/scripts/desktop-runtime-journey.sh", "build"]):
@@ -564,6 +563,8 @@ def emit(selection):
         with open(summary, "a") as handle:
             scope = f"everything ({selection['reason'] or 'not a pull request'})" if selection["everything"] else \
                 f"{len(selection['affected'])} affected crates from {len(selection['changed'])} changed"
+            if selection["tier"] == "draft":
+                scope += "; draft: tests cover the changed crates, dependents are tested when ready for review"
             handle.write(f"### Gate plan\n\nScope: {scope}\n\nJobs: {', '.join(selection['jobs']) or 'none'}\n\n")
             for entry in selection["matrix"]:
                 handle.write(f"- `test:{entry['group']}`: {entry['packages']}\n")
@@ -579,7 +580,11 @@ def main():
         command.add_argument("--everything", action="store_true")
         if name == "run":
             command.add_argument("job")
+    commands.add_parser("packages").add_argument("groups", nargs="+")
     arguments = parser.parse_args()
+    if arguments.command == "packages":
+        print(" ".join(package for group in GROUPS if group.name in arguments.groups for package in group.packages))
+        return
     selection = resolve_plan(arguments)
     if arguments.command == "plan":
         emit(selection)
