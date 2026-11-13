@@ -136,6 +136,7 @@ export function startClientObservation(
     const unsubscribeSelection = selection.subscribe((state, prev) => {
       if (state.nodeDid !== prev.nodeDid) publishSelection();
       if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
+        actions.showRecentRead();
         void controller.request("session");
       }
     });

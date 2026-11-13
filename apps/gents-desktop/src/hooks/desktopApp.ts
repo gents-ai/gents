@@ -104,6 +104,10 @@ export function createDesktopApp({
     ...localServer,
     ...createProvenance({ api, stores }),
   };
+  stores.client.subscribe((state, prev) => {
+    if (state.snapshot !== prev.snapshot)
+      reads.forgetWithdrawnReads(state.snapshot?.client ?? null);
+  });
   observeMailboxAnswerRetirement({ api, stores });
   const drafts = createDraftStore();
   reconcileSelection(stores, actions.selectNode, drafts);

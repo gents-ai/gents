@@ -115,6 +115,26 @@ export function writeSessionRead(
   );
 }
 
+export function writeSessionRecent(
+  store: SessionStore,
+  session: DesktopSessionSnapshot,
+  goal: HeldSessionGoal | null,
+) {
+  store.setState((state) =>
+    session === state.session
+      ? state
+      : { ...state, session, facts: factsOf(state, session), goal },
+  );
+}
+
+export function keepSelectedSession(
+  store: SessionStore,
+  sessionId: string | null,
+  nodeDid: string | null,
+) {
+  writeSession(store, (held) => heldFor(held, sessionId, nodeDid));
+}
+
 /** Folds one Goal read of the selected session into what the store holds. */
 export function writeSessionGoalRead(store: SessionStore, read: SessionGoalRead) {
   store.setState((state) => ({ goal: foldSessionGoalRead(state.goal, read) }));

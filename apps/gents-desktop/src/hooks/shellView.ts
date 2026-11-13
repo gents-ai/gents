@@ -54,15 +54,25 @@ function sameInputs(a: ViewInputs, b: ViewInputs) {
 function viewOf(inputs: ViewInputs): ShellView {
   const projection = projectShell(inputs);
   const { selection, session, optimisticPendingTurn: turn } = inputs;
+  const loadingStatus = projectSessionLoadingStatus({
+    selectedSessionId: selection.sessionId,
+    selectedNodeDid: selection.nodeDid,
+    session,
+    sessionLoad: inputs.load,
+    operationalState: projection.operationalState,
+  });
+  const rereadingShown =
+    inputs.load.phase === "cached" &&
+    inputs.load.sessionId === selection.sessionId &&
+    inputs.load.nodeDid === selection.nodeDid &&
+    session?.sessionId === selection.sessionId &&
+    session.nodeDid === selection.nodeDid;
   return {
     ...projection,
-    loadingStatus: projectSessionLoadingStatus({
-      selectedSessionId: selection.sessionId,
-      selectedNodeDid: selection.nodeDid,
-      session,
-      sessionLoad: inputs.load,
-      operationalState: projection.operationalState,
-    }),
+    loadingStatus:
+      loadingStatus && rereadingShown
+        ? { ...loadingStatus, quiet: true }
+        : loadingStatus,
     pendingTurn: turn,
     sentTurns: inputs.sentTurns,
     draftKey: selection.sessionId

@@ -27,7 +27,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
   const nodeDid = useSelectedNodeDid();
   const selectedSessionId = stores.selection.use.sessionId();
   const [busy, setBusy] = useState(false);
-  if (!status) return null;
+  if (!status || status.quiet) return null;
   const act = async () => {
     const action = status.action;
     if (!action) return;
