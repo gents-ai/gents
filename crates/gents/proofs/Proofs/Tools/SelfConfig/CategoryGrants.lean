@@ -64,9 +64,11 @@ the rule is evaluated by ACP.
   2026-11-11, #3656): a new relation rather than `nodes#administrator`, so the
   catalog carries none of `administrator`'s Node update and delete, and none of
   the Agent, configuration and session permissions `parent` derives from them
-  (`agent_manager_is_catalog_only`). `agent_manager` is the grant for an Agent
-  or person that manages the catalog and nothing else; the Engineer holds the
-  stronger `administrator` (`engineerInitRelations`). Choosing the default writes the
+  (`agent_manager_is_catalog_only`). Decision (maintainer, 2026-11-13):
+  `agent_manager` takes only the userset of the Node's administrators
+  (`Identity.Household.agent_manager_admits_no_actor`), so no actor holds the
+  catalog and nothing else: an actor is given the catalog by being made a Node
+  administrator, as the Engineer is (`engineerInitRelations`). Choosing the default writes the
   Node's `DefaultAgentSelection` document, whose update is its parent Node's
   `manage_agents` (`default_selection_write_is_the_catalog`), so document ACP
   authorizes it directly. The catalog does not reach another Agent's
@@ -281,9 +283,8 @@ Node, which is every self-config category at every scope
 Accepted cost: `administrator` also gives what configuration does not need:
 Node delete, delete and invoke of every Agent, reading and administering every
 Agent's sessions, and granting or revoking Node relations, `administrator`
-itself included (`administratorPermissions`, `agent_manager_gives_catalog_only`).
-A User who wants an Agent to manage the catalog and nothing else grants
-`agent_manager` instead.
+itself included (`administratorPermissions`). There is no narrower grant of the
+catalog (`catalog_has_no_direct_holder`).
 
 The two lockout rules bind the Engineer like any actor
 (`SelfConfig.lockoutChecks`), a clone of it inherits no grant, and creating an
@@ -309,14 +310,15 @@ def provisionEngineer (state : State) (engineer node : String) : State :=
   { state with relations := engineerInitRelations engineer node ++ state.relations }
 
 /-- A Node with one Agent `a`, a configuration document and a session under it;
-`admin` is its administrator, `manager` holds only `agent_manager`, `runtime`
-holds `runtime_reader`. Init has created the default selection. -/
+`admin` is its administrator, the Node's administrators are its
+`agent_manager` userset, `runtime` holds `runtime_reader`. Init has created the
+default selection. -/
 def catalogRelationFixture : State :=
   let base : State :=
     { objects := [⟨"nodes", "node", "user"⟩, ⟨"configuration", "cfg", "user"⟩,
         ⟨"sessions", "s", "a"⟩]
     , relations := [⟨"nodes", "node", "administrator", .actor "admin"⟩,
-        ⟨"nodes", "node", "agent_manager", .actor "manager"⟩,
+        ⟨"nodes", "node", "agent_manager", .entitySet "nodes" "node" "administrator"⟩,
         ⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
         ⟨"configuration", "cfg", "parent", .object "nodes" "node"⟩,
         ⟨"sessions", "s", "parent", .object "agents" "a"⟩]
@@ -329,7 +331,7 @@ theorem initialised_node_has_one_default_selection :
   native_decide
 
 /-- Choosing the default is authorized by the policy itself: whoever holds the
-catalog (`nodes manage_agents`: owner, administrator, `agent_manager`) may
+catalog (`nodes manage_agents`: owner or administrator) may
 update the selection, and nobody else may; whoever reads the Node or holds the
 catalog reads it.
 
@@ -338,12 +340,12 @@ default authoritatively, as the runtime reads the Node, not through the acting
 actor's read grants; an actor that may update an Agent but cannot read the
 selection must still be refused disabling the default. -/
 theorem default_selection_write_is_the_catalog :
-    ["user", "admin", "manager", "runtime", "a", "stranger"].map (fun actor =>
+    ["user", "admin", "runtime", "a", "stranger"].map (fun actor =>
       (allowed 8 catalogRelationFixture actor "nodes" "node" "manage_agents",
        defaultSelectionWrite catalogRelationFixture actor "node",
        allowed 8 catalogRelationFixture actor "default_agent_selections" "node" "read",
        allowed 8 catalogRelationFixture actor "nodes" "node" "read")) =
-      [(true, true, true, true), (true, true, true, true), (true, true, true, false),
+      [(true, true, true, true), (true, true, true, true),
        (false, false, true, true), (false, false, false, false),
        (false, false, false, false)] := by
   native_decide
@@ -357,21 +359,28 @@ def administratorPermissions : List (String × String × String) :=
    ("configuration", "cfg", "delete"),
    ("sessions", "s", "read"), ("sessions", "s", "update"), ("sessions", "s", "delete")]
 
-/-- `agent_manager` gives the catalog and nothing `administrator` gives beyond
-it: no Node read, update or delete, no Agent read, update, delete, invoke or
-session access, no configuration or session access, and no relation management. -/
-theorem agent_manager_gives_catalog_only :
-    allowed 8 catalogRelationFixture "manager" "nodes" "node" "manage_agents" = true ∧
-    allowed 8 catalogRelationFixture "admin" "nodes" "node" "manage_agents" = true ∧
-    allowed 8 catalogRelationFixture "user" "nodes" "node" "manage_agents" = true ∧
-    administratorPermissions.all (fun (res, id, perm) =>
-      allowed 8 catalogRelationFixture "admin" res id perm) = true ∧
-    administratorPermissions.all (fun (res, id, perm) =>
-      !allowed 8 catalogRelationFixture "manager" res id perm) = true ∧
-    ["administrator", "runtime_reader", "agent_manager"].all (fun rel =>
-      !mayManage catalogRelationFixture "manager" ⟨"nodes", "node", rel, .actor "x"⟩) = true ∧
+/-- The catalog has no direct holder: an administrator, who manages
+`agent_manager`, is still refused adding an actor or the wildcard to it, and
+is admitted adding the Node's administrators. The owner and the administrator
+hold the catalog and everything `administrator` gives; an Agent with no Node
+relation and the runtime reader hold neither. -/
+theorem catalog_has_no_direct_holder :
     mayManage catalogRelationFixture "admin" ⟨"nodes", "node", "agent_manager", .actor "x"⟩
-      = true := by
+      = true ∧
+    grantAdmitted catalogRelationFixture "admin" ⟨"nodes", "node", "agent_manager", .actor "x"⟩
+      = false ∧
+    grantAdmitted catalogRelationFixture "admin" ⟨"nodes", "node", "agent_manager", .wildcard⟩
+      = false ∧
+    grantAdmitted catalogRelationFixture "admin"
+      ⟨"nodes", "node", "agent_manager", .entitySet "nodes" "node" "administrator"⟩ = true ∧
+    grantAdmitted catalogRelationFixture "admin" ⟨"nodes", "node", "administrator", .actor "x"⟩
+      = true ∧
+    ["user", "admin"].all (fun actor =>
+      allowed 8 catalogRelationFixture actor "nodes" "node" "manage_agents" &&
+        administratorPermissions.all (fun (res, id, perm) =>
+          allowed 8 catalogRelationFixture actor res id perm)) = true ∧
+    ["runtime", "a", "stranger"].all (fun actor =>
+      !allowed 8 catalogRelationFixture actor "nodes" "node" "manage_agents") = true := by
   native_decide
 
 /-- `catalogRelationFixture` after init publishes the Engineer and its grants. -/
@@ -400,6 +409,18 @@ theorem initialised_engineer_administers_node :
       allowed 8 initialisedEngineerState "engineer" res id perm) = true ∧
     allowed 8 initialisedEngineerState "engineer" "nodes" "node" "manage_agents" = true ∧
     defaultSelectionWrite initialisedEngineerState "engineer" "node" = true := by
+  native_decide
+
+/-- The Engineer's catalog is its Node administration and nothing else:
+withdrawing `nodes#administrator` from it removes creating and cloning Agents
+and choosing the default, and no `agent_manager` relationship restores them. -/
+theorem engineer_without_administration_loses_catalog :
+    let revoked := apply initialisedEngineerState
+      (.revokeAs "user" ⟨"nodes", "node", "administrator", .actor "engineer"⟩)
+    allowed 8 revoked "engineer" "nodes" "node" "manage_agents" = false ∧
+    defaultSelectionWrite revoked "engineer" "node" = false ∧
+    allowed 8 revoked "admin" "nodes" "node" "manage_agents" = true ∧
+    grantAdmitted revoked "user" ⟨"nodes", "node", "agent_manager", .actor "engineer"⟩ = false := by
   native_decide
 
 /-- Creating or cloning an Agent never issues the catalog relation. -/

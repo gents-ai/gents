@@ -57,7 +57,9 @@ inherits `manage_agents` through a parent, so it confers none of
 `administrator`'s Node read, update or delete, nor the Agent, configuration and
 session permissions those confer through `parent`
 (`SelfConfig.agent_manager_is_catalog_only`). An administrator or the Node owner
-manages it. Decision (maintainer, 2026-11-11, #3656).
+manages it. Decision (maintainer, 2026-11-11, #3656). Its only subject is the
+userset of a Node's administrators (`agent_manager_admits_no_actor`; decision
+2026-11-13).
 
 `default_agent_selections` holds a Node's default Agent selection, one document
 per Node (`SelfConfig.initDefaultSelection`). Its update is its parent Node's
@@ -96,7 +98,7 @@ collections it names (`Identity.ApplicationPairingAccess`). -/
 def policy : List ResourceDefinition :=
   [ { name := "nodes"
       relations := [⟨"administrator", ["actor"], ["administrator", "runtime_reader", "agent_manager"]⟩,
-        ⟨"runtime_reader", ["actor"], []⟩, ⟨"agent_manager", ["actor"], []⟩]
+        ⟨"runtime_reader", ["actor"], []⟩, ⟨"agent_manager", ["nodes->administrator"], []⟩]
       permissions := [permission "read" ["administrator", "runtime_reader"] [],
         permission "update" ["administrator"] [], permission "delete" ["administrator"] [],
         permission "manage_agents" ["administrator", "agent_manager"] []] }
@@ -1080,60 +1082,91 @@ theorem subject_types_do_not_separate_actors (definitions : List ResourceDefinit
     subjectAdmittedIn definitions ⟨resource, id, relation, .actor first⟩ =
       subjectAdmittedIn definitions ⟨resource, id, relation, .actor second⟩ := rfl
 
-theorem agent_manager_type_admits_actors :
-    typeAdmitted policy "nodes" "agent_manager" "actor" = true := by native_decide
+theorem agent_manager_types :
+    typeAdmitted policy "nodes" "agent_manager" "actor" = false ∧
+    typeAdmitted policy "nodes" "agent_manager" ("nodes" ++ "->" ++ "administrator") = true := by
+  native_decide
 
-/-- Decision (maintainer, 2026-11-13): only an enrolled User should hold
-`agent_manager`, besides the Node owner and administrators, who hold
-`manage_agents` without it. The policy does not say that: the relation admits
-every actor and the wildcard, so whoever manages it (the Node owner or an
-administrator) can give the catalog to an Agent, to an unenrolled DID or to
-everyone. Open: by `subject_types_do_not_separate_actors` no choice of types
-admits an enrolled User's DID and refuses an Agent's. What document ACP can
-say is `policyWithUsersetCatalog`, or a relation that marks an enrolled User
-on the Node and a `manage_agents` expression over it, which changes the policy
-ID and what an enrollment grant writes (`Identity.EnrollmentGrant.derived`). -/
-theorem agent_manager_admits_every_actor (node : String) (did : DID) :
-    subjectAdmitted ⟨"nodes", node, "agent_manager", .actor did⟩ = true ∧
-    subjectAdmitted ⟨"nodes", node, "agent_manager", .wildcard⟩ = true :=
-  ⟨agent_manager_type_admits_actors, agent_manager_type_admits_actors⟩
-
-/-- The restriction document ACP can state without a new relation:
-`agent_manager` takes only the userset of a Node's administrators. An
+/-- Decision (maintainer, 2026-11-13, "Node admin holds it"): `agent_manager`
+takes only the userset of a Node's administrators. No actor DID and no
+wildcard is its subject, so the catalog cannot be given directly to an Agent,
+to an unenrolled DID or to everyone. By
+`subject_types_do_not_separate_actors` no type could have admitted an enrolled
+User and refused an Agent; the userset is what document ACP can say. An
 enrollment approval makes its member a Node administrator
 (`Identity.EnrollmentGrant.approve_grants_node_administrator_and_operator_user`),
-so that userset holds every enrolled User, and also every other administrator,
-the Engineer included; all of them hold `manage_agents` already. Not adopted:
-it ends the catalog-only grant for a person, and by
-`userset_catalog_collides` it keeps the policy ID, so a store that registered
-the present policy keeps admitting every actor. -/
-def policyWithUsersetCatalog : List ResourceDefinition := policy.map fun resource =>
+so every enrolled User holds `manage_agents` through `administrator`
+(`administrator_holds_catalog`). The one way to give an actor the catalog is to
+make it a Node administrator; there is no catalog-only holder. -/
+theorem agent_manager_admits_no_actor (node : String) (did : DID) :
+    subjectAdmitted ⟨"nodes", node, "agent_manager", .actor did⟩ = false ∧
+    subjectAdmitted ⟨"nodes", node, "agent_manager", .wildcard⟩ = false ∧
+    subjectAdmitted ⟨"nodes", node, "agent_manager", .entitySet "nodes" node "administrator"⟩ =
+      true :=
+  ⟨agent_manager_types.1, agent_manager_types.1, agent_manager_types.2⟩
+
+/-- A relationship is added when its requester manages the relation and the
+relation takes the subject. `apply` models the first condition alone; this is
+the whole native admission. -/
+def grantAdmitted (state : State) (actor : DID) (relation : Relation) : Bool :=
+  mayManage state actor relation && subjectAdmitted relation
+
+/-- Whoever asks, on whatever state: no actor and no wildcard is granted
+`agent_manager`. -/
+theorem no_actor_is_granted_agent_manager (state : State) (grantor : DID) (node : String)
+    (did : DID) :
+    grantAdmitted state grantor ⟨"nodes", node, "agent_manager", .actor did⟩ = false ∧
+    grantAdmitted state grantor ⟨"nodes", node, "agent_manager", .wildcard⟩ = false := by
+  constructor
+  · simp only [grantAdmitted, (agent_manager_admits_no_actor node did).1, Bool.and_false]
+  · simp only [grantAdmitted, (agent_manager_admits_no_actor node did).2.1, Bool.and_false]
+
+/-- A Node owned by `user`. `member` is an enrolled User and `engineer` the
+Engineer; both hold `administrator`. The Node's administrators are its
+`agent_manager` userset. `agent` holds no Node relation. -/
+def catalogFixture : State :=
+  { objects := [⟨"nodes", "node", "user"⟩],
+    relations := [⟨"nodes", "node", "administrator", .actor "member"⟩,
+      ⟨"nodes", "node", "administrator", .actor "engineer"⟩,
+      ⟨"nodes", "node", "agent_manager", .entitySet "nodes" "node" "administrator"⟩],
+    enrolled := ["member"] }
+
+/-- The Node owner and every administrator, enrolled User or Engineer, hold
+`manage_agents`; an actor with no Node relation does not. -/
+theorem administrator_holds_catalog :
+    ["user", "member", "engineer", "agent"].map (fun actor =>
+      allowed 8 catalogFixture actor "nodes" "node" "manage_agents") =
+      [true, true, true, false] := by native_decide
+
+/-- Revoking an actor's `administrator` removes its catalog, with the userset
+relationship still in place: the userset holds administrators and nobody else.
+Another administrator is unaffected. -/
+theorem revoked_administrator_loses_catalog :
+    let revoked := apply catalogFixture
+      (.revokeAs "user" ⟨"nodes", "node", "administrator", .actor "member"⟩)
+    ["member", "engineer", "user"].map (fun actor =>
+      allowed 8 revoked actor "nodes" "node" "manage_agents") = [false, true, true] := by
+  native_decide
+
+/-- The policy before the decision, which admitted any actor as
+`agent_manager`. -/
+def policyWithActorCatalog : List ResourceDefinition := policy.map fun resource =>
   if resource.name == "nodes" then
     { resource with relations := resource.relations.map fun relation =>
-        if relation.name == "agent_manager" then
-          { relation with types := ["nodes->administrator"] } else relation }
+        if relation.name == "agent_manager" then { relation with types := ["actor"] } else relation }
   else resource
 
-theorem userset_catalog_admits_no_actor (node : String) (did : DID) :
-    subjectAdmittedIn policyWithUsersetCatalog ⟨"nodes", node, "agent_manager", .actor did⟩ = false ∧
-    subjectAdmittedIn policyWithUsersetCatalog ⟨"nodes", node, "agent_manager", .wildcard⟩ = false ∧
-    subjectAdmittedIn policyWithUsersetCatalog
-      ⟨"nodes", node, "agent_manager", .entitySet "nodes" node "administrator"⟩ = true := by
-  have actor : typeAdmitted policyWithUsersetCatalog "nodes" "agent_manager" "actor" = false := by
-    native_decide
-  have userset : typeAdmitted policyWithUsersetCatalog "nodes" "agent_manager"
-      ("nodes" ++ "->" ++ "administrator") = true := by native_decide
-  exact ⟨actor, actor, userset⟩
-
-theorem userset_catalog_collides :
-    (policyIdInput policy == policyIdInput policyWithUsersetCatalog) = true := by native_decide
-
-/-- The userset changes no permission expression, so every actor that holds
-`manage_agents` through ownership or `administrator` keeps it: the Engineer's
-catalog needs no `agent_manager`. -/
-theorem userset_catalog_keeps_permissions :
-    ((policyWithUsersetCatalog.map fun resource => (resource.name, resource.permissions)) ==
-      policy.map fun resource => (resource.name, resource.permissions)) = true := by native_decide
+/-- The restriction changes a relation's types and nothing the policy ID
+hashes, so the ID is the one the earlier policy had. External premise:
+`registerPolicy` keeps a policy already registered under an ID. A store
+created before the decision therefore keeps the earlier types and still admits
+a direct `agent_manager` grant until its policy is replaced; nothing replaces
+it at startup. Accepted for a release that only initialises fresh stores;
+open point in #3683. -/
+theorem catalog_restriction_keeps_policy_id :
+    (policyIdInput policy == policyIdInput policyWithActorCatalog) = true ∧
+    typeAdmitted policyWithActorCatalog "nodes" "agent_manager" "actor" = true := by
+  native_decide
 
 def objectJson (object : Object) : Json := Json.mkObj
   [("resource", toJson object.resource), ("id", toJson object.id), ("owner", toJson object.owner)]
