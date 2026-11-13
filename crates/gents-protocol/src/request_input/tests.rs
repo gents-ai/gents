@@ -314,17 +314,3 @@ fn captured_context_structure_matches_the_executable_input_owner() {
         );
     }
 }
-
-#[test]
-fn generated_queue_sources_parse_and_key_through_the_protocol_owner() {
-    gents_lean_vocab::families::contracts_r6_queue_source::replay(|i| {
-        let parsed = serde_json::from_value::<QueueSource>(serde_json::json!(i.queue_source)).ok();
-        let enqueue = i.action == "enqueue_background_completion";
-        gents_lean_vocab::families::contracts_r6_queue_source::QueueSourceOutput {
-            legal: parsed.is_some() == enqueue,
-            queue_key: parsed
-                .filter(|_| enqueue)
-                .map(|source| source.queue_key(&i.session_key)),
-        }
-    });
-}

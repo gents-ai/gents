@@ -259,6 +259,7 @@
       ],
       "consumer_paths": [
         "crates/gents-toolcalls/src/call/lifecycle/admission_fixture.rs",
+        "crates/gents/tests/conformance/background.rs",
         "crates/gents-toolcalls/src/background/status.rs"
       ],
       "native_status": "pending",

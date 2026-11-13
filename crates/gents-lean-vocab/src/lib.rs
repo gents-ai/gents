@@ -200,6 +200,14 @@ pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
 }
 
+pub fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {
+    lean_contract_snapshot()
+        .r6_backgrounding_cases
+        .iter()
+        .find(|case| case.name == name)
+        .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
+}
+
 pub fn lean_composed_invariant_witness(
     theorem_name: &str,
 ) -> &'static LeanComposedInvariantWitness {

@@ -102,7 +102,18 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     use gents_session::request::lifecycle::{
         ClaimOutcome, RequestTerminalOutcome, TerminalizeResult,
     };
+    use gents_toolcalls::background::status::ProcessControlScope;
 
+    let originating = gents_lean_vocab::lean_r6_backgrounding_case(
+        "originating_request_without_matching_requester_is_denied",
+    );
+    let absent =
+        gents_lean_vocab::lean_r6_backgrounding_case("absent_requester_next_turn_authorized");
+    let empty =
+        gents_lean_vocab::lean_r6_backgrounding_case("empty_requester_does_not_alias_absent");
+    let same_requester = gents_lean_vocab::lean_r6_backgrounding_case(
+        "read_process_same_requester_next_turn_authorized",
+    );
     let (db, user, client, binding) =
         crate::test_support::root::signed_test_node("background-hook-scope").await;
     let node = db.node.clone();
@@ -189,6 +200,30 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     .await;
     assert_eq!(spawned["ok"], true);
     let handle = spawned["tool_call_id"].as_str().unwrap().to_owned();
+
+    // Historical optional scopes still compare exactly, independently of admission.
+    let scope = |requester| ProcessControlScope {
+        request_id: "historical-next".into(),
+        session_id: session.into(),
+        node_did: runtime.did().into(),
+        requester_did: requester,
+    };
+    assert_eq!(
+        scope(None).authorizes(session, runtime.did(), None),
+        absent.legal
+    );
+    assert_eq!(
+        scope(Some(user.did().into())).authorizes(session, runtime.did(), Some(user.did())),
+        same_requester.legal
+    );
+    assert_eq!(
+        scope(Some(String::new())).authorizes(session, runtime.did(), None),
+        empty.legal
+    );
+    assert_eq!(
+        scope(Some("did:requester".into())).authorizes(session, runtime.did(), None),
+        originating.legal
+    );
 
     hook.set_active_request_binding(
         Some("scope-origin".into()),

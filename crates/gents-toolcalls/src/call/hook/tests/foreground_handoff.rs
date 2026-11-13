@@ -193,7 +193,10 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         .background_with_receipt(&receipt)
         .await
         .unwrap();
-    let capacity = gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
+    let capacity = gents_lean_vocab::lean_r6_backgrounding_case(
+        "background_tool_budget_count_8_rejects_spawn",
+    )
+    .max_backgrounded;
     let mut fillers = Vec::new();
     let mut filler_ids = (1..=capacity)
         .map(|index| format!("handoff-capacity-{index}"))
@@ -538,7 +541,10 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
     let session = hook.session_id().await.unwrap();
     let deadline = Utc::now() + chrono::Duration::seconds(30);
     bind_interruptible_request(&hook, "concurrent-parent", &session, deadline).await;
-    let capacity = gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
+    let capacity = gents_lean_vocab::lean_r6_backgrounding_case(
+        "background_tool_budget_count_8_rejects_spawn",
+    )
+    .max_backgrounded;
     let ids = (0..=capacity)
         .map(|index| format!("concurrent-start-{index}"))
         .collect::<Vec<_>>();
@@ -610,19 +616,6 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
 #[cfg(unix)]
 #[tokio::test]
 async fn interrupted_foreground_with_unverified_exit_remains_background_controlled() {
-    for case in gents_lean_vocab::families::contracts_r6_recovery_transfer::cases() {
-        let observed = recover_unverified_foreground(case.input.pre_live_count).await;
-        case.check(observed);
-    }
-}
-
-/// Fills the parent's background slots, then interrupts a foreground call
-/// whose process exit is unverified: recovery transfers it to the background
-/// owner, where it still counts against the next admission.
-#[cfg(unix)]
-async fn recover_unverified_foreground(
-    occupied: u64,
-) -> gents_lean_vocab::families::contracts_r6_recovery_transfer::TransferOutput {
     use gents_session::exec::ownership::test_support::OwnedTestProcess;
     let expected = gents_lean_vocab::lean_process_stop_cases()
         .iter()
@@ -638,7 +631,8 @@ async fn recover_unverified_foreground(
     let session = hook.session_id().await.unwrap();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     bind_interruptible_request(&hook, "unverified-parent", &session, deadline).await;
-    for index in 0..occupied {
+    let recovery = gents_lean_vocab::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
+    for index in 0..recovery.pre_live_count {
         let mut occupied = accepted_hook_tool_lifecycle(
             &hook,
             &format!("occupied-recovery-{index}"),
@@ -650,6 +644,7 @@ async fn recover_unverified_foreground(
         .await;
         occupied.start_running().await.unwrap();
     }
+    assert!(recovery.legal);
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
         "unverified-foreground",
@@ -696,9 +691,10 @@ async fn recover_unverified_foreground(
     let process = process_rx.await.unwrap();
     parent.cancel();
     let result = running.await.unwrap();
-    let transferred = matches!(result, ForegroundResult::Backgrounded(_));
+    assert!(matches!(result, ForegroundResult::Backgrounded(_)));
     let row = fetch_tool_call_row(&hook, &session, "unverified-foreground").await;
     assert_eq!(row["lifecycle_state"], expected.durable_state);
+    assert_eq!(row["await_mode"], recovery.await_mode);
     let mut overflow = accepted_hook_tool_lifecycle(
         &hook,
         "after-recovery-overflow",
@@ -709,9 +705,13 @@ async fn recover_unverified_foreground(
     )
     .await;
     let refusal = overflow.start_running().await.unwrap_err();
-    let counted = refusal
-        .downcast_ref::<crate::call::hook::persistence::BackgroundSlotRefusal>()
-        .and_then(|refusal| refusal.capacity());
+    let modeled_count: usize = recovery.result.as_deref().unwrap().parse().unwrap();
+    assert_eq!(
+        refusal
+            .downcast_ref::<crate::call::hook::persistence::BackgroundSlotRefusal>()
+            .and_then(|refusal| refusal.capacity()),
+        Some(modeled_count)
+    );
     assert!(hook
         .background_executions
         .process_record("unverified-foreground", &doc)
@@ -739,18 +739,13 @@ async fn recover_unverified_foreground(
     );
     process.finish().await;
     node.shutdown().await.expect("shut down test node");
-    gents_lean_vocab::families::contracts_r6_recovery_transfer::TransferOutput {
-        legal: transferred,
-        await_mode: row["await_mode"].as_str().unwrap().to_owned(),
-        terminal_state: row["lifecycle_state"].as_str().unwrap().to_owned(),
-        result: counted.map(|count| count.to_string()),
-    }
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery() {
     use gents_session::exec::ownership::test_support::OwnedTestProcess;
+    let modeled = gents_lean_vocab::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
     let node_db = gents_inference::test_support::test_db(
         "failed-recovery-handoff-retains-physical",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -798,7 +793,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     assert!(registry.process_record("failed-handoff", &doc).is_some());
     let row = fetch_tool_call_row(&hook, &session, "failed-handoff").await;
     assert_eq!(row["await_mode"], "foreground");
-    assert_eq!(row["lifecycle_state"], "running");
+    assert_eq!(row["lifecycle_state"], modeled.terminal_state);
     let request_doc = hook.active_request_doc_id().await.unwrap();
     let escaped = gents_store::graphql::escape_graphql_string(&request_doc);
     gents_store::config_client::ConfigAccess::local_managed_agent(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.as_ref()).unwrap().write("test.terminal_parent_with_retained_process", &format!(
@@ -807,7 +802,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     let report = crate::call::lifecycle::ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(&node, &hook.node_did, std::slice::from_ref(&signer), &registry).await.unwrap();
     assert_eq!(report.tool_calls_terminalized, 0);
     let row = fetch_tool_call_row(&hook, &session, "failed-handoff").await;
-    assert_eq!(row["lifecycle_state"], "running");
+    assert_eq!(row["lifecycle_state"], modeled.terminal_state);
     crate::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &node,
         &hook.node_did,
@@ -817,8 +812,8 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     .await
     .unwrap();
     let row = fetch_tool_call_row(&hook, &session, "failed-handoff").await;
-    assert_eq!(row["await_mode"], "background");
-    assert_eq!(row["lifecycle_state"], "running");
+    assert_eq!(row["await_mode"], modeled.await_mode);
+    assert_eq!(row["lifecycle_state"], modeled.terminal_state);
     let mut settling = crate::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         node.clone(),
         identity::Did::new(signer.did()).unwrap(),

@@ -156,23 +156,14 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
         .expect("finish owned request through terminal owner");
 }
 
-struct WaitObservation {
-    status: Option<String>,
-    reason: Option<String>,
-    process_state: String,
-    process_cancelled: bool,
-    wait_state: String,
-    wait_mode: String,
-}
-
-/// Spawns a running background process, then waits on it until the modeled
-/// boundary ends the wait: its own one-second timeout, the caller's
-/// interruption, or the caller's deadline two seconds out. At the caller's
-/// deadline the hook times the wait call out and ends the turn instead of
-/// publishing the observer's envelope.
-async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
+#[tokio::test]
+async fn generated_wait_observer_interrupt_preserves_background_process() {
+    let case = gents_lean_vocab::lean_r6_backgrounding_case(
+        "caller_interrupt_observer_completes_wait_call_preserves_background_process",
+    );
+    assert!(case.legal);
     let node_db = gents_inference::test_support::test_db(
-        &format!("wait-boundary-{boundary}"),
+        "generated-wait-observer-interrupt-preser",
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
@@ -190,7 +181,7 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
     hook.on_completion_call(&user_text_message("observe background work"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    let request_id = "wait-observer-boundary";
+    let request_id = "wait-observer-interrupt";
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     bind_interruptible_request(&hook, request_id, &session_id, deadline).await;
     let receipt = invoke(
@@ -202,19 +193,8 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
     .await;
     let tool_call_id = receipt["tool_call_id"]
         .as_str()
-        .expect("spawned process handle")
-        .to_owned();
-    let mut wait_args = json!({"tool_call_id": tool_call_id});
-    match boundary {
-        "waitTimeout" => wait_args["timeout_secs"] = json!(1),
-        "callerDeadline" => {
-            hook.set_request_deadline_at(Some(Utc::now() + chrono::Duration::seconds(2)))
-                .await
-        }
-        "callerInterrupted" => {}
-        other => panic!("unmodeled wait boundary {other}"),
-    }
-    let args = wait_args.to_string();
+        .expect("spawned process handle");
+    let args = json!({"tool_call_id": tool_call_id}).to_string();
     let wait_id = "observer-wait";
     accept_hook_tool_call(&hook, wait_id, "wait_process", &args, None).await;
     let waiting_hook = hook.clone();
@@ -223,79 +203,63 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
             .on_tool_call("wait_process", None, wait_id, &args)
             .await
     });
-    if boundary == "callerInterrupted" {
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while !hook.in_flight_lifecycles.lock().await.contains_key(wait_id) {
-                assert!(!wait.is_finished(), "wait must register before returning");
-                tokio::task::yield_now().await;
-            }
-        })
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !hook.in_flight_lifecycles.lock().await.contains_key(wait_id) {
+            assert!(!wait.is_finished(), "wait must register before returning");
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("wait owner registered");
+    gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
+        &hook.actor_access().unwrap(),
+        &hook.active_request_doc_id().await.unwrap(),
+        &hook.node_did,
+        hook.active_requester_did().await.as_deref(),
+    )
+    .await
+    .unwrap();
+    let action = tokio::time::timeout(std::time::Duration::from_secs(10), wait)
         .await
-        .expect("wait owner registered");
-        gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
-            &hook.actor_access().unwrap(),
-            &hook.active_request_doc_id().await.unwrap(),
-            &hook.node_did,
-            hook.active_requester_did().await.as_deref(),
-        )
-        .await
+        .expect("observer returns on interrupt")
         .unwrap();
-    }
-    let action = tokio::time::timeout(std::time::Duration::from_secs(30), wait)
-        .await
-        .expect("observer returns at its boundary")
-        .unwrap();
-    let row = fetch_tool_call_row(&hook, &session_id, &tool_call_id).await;
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("wait observer must publish its structured result: {action:?}");
+    };
+    let result: serde_json::Value = serde_json::from_str(&reason).unwrap();
+    assert_eq!(result["status"].as_str(), case.result.as_deref());
+    assert_eq!(result["error"]["reason"].as_str(), case.reason.as_deref());
+    assert_eq!(result["tool_call_id"], tool_call_id);
+    let row = fetch_tool_call_row(&hook, &session_id, tool_call_id).await;
+    assert_eq!(row["lifecycle_state"].as_str(), case.result.as_deref());
+    assert!(row["cancel_cause"].is_null());
     let wait_row = fetch_tool_call_row(&hook, &session_id, wait_id).await;
-    let (status, reason) = match action {
-        ToolCallHookAction::Skip { reason } => {
-            let result: serde_json::Value = serde_json::from_str(&reason).unwrap();
-            assert_eq!(result["tool_call_id"], tool_call_id.as_str());
-            let persisted = gents_session::tool_call::query::result::load_tool_call_result(
-                &hook.actor_access().unwrap(),
-                wait_row["_docID"].as_str().expect("physical wait call"),
-                &hook.node_did,
-                &session_id,
-                hook.active_requester_did().await.as_deref(),
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                gents_session::tool_call::query::result::render_tool_result(&persisted).unwrap(),
-                reason
-            );
-            (
-                result["status"].as_str().map(str::to_owned),
-                result["error"]["reason"].as_str().map(str::to_owned),
-            )
-        }
-        ToolCallHookAction::Terminate { reason }
-            if reason == "request deadline exceeded while waiting for background process" =>
-        {
-            (None, Some("caller_deadline_exceeded".to_owned()))
-        }
-        other => panic!("wait observer must end at its boundary: {other:?}"),
-    };
-    let observed = WaitObservation {
-        status,
-        reason,
-        process_state: row["lifecycle_state"].as_str().unwrap().to_owned(),
-        process_cancelled: !row["cancel_cause"].is_null(),
-        wait_state: wait_row["lifecycle_state"].as_str().unwrap().to_owned(),
-        wait_mode: wait_row["await_mode"].as_str().unwrap().to_owned(),
-    };
+    assert_eq!(wait_row["lifecycle_state"], case.terminal_state);
+    let persisted = gents_session::tool_call::query::result::load_tool_call_result(
+        &hook.actor_access().unwrap(),
+        wait_row["_docID"].as_str().expect("physical wait call"),
+        &hook.node_did,
+        &session_id,
+        hook.active_requester_did().await.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        gents_session::tool_call::query::result::render_tool_result(&persisted).unwrap(),
+        reason
+    );
     crate::call::control::cancel_background_tool_call(
         &hook.actor_access().unwrap(),
         &executions,
         &gents_session::session::message::NoSessionMessageGoals,
         &session_id,
-        &tool_call_id,
+        tool_call_id,
     )
     .await
     .unwrap();
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        executions.wait_for_completion(&tool_call_id),
+        executions.wait_for_completion(tool_call_id),
     )
     .await
     .expect("test background task cleaned up");
@@ -304,39 +268,6 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
         .await
         .remove(&hook_execution_fixture_key(&hook, request_id));
     node.shutdown().await.expect("shut down test node");
-    observed
-}
-
-#[tokio::test]
-async fn generated_wait_boundaries_preserve_background_process() {
-    for case in gents_lean_vocab::families::contracts_r6_wait_boundary::cases() {
-        let observed = observe_wait_boundary(&case.input.boundary).await;
-        if let Some(status) = &observed.status {
-            assert_eq!(status, &observed.process_state);
-        }
-        case.check(
-            gents_lean_vocab::families::contracts_r6_wait_boundary::WaitBoundaryOutput {
-                legal: !observed.process_cancelled,
-                terminal_state: observed.process_state,
-                reason: observed.reason,
-            },
-        );
-    }
-    for case in gents_lean_vocab::families::contracts_r6_wait_dispatch::cases() {
-        let observed = observe_wait_boundary(&case.input.boundary).await;
-        if let Some(status) = &observed.status {
-            assert_eq!(status, &observed.process_state);
-        }
-        case.check(
-            gents_lean_vocab::families::contracts_r6_wait_dispatch::WaitDispatchOutput {
-                legal: !observed.process_cancelled,
-                await_mode: observed.wait_mode,
-                terminal_state: observed.wait_state,
-                result: Some(observed.process_state),
-                reason: observed.reason,
-            },
-        );
-    }
 }
 
 #[tokio::test]

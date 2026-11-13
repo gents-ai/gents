@@ -662,47 +662,71 @@ mod tests {
         })
     }
 
-    /// The other request is ahead of the wake in queue order; each row is
-    /// created its modeled age before the watcher ranks them.
     #[test]
-    fn generated_wake_admission_ranks_through_the_watcher_owner() {
+    fn aged_completion_wake_moves_ahead_of_older_descendant() {
+        let witness = gents_lean_vocab::lean_r6_backgrounding_case(
+            "aged_background_wake_precedes_new_descendant",
+        );
+        assert!(witness.legal);
+        assert_eq!(witness.reason.as_deref(), Some("aged_priority"));
         let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T22:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let created = |age: u64| {
-            (now - chrono::Duration::seconds(age as i64))
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        };
-        let row = |request_id: &str, session_id: &str, source: &str, age: u64| {
-            let wake = source == "background_completion";
-            pending_row(
-                request_id,
-                session_id,
-                &created(age),
-                (source != "user").then(|| {
-                    let mut input = versioned_wake_input(session_id);
-                    input["queue"]["source"] = serde_json::json!(source);
-                    input
-                }),
-                if wake { "scheduled" } else { "interactive" },
-            )
-        };
-        gents_lean_vocab::families::contracts_r6_wake_admission::replay(|i| {
-            let data = serde_json::json!({
-                "AgentRequest": [
-                    row("other", "descendant-session", &i.other_source, i.other_age_seconds),
-                    row("wake", "parent-session", &i.queue_source, i.wake_age_seconds),
-                ]
-            });
-            let rows = claimable_pending_rows_from_rows(active_runtime_rows(Some(&data)).unwrap());
-            let ranked = prioritize_aged_background_wakes(rows, now);
-            assert_eq!(ranked.len(), 2, "{}", i.name);
-            let legal = ranked[0].request_id == "wake";
-            gents_lean_vocab::families::contracts_r6_wake_admission::WakeAdmissionOutput {
-                legal,
-                reason: Some(if legal { "aged_priority" } else { "fifo" }.to_owned()),
-            }
+        let data = serde_json::json!({
+            "AgentRequest": [
+                pending_row(
+                    "older-descendant",
+                    "descendant-session",
+                    "2026-08-12T21:00:00Z",
+                    None,
+                    "interactive",
+                ),
+                pending_row(
+                    "aged-wake",
+                    "parent-session",
+                    "2026-08-12T21:59:30Z",
+                    Some(versioned_wake_input("parent-session")),
+                    "scheduled",
+                )
+            ]
         });
+        let rows = claimable_pending_rows_from_rows(active_runtime_rows(Some(&data)).unwrap());
+        let ranked = prioritize_aged_background_wakes(rows, now);
+        assert_eq!(ranked[0].request_id, "aged-wake");
+        assert_eq!(ranked[1].request_id, "older-descendant");
+    }
+
+    #[test]
+    fn fresh_completion_wake_preserves_fifo() {
+        let witness =
+            gents_lean_vocab::lean_r6_backgrounding_case("fresh_background_wake_preserves_fifo");
+        assert!(!witness.legal);
+        assert_eq!(witness.reason.as_deref(), Some("fifo"));
+        let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T22:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let data = serde_json::json!({
+            "AgentRequest": [
+                pending_row(
+                    "older-descendant",
+                    "descendant-session",
+                    "2026-08-12T21:59:00Z",
+                    None,
+                    "interactive",
+                ),
+                pending_row(
+                    "fresh-wake",
+                    "parent-session",
+                    "2026-08-12T21:59:31Z",
+                    Some(versioned_wake_input("parent-session")),
+                    "scheduled",
+                )
+            ]
+        });
+        let rows = claimable_pending_rows_from_rows(active_runtime_rows(Some(&data)).unwrap());
+        let ranked = prioritize_aged_background_wakes(rows, now);
+        assert_eq!(ranked[0].request_id, "older-descendant");
+        assert_eq!(ranked[1].request_id, "fresh-wake");
     }
 
     #[test]

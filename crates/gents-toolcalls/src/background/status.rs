@@ -541,25 +541,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_process_control_scopes_authorize_through_the_scope_owner() {
-        gents_lean_vocab::families::contracts_r6_process_control::replay(|i| {
-            let caller = ProcessControlScope {
-                request_id: i.caller.request_id.clone(),
-                session_id: i.caller.session_id.clone(),
-                node_did: i.caller.node_did.clone(),
-                requester_did: i.caller.requester_did.clone(),
-            };
-            gents_lean_vocab::families::contracts_r6_process_control::ProcessControlOutput {
-                legal: caller.authorizes(
-                    &i.owner.session_id,
-                    &i.owner.node_did,
-                    i.owner.requester_did.as_deref(),
-                ),
-            }
-        });
-    }
-
-    #[test]
     fn read_tool_output_row_decodes_missing_and_malformed_timestamps() {
         // Missing started_at/completed_at must decode as None (not drop the
         // row); the projection then renders elapsed as unknown truthfully.
