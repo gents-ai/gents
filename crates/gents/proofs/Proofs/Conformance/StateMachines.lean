@@ -136,6 +136,11 @@ example :
       && illegal sessionRecoveryMachine "superseded" "pending"
       && illegal sessionRecoveryMachine "interrupted" "pending") = true := by native_decide
 
+example :
+    mailboxMachine.terminalStates
+      = (mailboxStatuses.filter Mailbox.Status.terminal).map Mailbox.Status.toDefraDB := by
+  native_decide
+
 example : mailboxMachine.nonterminalStates = ["open"] := by native_decide
 
 example : mailboxMachine.legalTransitions.all (·.source == "open") = true := by native_decide
