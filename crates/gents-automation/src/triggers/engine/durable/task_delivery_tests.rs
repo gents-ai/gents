@@ -589,45 +589,41 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         "completed"
     );
     let session_doc = session["_docID"].as_str().unwrap();
-    let trace = gents_lean_vocab::lean_contract_snapshot()
-        .identity_publication_cases
-        .iter()
-        .find(|case| case.name == "interrupted_then_repaired")
+    for trace in gents_lean_vocab::families::identity_publication_session_recovery::cases() {
+        gents_store::test_support::relationships::resource_in_txn(
+            &access,
+            "AgentSession",
+            session_doc,
+            "parent",
+            "agents",
+            &agent_doc,
+            true,
+        )
+        .await
         .unwrap();
-    gents_store::test_support::relationships::resource_in_txn(
-        &access,
-        "AgentSession",
-        session_doc,
-        "parent",
-        "agents",
-        &agent_doc,
-        true,
-    )
-    .await
-    .unwrap();
-    access.write("test.session.interrupted", &format!(
+        access.write("test.session.interrupted", &format!(
         r#"mutation {{ update_AgentSession(docID: "{}", input: {{ relationships_pending: true }}) {{ _docID }} }}"#,
         escape_graphql_string(session_doc),
     )).await.unwrap();
-    let actor = identity::Did::new(agent.did()).unwrap();
-    assert_eq!(
-        gents_session::session::recover_agent_session_relationships_with_access(
-            &access, node_did, &actor
-        )
-        .await
-        .unwrap(),
-        1
-    );
-    let recovered = user_access
-        .execute("{ AgentSession { relationships_pending } }")
-        .await
-        .unwrap();
-    assert_eq!(
-        recovered["data"]["AgentSession"][0]["relationships_pending"]
-            .as_bool()
+        let actor = identity::Did::new(agent.did()).unwrap();
+        assert_eq!(
+            gents_session::session::recover_agent_session_relationships_with_access(
+                &access, node_did, &actor
+            )
+            .await
             .unwrap(),
-        trace.steps[1].after.pending
-    );
+            1
+        );
+        let recovered = user_access
+            .execute("{ AgentSession { relationships_pending } }")
+            .await
+            .unwrap();
+        trace.check(
+            recovered["data"]["AgentSession"][0]["relationships_pending"]
+                .as_bool()
+                .unwrap(),
+        );
+    }
     let request_row = access
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",

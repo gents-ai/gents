@@ -569,10 +569,7 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
 #[tokio::test]
 async fn modeled_publication_retries_pending_receipt_relationships() {
     let seed = &gents_lean_vocab::lean_contract_snapshot().goal_client_receipt_cases[0];
-    for trace in gents_lean_vocab::lean_contract_snapshot()
-        .identity_publication_cases
-        .iter()
-    {
+    for trace in gents_lean_vocab::families::identity_publication_receipt::cases() {
         let mut driver = Driver::new(&seed.initial).await;
         let (command_doc, command) = driver.command(&seed.command).await;
         let node = &driver.fixture.node;
@@ -616,20 +613,27 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
             r#"{{ AgentSessionGoalReceipt(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ relationships_pending }} }}"#,
             escape_graphql_string(&receipt_doc)
         );
-        assert_eq!(
-            agent_access.execute(&query).await.unwrap()["data"]["AgentSessionGoalReceipt"][0]
-                ["relationships_pending"]
-                .as_bool()
-                .unwrap(),
-            trace.initial.pending
-        );
-        assert!(
-            user_access.execute(&query).await.unwrap()["data"]["AgentSessionGoalReceipt"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        for step in &trace.steps {
+        let observe = || {
+            let agent_access = &agent_access;
+            let user_access = &user_access;
+            let query = &query;
+            async move {
+                gents_lean_vocab::families::identity_publication_receipt::Observation {
+                    pending: agent_access.execute(query).await.unwrap()["data"]
+                        ["AgentSessionGoalReceipt"][0]["relationships_pending"]
+                        .as_bool()
+                        .unwrap(),
+                    visible: !user_access.execute(query).await.unwrap()["data"]
+                        ["AgentSessionGoalReceipt"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty(),
+                }
+            }
+        };
+        let initial = observe().await;
+        let mut after = Vec::new();
+        for step in &trace.input.steps {
             if step.parent_ok && !step.reader_ok {
                 agent_access
                     .add_resource_relationship(
@@ -660,23 +664,14 @@ async fn modeled_publication_retries_pending_receipt_relationships() {
                     .await
                     .unwrap();
             }
-            let agent_rows = agent_access.execute(&query).await.unwrap();
-            assert_eq!(
-                agent_rows["data"]["AgentSessionGoalReceipt"][0]["relationships_pending"]
-                    .as_bool()
-                    .unwrap(),
-                step.after.pending,
-                "{}",
-                trace.name
-            );
-            let visible = !user_access.execute(&query).await.unwrap()["data"]
-                ["AgentSessionGoalReceipt"]
-                .as_array()
-                .unwrap()
-                .is_empty();
-            let expected = step.after.parent_granted || step.after.reader_granted;
-            assert_eq!(visible, expected, "{}", trace.name);
+            after.push(observe().await);
         }
+        trace.check(
+            gents_lean_vocab::families::identity_publication_receipt::ReceiptOutput {
+                initial,
+                after,
+            },
+        );
         node.shutdown().await.expect("node shutdown");
     }
 }

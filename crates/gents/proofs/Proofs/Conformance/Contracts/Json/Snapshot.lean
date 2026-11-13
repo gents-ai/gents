@@ -151,7 +151,8 @@ import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
 import Proofs.Conformance.InferenceObservation
-import Proofs.Store.Identity.PublicationConformance
+import Proofs.Conformance.Identity.Publication
+import Proofs.Conformance.Identity.GoalLinks
 import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
@@ -357,14 +358,11 @@ def snapshotCaptureTailJson : String :=
   ""
     ++ "\"compaction_canonical_projection_cases\":"
       ++ compactionCanonicalProjectionCasesJson ++ ","
-    ++ "\"goal_link_cases\":"
-      ++ Identity.SessionChild.goalLinkCasesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""
-    ++ "\"trigger_delivery_callback_visibility_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryCallbackVisibilityCasesJson ++ ","
     ++ "\"trigger_delivery_latest_admission_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryLatestAdmissionCasesJson ++ ","
     ++ "\"watcher_scoped_scan_cases\":"
       ++ EventDelivery.WatcherConformance.casesJson ++ ","
@@ -393,10 +391,6 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
-    ++ "\"goal_claimed_publication_cases\":"
-      ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
-    ++ "\"goal_operator_resume_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
     ++ "\"goal_operator_resume_on_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
 
@@ -420,12 +414,8 @@ def snapshotSessionCasesJson : String :=
 
 def snapshotIdentityCasesJson : String :=
   ""
-    ++ "\"identity_publication_cases\":"
-      ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"identity_parent_publication_cases\":"
-      ++ Identity.PublicationConformance.parentCasesJson ++ ","
 
 def snapshotClientCasesJson : String :=
   ""

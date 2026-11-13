@@ -324,26 +324,6 @@ const SESSION: &str = "goal-session";
 
 const RESCAN: Duration = Duration::from_millis(20);
 
-async fn atomic_goal_link_case(actor: &'static str, collection: &'static str) -> serde_json::Value {
-    tokio::task::spawn_blocking(move || {
-        let contracts: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        contracts["goal_link_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| {
-                case["actor"] == actor
-                    && case["collection"] == collection
-                    && case["mode"] == "fresh"
-                    && case["commit"] == true
-            })
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap()
-}
-
 async fn goal_creation_actors(
     db: &TestDb,
 ) -> (gents_store::identity::KeyIdentity, Arc<dyn NodeIdentity>) {
@@ -2311,12 +2291,12 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     assert_ne!(user.did(), db.node_identity.did());
     assert_ne!(user.did(), agent.did());
     let rows = client.execute("{ Goal { _docID session_doc_id agent_did creator_did parent_linked } GoalCreationClaim { _docID session_doc_id agent_did creator_did parent_linked } }").await.unwrap();
-    for collection in ["Goal", "GoalCreationClaim"] {
+    for case in gents_lean_vocab::families::goal_links_session_goal::cases() {
+        let collection = case.input.collection.as_str();
         let row = &rows["data"][collection][0];
         assert_eq!(row["agent_did"], agent.did());
         assert_eq!(row["creator_did"], user.did());
-        let modeled = atomic_goal_link_case("user", collection).await;
-        assert_eq!(row["parent_linked"], modeled["initial"]["linked"]);
+        case.check(row["parent_linked"].as_bool().unwrap());
         let doc = row["_docID"].as_str().unwrap().to_owned();
         let owners = client
             .transact_readonly("test.client_goal_owner", |txn| {
@@ -2678,8 +2658,10 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     assert_eq!(goal_row["session_doc_id"], session_doc);
     assert_eq!(goal_row["agent_did"], agent.did());
     assert_eq!(goal_row["creator_did"], user.did());
-    let modeled = atomic_goal_link_case("user", "Goal").await;
-    assert_eq!(goal_row["parent_linked"], modeled["initial"]["linked"]);
+    for case in gents_lean_vocab::families::goal_links_seeded_goal::cases() {
+        assert_eq!(case.input.collection, "Goal");
+        case.check(goal_row["parent_linked"].as_bool().unwrap());
+    }
     let cid = rows["data"]["_commits"][0]["cid"].as_str().unwrap();
     assert_eq!(
         verified_block_signer_as(&db.node, user.did(), cid).await,
@@ -2712,7 +2694,8 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
         CreateGoalForSessionOutcome::Idempotent(_)
     ));
     assert_eq!(created.goal().doc_id, retried.goal().doc_id);
-    for collection in ["Goal", "GoalCreationClaim"] {
+    for case in gents_lean_vocab::families::goal_links_client_session_goal::cases() {
+        let collection = case.input.collection.as_str();
         let session = escape_graphql_string(&client_session_doc);
         let rows = access.execute(&format!(r#"{{ {collection}(filter: {{session_doc_id: {{_eq: "{session}"}}}}) {{_docID session_doc_id agent_did creator_did parent_linked}} }}"#)).await.unwrap();
         let rows = rows["data"][collection].as_array().unwrap();
@@ -2721,8 +2704,7 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
         assert_eq!(row["session_doc_id"], client_session_doc);
         assert_eq!(row["agent_did"], agent.did());
         assert_eq!(row["creator_did"], user.did());
-        let modeled = atomic_goal_link_case("user", collection).await;
-        assert_eq!(row["parent_linked"], modeled["initial"]["linked"]);
+        case.check(row["parent_linked"].as_bool().unwrap());
         let doc = escape_graphql_string(row["_docID"].as_str().unwrap());
         let history = access.execute(&format!(r#"{{_commits(docID: "{doc}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}}}}"#)).await.unwrap();
         let cid = history["data"]["_commits"][0]["cid"].as_str().unwrap();
@@ -2764,13 +2746,13 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     let request = &binding["data"]["AgentRequest"][0];
     assert_eq!(session["agent_did"], agent.did());
     assert_eq!(session["requester_did"], agent.did());
-    for collection in ["Goal", "GoalCreationClaim"] {
+    for case in gents_lean_vocab::families::goal_links_goal_backed_submission::cases() {
+        let collection = case.input.collection.as_str();
         let row = &binding["data"][collection][0];
         assert_eq!(row["session_doc_id"], session["_docID"]);
         assert_eq!(row["agent_did"], agent.did());
         assert_eq!(row["creator_did"], agent.did());
-        let modeled = atomic_goal_link_case("agent", collection).await;
-        assert_eq!(row["parent_linked"], modeled["initial"]["linked"]);
+        case.check(row["parent_linked"].as_bool().unwrap());
         let doc = row["_docID"].as_str().unwrap().to_owned();
         let owners = access
             .transact_readonly("test.goal_backed_native_owner", |txn| {

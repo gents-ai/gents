@@ -137,10 +137,12 @@ pub(super) fn verify_goal_continuation_receipt(
     )?);
     let actual: GoalBackedRequestFingerprint =
         serde_json::from_value(serde_json::to_value(child)?)?;
-    anyhow::ensure!(
-        actual == GoalBackedRequestFingerprint::from_create(&expected)?,
-        "continuation receipt conflicts with the goal and physical predecessor binding"
-    );
+    if actual != GoalBackedRequestFingerprint::from_create(&expected)? {
+        return Err(crate::goal::continuation::ContinuationRefusal::Conflict(
+            "continuation receipt conflicts with the goal and physical predecessor binding",
+        )
+        .into());
+    }
     Ok(())
 }
 

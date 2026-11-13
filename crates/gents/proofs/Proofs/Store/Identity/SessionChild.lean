@@ -377,50 +377,6 @@ def clientRequestCases : List ClientRequestCase :=
    ⟨"wrong_signature", ⟨true, true, false⟩, false, true, true, true⟩,
    ⟨"already_completed_revoked", ⟨true, false, false⟩, true, true, true, true⟩]
 
-structure GoalLinkStep where
-  parentOk : Bool
-  workerOk : Bool
-  markOk : Bool
-  deriving Repr
-
-def goalLinkStateJson (state : GoalLinks) : Lean.Json := Lean.Json.mkObj
-  [("parent", Lean.toJson state.parent), ("worker", Lean.toJson state.worker),
-   ("linked", Lean.toJson state.linked)]
-
-def goalLinkTraceJson : GoalLinks → List GoalLinkStep → List Lean.Json
-  | _, [] => []
-  | state, step :: rest =>
-    let next := repairGoalLinks state step.parentOk step.workerOk step.markOk
-    Lean.Json.mkObj [("parent_ok", Lean.toJson step.parentOk),
-      ("worker_ok", Lean.toJson step.workerOk), ("mark_ok", Lean.toJson step.markOk),
-      ("after", goalLinkStateJson next)] :: goalLinkTraceJson next rest
-
-def goalLinkCaseJson (collection actor mode : String) (commit : Bool) : Lean.Json :=
-  let empty : State := { objects := [], relations := [], enrolled := [] }
-  let docExists := mode != "fresh" || commit
-  let author := if mode == "foreign" then "agent" else actor
-  let committed := if docExists then directCreate empty author "children" "goal" true true else empty
-  let owner := (committed.objects.find? (fun object => object.id == "goal")).map (·.owner)
-  let initial := if mode == "fresh" then publishGoalLinks commit
-    else if mode == "partial" then ⟨true, false, false⟩ else {}
-  let steps : List GoalLinkStep := if mode == "recovery" || mode == "partial" then
-    [⟨true, false, true⟩, ⟨true, true, false⟩, ⟨true, true, true⟩] else []
-  let revoked := repairGoalLinks ⟨false, true, true⟩ true true true
-  Lean.Json.mkObj [("collection", Lean.toJson collection), ("actor", Lean.toJson actor),
-    ("mode", Lean.toJson mode), ("commit", Lean.toJson commit), ("owner", Lean.toJson owner),
-    ("initial", goalLinkStateJson initial), ("steps", Lean.toJson (goalLinkTraceJson initial steps)),
-    ("after_revocation", goalLinkStateJson revoked),
-    ("repair_allowed", Lean.toJson (goalRepairAllowed actor author initial))]
-
-def goalLinkCasesJson : String :=
-  (Lean.toJson (["Goal", "GoalCreationClaim"].flatMap fun collection =>
-    (["user", "agent"].flatMap fun actor =>
-      [goalLinkCaseJson collection actor "fresh" false,
-       goalLinkCaseJson collection actor "fresh" true,
-       goalLinkCaseJson collection actor "recovery" true,
-       goalLinkCaseJson collection actor "partial" true]) ++
-    [goalLinkCaseJson collection "user" "foreign" true])).compress
-
 /-- Capture payload deduplication is limited to a physical session. The
 content digest remains the manifest integrity input; the storage identity also
 includes the session to prevent cross-session key collisions and reuse. This

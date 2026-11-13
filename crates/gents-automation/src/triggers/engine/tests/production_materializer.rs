@@ -651,28 +651,13 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let session = &rows["data"]["AgentSession"][0];
     let request = &rows["data"]["AgentRequest"][0];
     assert_eq!(session["agent_did"], agent_did);
-    let goal_links = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .goal_link_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    for collection in ["Goal", "GoalCreationClaim"] {
-        let modeled_link = goal_links
-            .iter()
-            .find(|case| {
-                case.collection == collection
-                    && case.actor == "agent"
-                    && case.mode == "fresh"
-                    && case.commit
-            })
-            .unwrap();
+    for case in gents_lean_vocab::families::goal_links_task_fire::cases() {
+        let collection = case.input.collection.as_str();
         let row = &rows["data"][collection][0];
         assert_eq!(row["session_doc_id"], session["_docID"]);
         assert_eq!(row["agent_did"], agent_did);
         assert_eq!(row["creator_did"], agent_did);
-        assert_eq!(row["parent_linked"], modeled_link.initial.linked);
+        case.check(row["parent_linked"].as_bool().unwrap());
         let doc = row["_docID"].as_str().unwrap().to_owned();
         let owners = access
             .transact_readonly("test.task_goal_owner", |txn| {
@@ -892,19 +877,15 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         assert_eq!(claims.len(), 1);
         assert_eq!(sessions[0]["agent_did"], agent_did);
         assert_eq!(requests[0]["lifecycle_state"], "pending");
-        for (collection, child) in [("Goal", &goals[0]), ("GoalCreationClaim", &claims[0])] {
-            let modeled_link = goal_links
-                .iter()
-                .find(|case| {
-                    case.collection == collection
-                        && case.actor == "agent"
-                        && case.mode == "fresh"
-                        && case.commit
-                })
-                .unwrap();
+        for link in gents_lean_vocab::families::goal_links_scheduled_task_fire::cases() {
+            let child = match link.input.collection.as_str() {
+                "Goal" => &goals[0],
+                "GoalCreationClaim" => &claims[0],
+                other => panic!("unknown modeled collection {other}"),
+            };
             assert_eq!(child["session_doc_id"], sessions[0]["_docID"]);
             assert_eq!(child["creator_did"], agent_did);
-            assert_eq!(child["parent_linked"], modeled_link.initial.linked);
+            link.check(child["parent_linked"].as_bool().unwrap());
         }
         assert_eq!(
             goals[0]["assignment_root_request_doc_id"],
@@ -1979,25 +1960,14 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     let session = escape_graphql_string(rows[0]["session_id"].as_str().unwrap());
     let goal = access.execute(&format!(r#"{{Goal(filter: {{session_id: {{_eq: "{session}"}}}}) {{creator_did parent_linked assignment_root_request_doc_id}}}}"#)).await.unwrap();
     assert_eq!(goal["data"]["Goal"][0]["creator_did"], agent_did);
-    let modeled_link = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .goal_link_cases
-            .iter()
-            .find(|case| {
-                case.collection == "Goal"
-                    && case.actor == "agent"
-                    && case.mode == "fresh"
-                    && case.commit
-            })
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap();
-    assert_eq!(
-        goal["data"]["Goal"][0]["parent_linked"],
-        modeled_link.initial.linked
-    );
+    for case in gents_lean_vocab::families::goal_links_workspace_task_fire::cases() {
+        let collection = case.input.collection.as_str();
+        case.check(
+            goal["data"][collection][0]["parent_linked"]
+                .as_bool()
+                .unwrap(),
+        );
+    }
     assert_eq!(
         goal["data"]["Goal"][0]["assignment_root_request_doc_id"],
         rows[0]["_docID"]

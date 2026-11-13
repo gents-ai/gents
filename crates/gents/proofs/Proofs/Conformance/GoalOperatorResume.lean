@@ -71,6 +71,56 @@ def resumeCases : List ResumeCase :=
 theorem cases_replay_explicit_expectations :
   ∀ c ∈ resumeCases, resume c.before c.request c.commit = (c.expected, c.outcome) := by decide
 
+deriving instance Lean.ToJson for Binding, Request, Outcome
+
+structure SnapshotWire where
+  status : Goals.Status
+  blockedAudits : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  sequence : Nat
+  lastContinuedFrom : Option Nat
+  latestRequest : Nat
+  children : List Binding
+  tokensUsed : Nat
+  tokenBudget : Option Nat
+  deriving Lean.ToJson
+
+def SnapshotWire.ofModel (s : Snapshot) : SnapshotWire :=
+  { status := s.goal.status, blockedAudits := s.goal.blockedAudits
+    wrapupRequested := s.goal.wrapupRequested, wrapupCompleted := s.goal.wrapupCompleted
+    sequence := s.sequence, lastContinuedFrom := s.lastContinuedFrom
+    latestRequest := s.latestRequest, children := s.children, tokensUsed := s.tokensUsed
+    tokenBudget := s.tokenBudget }
+
+def SnapshotWire.toModel (s : SnapshotWire) : Snapshot :=
+  { goal := { status := s.status, blockedAudits := s.blockedAudits
+              wrapupRequested := s.wrapupRequested, wrapupCompleted := s.wrapupCompleted }
+    sequence := s.sequence, lastContinuedFrom := s.lastContinuedFrom
+    latestRequest := s.latestRequest, children := s.children, tokensUsed := s.tokensUsed
+    tokenBudget := s.tokenBudget }
+
+structure ResumeInput where
+  name : String
+  before : SnapshotWire
+  request : Request
+  commit : Bool
+  deriving Lean.ToJson
+
+structure ResumeOutput where
+  expected : SnapshotWire
+  outcome : Outcome
+  goalStatus : Option Goals.Status
+  deriving Lean.ToJson
+
+@[conformance_family]
+def resumeTransaction : Family ResumeInput ResumeOutput where
+  inputs := resumeCases.map fun c =>
+    { name := c.name, before := .ofModel c.before, request := c.request, commit := c.commit }
+  model := fun i =>
+    let result := resume i.before.toModel i.request i.commit
+    { expected := .ofModel result.1, outcome := result.2, goalStatus := receiptStatus result }
+
 structure ResumeOnCase where
   name : String
   before : Snapshot
@@ -145,12 +195,6 @@ def requestJson (x : Request) : String :=
 theorem historical_receipt_can_report_paused :
   receiptStatus (resume later request true) = some .paused := by decide
 
-def caseJson (c : ResumeCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ snapshotJson c.before ++
-  ",\"request\":" ++ requestJson c.request ++ ",\"commit\":" ++ b c.commit ++
-  ",\"expected\":" ++ snapshotJson c.expected ++ ",\"outcome\":" ++ jsonString (outcome c.outcome) ++
-  ",\"goal_status\":" ++ (match receiptStatus (c.expected, c.outcome) with | none => "null" | some value => status value) ++ "}"
-def resumeCasesJson : String := jsonArray (resumeCases.map caseJson)
 def resumeOnCasesJson : String := jsonArray (resumeOnCases.map fun c =>
   "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ snapshotJson c.before ++
   ",\"target_available\":" ++ b c.targetAvailable ++
