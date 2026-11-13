@@ -416,9 +416,9 @@ pub(super) async fn request_session_owner(
 pub enum RedriveError {
     #[error("owed delivery recovery requires the configured runtime identity")]
     RuntimeIdentity,
-    #[error(transparent)]
+    #[error("{0}")]
     Store(#[from] gents_store::config_client::ConfigClientError),
-    #[error(transparent)]
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 

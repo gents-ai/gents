@@ -107,8 +107,8 @@ pub enum TaskOperationError {
     ManyEnabledTriggers(String),
     /// Another owner's failure (templates, request signing, Task delivery,
     /// the store), unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn std::error::Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl TaskOperationError {

@@ -138,7 +138,7 @@ pub enum LocalPackError {
         sources: Vec<String>,
         built: Option<PathBuf>,
     },
-    #[error(transparent)]
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 
@@ -181,7 +181,7 @@ pub enum HomePackRemovalError {
         selections: Option<Vec<PluginSelection>>,
         cause: anyhow::Error,
     },
-    #[error(transparent)]
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 

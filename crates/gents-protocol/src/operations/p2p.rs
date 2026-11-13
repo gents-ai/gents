@@ -134,8 +134,8 @@ pub enum RegistryError {
     #[error("template {0:?} is not one this node can offer")]
     UnknownTemplate(String),
     /// Another owner's failure (the store, ACP), unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl RegistryError {
@@ -263,6 +263,6 @@ pub struct ApplicationPairingRemoved {
 pub enum ApplicationPairingError {
     #[error("an application pairing status is malformed")]
     Malformed(#[source] serde_json::Error),
-    #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn Error + Send + Sync>),
 }

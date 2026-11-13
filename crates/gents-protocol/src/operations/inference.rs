@@ -275,11 +275,11 @@ pub enum InferenceOperationError {
     #[error("{} requires a document ID", .0.resource())]
     IdRequired(InferenceDocument),
     /// The patch or the document it produces is not a valid document.
-    #[error(transparent)]
-    Invalid(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Invalid(#[source] Box<dyn Error + Send + Sync>),
     /// Another owner's failure (plan validation, the store), unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl BackendDecision {

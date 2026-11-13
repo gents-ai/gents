@@ -219,15 +219,11 @@ impl HomeError {
 pub fn store_lock_held<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a StoreLockHeld> {
+    use gents_protocol::error_chain::as_owner;
     gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<StoreLockHeld>()
-            .or_else(|| cause.downcast_ref::<HomeError>()?.lock_held())
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::local::store_key::StoreKeyError>()?
-                    .lock_held()
-            })
+        as_owner::<StoreLockHeld>(cause)
+            .or_else(|| as_owner::<HomeError>(cause)?.lock_held())
+            .or_else(|| as_owner::<crate::local::store_key::StoreKeyError>(cause)?.lock_held())
     })
 }
 

@@ -240,8 +240,8 @@ pub enum GoalOperationError {
         status: &'static str,
     },
     /// Another owner's failure (request staging, the store), unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn std::error::Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// How a Goal in `status` runs again, as the text a person or model reads.

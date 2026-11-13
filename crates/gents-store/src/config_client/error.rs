@@ -99,7 +99,7 @@ pub enum ConfigClientError {
     WriteTelemetry(#[from] WriteTelemetryError),
     #[error(transparent)]
     Reentrant(#[from] ReentrantEmbeddedWrite),
-    #[error(transparent)]
+    #[error("{0}")]
     Protocol(#[from] gents_protocol::graphql::GraphqlError),
     #[error(transparent)]
     Identity(Box<crate::identity::IdentityError>),
@@ -314,7 +314,7 @@ pub enum ConfigClientError {
         source: reqwest::Error,
     },
     /// Error list returned by DefraDB; its source exposes storage exhaustion.
-    #[error(transparent)]
+    #[error("{0}")]
     Database(#[from] gents_protocol::database_error::GraphqlFailure),
     /// Error list returned by the embedded DefraDB node.
     #[error("graphql returned errors: {errors:?}")]

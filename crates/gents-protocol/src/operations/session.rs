@@ -275,8 +275,8 @@ pub enum SessionOperationError {
         #[source]
         source: Box<dyn Error + Send + Sync>,
     },
-    #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl SessionOperationError {

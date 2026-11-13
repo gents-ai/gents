@@ -2060,7 +2060,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-session/src/session/output/replay_capture.rs", 1),
     ("crates/gents-session/src/session/output/replay_request.rs", 1),
     ("crates/gents-session/src/session/request_output.rs", 1),
-    ("crates/gents-store/src/local/storage_backend.rs", 9),
+    ("crates/gents-store/src/local/storage_backend.rs", 8),
     ("crates/gents-store/src/local/store_key.rs", 2),
     ("crates/gents-session/src/request/streaming.rs", 1),
     ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
@@ -2803,14 +2803,20 @@ const ACCESS_HOLDER_FAMILIES: &[(&str, &str)] = &[
     ("gents-p2p", "access_classification_p2p_wrapped"),
     ("gents-service", "access_classification_service_wrapped"),
     ("gents-tools", "access_classification_tools_wrapped"),
-    ("gents-desktop-core", "access_classification_desktop_core_wrapped"),
+    (
+        "gents-desktop-core",
+        "access_classification_desktop_core_wrapped",
+    ),
 ];
 
 /// Each crate's family enumerating its variants, other than the GraphQL
 /// owners', that hold a GraphQL error or failure.
 const RETRY_HOLDER_FAMILIES: &[(&str, &str)] = &[
     ("gents-store", "access_classification_store_retry_wrapped"),
-    ("gents-protocol", "access_classification_protocol_retry_wrapped"),
+    (
+        "gents-protocol",
+        "access_classification_protocol_retry_wrapped",
+    ),
 ];
 
 #[derive(Default)]
@@ -2932,8 +2938,7 @@ fn holder_wire_name(owner: &str, variant: &str) -> String {
             && previous.is_some_and(|previous| {
                 previous.is_ascii_lowercase()
                     || previous.is_ascii_digit()
-                    || (previous.is_ascii_uppercase()
-                        && next.is_some_and(char::is_ascii_lowercase))
+                    || (previous.is_ascii_uppercase() && next.is_some_and(char::is_ascii_lowercase))
             });
         if starts_word {
             wire.push('_');
@@ -3016,7 +3021,11 @@ fn access_error_holders_are_sourced() {
         }
     }
     for (kind, declared, families_by_crate) in [
-        ("an access error or a store view error", &access, ACCESS_HOLDER_FAMILIES),
+        (
+            "an access error or a store view error",
+            &access,
+            ACCESS_HOLDER_FAMILIES,
+        ),
         ("a GraphQL error or failure", &retry, RETRY_HOLDER_FAMILIES),
     ] {
         let packages = declared
@@ -3026,7 +3035,10 @@ fn access_error_holders_are_sourced() {
             .collect::<BTreeSet<_>>();
         for package in packages {
             let found = declared.get(package).cloned().unwrap_or_default();
-            match families_by_crate.iter().find(|(owner, _)| *owner == package) {
+            match families_by_crate
+                .iter()
+                .find(|(owner, _)| *owner == package)
+            {
                 None => violations.push(format!(
                     "{package}: variants {found:?} hold {kind} and the crate has no \
                      `AccessClassification` family; model them and replay it in the crate"
@@ -3090,5 +3102,8 @@ fn error_holder_fence_reads_holdings_and_wire_names() {
         holder_wire_name("AgentSelfConfigPermissionError", "Access"),
         "agent_self_config_permission_error_access"
     );
-    assert_eq!(holder_wire_name("MCPHealthError", "Probe"), "mcp_health_error_probe");
+    assert_eq!(
+        holder_wire_name("MCPHealthError", "Probe"),
+        "mcp_health_error_probe"
+    );
 }

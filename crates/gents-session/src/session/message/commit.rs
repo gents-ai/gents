@@ -88,9 +88,9 @@ pub struct SessionMessageReceipt {
 pub enum CommitError {
     #[error(transparent)]
     Steer(#[from] crate::request::lifecycle::queue::SteerAdmissionRefusal),
-    #[error(transparent)]
+    #[error("{0}")]
     Access(#[from] gents_store::config_client::ConfigClientError),
-    #[error(transparent)]
+    #[error("{0}")]
     Other(#[from] anyhow::Error),
     #[error("session-message commit is unconfirmed")]
     Unconfirmed(#[source] Box<CommitError>),

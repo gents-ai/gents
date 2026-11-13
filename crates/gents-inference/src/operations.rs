@@ -34,8 +34,8 @@ use gents_store::config_client::{ConfigClientError, TransactionFailure};
 pub enum OperationFailure {
     #[error(transparent)]
     Operation(InferenceOperationError),
-    #[error(transparent)]
-    Other(anyhow::Error),
+    #[error("{0}")]
+    Other(#[source] anyhow::Error),
 }
 
 impl From<InferenceOperationError> for OperationFailure {

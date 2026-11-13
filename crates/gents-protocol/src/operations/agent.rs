@@ -246,8 +246,8 @@ pub enum AgentOperationError {
     CandidateDoesNotResolve,
     /// Another owner's failure (root policy, the account and compaction
     /// fences, plan validation, the store), unchanged.
-    #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    #[error("{0}")]
+    Passthrough(#[source] Box<dyn Error + Send + Sync>),
 }
 
 impl AgentOperationError {

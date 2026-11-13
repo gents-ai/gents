@@ -15,7 +15,7 @@ pub use gents_protocol::graphql::{
 #[derive(Debug, thiserror::Error)]
 pub enum GraphqlResponseError {
     /// Error list returned by DefraDB; its source exposes storage exhaustion.
-    #[error(transparent)]
+    #[error("{0}")]
     Database(#[from] gents_protocol::database_error::GraphqlFailure),
     #[error(transparent)]
     EncodeErrors(#[from] serde_json::Error),

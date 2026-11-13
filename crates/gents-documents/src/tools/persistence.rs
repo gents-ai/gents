@@ -31,10 +31,10 @@ pub async fn write_tools_document(
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolsWriteError {
-    #[error(transparent)]
-    Invalid(anyhow::Error),
-    #[error(transparent)]
-    Publication(anyhow::Error),
+    #[error("{0}")]
+    Invalid(#[source] anyhow::Error),
+    #[error("{0}")]
+    Publication(#[source] anyhow::Error),
 }
 
 pub async fn write_tools_document_in_txn(
