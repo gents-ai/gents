@@ -265,6 +265,70 @@ describe("the install review", () => {
     await waitFor(() => expect(screen.queryByTestId("pack-install-review")).toBeNull());
   });
 
+  it("installs the version chosen on a pack's page, through the same review", async () => {
+    const installPack = bridge((request) =>
+      request.package === "acme/docs@1.5.0" ? preview({ version: "1.5.0" }) : preview(),
+    );
+    show(installPack, "acme/docs", {
+      latest: "2.0.0",
+      versions: [
+        { version: "1.5.0", published_at: "2026-09-01T00:00:00Z" },
+        { version: "1.6.0", published_at: "2026-09-15T00:00:00Z", yanked: true },
+        { version: "2.0.0", published_at: "2026-10-01T00:00:00Z" },
+      ],
+    });
+    const user = userEvent.setup();
+    const versions = await screen.findByRole("region", { name: "Versions" });
+    expect(
+      within(versions)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Install docs 2.0.0", "Install docs 1.5.0"]);
+    await user.click(
+      within(versions).getByRole("button", { name: "Install docs 1.5.0" }),
+    );
+    const review = await screen.findByTestId("pack-install-review");
+    expect(
+      await within(review).findByText("Version 1.5.0 · from the registry"),
+    ).toBeInTheDocument();
+    await user.click(installButton(review));
+    await waitFor(() => expect(installs(installPack)).toHaveLength(1));
+    expect(installs(installPack)[0]).toMatchObject({
+      package: "acme/docs@1.5.0",
+      expectDigest: DIGEST,
+    });
+  });
+
+  it("offers every other version of an installed pack, replacing the one installed", async () => {
+    const versions = {
+      latest: "1.1.0",
+      versions: [{ version: "0.9.0" }, { version: "1.0.0" }, { version: "1.1.0" }],
+    };
+    const installPack = bridge((request) =>
+      preview({
+        pack: "research",
+        coordinate: "demo/research",
+        version: request.package.split("@")[1] ?? "1.1.0",
+      }),
+    );
+    show(installPack, "demo/research", versions);
+    const user = userEvent.setup();
+    const listed = await screen.findByRole("region", { name: "Versions" });
+    expect(
+      within(listed)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Install research 1.1.0", "Install research 0.9.0"]);
+    await user.click(
+      within(listed).getByRole("button", { name: "Install research 0.9.0" }),
+    );
+    const review = await screen.findByTestId("pack-install-review");
+    expect(await within(review).findByText(/replaces 1\.0\.0/)).toBeInTheDocument();
+    expect(installPack).toHaveBeenCalledWith(
+      expect.objectContaining({ package: "demo/research@0.9.0", preview: true }),
+    );
+  });
+
   it("writes nothing when cancelled", async () => {
     const installPack = bridge();
     show(installPack);

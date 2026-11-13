@@ -694,6 +694,26 @@ export function PackPage({
                     .filter(Boolean)
                     .join(" · ")}
                 </span>
+                {/* any version the registry still offers, through the same
+                    review as the latest; the one installed has nothing to
+                    install */}
+                {local && pack && installed?.installed !== v.version && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="-my-1 text-muted-foreground hover:text-foreground"
+                    aria-label={`Install ${shortName(pack)} ${v.version}`}
+                    disabled={busy !== null}
+                    onClick={() =>
+                      reviewInstall({
+                        package: `${pack}@${v.version}`,
+                        source: "registry",
+                      })
+                    }
+                  >
+                    Install
+                  </Button>
+                )}
               </li>
             ))}
           </ul>

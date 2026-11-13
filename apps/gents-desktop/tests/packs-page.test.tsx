@@ -516,6 +516,26 @@ describe("the Packs page", () => {
       await within(registry).findByRole("button", { name: "Install" }),
     ).toBeDisabled();
   });
+
+  it("lists a pack's versions without Install on a node it can't install on", async () => {
+    withFlags({ packs: true });
+    const app = testApp({
+      api: {
+        installPack: async () => {
+          throw new Error("not previewed in this test");
+        },
+        packInfo: async () => ({
+          latest: "1.1.0",
+          versions: [{ version: "1.0.0" }, { version: "1.1.0" }],
+        }),
+      },
+      deployments: [{ ...node, nodeDid: "did:key:remote", source: "peer" }],
+    });
+    renderIn(app, <PacksScreen item="acme/docs" />);
+    const versions = await screen.findByRole("region", { name: "Versions" });
+    expect(within(versions).getByText("1.0.0")).toBeInTheDocument();
+    expect(within(versions).queryByRole("button")).toBeNull();
+  });
 });
 
 describe("where Packs is reached", () => {
