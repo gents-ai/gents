@@ -28,6 +28,7 @@ mod reset;
 mod reset_store;
 mod startup_readiness;
 mod status;
+mod unfinished_setup;
 
 fn not_the_user_home() -> &'static Path {
     Path::new("/nonexistent-user-home")

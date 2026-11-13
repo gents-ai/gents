@@ -23,27 +23,12 @@ pub struct MetaToolContext {
 }
 
 impl MetaToolContext {
-    pub(super) fn is_mcp_service_allowed(&self, service_id: &str) -> bool {
-        mcp_service_allowed(&self.allowed_mcp_service_ids, service_id)
-    }
-
     pub(super) fn service_selection(
         &self,
         service_id: &str,
     ) -> Option<&gents_documents::RemoteServiceTools> {
-        let mut matches = self
-            .remote_tools
-            .services
-            .iter()
-            .filter(|service| service.mcp_service_id == service_id);
-        let service = matches.next()?;
-        (matches.next().is_none()
-            && self.is_mcp_service_allowed(service_id)
-            && service
-                .background_tool_names
-                .iter()
-                .all(|name| service.tool_names.contains(name)))
-        .then_some(service)
+        self.remote_tools
+            .selected_service(service_id, &self.allowed_mcp_service_ids)
     }
 
     pub(super) fn is_tool_allowed(&self, service_id: &str, tool_name: &str) -> bool {
@@ -98,12 +83,6 @@ impl MetaToolContext {
             )
         })
     }
-}
-
-pub(super) fn mcp_service_allowed(allowed_mcp_service_ids: &[String], service_id: &str) -> bool {
-    allowed_mcp_service_ids
-        .iter()
-        .any(|allowed| allowed == service_id)
 }
 
 #[derive(Debug)]

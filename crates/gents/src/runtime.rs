@@ -6,6 +6,7 @@ pub mod native_logging;
 pub(crate) mod node_readiness_publisher;
 pub mod node_start;
 pub mod oneshot;
+pub mod shutdown;
 pub mod startup_readiness;
 pub mod startup_recovery;
 pub(crate) mod status;

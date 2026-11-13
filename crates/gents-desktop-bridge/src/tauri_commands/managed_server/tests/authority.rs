@@ -74,6 +74,11 @@ fn invoke_on_forge_home(cmd: &str) -> (tempfile::TempDir, Vec<u8>, String) {
     let node_home = state.policy.node_home.clone().expect("node home");
     let desktop_root = state.policy.desktop_paths.root().to_path_buf();
     write_home(&node_home, "did:key:forge", "MetaOnly", None);
+    // A home that has served is another Node, not an unfinished attempt.
+    write(
+        &node_home.join(gents_store::local::home::RUNTIME_STATE_FILE_NAME),
+        "{}",
+    );
     let before = std::fs::read(node_home.join("init.json")).unwrap();
     let root = temp.path().join("work");
     std::fs::create_dir_all(&root).unwrap();

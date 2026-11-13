@@ -354,7 +354,6 @@ pub struct McpHealthCheckService {
     pub endpoint_url: String,
     #[serde(default, deserialize_with = "crate::mcp::registry::null_as_default")]
     pub send_node_did: bool,
-    pub updated_at: Option<String>,
 }
 
 impl From<gents_documents::ToolServiceRegistry> for McpHealthCheckService {
@@ -368,7 +367,6 @@ impl From<gents_documents::ToolServiceRegistry> for McpHealthCheckService {
             mcp_path: service.mcp_path.unwrap_or_default(),
             endpoint_url: service.endpoint_url.unwrap_or_default(),
             send_node_did: service.send_node_did,
-            updated_at: None,
         }
     }
 }
@@ -646,16 +644,13 @@ async fn run_health_check_cycle_with_cancel(
         let service_id = service.service_id.clone();
         online_service_ids.insert(service_id.clone());
 
-        let heartbeat_seen_at = parse_updated_at(service.updated_at.as_deref()).unwrap_or(now);
         let previous = health_map.get_entry(&service_id).await;
         let previous_model = previous
             .as_ref()
             .map(|entry| entry.model.clone())
             .unwrap_or_else(ServiceModelInternal::initial);
-        let previous_last_seen = previous
-            .as_ref()
-            .map(|entry| entry.health.last_seen)
-            .unwrap_or(heartbeat_seen_at);
+        let observed_at = previous.as_ref().map(|entry| entry.health.last_seen);
+        let previous_last_seen = observed_at.unwrap_or(now);
         let previous_endpoint = previous.as_ref().and_then(|entry| entry.endpoint.clone());
         let previous_tool_count = previous.as_ref().and_then(|entry| entry.tool_count);
 
@@ -687,11 +682,13 @@ async fn run_health_check_cycle_with_cancel(
             }
         };
 
-        let is_stale = now
-            .signed_duration_since(heartbeat_seen_at)
-            .to_std()
-            .map(|age| age > options.staleness_threshold)
-            .unwrap_or(false);
+        // External premise: no writer refreshes `ToolServiceRegistry.updated_at`
+        // after its create stamp, so the configuration document carries no
+        // liveness. A probe's freshness is the age of this node's last
+        // observation; an unobserved service has no age and is not stale.
+        let is_stale = observed_at
+            .and_then(|observed_at| now.signed_duration_since(observed_at).to_std().ok())
+            .is_some_and(|age| age > options.staleness_threshold);
 
         if let Some(context) = persistence.as_ref() {
             let current = crate::mcp::registry::configured_mcp_service_on(
@@ -972,13 +969,6 @@ fn now_plus_duration(now: DateTime<Utc>, duration: Duration) -> DateTime<Utc> {
         .unwrap_or(now)
 }
 
-fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
-    let value = value?;
-    chrono::DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
 /// External premise: an MCP health probe fails with transport and OS errors
 /// (rmcp, reqwest, std::io) recorded as text in the health row; their kind
 /// survives only in that wording.
@@ -1252,7 +1242,6 @@ mod registry_parsing_tests {
             "mcp_port": 9201,
             "mcp_path": null,
             "send_node_did": null,
-            "updated_at": null,
         });
 
         let entry: McpHealthCheckService =
@@ -1275,8 +1264,7 @@ mod registry_parsing_tests {
                 "tailscale_ip": "100.69.4.79",
                 "lan_ip": null,
                 "mcp_port": 9201,
-                "mcp_path": "/mcp",
-                "updated_at": "2026-04-14T00:00:00Z"
+                "mcp_path": "/mcp"
             }
         ]);
 
@@ -1675,10 +1663,7 @@ mod tests {
         }
     }
 
-    fn registry_entry(
-        service_id: &str,
-        updated_at: chrono::DateTime<chrono::Utc>,
-    ) -> McpHealthCheckService {
+    fn registry_entry(service_id: &str) -> McpHealthCheckService {
         McpHealthCheckService {
             service_id: service_id.to_string(),
             hostname: "remote-host".to_string(),
@@ -1688,7 +1673,6 @@ mod tests {
             mcp_path: "/mcp".to_string(),
             endpoint_url: String::new(),
             send_node_did: false,
-            updated_at: Some(updated_at.to_rfc3339()),
         }
     }
 
@@ -1878,7 +1862,7 @@ mod tests {
         for offset in 0..3 {
             let cycle_now = now + ChronoDuration::seconds(offset);
             run_health_check_cycle(
-                vec![registry_entry(SERVICE_ID, cycle_now)],
+                vec![registry_entry(SERVICE_ID)],
                 cycle_now,
                 &pool,
                 &health_map,
@@ -1907,7 +1891,7 @@ mod tests {
         let calls_after_eviction = handler_calls.load(Ordering::SeqCst);
         let during_backoff = now + ChronoDuration::seconds(12);
         run_health_check_cycle(
-            vec![registry_entry(SERVICE_ID, during_backoff)],
+            vec![registry_entry(SERVICE_ID)],
             during_backoff,
             &pool,
             &health_map,
@@ -1926,7 +1910,7 @@ mod tests {
 
         let expired = now + ChronoDuration::seconds(32);
         run_health_check_cycle(
-            vec![registry_entry(SERVICE_ID, expired)],
+            vec![registry_entry(SERVICE_ID)],
             expired,
             &pool,
             &health_map,
@@ -1948,7 +1932,7 @@ mod tests {
         probe_succeeds.store(true, Ordering::SeqCst);
         let recovered = expired + ChronoDuration::seconds(60);
         run_health_check_cycle(
-            vec![registry_entry(SERVICE_ID, recovered)],
+            vec![registry_entry(SERVICE_ID)],
             recovered,
             &pool,
             &health_map,
@@ -1976,6 +1960,83 @@ mod tests {
             backoff_duration(9, &options),
             std::time::Duration::from_secs(60)
         );
+    }
+
+    /// External premise: no writer refreshes `ToolServiceRegistry.updated_at`
+    /// after the create stamp, and readers that query the field see that stamp.
+    #[tokio::test]
+    async fn successful_probe_of_an_old_registry_row_is_healthy() {
+        let now = chrono::Utc::now();
+        let created_at = now - ChronoDuration::minutes(10);
+        let service: McpHealthCheckService = serde_json::from_value(serde_json::json!({
+            "service_id": "unheartbeaten",
+            "hostname": "remote-host",
+            "tailscale_ip": "100.64.0.1",
+            "lan_ip": null,
+            "mcp_port": 9201,
+            "mcp_path": "/mcp",
+            "send_node_did": false,
+            "updated_at": created_at.to_rfc3339(),
+        }))
+        .expect("registry row must parse");
+        let pool =
+            McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async move {
+                Ok(ListToolsResult::default())
+            });
+        let health_map = ServiceHealthMap::new();
+
+        run_health_check_cycle(
+            vec![service],
+            now,
+            &pool,
+            &health_map,
+            "local-host",
+            None,
+            &HealthCheckerOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let entry = health_map.get_entry("unheartbeaten").await.unwrap();
+        assert_eq!(entry.health.status, super::HealthStatus::Healthy);
+        assert_eq!(entry.health.last_error, None);
+    }
+
+    #[tokio::test]
+    async fn successful_probe_after_an_unobserved_gap_is_stale() {
+        let now = chrono::Utc::now();
+        let health_map = ServiceHealthMap::new();
+        health_map
+            .set_for_test(
+                "long-gap",
+                ServiceHealth {
+                    status: super::HealthStatus::Healthy,
+                    last_seen: now - ChronoDuration::minutes(10),
+                    last_error: None,
+                },
+            )
+            .await;
+        let pool =
+            McpPool::new_with_list_tools_handler(|_service_id, _endpoint| async move {
+                Ok(ListToolsResult::default())
+            });
+
+        run_health_check_cycle(
+            vec![registry_entry("long-gap")],
+            now,
+            &pool,
+            &health_map,
+            "local-host",
+            None,
+            &HealthCheckerOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let entry = health_map.get_entry("long-gap").await.unwrap();
+        assert_eq!(entry.health.status, super::HealthStatus::Stale);
     }
 
     #[tokio::test]
@@ -2184,7 +2245,6 @@ mod tests {
             mcp_path: endpoint.path().into(),
             endpoint_url: String::new(),
             send_node_did: true,
-            updated_at: None,
         };
         let options = HealthCheckerOptions::default();
         super::run_health_check_cycle_for_actor(
@@ -2413,7 +2473,7 @@ mod tests {
                     let registry = input
                         .registry
                         .iter()
-                        .map(|id| registry_entry(id, now))
+                        .map(|id| registry_entry(id))
                         .collect::<Vec<_>>();
                     let handle = tokio::spawn(async move {
                         super::run_health_check_cycle_with_cancel(
@@ -2476,7 +2536,7 @@ mod tests {
         });
         let health = ServiceHealthMap::new();
         super::run_health_check_cycle_with_cancel(
-            vec![registry_entry("pending", chrono::Utc::now())],
+            vec![registry_entry("pending")],
             chrono::Utc::now(),
             &pool,
             &health,
@@ -2505,7 +2565,6 @@ mod tests {
                     mcp_path: String::new(),
                     endpoint_url: "ftp://mcp.example.com".into(),
                     send_node_did: false,
-                    updated_at: None,
                 },
                 super::McpEndpointDefect::InvalidEndpointUrl,
             ),
@@ -2519,7 +2578,6 @@ mod tests {
                     mcp_path: String::new(),
                     endpoint_url: String::new(),
                     send_node_did: false,
-                    updated_at: None,
                 },
                 super::McpEndpointDefect::MissingMcpPort,
             ),
@@ -2533,7 +2591,6 @@ mod tests {
                     mcp_path: String::new(),
                     endpoint_url: String::new(),
                     send_node_did: false,
-                    updated_at: None,
                 },
                 super::McpEndpointDefect::MissingAddressFields,
             ),
@@ -2621,7 +2678,6 @@ mod tests {
             mcp_path: String::new(),
             endpoint_url: format!("http://{addr}/mcp"),
             send_node_did: false,
-            updated_at: None,
         };
         let health_map = ServiceHealthMap::new();
         run_health_check_cycle(

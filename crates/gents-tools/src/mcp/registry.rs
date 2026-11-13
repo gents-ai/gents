@@ -128,7 +128,6 @@ mod tests {
             mcp_path: "/mcp".into(),
             endpoint_url: endpoint_url.into(),
             send_node_did: false,
-            updated_at: None,
         }
     }
 

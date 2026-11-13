@@ -36,9 +36,9 @@ pub use observe::{
 pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
 pub(crate) use peer_directory::PeerDirectory;
 pub use peer_directory::{
-    initialize_local_standard_peer, load_peer_records, retire_stale_local_peers,
-    set_aside_unreadable, set_aside_unreadable_peer_directory, ChatNextAction, ChatRouteCause,
-    EndedAccess, EndedAccessReason, PeerRecord,
+    initialize_local_standard_peer, load_peer_records, retire_local_node_records,
+    retire_stale_local_peers, set_aside_unreadable, set_aside_unreadable_peer_directory,
+    ChatNextAction, ChatRouteCause, EndedAccess, EndedAccessReason, PeerRecord,
 };
 pub use principal_identity::PrincipalIdentity;
 pub(crate) use query::load_request_documents_on;

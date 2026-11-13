@@ -417,7 +417,6 @@ pub async fn observed_case_request(
     lifecycle
 }
 
-use tracing::field::{Field, Visit};
 
 pub async fn agent_write_value(
     access: &gents_store::config_client::ConfigAccess,
@@ -434,19 +433,3 @@ pub async fn agent_write_value(
         .expect("Agent-signed canonical write")
 }
 
-#[derive(Default)]
-pub struct PendingNativeOutcome(pub bool);
-
-impl Visit for PendingNativeOutcome {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "outcome" && value == "pending_native" {
-            self.0 = true;
-        }
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "outcome" && format!("{value:?}").trim_matches('"') == "pending_native" {
-            self.0 = true;
-        }
-    }
-}
