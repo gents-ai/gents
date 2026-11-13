@@ -53,20 +53,8 @@ pub fn lean_goal_create_cases() -> &'static [LeanGoalCreateCase] {
     &lean_contract_snapshot().goal_create_cases
 }
 
-pub fn lean_identity_contracts() -> &'static [LeanIdentityContract] {
-    &lean_contract_snapshot().identity_contracts
-}
-
-pub fn lean_identity_derivation_cases() -> &'static [LeanIdentityDerivationCase] {
-    &lean_contract_snapshot().identity_derivation_cases
-}
-
 pub fn lean_identity_household_cases() -> &'static [LeanIdentityHouseholdCase] {
     &lean_contract_snapshot().identity_household_cases
-}
-
-pub fn lean_identity_permission_cases() -> &'static [LeanIdentityPermissionCase] {
-    &lean_contract_snapshot().identity_permission_cases
 }
 
 pub fn lean_managed_exec_liveness_cases() -> &'static [LeanManagedExecLivenessCase] {
@@ -856,13 +844,7 @@ pub struct LeanContractSnapshot {
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
     pub feature_matrix: LeanFeatureMatrix,
-    pub identity_permission_cases: Vec<LeanIdentityPermissionCase>,
     pub identity_household_cases: Vec<LeanIdentityHouseholdCase>,
-    pub identity_task_session_publication_cases: Vec<serde_json::Value>,
-    pub identity_client_session_reservation_cases: Vec<serde_json::Value>,
-    pub identity_atomic_client_request_cases: Vec<serde_json::Value>,
-    pub identity_derivation_cases: Vec<LeanIdentityDerivationCase>,
-    pub identity_contracts: Vec<LeanIdentityContract>,
     pub pack_operator_wire_cases: Vec<LeanPackOperatorWireCase>,
     pub recovery_sweep_ids: Vec<String>,
 }
@@ -1759,44 +1741,6 @@ pub enum LeanIdentityAction {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanIdentityAgent {
-    pub label: String,
-    pub did: String,
-    pub creation_nonce: String,
-    pub node: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanIdentityContract {
-    pub node_local_collections: Vec<String>,
-    pub replicated_protocol_collections: Vec<String>,
-    pub schema_actor: String,
-    pub runtime_actor: String,
-    pub name: String,
-    pub statement: String,
-    pub enforced: bool,
-    pub tracked_by: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityDerivationCase {
-    pub name: String,
-    pub left: LeanIdentityDerivationInput,
-    pub right: LeanIdentityDerivationInput,
-    pub expected_same_did: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityDerivationInput {
-    pub node_key: String,
-    pub creation_nonce: String,
-    pub label: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanIdentityEnrollmentPolicyCase {
@@ -2023,12 +1967,6 @@ pub struct LeanIdentityHouseholdCaseEventGroupStateCase {
     pub expected: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanIdentityNode {
-    pub did: String,
-    pub enabled: bool,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanIdentityObject {
@@ -2090,32 +2028,6 @@ pub struct LeanIdentityParentPublicationStep {
     pub mark_ok: bool,
     pub revoke_parent: bool,
     pub after: LeanIdentityParentPublicationState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanIdentityPermissionCase {
-    pub name: String,
-    pub nodes: Vec<LeanIdentityNode>,
-    pub agents: Vec<LeanIdentityAgent>,
-    pub grants: Vec<LeanIdentityPermissionGrant>,
-    pub permission: String,
-    pub row_owner: String,
-    pub actor_node: String,
-    pub actor_did: String,
-    pub peer_node: String,
-    pub peer_did: String,
-    pub expected_actor_did: Option<String>,
-    pub expected_peer_did: Option<String>,
-    pub expected_actor_allowed: bool,
-    pub expected_peer_allowed: bool,
-    pub same_node: bool,
-    pub expected_decisions_equal: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanIdentityPermissionGrant {
-    pub actor: String,
-    pub permission: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

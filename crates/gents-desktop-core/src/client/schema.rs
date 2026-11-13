@@ -40,20 +40,21 @@ mod tests {
 
     #[test]
     fn desktop_subscriptions_are_exactly_the_modeled_protocol_allowlist() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let contract = &snapshot["identity_contracts"][0];
-        let expected: std::collections::BTreeSet<_> = contract["replicated_protocol_collections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|name| name.as_str().unwrap())
-            .collect();
-        assert_eq!(
-            subscribed_collection_names()
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>(),
-            expected
-        );
+        let subscribed = subscribed_collection_names();
+        let cases = gents_lean_vocab::families::agent_identity_desktop_subscription::cases();
+        for case in &cases {
+            case.check(
+                gents_lean_vocab::families::agent_identity_desktop_subscription::LocalityOutput {
+                    replicates: subscribed.contains(&case.input.collection.as_str()),
+                },
+            );
+        }
+        for name in &subscribed {
+            assert!(
+                cases.iter().any(|case| case.input.collection == *name),
+                "{name} is subscribed without a modeled protocol collection"
+            );
+        }
     }
 
     #[test]
