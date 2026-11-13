@@ -1226,9 +1226,13 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "admission_handoff_owned_loop")
       "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "admission_handoff_hook_effect")
+      "tool-call" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "family" "admission_handoff_unreached"
-      "model-production-gap: production's typed oneshot admission handoff has no dispatch linearization, lease or generation fence, duplicate or misaddressed reply, unpublished header or terminate decision to stage, so no production scenario replays these cases.")
+      "model-production-gap: production's typed oneshot admission handoff has no dispatch linearization, lease or generation fence, duplicate or misaddressed reply, unpublished header, invocation without a reply or effect observed after a stop to stage, so no production scenario replays these cases.")
       "tool-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

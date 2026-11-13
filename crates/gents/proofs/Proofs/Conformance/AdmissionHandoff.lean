@@ -26,27 +26,33 @@ def observe (name : String) : Option State :=
 def inputsNamed (names : List String) : List HandoffInput :=
   (cases.filter fun c => names.contains c.name).map fun c => ⟨c.name, c.published⟩
 
-structure DriveOutput where
-  effect : String
-  invoked : Bool
-  deriving ToJson
-
 /-- `drive_admissions` hands each hook reply to the waiting loop over a typed
-oneshot: a stand-in loop can stage a delivered reply, a stop before or after
-the reply, a closed reply channel and a skip that keeps a hook effect. Dispatch
-linearization, lease and generation fencing and misaddressed replies have no
-representation in that handoff. -/
+oneshot: a stand-in loop can stage a delivered reply (with or without elapsed
+time before the invocation), a stop before or after the reply, a closed reply
+channel, a skip that keeps a hook effect and a terminate reply. The stop reason
+and the lease clock have no representation in that handoff, so every stop
+before or after the reply is staged by the same stop. Dispatch linearization,
+lease and generation fencing and misaddressed replies have no representation
+there either. -/
 def driveNames : List String :=
-  ["accepted-before-invoke", "cancel-after-reply", "cancel-waiting-unknown",
-   "lease-lost-waiting", "shutdown-waiting", "deadline-waiting", "dropped-channel",
-   "skip-with-hook-effect"]
+  ["accepted-before-invoke", "lease-expires-after-reply-without-observed-stop",
+   "cancel-after-reply", "lease-lost-after-reply", "shutdown-after-reply",
+   "deadline-after-reply", "cancel-waiting-unknown", "lease-lost-waiting",
+   "shutdown-waiting", "deadline-waiting", "dropped-channel", "skip-with-hook-effect",
+   "terminate-after-dispatch"]
 
+/-- Whether the stand-in loop invokes the guest after the handoff. -/
 @[conformance_family]
-def driveAdmissions : Family HandoffInput DriveOutput where
+def driveAdmissions : Family HandoffInput Bool where
   inputs := inputsNamed driveNames
-  model := fun i => match observe i.name with
-    | some result => ⟨observationName result.effectObservation, result.invoked⟩
-    | none => ⟨"", false⟩
+  model := fun i => ((observe i.name).map (·.invoked)).getD false
+
+/-- Only the skip scenario's hook performs an effect before it replies; the
+handoff keeps it. -/
+@[conformance_family]
+def hookEffect : Family HandoffInput String where
+  inputs := inputsNamed ["skip-with-hook-effect"]
+  model := fun i => ((observe i.name).map (observationName ·.effectObservation)).getD ""
 
 /-- The owned loop scenario holds a hook inside admission and drops the loop:
 only a stop while the reply is pending is reachable there. -/
@@ -68,8 +74,8 @@ structure Observed where
 
 /-- model-production-gap: production's typed oneshot handoff has no dispatch
 linearization, lease or generation fence, duplicate or misaddressed reply,
-unpublished header or terminate decision to stage, so these cases are replayed
-by no production scenario. -/
+unpublished header, invocation without a reply or effect observed after a stop
+to stage, so these cases are replayed by no production scenario. -/
 @[conformance_family]
 def unreached : Family HandoffInput Observed where
   inputs := (cases.filter fun c => !(driveNames.contains c.name)).map fun c => ⟨c.name, c.published⟩

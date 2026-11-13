@@ -89,7 +89,7 @@ async fn dropping_pending_provider_dispatch_keeps_scope_and_cancels_work() {
     assert!(result.await.is_err());
 }
 
-async fn delivered_reply() -> (bool, bool) {
+async fn delivered_reply() -> bool {
     let invoked = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let work = AdmissionWork {
@@ -108,10 +108,10 @@ async fn delivered_reply() -> (bool, bool) {
     let item = stream.next().await.unwrap().unwrap();
     assert!(matches!(item, super::LoopStreamItem::Final { .. }));
     assert!(stream.next().await.is_none());
-    (false, invoked.load(Ordering::SeqCst))
+    invoked.load(Ordering::SeqCst)
 }
 
-async fn stop_after_the_reply() -> (bool, bool) {
+async fn stop_after_the_reply() -> bool {
     let invoked = Arc::new(AtomicBool::new(false));
     let (sender, mut receiver) = tokio::sync::oneshot::channel();
     let (resume, resume_rx) = tokio::sync::oneshot::channel::<()>();
@@ -136,10 +136,10 @@ async fn stop_after_the_reply() -> (bool, bool) {
     );
     drop(stream);
     assert!(resume.send(()).is_err());
-    (false, invoked.load(Ordering::SeqCst))
+    invoked.load(Ordering::SeqCst)
 }
 
-async fn drop_while_waiting() -> (bool, bool) {
+async fn drop_while_waiting() -> bool {
     struct Dropped(Arc<AtomicBool>);
     impl Drop for Dropped {
         fn drop(&mut self) {
@@ -163,10 +163,10 @@ async fn drop_while_waiting() -> (bool, bool) {
     assert!(dropped.load(Ordering::SeqCst));
     let reply = receiver.await;
     assert!(reply.is_err(), "a dropped hook delivers no reply");
-    (false, matches!(reply, Ok(ToolCallHookAction::Continue)))
+    matches!(reply, Ok(ToolCallHookAction::Continue))
 }
 
-async fn biased_stop_while_waiting() -> (bool, bool) {
+async fn biased_stop_while_waiting() -> bool {
     let entered = Arc::new(tokio::sync::Notify::new());
     let marker = entered.clone();
     let invoked = Arc::new(AtomicBool::new(false));
@@ -202,17 +202,23 @@ async fn biased_stop_while_waiting() -> (bool, bool) {
     stop.send(()).unwrap();
     assert!(!driver.await);
     drop(stream);
-    (false, invoked.load(Ordering::SeqCst))
+    invoked.load(Ordering::SeqCst)
 }
 
-async fn closed_reply_channel() -> (bool, bool) {
+async fn closed_reply_channel() -> bool {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     drop(receiver);
     let work = AdmissionWork {
         future: Box::pin(async { ToolCallHookAction::Continue }),
         reply: sender,
     };
-    let inner = stream::iter(vec![Ok(OwnedLoopItem::Admission(work))]);
+    let invoked = Arc::new(AtomicBool::new(false));
+    let invoked_by_stream = invoked.clone();
+    let inner = async_stream::stream! {
+        yield Ok(OwnedLoopItem::Admission(work));
+        invoked_by_stream.store(true, Ordering::SeqCst);
+        yield Ok(OwnedLoopItem::Output(super::LoopStreamItem::Final { text: "done".into() }));
+    };
     let mut stream = Box::pin(drive_admissions(inner));
     let error = stream
         .next()
@@ -221,7 +227,34 @@ async fn closed_reply_channel() -> (bool, bool) {
         .unwrap_err();
     assert!(error.to_string().contains("reply receiver closed"));
     assert!(stream.next().await.is_none());
-    (false, false)
+    invoked.load(Ordering::SeqCst)
+}
+
+async fn terminate_reply() -> bool {
+    let invoked = Arc::new(AtomicBool::new(false));
+    let invoked_by_stream = invoked.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let work = AdmissionWork {
+        future: Box::pin(async {
+            ToolCallHookAction::Terminate {
+                reason: "hook terminated".into(),
+            }
+        }),
+        reply: sender,
+    };
+    let inner = async_stream::stream! {
+        yield Ok(OwnedLoopItem::Admission(work));
+        if matches!(receiver.await, Ok(ToolCallHookAction::Continue)) {
+            invoked_by_stream.store(true, Ordering::SeqCst);
+        }
+        yield Ok(OwnedLoopItem::Output(super::LoopStreamItem::Final { text: "done".into() }));
+    };
+    let mut stream = Box::pin(drive_admissions(inner));
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap(),
+        super::LoopStreamItem::Final { .. }
+    ));
+    invoked.load(Ordering::SeqCst)
 }
 
 async fn skip_with_hook_effect() -> (bool, bool) {
@@ -260,9 +293,14 @@ async fn skip_with_hook_effect() -> (bool, bool) {
 #[tokio::test]
 async fn handoff_scenarios_follow_the_lean_admission_model() {
     for case in gents_lean_vocab::families::admission_handoff_drive_admissions::cases() {
-        let (effect, invoked) = match case.input.name.as_str() {
-            "accepted-before-invoke" => delivered_reply().await,
-            "cancel-after-reply" => stop_after_the_reply().await,
+        let invoked = match case.input.name.as_str() {
+            "accepted-before-invoke" | "lease-expires-after-reply-without-observed-stop" => {
+                delivered_reply().await
+            }
+            "cancel-after-reply"
+            | "lease-lost-after-reply"
+            | "shutdown-after-reply"
+            | "deadline-after-reply" => stop_after_the_reply().await,
             "cancel-waiting-unknown" => {
                 let dropped = drop_while_waiting().await;
                 let stopped = biased_stop_while_waiting().await;
@@ -273,15 +311,22 @@ async fn handoff_scenarios_follow_the_lean_admission_model() {
                 biased_stop_while_waiting().await
             }
             "dropped-channel" => closed_reply_channel().await,
-            "skip-with-hook-effect" => skip_with_hook_effect().await,
+            "skip-with-hook-effect" => skip_with_hook_effect().await.1,
+            "terminate-after-dispatch" => terminate_reply().await,
             other => panic!("no drive_admissions scenario stages {other}"),
         };
-        case.check(
-            gents_lean_vocab::families::admission_handoff_drive_admissions::DriveOutput {
-                effect: if effect { "committed" } else { "not_started" }.to_owned(),
-                invoked,
-            },
-        );
+        case.check(invoked);
+    }
+}
+
+#[tokio::test]
+async fn skip_keeps_the_hook_effect_as_the_lean_admission_model() {
+    for case in gents_lean_vocab::families::admission_handoff_hook_effect::cases() {
+        let (effect, _) = match case.input.name.as_str() {
+            "skip-with-hook-effect" => skip_with_hook_effect().await,
+            other => panic!("no hook effect scenario stages {other}"),
+        };
+        case.check(if effect { "committed" } else { "not_started" }.to_owned());
     }
 }
 
