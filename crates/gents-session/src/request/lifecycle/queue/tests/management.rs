@@ -104,7 +104,7 @@ async fn replay_replacement(
         .collect::<Vec<_>>();
     let selected = &originals[offset.min(originals.len() as u64) as usize
         ..(offset + count).min(originals.len() as u64) as usize];
-    let ids = |entries: &[gents_lean_vocab::LeanFoldQueueEntry]| {
+    let ids = |entries: &[super::folding::ModeledEntry]| {
         entries
             .iter()
             .map(|entry| entry.request_id)
@@ -112,7 +112,7 @@ async fn replay_replacement(
     };
     let db = test_db(&format!("{}-{variant}", case.name)).await;
     let session_id = format!("management-{}", case.name);
-    let ttl = |entry: &gents_lean_vocab::LeanFoldQueueEntry| match (entry.fresh, variant) {
+    let ttl = |entry: &super::folding::ModeledEntry| match (entry.fresh, variant) {
         (true, 0) => None,
         (true, _) => Some("2099-01-01T00:00:00Z"),
         (false, 0) => Some("2000-01-01T00:00:00Z"),

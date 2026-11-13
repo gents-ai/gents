@@ -1770,13 +1770,36 @@ def caseCoverage : List CoverageEntry :=
       "fold_queue_contracts_publication_script")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "session_input_edit_cases"
-      "SessionInputEditCases"
+      "family"
+      "fold_queue_contracts_input_edit_atomic"
       "The model composes existing authority observations with the queue replacement owner and atomic terminal receipt. Signature validity and session ownership are supplied by their existing native owners; edits are direct client-signed commands, and the command introduces no new authority kind. Native binding must exercise these facts, exact replay and identity collision through the real reconciler. Distinct physical commands sharing an ID are an observed fail-closed barrier, including before application and after a receipt on another session; existing effects and receipts remain intact.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_cases"
-      "SessionInputEditCases")
+      "family"
+      "fold_queue_contracts_input_edit_endpoint")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_endpoint_refused")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_concurrent_replay")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_racing_intents")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_late_twin")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_identical_republish")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "fold_queue_contracts_input_edit_unreached"
+      "model-production-gap: process_command leaves a command unanswered when another physical command shares its ID, but the session command table's unique command_id index refuses the second document, so no fixture can store two physical commands under one ID, before application or after a receipt in another session.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

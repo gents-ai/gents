@@ -45,10 +45,6 @@ pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
     &lean_contract_snapshot().recovery_sweep_cases
 }
 
-pub fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
-    &lean_contract_snapshot().session_input_edit_cases
-}
-
 pub fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
     &lean_contract_snapshot().transcript_conformance_cases
 }
@@ -467,7 +463,6 @@ pub struct LeanContractSnapshot {
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
-    pub session_input_edit_cases: Vec<LeanSessionInputEditCase>,
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
@@ -578,21 +573,6 @@ pub struct LeanFeatureSurfaceRequirement {
     pub feature: String,
     pub required: Vec<LeanSurface>,
     pub deferred: Vec<LeanFeatureSurfaceDeferral>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFoldQueueEntry {
-    pub request_id: u64,
-    pub execution_origin: String,
-    pub delivery: String,
-    pub order_key: u64,
-    pub source: String,
-    pub policy: String,
-    pub queued_after: Option<u64>,
-    pub requester_id: Option<u64>,
-    pub turn_context: u64,
-    pub fresh: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -996,15 +976,6 @@ pub struct LeanProcessStopCase {
     pub durable_state: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanQueueManagementState {
-    pub active: Option<u64>,
-    pub pending: Vec<LeanFoldQueueEntry>,
-    pub folding: Vec<LeanFoldQueueEntry>,
-    pub terminal: Vec<u64>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LeanR6BackgroundingCase {
     pub name: String,
@@ -1144,81 +1115,6 @@ pub struct LeanSelfConfigLookupCase {
     pub same_generation: bool,
     pub native_allows: bool,
     pub expected: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionInputEditAuthority {
-    pub signature_valid: bool,
-    pub replacements_valid: bool,
-    pub command_identity_unique: bool,
-    pub session_owned: bool,
-    pub editor: LeanSessionInputEditor,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionInputEditCase {
-    pub name: String,
-    pub initial: LeanSessionInputEditState,
-    pub history: Vec<LeanSessionInputEditStep>,
-    pub before: LeanSessionInputEditState,
-    pub now: u64,
-    pub command: LeanSessionInputEditCommand,
-    pub authority: LeanSessionInputEditAuthority,
-    pub after: LeanSessionInputEditState,
-    pub receipt: Option<LeanSessionInputEditReceipt>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionInputEditCommand {
-    pub id: u64,
-    pub digest: u64,
-    pub caller: Option<u64>,
-    pub issued_at: u64,
-    pub expires_at: u64,
-    pub expected: Vec<u64>,
-    pub offset: usize,
-    pub count: usize,
-    pub replacements: Vec<LeanFoldQueueEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionInputEditReceipt {
-    pub command_id: u64,
-    pub digest: u64,
-    pub outcome: String,
-    pub request_ids: Vec<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionInputEditState {
-    pub queue: LeanQueueManagementState,
-    pub receipts: Vec<LeanSessionInputEditReceipt>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanSessionInputEditStep {
-    Apply {
-        now: u64,
-        authority: LeanSessionInputEditAuthority,
-        command: LeanSessionInputEditCommand,
-    },
-    LoseReceipts,
-    OtherSession { session: u64 },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanSessionInputEditor {
-    Requester,
-    WorkingAgent,
-    Admin,
-    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
