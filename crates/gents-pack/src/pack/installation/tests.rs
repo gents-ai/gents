@@ -682,27 +682,14 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
 
 #[tokio::test]
 async fn pin_rejection_after_unknown_commit_preserves_unconfirmed_outcome() {
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .pack_finality_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    for events in [&["no_commit"][..], &["unknown_commit", "no_commit"][..]] {
-        let modeled = cases
-            .iter()
-            .find(|case| case["attempts"] == json!(events))
-            .unwrap()["unconfirmed"]
-            .as_bool()
-            .unwrap();
+    for unconfirmed in [false, true] {
         let result = classify_plugin_store_failure(
             PluginStoreChangeError::PinConflict("pin conflict".into()),
-            modeled,
+            unconfirmed,
         );
         assert_eq!(
             matches!(result, PluginStoreChangeError::Unconfirmed(_)),
-            modeled
+            unconfirmed
         );
     }
 }
@@ -764,17 +751,6 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         .execute("{ PackInstallation { _docID installed_at } }")
         .await
         .unwrap();
-    let model = gents_lean_vocab::lean_plugin_reference_cases()
-        .iter()
-        .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
-        .unwrap();
-    assert_eq!(
-        !rows["data"]["PackInstallation"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        model["retain_notification_record"].as_bool().unwrap()
-    );
     assert_eq!(
         rows["data"]["PackInstallation"][0]["_docID"],
         before["data"]["PackInstallation"][0]["_docID"]
@@ -782,29 +758,6 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
     assert_ne!(
         rows["data"]["PackInstallation"][0]["installed_at"],
         before["data"]["PackInstallation"][0]["installed_at"]
-    );
-
-    // A retirement releases the record a disappearance notice keeps.
-    super::super::record_plugin_retirement_as(
-        &access,
-        OWNER,
-        None,
-        home.path(),
-        "acme/demo",
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    let rows = access
-        .execute("{ PackInstallation { _docID } }")
-        .await
-        .unwrap();
-    assert_eq!(
-        !rows["data"]["PackInstallation"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        model["retain_retired_record"].as_bool().unwrap()
     );
 }
 
@@ -1669,23 +1622,6 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         .execute("{ PackInstallation { _docID } }")
         .await
         .unwrap();
-    let retained = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_plugin_reference_cases()
-            .iter()
-            .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
-            .unwrap()["retain_notification_record"]
-            .as_bool()
-            .unwrap()
-    })
-    .await
-    .unwrap();
-    assert_eq!(
-        !response["data"]["PackInstallation"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        retained
-    );
     assert_eq!(response["data"]["PackInstallation"][0]["_docID"], record_id);
     node.shutdown().await.expect("node shutdown");
 }
@@ -3094,41 +3030,36 @@ fn a_documents_dependency_naming_an_unresolved_plugin_is_refused() {
     );
 }
 
-#[tokio::test]
-async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
-    fn names(value: &Value) -> Vec<&str> {
-        value
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap().strip_prefix("acme/").unwrap())
-            .collect()
-    }
-    fn config(references: &Value) -> PackConfig {
-        serde_json::from_value(json!({
-            "node": {"node_did": OWNER},
-            "tools": [{"tools_id": "reference-tools", "node_did": OWNER,
-                "integrations": {"plugins": references.as_array().unwrap().iter()
-                    .map(|plugin| json!({"plugin": plugin})).collect::<Vec<_>>()}}],
-        }))
-        .unwrap()
-    }
-    let cases =
-        tokio::task::spawn_blocking(|| gents_lean_vocab::lean_plugin_reference_cases().to_vec())
-            .await
-            .unwrap();
-    assert_eq!(cases.len(), 14);
-    for case in &cases {
+fn acme_names(plugins: &[String]) -> Vec<&str> {
+    plugins
+        .iter()
+        .map(|plugin| plugin.strip_prefix("acme/").unwrap())
+        .collect()
+}
+
+fn reference_config(references: &[String]) -> PackConfig {
+    serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "tools": [{"tools_id": "reference-tools", "node_did": OWNER,
+            "integrations": {"plugins": references.iter()
+                .map(|plugin| json!({"plugin": plugin})).collect::<Vec<_>>()}}],
+    }))
+    .unwrap()
+}
+
+#[test]
+fn plugin_reference_availability_follows_the_lean_model() {
+    gents_lean_vocab::families::contracts_pack_installation_reference_availability::replay(|i| {
         let home = tempfile::tempdir().unwrap();
-        let root = plugin_pack_manifest("workflow", "documents", &names(&case["root_ships"]));
+        let root = plugin_pack_manifest("workflow", "documents", &acme_names(&i.root_ships));
         let dependency =
-            plugin_pack_manifest("dependency", "documents", &names(&case["dependency_ships"]));
-        let references = case["references"].as_array().unwrap();
-        assert!((1..=2).contains(&references.len()));
-        let root_config = config(&references[0]);
-        let mut dependency_config = config(references.get(1).unwrap_or(&json!([])));
+            plugin_pack_manifest("dependency", "documents", &acme_names(&i.dependency_ships));
+        assert!((1..=2).contains(&i.references.len()));
+        let root_config = reference_config(&i.references[0]);
+        let mut dependency_config =
+            reference_config(i.references.get(1).map_or(&[][..], |group| &group[..]));
         dependency_config.tools[0].tools_id = "dependency-tools".into();
-        for plugin in names(&case["installed"]) {
+        for plugin in acme_names(&i.installed) {
             let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
                 "namespace": "acme", "name": plugin, "version": "1.0.0",
                 "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust",
@@ -3136,23 +3067,27 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
             })).unwrap();
             crate::plugin::store::write_record(home.path(), &record).unwrap();
         }
-        let result = super::documents::ensure_plugin_references_resolve(
+        super::documents::ensure_plugin_references_resolve(
             &[(&root, &root_config), (&dependency, &dependency_config)],
-            case["local"].as_bool().unwrap().then_some(home.path()),
+            i.local.then_some(home.path()),
             &BTreeMap::new(),
-        );
-        assert_eq!(
-            result.is_ok(),
-            case["accepted"].as_bool().unwrap(),
-            "{case}: {result:?}"
-        );
+        )
+        .is_ok()
+    });
+}
+
+#[tokio::test]
+async fn plugin_reference_removal_follows_the_lean_model() {
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::contracts_pack_installation_reference_removal::cases()
+    })
+    .await
+    .unwrap();
+    for case in cases {
         let (_directory, runtime, _node, access) =
             super::super::agent_bindings::tests::fixture().await;
         let owner = gents_store::identity::NodeIdentity::did(&runtime);
-        let references = references
-            .iter()
-            .flat_map(|group| group.as_array().unwrap())
-            .collect::<Vec<_>>();
+        let references = case.input.references.iter().flatten().collect::<Vec<_>>();
         let bindings = references
             .iter()
             .map(|_| gents_store::identity::provision_agent_identity(&runtime).unwrap())
@@ -3185,18 +3120,79 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
         )
         .await
         .unwrap();
-        let removed = case["root_ships"]
-            .as_array()
-            .unwrap()
+        let removed: std::collections::BTreeSet<String> = case
+            .input
+            .root_ships
             .iter()
-            .chain(case["dependency_ships"].as_array().unwrap())
-            .map(|value| value.as_str().unwrap().to_owned())
+            .chain(&case.input.dependency_ships)
+            .cloned()
             .collect();
         let removal = super::ensure_plugins_unreferenced(&access, owner, &removed).await;
-        assert_eq!(
-            removal.is_ok(),
-            case["removal_accepted"].as_bool().unwrap(),
-            "{case}: {removal:?}"
+        case.check(removal.is_ok());
+    }
+}
+
+#[tokio::test]
+async fn plugin_store_record_retention_follows_the_lean_model() {
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::contracts_pack_installation_store_record_retention::cases()
+    })
+    .await
+    .unwrap();
+    for case in cases {
+        let access = access().await;
+        let home = tempfile::tempdir().unwrap();
+        let mut pack = identity("1");
+        if case.input.root_ships.is_empty() {
+            pack.plugins.clear();
+        }
+        record_plugin_store_change(
+            &access,
+            OWNER,
+            home.path(),
+            "acme/demo",
+            Some(&pack),
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let recorded = |access: ConfigAccess| async move {
+            !access
+                .execute("{ PackInstallation { _docID } }")
+                .await
+                .unwrap()["data"]["PackInstallation"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        };
+        assert!(recorded(access.clone()).await);
+        record_plugin_store_change(
+            &access,
+            OWNER,
+            home.path(),
+            "acme/demo",
+            None,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let retain_notification_record = recorded(access.clone()).await;
+        super::super::record_plugin_retirement_as(
+            &access,
+            OWNER,
+            None,
+            home.path(),
+            "acme/demo",
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let retain_retired_record = recorded(access.clone()).await;
+        case.check(
+            gents_lean_vocab::families::contracts_pack_installation_store_record_retention::RetentionObservation {
+                retain_notification_record,
+                retain_retired_record,
+            },
         );
     }
 }
@@ -3408,13 +3404,10 @@ async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
 #[tokio::test]
 async fn pinned_plugin_references_match_executable_model_before_install_or_update() {
     let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .plugin_pin_cases
-            .clone()
+        gents_lean_vocab::families::contracts_pack_installation_pin_prepare::cases::<String>()
     })
     .await
     .unwrap();
-    assert_eq!(cases.len(), 5);
     let bytes = crate::plugin::test_fixtures::build_plugin_afb(
         &crate::plugin::test_fixtures::constant_output_wat(br#"{"ok":true}"#),
     );
@@ -3426,7 +3419,7 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
     for case in cases {
         let home = tempfile::tempdir().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let shipped = case["source"] == "shipped";
+        let shipped = case.input.source == "shipped";
         let manifest = plugin_pack_manifest(
             "pin_fixture",
             "documents",
@@ -3460,7 +3453,7 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
             .plugins
             .as_mut()
             .unwrap()[0];
-        plugin.digest = case["pin"].as_str().map(|pin| {
+        plugin.digest = case.input.pin.as_deref().map(|pin| {
             if pin == "a" {
                 digest.clone()
             } else {
@@ -3473,7 +3466,8 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
         }))
         .unwrap();
         let identity = PackIdentity::new(archive.manifest(), archive.digest(), Vec::new());
-        assert_eq!(case["actual"], "a");
+        assert_eq!(case.input.actual, "a");
+        let mut accepted = Vec::new();
         for update in [false, true] {
             if update {
                 super::super::install_pack_documents(
@@ -3507,13 +3501,8 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                 &Default::default(),
             )
             .await;
-            assert_eq!(
-                result.is_ok(),
-                case["accepted"].as_bool().unwrap(),
-                "{case}, update={update}: {}",
-                result.err().map(|e| e.to_string()).unwrap_or_default()
-            );
-            if !case["accepted"].as_bool().unwrap() {
+            accepted.push(result.is_ok());
+            if result.is_err() {
                 let after = access.execute("{Tools {tools_id integrations} PackInstallation {coordinate version digest}}").await.unwrap();
                 assert_eq!(
                     after, before,
@@ -3522,6 +3511,8 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
             }
         }
         node.shutdown().await.expect("node shutdown");
+        assert_eq!(accepted[0], accepted[1], "{:?}", case.input);
+        case.check(accepted[0]);
     }
 }
 
@@ -3557,19 +3548,6 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
     .await
     .unwrap();
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .pack_finality_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    let expected = cases
-        .iter()
-        .find(|case| case["attempts"] == json!(["no_commit"]))
-        .unwrap()["unconfirmed"]
-        .as_bool()
-        .unwrap();
     node.shutdown().await.expect("node shutdown");
     let error = super::documents::install_documents_with_plugins(
         &access,
@@ -3588,7 +3566,6 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
     )
     .await
     .unwrap_err();
-    assert!(!expected);
     assert!(
         format!("{error:#}").contains("transaction was rejected"),
         "{error:#}"
@@ -3658,18 +3635,6 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         )
         .await
         .unwrap();
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .plugin_pin_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    let model = |name: &str| {
-        cases.iter().find(|case| case["name"] == name).unwrap()["accepted"]
-            .as_bool()
-            .unwrap()
-    };
     let rejected = super::documents::install_documents_with_plugins(
         &access,
         owner,
@@ -3719,7 +3684,6 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await;
-    assert_eq!(accepted.is_ok(), model("installed_match"), "{accepted:?}");
     accepted.unwrap();
     assert_eq!(
         crate::plugin::store::read_record(home.path(), "acme", "web_search")
@@ -3916,91 +3880,103 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
 
 #[tokio::test]
 async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
-    let home = tempfile::tempdir().unwrap();
-    let (node, access) = dependency_fixture().await;
-    let (_source, _, old_archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
-    crate::pack::plugin_lifecycle::install(
-        home.path(),
-        &old_archive,
-        false,
-        None,
-        &BTreeMap::new(),
-        crate::pack::InstalledVia::Operator,
-        crate::pack::PackSource::Local { file_name: None },
-        |_, _| async { Ok(()) },
-    )
-    .await
-    .unwrap();
-    let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
-    let (updated_dir, _, _) = crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
-    std::fs::write(
-        updated_dir.path().join("source/plugins/native_echo.afb"),
-        crate::plugin::test_fixtures::build_plugin_afb(
-            &crate::plugin::test_fixtures::constant_output_wat(br#"{"changed":true}"#),
-        ),
-    )
-    .unwrap();
-    let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
-    let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
-    crate::pack::plugin_lifecycle::install(
-        home.path(),
-        &updated,
-        false,
-        None,
-        &BTreeMap::new(),
-        crate::pack::InstalledVia::Operator,
-        crate::pack::PackSource::Local { file_name: None },
-        |_, _| async { Ok(()) },
-    )
-    .await
-    .unwrap();
-    let current = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
-    assert_ne!(old.digest, current.digest);
-    let config: PackConfig = serde_json::from_value(json!({
-        "node": {"node_did":OWNER},
-        "tools": [{"tools_id":"stale-pin", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
-    })).unwrap();
-    let manifest = plugin_pack_manifest("stale_pin", "documents", &[]);
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .plugin_pin_cases
-            .clone()
-    })
-    .await
-    .unwrap();
-    let expected = cases
-        .iter()
-        .find(|case| case["name"] == "installed_mismatch")
-        .unwrap()["accepted"]
-        .as_bool()
-        .unwrap();
-    let result = super::documents::install_documents_with_plugins(
-        &access,
-        OWNER,
-        &manifest,
-        &format!("sha256:{}", "4".repeat(64)),
-        &config,
-        DriftPolicy::Refuse,
-        Some(home.path()),
-        BTreeMap::new(),
-        false,
-        &BTreeMap::new(),
-        Vec::new(),
-        true,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await;
-    assert_eq!(result.is_ok(), expected, "{result:?}");
-    assert_eq!(
-        crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
-        current
-    );
-    let rows = access
-        .execute("{Tools(filter:{tools_id:{_eq:\"stale-pin\"}}){tools_id}}")
+    let cases =
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::families::contracts_pack_installation_pin_installed_commit::cases::<
+                String,
+            >()
+        })
         .await
         .unwrap();
-    assert!(rows["data"]["Tools"].as_array().unwrap().is_empty());
-    node.shutdown().await.expect("node shutdown");
+    for case in cases {
+        let home = tempfile::tempdir().unwrap();
+        let (node, access) = dependency_fixture().await;
+        let (_source, _, old_archive) =
+            crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+        crate::pack::plugin_lifecycle::install(
+            home.path(),
+            &old_archive,
+            false,
+            None,
+            &BTreeMap::new(),
+            crate::pack::InstalledVia::Operator,
+            crate::pack::PackSource::Local { file_name: None },
+            |_, _| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        let (updated_dir, _, _) = crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
+        std::fs::write(
+            updated_dir.path().join("source/plugins/native_echo.afb"),
+            crate::plugin::test_fixtures::build_plugin_afb(
+                &crate::plugin::test_fixtures::constant_output_wat(br#"{"changed":true}"#),
+            ),
+        )
+        .unwrap();
+        let (packed, _) =
+            crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+        let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
+        crate::pack::plugin_lifecycle::install(
+            home.path(),
+            &updated,
+            false,
+            None,
+            &BTreeMap::new(),
+            crate::pack::InstalledVia::Operator,
+            crate::pack::PackSource::Local { file_name: None },
+            |_, _| async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        let current =
+            crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        assert_ne!(old.digest, current.digest);
+        assert_eq!(case.input.actual, "a");
+        let pin = case.input.pin.as_deref().map(|pin| {
+            if pin == "a" {
+                current.digest.clone()
+            } else {
+                old.digest.clone()
+            }
+        });
+        let config: PackConfig = serde_json::from_value(json!({
+            "node": {"node_did":OWNER},
+            "tools": [{"tools_id":"stale-pin", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":pin}]}}]
+        })).unwrap();
+        let manifest = plugin_pack_manifest("stale_pin", "documents", &[]);
+        let result = super::documents::install_documents_with_plugins(
+            &access,
+            OWNER,
+            &manifest,
+            &format!("sha256:{}", "4".repeat(64)),
+            &config,
+            DriftPolicy::Refuse,
+            Some(home.path()),
+            BTreeMap::new(),
+            false,
+            &BTreeMap::new(),
+            Vec::new(),
+            true,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await;
+        assert_eq!(
+            crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
+            current
+        );
+        let rows = access
+            .execute("{Tools(filter:{tools_id:{_eq:\"stale-pin\"}}){tools_id}}")
+            .await
+            .unwrap();
+        assert_eq!(
+            rows["data"]["Tools"].as_array().unwrap().is_empty(),
+            result.is_err(),
+            "{result:?}"
+        );
+        node.shutdown().await.expect("node shutdown");
+        case.check(result.is_ok());
+    }
 }
 
 #[tokio::test]
@@ -4443,19 +4419,20 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     tokio::time::resume();
     let error = write.await.unwrap_err();
     let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .pack_finality_cases
-            .clone()
+        gents_lean_vocab::families::contracts_pack_installation_finality_staged_plugin::cases::<
+            String,
+        >()
     })
     .await
     .unwrap();
-    let expected = cases
-        .iter()
-        .find(|case| case["attempts"] == json!(["unknown_commit"]))
-        .unwrap()["unconfirmed"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(error.unconfirmed, expected);
+    for case in cases {
+        assert_eq!(case.input.attempts, ["unknown_commit"]);
+        case.check(
+            gents_lean_vocab::families::contracts_pack_installation_finality_staged_plugin::FinalityOutput {
+                unconfirmed: error.unconfirmed,
+            },
+        );
+    }
     stage.finish(error.unconfirmed).await.unwrap();
     assert_eq!(
         crate::plugin::store::read_record(home.path(), "acme", "web_search")
@@ -4622,12 +4599,10 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
             })
         })
         .await;
-    let model = gents_lean_vocab::lean_contract_snapshot()
-        .hosted_plugin_cases
-        .iter()
-        .find(|case| case["reviewed"] == true && case["plan"] == true && case["native"] == true)
-        .unwrap();
-    assert_eq!(result.is_ok(), model["allowed"].as_bool().unwrap());
+    for case in gents_lean_vocab::families::contracts_pack_installation_hosted_plugin::cases() {
+        assert!(case.input.reviewed && case.input.plan && case.input.native);
+        case.check(result.is_ok());
+    }
     result?;
     let record = access
         .transact_readonly("test.hosted_plugin.read", |txn| {

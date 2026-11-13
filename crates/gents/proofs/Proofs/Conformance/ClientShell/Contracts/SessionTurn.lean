@@ -1,9 +1,12 @@
 import Proofs.Clients.ClientShell.SessionTurn
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.ClientShellContracts.SessionTurnCases
 
 open ClientShell.SessionTurn Conformance.Contracts
+
+deriving instance Lean.ToJson for RowState, Row
 
 def row (doc request : Nat) (state : RowState) (requester : Nat := 1)
     (foldedInto : Option Nat := none) (queuedAfter retryParent : Option Nat := none)

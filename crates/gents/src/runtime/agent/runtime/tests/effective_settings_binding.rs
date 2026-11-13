@@ -25,9 +25,13 @@ fn staged_slot(
 #[test]
 fn generated_effective_settings_bindings_match_the_runtime_owners() {
     use gents_lean_vocab::families::runtime_effective_settings_binding::{
-        cases, EffectiveSettings, SelectedModel,
+        EffectiveSettings, SelectedModel,
     };
-    for case in cases::<String, String, String>() {
+    for case in gents_lean_vocab::families::runtime_effective_settings_binding::cases::<
+        String,
+        String,
+        String,
+    >() {
         let selected = &case.input.selected;
         let slot = staged_slot(
             &case.input.scenario,

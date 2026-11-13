@@ -348,12 +348,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         !modeled_revoked_invoke,
         "model must deny invoke after session_writer revocation"
     );
-    let root_expected = gents_lean_vocab::lean_contract_snapshot()
-        .workspace_root_access_cases
-        .iter()
-        .find(|case| case.actor == "other" && case.permission == "read")
-        .context("modeled unrelated Agent root access")?
-        .expected;
+    let mut unrelated_root_reads = Vec::new();
     for (binding, documents) in [
         (
             &bindings[0],
@@ -389,10 +384,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
                 &root_doc,
             )
             .await?;
-        assert_eq!(
-            permitted, root_expected,
-            "unexpected Agent WorkspaceRoot access"
-        );
+        unrelated_root_reads.push(permitted);
         let roots = access
             .execute(&format!(
                 "{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{_docID}} }}",
@@ -404,8 +396,8 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             .context("Agent WorkspaceRoot query")?;
         assert_eq!(
             !visible.is_empty(),
-            root_expected,
-            "unexpected Agent WorkspaceRoot visibility: {roots}"
+            permitted,
+            "Agent WorkspaceRoot visibility disagrees with native access: {roots}"
         );
         for (collection, doc) in documents {
             let owners = access
@@ -423,6 +415,15 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
                 "wrong native {collection} owner"
             );
         }
+    }
+    for case in gents_lean_vocab::families::workspace_root_access_unrelated_agent_read::cases() {
+        assert!(
+            unrelated_root_reads
+                .iter()
+                .all(|permitted| *permitted == unrelated_root_reads[0]),
+            "delegated Agents disagree on WorkspaceRoot access: {unrelated_root_reads:?}"
+        );
+        case.check(unrelated_root_reads[0]);
     }
     node.shutdown().await?;
     Ok(())

@@ -216,7 +216,7 @@ pub async fn recover_workspace_binding_pending_requests(
     Ok(recovered)
 }
 
-pub(crate) fn execution_origin_for_trigger_kind(trigger_kind: TriggerKind) -> ExecutionOrigin {
+pub fn execution_origin_for_trigger_kind(trigger_kind: TriggerKind) -> ExecutionOrigin {
     match trigger_kind {
         TriggerKind::Manual => ExecutionOrigin::Interactive,
         TriggerKind::Schedule | TriggerKind::Event => ExecutionOrigin::Scheduled,

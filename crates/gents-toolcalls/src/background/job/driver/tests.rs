@@ -1397,12 +1397,7 @@ async fn live_child(step: &Stepper, node_did: &str) -> String {
 #[tokio::test]
 async fn generated_plugin_job_wake_cases_keep_the_selected_agent() {
     use futures::FutureExt;
-    use gents_lean_vocab::{lean_plugin_job_wake_cases, LeanPluginJobWakeOutcome};
 
-    let cases = lean_plugin_job_wake_cases();
-    assert!(cases
-        .iter()
-        .any(|case| case.expected.outcome == LeanPluginJobWakeOutcome::Refused));
     let node = super::super::input::tests::open().await;
     let home = tempfile::tempdir().unwrap();
     let runtime = JobRuntime::new(
@@ -1418,9 +1413,16 @@ async fn generated_plugin_job_wake_cases_keep_the_selected_agent() {
         "other" => other.clone(),
         label => panic!("unmodeled agent label {label}"),
     };
-    for case in cases {
-        let (running, wake) = (case.running.document.clone(), case.wake.document.clone());
-        let (running_actor, wake_actor) = (actor(&case.running.agent), actor(&case.wake.agent));
+    for case in gents_lean_vocab::families::plugin_job_wakes::cases::<String>() {
+        let (running, wake) = (
+            case.input.running.document.clone(),
+            case.input.wake.document.clone(),
+        );
+        let (running_actor, wake_actor) = (
+            actor(&case.input.running.agent),
+            actor(&case.input.wake.agent),
+        );
+        let mut outcomes = Vec::new();
         for immediate in [false, true] {
             let driver = JobDriver::new(runtime.clone());
             let held = driver.permits.acquire_many(4).await.unwrap();
@@ -1443,22 +1445,26 @@ async fn generated_plugin_job_wake_cases_keep_the_selected_agent() {
                         in_flight.remove(&wake);
                     }
                     match (accepted, joined, independent) {
-                        (Some(true), true, false) => LeanPluginJobWakeOutcome::Coalesced,
-                        (Some(false), false, false) => LeanPluginJobWakeOutcome::Refused,
-                        (Some(true) | None, false, true) => LeanPluginJobWakeOutcome::Independent,
-                        observed => panic!("{}: unclassified wake {observed:?}", case.name),
+                        (Some(true), true, false) => "coalesced",
+                        (Some(false), false, false) => "refused",
+                        (Some(true) | None, false, true) => "independent",
+                        observed => panic!("{}: unclassified wake {observed:?}", case.input.name),
                     }
                 })
                 .await
                 .unwrap();
-            assert_eq!(
-                observed, case.expected.outcome,
-                "{} immediate={immediate}",
-                case.name
-            );
+            outcomes.push(observed);
             drop(held);
             idle(&driver).await;
         }
+        assert_eq!(
+            outcomes[0], outcomes[1],
+            "{}: a kick and an immediate step meet the running step alike",
+            case.input.name
+        );
+        case.check(gents_lean_vocab::families::plugin_job_wakes::WakeOutput {
+            outcome: outcomes[0].to_owned(),
+        });
     }
 }
 

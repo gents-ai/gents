@@ -3,13 +3,15 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[tokio::test]
-async fn routing_affinity_matches_lean_owner() {
+async fn routing_affinity_follows_the_lean_model() {
     use crate::auth::http::OAuthHttpPolicy;
     use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
-    for case in &gents_lean_vocab::lean_contract_snapshot().routing_affinity_cases {
-        let state = RoutingAffinity::start(case.codex, case.main, case.session.clone());
-        scope(state.clone(), async {
-            for response in &case.responses {
+    for case in gents_lean_vocab::families::contracts_routing_affinity::cases() {
+        let input = &case.input;
+        let state =
+            RoutingAffinity::start(input.codex, input.main, input.execution_session.clone());
+        let req = scope(state.clone(), async {
+            for response in &input.responses {
                 let mut headers = HeaderMap::new();
                 if let Some(token) = response.as_deref() {
                     headers.insert("x-codex-turn-state", HeaderValue::from_str(token).unwrap());
@@ -23,30 +25,22 @@ async fn routing_affinity_matches_lean_owner() {
                 .header("x-codex-turn-state", "stale-token")
                 .body(Bytes::from_static(b"{}"))
                 .unwrap();
-            let req = ChatGptCodexPolicy::default().patch_request_body(req);
-            assert_eq!(
-                req.headers()
-                    .get("session_id")
-                    .and_then(|h| h.to_str().ok()),
-                case.expected_session.as_deref(),
-                "{case:?}"
-            );
-            assert_eq!(
-                req.headers()
-                    .get("x-client-request-id")
-                    .and_then(|h| h.to_str().ok()),
-                case.expected_session.as_deref(),
-                "{case:?}"
-            );
-            assert_eq!(
-                req.headers()
-                    .get("x-codex-turn-state")
-                    .and_then(|h| h.to_str().ok()),
-                case.expected_token.as_deref(),
-                "{case:?}"
-            );
+            ChatGptCodexPolicy::default().patch_request_body(req)
         })
         .await;
+        let header = |name: &str| {
+            req.headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+        assert_eq!(header("session_id"), header("x-client-request-id"));
+        case.check(
+            gents_lean_vocab::families::contracts_routing_affinity::RoutingAffinityOutput {
+                expected_session: header("session_id"),
+                expected_token: header("x-codex-turn-state"),
+            },
+        );
     }
 }
 

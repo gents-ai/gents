@@ -1119,23 +1119,11 @@ mod tests {
 
     #[test]
     fn generated_fork_reference_authority_matches_native_decision() {
-        let cases = gents_lean_vocab::lean_contract_snapshot()
-            .session_document_projection_cases
-            .iter()
-            .filter(|case| case["operation"] == "fork_reference_authority")
-            .collect::<Vec<_>>();
-        assert!(!cases.is_empty());
-        for case in cases {
-            assert_eq!(
-                may_reuse_source_fragments(
-                    case["source_agent"].as_str().unwrap(),
-                    case["target_agent"].as_str().unwrap(),
-                ),
-                case["allowed"].as_bool().unwrap(),
-                "{}",
-                case["name"]
-            );
-        }
+        gents_lean_vocab::families::contracts_fork_reference_authority::replay(|i| {
+            gents_lean_vocab::families::contracts_fork_reference_authority::ForkAuthorityOutput {
+                allowed: may_reuse_source_fragments(&i.source_agent, &i.target_agent),
+            }
+        });
     }
 
     fn modeled_message(row: &Value) -> TranscriptMessage {
@@ -1182,58 +1170,53 @@ mod tests {
 
     #[test]
     fn generated_edit_anchors_select_exact_canonical_user_messages() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_edit_anchor_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let messages = case["messages"]
-                .as_array()
-                .unwrap()
+        gents_lean_vocab::families::contracts_edit_anchor_cut::replay(|i| {
+            let messages = i
+                .messages
                 .iter()
-                .map(modeled_message)
+                .map(|message| modeled_message(&serde_json::to_value(message).unwrap()))
                 .collect::<Vec<_>>();
-            let expected = case["cut"].as_u64().map(|cut| u32::try_from(cut).unwrap());
-            assert_eq!(
-                edit_cut(messages.iter(), case["key"].as_str().unwrap()),
-                expected,
-                "{case}"
-            );
-        }
+            gents_lean_vocab::families::contracts_edit_anchor_cut::EditAnchorCut {
+                cut: edit_cut(messages.iter(), &i.key).map(u64::from),
+            }
+        });
     }
 
     #[test]
     fn generated_edit_fork_bindings_control_destination_reuse() {
-        fn scope(value: &Value) -> SessionScope {
+        fn scope(
+            value: &gents_lean_vocab::families::contracts_edit_fork_decision::Scope,
+        ) -> SessionScope {
             SessionScope {
-                node_did: value["node"].as_u64().unwrap().to_string(),
-                session_id: value["session"].as_u64().unwrap().to_string(),
-                requester_did: value["requester"].as_u64().map(|id| id.to_string()),
+                node_did: value.node.to_string(),
+                session_id: value.session.to_string(),
+                requester_did: value.requester.map(|id| id.to_string()),
             }
         }
-        fn binding(value: &Value) -> EditForkBinding {
+        fn binding(
+            value: &gents_lean_vocab::families::contracts_edit_fork_decision::EditForkBinding,
+        ) -> EditForkBinding {
             EditForkBinding {
-                client_did: value["client"].as_u64().unwrap().to_string(),
-                parent: scope(&value["parent"]),
-                child: scope(&value["child"]),
-                message_key: value["message_key"].as_str().unwrap().to_owned(),
+                client_did: value.client.to_string(),
+                parent: scope(&value.parent),
+                child: scope(&value.child),
+                message_key: value.message_key.clone(),
             }
         }
-        let cases =
-            &gents_lean_vocab::lean_contract_snapshot().session_document_edit_fork_binding_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let retained = match case["retained_kind"].as_str().unwrap() {
-                "missing" => ExistingEditFork::Missing,
-                "unbound" => ExistingEditFork::Unbound,
-                "bound" => ExistingEditFork::Bound(binding(&case["retained"])),
-                other => panic!("untranslated retained fork {other}"),
+        gents_lean_vocab::families::contracts_edit_fork_decision::replay::<String>(|i| {
+            let retained = match (i.retained_kind.as_str(), &i.retained) {
+                ("missing", None) => ExistingEditFork::Missing,
+                ("unbound", None) => ExistingEditFork::Unbound,
+                ("bound", Some(retained)) => ExistingEditFork::Bound(binding(retained)),
+                other => panic!("untranslated retained fork {other:?}"),
             };
-            let actual = match decide_edit_fork(&binding(&case["requested"]), &retained) {
+            match decide_edit_fork(&binding(&i.requested), &retained) {
                 EditForkDecision::Create => "create",
                 EditForkDecision::Reuse => "reuse",
                 EditForkDecision::Refuse => "refuse",
-            };
-            assert_eq!(actual, case["decision"].as_str().unwrap(), "{case}");
-        }
+            }
+            .to_owned()
+        });
     }
 
     #[tokio::test]

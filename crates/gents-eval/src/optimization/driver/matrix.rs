@@ -430,18 +430,8 @@ async fn install_task_definition(harness: &Harness, seeded_splits: &[&str]) {
 #[tokio::test]
 async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created() {
     let (harness, pack) = task_harness().await;
-    let rows = &gents_lean_vocab::lean_optimization_cases().seed_coverage;
-    let scenarios = rows.iter().filter(|row| {
-        matches!(
-            row.name.as_str(),
-            "task_prompt_only"
-                | "only_train_seeds"
-                | "only_validation_seeds"
-                | "only_held_out_seeds"
-        )
-    });
-    assert_eq!(scenarios.clone().count(), 4);
-    for row in scenarios {
+    for case in gents_lean_vocab::families::optimization_seed_coverage_refused::cases::<String>() {
+        let row = &case.input;
         let seeded_splits: Vec<&str> = row
             .cases
             .iter()
@@ -470,14 +460,14 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
             .unwrap_or_else(|| panic!("{error:#}"))
             .0;
         assert!(reason.contains("task target \"plan\""), "{reason}");
-        assert!(
-            reason.contains(&format!(
-                "in the {} split",
-                row.missing_splits.join(" and ")
-            )),
-            "{}: {reason}",
-            row.name,
-        );
+        let splits = reason
+            .split_once("no seed route in the ")
+            .and_then(|(_, rest)| rest.split_once(" split"))
+            .unwrap_or_else(|| panic!("{}: {reason}", row.name))
+            .0
+            .split(" and ")
+            .map(str::to_owned)
+            .collect();
         assert!(executor.calls.lock().unwrap().is_empty());
         assert!(proposer.calls.lock().unwrap().is_empty());
         assert!(load_job(harness.access(), harness.owner(), &request.job_id)
@@ -485,6 +475,7 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
             .unwrap()
             .is_none());
         assert!(!super::job_dir(&request.jobs_dir, &request.job_id).exists());
+        case.check(splits);
     }
     let rows = harness
         .access()
@@ -496,19 +487,8 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
 
 #[tokio::test]
 async fn exact_seed_failures_reject_candidates_before_validation() {
-    for row in &gents_lean_vocab::lean_optimization_cases().seed_rendering {
-        if !matches!(
-            row.name.as_str(),
-            "missing_added_field"
-                | "nested_missing_field"
-                | "one_of_multiple_seeds_fails"
-                | "added_field_present_in_every_seed"
-                | "guarded_absent_field_renders"
-                | "runtime_document_id_is_available"
-                | "trial_owner_binding_reaches_the_guarded_missing_field"
-        ) {
-            continue;
-        }
+    for case in gents_lean_vocab::families::optimization_seed_rendering_candidate::cases() {
+        let row = &case.input;
         let (harness, pack) = task_harness().await;
         let mut value = definition(
             harness.owner(),
@@ -520,10 +500,14 @@ async fn exact_seed_failures_reject_candidates_before_validation() {
         for case in value["cases"].as_array_mut().unwrap() {
             let stage = &mut case["stages"][0];
             stage["prompt"] = json!("");
-            stage["seed"] = json!({"collection":"PlanItem", "document":row.seeds[0].document});
+            stage["seed"] = json!({
+                "collection": "PlanItem",
+                "document": serde_json::from_str::<Value>(&row.seeds[0].document).unwrap(),
+            });
         }
         for (index, seed) in row.seeds.iter().enumerate() {
-            value["cases"][1 + index]["stages"][0]["seed"]["document"] = seed.document.clone();
+            value["cases"][1 + index]["stages"][0]["seed"]["document"] =
+                serde_json::from_str::<Value>(&seed.document).unwrap();
         }
         harness
             .install(vec![(Collection::EvalDefinition, value)])
@@ -537,13 +521,7 @@ async fn exact_seed_failures_reject_candidates_before_validation() {
         let proposer = repeating_proposer(&row.text);
         settle(&harness, &request, &executor, &proposer).await;
         let entries = journal(&harness, &request.job_id).await;
-        let failed = !row.failed_stages.is_empty();
-        assert_eq!(
-            runs_started(&entries, EvalSplit::Validation).is_empty(),
-            failed,
-            "{}",
-            row.name
-        );
+        let failed = runs_started(&entries, EvalSplit::Validation).is_empty();
         let diagnostics: Vec<_> = entries
             .iter()
             .filter_map(|entry| match entry {
@@ -567,6 +545,11 @@ async fn exact_seed_failures_reject_candidates_before_validation() {
                 }
             }
         }
+        case.check(
+            gents_lean_vocab::families::optimization_seed_rendering_candidate::CandidateOutput {
+                failed,
+            },
+        );
     }
 }
 

@@ -59,34 +59,38 @@ fn error(results: &Map<String, Value>, id: &str) -> String {
 }
 
 #[test]
-fn generated_plugin_network_cases_drive_admission() {
-    let cases = gents_lean_vocab::lean_contract_snapshot();
-    let cases = cases.plugin_resource_network_cases.as_array().unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let net = match &case["grant"] {
-            Value::Null => NetAccess::None,
-            Value::String(any) if any == "any" => NetAccess::OutboundHttp(None),
-            hosts => NetAccess::OutboundHttp(Some(serde_json::from_value(hosts.clone()).unwrap())),
+fn network_admission_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_resources_network_admission::replay::<String>(|i| {
+        let net = match &i.grant {
+            None => NetAccess::None,
+            Some(grant) if grant.scope.is_some() => NetAccess::OutboundHttp(None),
+            Some(grant) => NetAccess::OutboundHttp(Some(grant.hosts.clone())),
         };
         let grant = net_grant(&net).unwrap();
-        let url = Url::parse(case["url"].as_str().unwrap()).unwrap();
-        let addrs: Vec<IpAddr> = serde_json::from_value(case["addresses"].clone()).unwrap();
-        let public: Vec<bool> = serde_json::from_value(case["public"].clone()).unwrap();
-        assert_eq!(
-            addrs.iter().map(ip_public).collect::<Vec<_>>(),
-            public,
-            "{case}"
-        );
+        let url = Url::parse(&i.url).unwrap();
+        let addrs: Vec<IpAddr> = i
+            .addresses
+            .iter()
+            .map(|addr| addr.parse().unwrap())
+            .collect();
         let admitted = admit(&grant, &url, PLUGIN);
         if let Ok(admission) = &admitted {
             if let Some(literal) = admission.literal {
-                assert_eq!(addrs, [literal], "{case}");
+                assert_eq!(addrs, [literal], "{i:?}");
             }
         }
-        let allowed = admitted.is_ok_and(|admission| addresses_allowed(admission.explicit, &addrs));
-        assert_eq!(allowed, case["expected"].as_bool().unwrap(), "{case}");
-    }
+        admitted.is_ok_and(|admission| addresses_allowed(admission.explicit, &addrs))
+    });
+}
+
+#[test]
+fn address_publicity_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_resources_address_public::replay(|i| {
+        i.addresses
+            .iter()
+            .map(|addr| ip_public(&addr.parse::<IpAddr>().unwrap()))
+            .collect::<Vec<_>>()
+    });
 }
 
 #[test]

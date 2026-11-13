@@ -71,19 +71,6 @@ theorem root_execution_uses_selected_agent :
     workspaceRootExecutionAllowed "writer" "runtime" workspaceRootFixture = false ∧
     workspaceRootExecutionAllowed "writer" "writer" workspaceRootAfterWriterRevocation = false := by native_decide
 
-def workspaceRootAccessCasesJson : String :=
-  (Lean.toJson (["user", "runtime", "writer", "integrator", "other"].flatMap fun actor =>
-    ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
-      [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
-       ("expected", Lean.toJson (workspaceRootPermission actor permission)),
-       ("writer_execution", Lean.toJson (workspaceRootExecutionAllowed "writer" actor workspaceRootFixture)),
-       ("writer_execution_after_revocation", Lean.toJson (workspaceRootExecutionAllowed "writer" actor workspaceRootAfterWriterRevocation)),
-       ("may_publish", Lean.toJson (workspaceRootPublicationAllowed actor)),
-       ("after_parent_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterRevocation actor "workspace_roots" "root" permission)),
-       ("after_integrator_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterIntegratorRevocation actor "workspace_roots" "root" permission)),
-       ("after_writer_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterWriterRevocation actor "workspace_roots" "root" permission)),
-       ("aborted_document", Lean.toJson (Identity.NodeFileRequests.publish false).document)])).compress
-
 /-- Workspace workflow configuration chooses the writer and integrator
 Agents explicitly. Their selection is frozen into the recorded action plan;
 the node DID and planner-provided labels are not substitute principals. -/
@@ -159,12 +146,6 @@ theorem quickstart_creator_resolves_only_selected_agent :
     Household.allowed 8 quickstartSelectedAgentFixture "other" "agents" "target" "read" = false ∧
     Household.allowed 8 quickstartSelectedAgentRevoked "creator" "agents" "target" "read" = false := by native_decide
 
-def quickstartSelectedAgentCasesJson : String :=
-  (Lean.toJson (["user", "creator", "other"].map fun actor => Lean.Json.mkObj
-    [("actor", Lean.toJson actor),
-     ("before", Lean.toJson (Household.allowed 8 quickstartSelectedAgentFixture actor "agents" "target" "read")),
-     ("after_revocation", Lean.toJson (Household.allowed 8 quickstartSelectedAgentRevoked actor "agents" "target" "read"))])).compress
-
 /-- A filtered or malformed physical request is not proof that an exclusive
 workspace binding is stale. Release requires a visible terminal request. -/
 def mayReleaseExclusive (visible terminal : Bool) : Bool := visible && terminal
@@ -184,11 +165,6 @@ def workspaceDatastoreWriteAllowed (collection : String) : Bool :=
 
 theorem workspace_binding_tool_create_refused :
     workspaceDatastoreWriteAllowed "WorkspaceBinding" = false := by decide
-
-def workspaceDatastoreWriteCasesJson : String :=
-  (Lean.toJson ((workspaceRuntimeOwnedCollections ++ ["Notes"]).map fun collection =>
-    Lean.Json.mkObj [("collection", Lean.toJson collection),
-      ("allowed", Lean.toJson (workspaceDatastoreWriteAllowed collection))])).compress
 
 /-- Workspace publication attaches its physical Agent parent and the selected
 writer and integrator in the same transaction. Every admitted child is linked
@@ -241,13 +217,6 @@ def callbackWorkspacePublishable (existing desired : String) : Bool :=
 theorem callback_retry_does_not_reopen_cleaning :
     callbackWorkspacePublishable "cleaning" "ready" = false := by decide
 
-def workspacePublicationCasesJson : String :=
-  (Lean.Json.mkObj [("revoked_writer_restored", Lean.toJson (reuseWorkspace (revokeWorkspaceWriter (publishWorkspace true))).writer),
-    ("revoked_reader_restored", Lean.toJson (reuseWorkspace (revokeWorkspaceReader (publishWorkspace true))).reader),
-    ("stale_publication_allowed", Lean.toJson (callbackWorkspacePublishable "cleaning" "ready")),
-    ("aborted_document_visible", Lean.toJson (publishWorkspace false).document),
-    ("effect_after_failed_reservation", Lean.toJson (mayProvisionWorkspace false))]).compress
-
 def workspacePublicationFixture : Household.State :=
   { objects := [⟨"agents", "agent-doc", "user"⟩,
       ⟨"workspaces", "workspace", "creator"⟩,
@@ -269,12 +238,6 @@ theorem selected_agents_see_the_same_binding :
     workspaceChildPermission "reader" "update" = false ∧
     workspaceChildPermission "other" "read" = false := by native_decide
 
-def workspaceChildCasesJson : String :=
-  (Lean.toJson (["user", "creator", "writer", "integrator", "reader", "other"].flatMap fun actor =>
-    ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
-      [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
-       ("expected", Lean.toJson (workspaceChildPermission actor permission))])).compress
-
 /-- ACP1 allows a child owner with native relation-delete capability to unlink
 a binding. Its former parent readers then cannot distinguish the hidden child
 from absence. Canonical Agent capability provisioning does not grant that
@@ -282,11 +245,6 @@ delete operation; granting it explicitly invalidates inventory completeness. -/
 def revokedWorkspaceChildFixture : Household.State :=
   Household.apply workspacePublicationFixture
     (.revoke ⟨"workspace_children", "binding", "parent", .object "workspaces" "workspace"⟩)
-
-def workspaceChildRevocationCasesJson : String :=
-  (Lean.toJson (["user", "creator", "writer", "integrator", "reader", "other"].map fun actor =>
-    Lean.Json.mkObj [("actor", Lean.toJson actor),
-      ("read", Lean.toJson (Household.allowed 8 revokedWorkspaceChildFixture actor "workspace_children" "binding" "read"))])).compress
 
 /-- Exclusive admission reads the complete published-child set and commits a
 new child together with a write to the shared workspace revision. The shared
@@ -307,18 +265,6 @@ theorem cleanup_without_native_update_cannot_begin :
 theorem cleanup_with_active_binding_cannot_begin :
     mayBeginCleanup true true true = false := by rfl
 
-def workspaceCleanupCasesJson : String :=
-  let cases : List (String × Bool × Bool) :=
-    [("active", true, true), ("unauthorized", false, false), ("available", true, false)]
-  (Lean.toJson (cases.map fun (name, allowed, active) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("allowed", Lean.toJson allowed),
-      ("active", Lean.toJson active), ("begins", Lean.toJson (mayBeginCleanup allowed true active))])).compress
-
-def workspaceAdmissionCasesJson : String :=
-  (Lean.toJson ([false, true].map fun occupied =>
-    Lean.Json.mkObj [("complete", Lean.toJson true), ("occupied", Lean.toJson occupied),
-      ("admitted", Lean.toJson (admitExclusive true occupied))])).compress
-
 /-- The user-authored RepositoryPlacement and selected Agent reader grants
 commit together. Reusing an existing placement does not restore a revoked
 reader; the host effect still requires a visible placement and a committed
@@ -336,29 +282,6 @@ def quickstartRepositoryRead (state : Household.State) (actor : String) : Bool :
 
 theorem repository_reader_revocation_survives_reuse :
     quickstartRepositoryRead revokedWorkspaceRepository "agent" = false := by native_decide
-
-def workspaceQuickstartCasesJson : String :=
-  (Lean.toJson (["user", "agent", "other"].map fun actor => Lean.Json.mkObj
-    [("actor", Lean.toJson actor),
-     ("before", Lean.toJson (quickstartRepositoryRead workspaceRepositoryFixture actor)),
-     ("after_revoke", Lean.toJson (quickstartRepositoryRead revokedWorkspaceRepository actor)),
-     ("aborted_document_visible", Lean.toJson (Identity.NodeFileRequests.publish false).document)])).compress
-
-def workspaceLivenessCasesJson : String :=
-  (Lean.toJson ([false, true].flatMap fun visible => [false, true].map fun terminal =>
-    Lean.Json.mkObj [("visible", Lean.toJson visible), ("terminal", Lean.toJson terminal),
-      ("may_release", Lean.toJson (mayReleaseExclusive visible terminal))])).compress
-
-def workspaceAgentSelectionCasesJson : String :=
-  let cases : List (String × Option WorkspaceAgentSelection) :=
-    [("missing", none), ("separate", some ⟨"writer", "integrator"⟩),
-    ("same", some ⟨"writer", "writer"⟩), ("node", some ⟨"node", "integrator"⟩),
-    ("blank", some ⟨"", "integrator"⟩)]
-  (Lean.toJson (cases.map fun (name, configured) =>
-      let selected := freezeWorkspaceAgents "node" configured
-      Lean.Json.mkObj [("name", Lean.toJson name), ("accepted", Lean.toJson selected.isSome),
-        ("writer", Lean.toJson (selected.map WorkspaceAgentSelection.writer)),
-        ("integrator", Lean.toJson (selected.map WorkspaceAgentSelection.integrator))] )).compress
 
 /-- Workspace effects are Agent-authored, while their logical parent grants
 the user access. Host-only placement and operator root configuration must not

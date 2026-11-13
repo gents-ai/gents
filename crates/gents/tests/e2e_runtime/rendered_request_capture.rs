@@ -809,35 +809,36 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         .find(|body| canonical(body) == captured)
         .expect("the successor capture must match an actual provider request");
     let messages = retry_body["messages"].as_array().unwrap();
-    let cases = &gents_lean_vocab::lean_contract_snapshot().retry_entry_cases;
-    let case = cases
+    let [case] = gents_lean_vocab::families::contracts_retry_entry_capture::cases()
+        .try_into()
+        .unwrap_or_else(|_| panic!("the capture scenario replays one modeled retry"));
+    assert!(
+        case.input.resume && case.input.history == [1, 2, 3] && case.input.context.is_none(),
+        "the scenario builds a failed prompt, tool call and result: {:?}",
+        case.input
+    );
+    let prompt_copies = messages
         .iter()
-        .find(|case| case.resume && case.history == vec![1, 2, 3] && case.context.is_none())
-        .unwrap();
-    let expected = &case.expected;
-    assert_eq!(
-        messages
-            .iter()
-            .filter(|row| row["content"].to_string().contains(&content))
-            .count(),
-        expected.iter().filter(|value| **value == 1).count(),
-        "{messages:?}"
-    );
-    assert_eq!(
-        messages
-            .iter()
-            .filter(|row| row["role"] == "tool" && row["tool_call_id"] == "retry-call")
-            .count(),
-        expected.iter().filter(|value| **value == 3).count(),
-        "{messages:?}"
-    );
+        .filter(|row| row["content"].to_string().contains(&content))
+        .count();
+    let tool_results = messages
+        .iter()
+        .filter(|row| row["role"] == "tool" && row["tool_call_id"] == "retry-call")
+        .count();
     let retry_doc = escape_graphql_string(&doc_id);
     let rows = fixture.access.execute(&format!(
         r#"{{ AgentMessage(filter: {{request_doc_id: {{_eq:"{retry_doc}"}}, message_key: {{_eq:"authored:{retry_doc}:prompt"}}}}) {{_docID}} }}"#
     )).await.unwrap();
-    assert_eq!(
-        rows["data"]["AgentMessage"].as_array().unwrap().len(),
-        usize::from(case.publish)
+    case.check(
+        gents_lean_vocab::families::contracts_retry_entry_capture::RetryEntryCaptureOutput {
+            prompt_copies: prompt_copies as u64,
+            tool_results: tool_results as u64,
+            publish: match rows["data"]["AgentMessage"].as_array().unwrap().len() {
+                0 => false,
+                1 => true,
+                more => panic!("the authored prompt was published {more} times"),
+            },
+        },
     );
     fixture.runtime.shutdown().await;
 }

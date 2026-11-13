@@ -1,5 +1,4 @@
 use super::*;
-use gents_lean_vocab::LeanQueuedSteeringAction as Action;
 
 /// Reads through the Agent's own access: the queued rows are Agent-owned, so
 /// the node identity does not see them.
@@ -86,21 +85,10 @@ async fn steering_admission_keeps_signed_content_queued_without_transcript_publi
 
 #[tokio::test]
 async fn generated_pending_steering_terminals_retain_signed_admission_without_output() {
-    let cases = gents_lean_vocab::lean_queued_steering_trace_cases();
-    let mut covered = 0;
-    for case in cases {
-        let terminal = match case.actions.as_slice() {
-            [Action::Enqueue, Action::InterruptBeforeClaim] => Action::InterruptBeforeClaim,
-            [Action::Enqueue, Action::AdmissionReject] => Action::AdmissionReject,
-            _ => continue,
-        };
-        covered += 1;
-        assert_eq!(case.entry.request_id, case.request_id, "{}", case.name);
-        assert_eq!(case.entry.source, "steering", "{}", case.name);
-        assert_eq!(case.entry.policy, "append", "{}", case.name);
-        assert!(case.entry.queue_key.is_none(), "{}", case.name);
-        assert!(case.entry.queued_after.is_some(), "{}", case.name);
-
+    for case in
+        gents_lean_vocab::families::contracts_queued_steering_trace_pending_terminal::cases()
+    {
+        let name = case.input.name.clone();
         let db = test_db("generated-steering-terminal").await;
         let mut parent =
             parent_request(db.node_did(), db.agent_did(), "generated-steering-session");
@@ -111,7 +99,7 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
             &RequestInput::default(),
         )
         .await;
-        let content = format!("steering input token {}", case.content_token);
+        let content = format!("steering input token {}", case.input.content_token);
         let enqueued = enqueue_test_steering(
             &db,
             &parent,
@@ -137,14 +125,7 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ _docID lifecycle_state content input admission_signature }} }}"#
         );
         let before = agent_data(&db, &query).await["AgentRequest"][0].clone();
-        assert_eq!(before["content"], content, "{}", case.name);
-        assert!(
-            before["admission_signature"]
-                .as_str()
-                .is_some_and(|s| !s.is_empty()),
-            "{}",
-            case.name
-        );
+        assert_eq!(before["content"], content, "{name}");
         let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
             &db.agent_access,
             &enqueued.doc_id,
@@ -156,9 +137,8 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
         lifecycle
             .bind_managed_agent(db.agent_identity.as_ref())
             .unwrap();
-        match terminal {
-            Action::InterruptBeforeClaim => {
-                assert!(case.interrupt_at.is_some(), "{}", case.name);
+        match case.input.actions.last().map(String::as_str) {
+            Some("interruptBeforeClaim") => {
                 crate::request::interrupt::interrupt_request_by_doc_id_with_access(
                     &db.agent_access,
                     &enqueued.doc_id,
@@ -169,68 +149,57 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
                 .unwrap();
                 assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
             }
-            Action::AdmissionReject => {
+            Some("admissionReject") => {
                 lifecycle
                     .reject_admission("generated admission rejection")
                     .await
                     .unwrap();
             }
-            _ => unreachable!(),
+            _ => panic!("{name} is not a pending steering terminal"),
         }
         let after = agent_data(&db, &query).await;
         let after = &after["AgentRequest"][0];
-        assert_eq!(
-            after["lifecycle_state"], case.lifecycle_state,
-            "{}",
-            case.name
-        );
-        assert_eq!(after["content"], before["content"], "{}", case.name);
-        assert_eq!(after["input"], before["input"], "{}", case.name);
-        assert_eq!(
-            after["admission_signature"], before["admission_signature"],
-            "{}",
-            case.name
-        );
         let output = agent_data(&db, &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{doc_id}" }} }}) {{ _docID }} AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{doc_id}" }} }}) {{ _docID }} }}"#
         )).await;
-        assert_eq!(
-            output["AgentMessage"].as_array().unwrap().len() as u64,
-            case.canonical_authored_count,
-            "{}",
-            case.name
-        );
         assert!(
             output["AgentOutputSegment"].as_array().unwrap().is_empty(),
-            "{}",
-            case.name
+            "{name}"
         );
+        case.check(Some(
+            gents_lean_vocab::families::contracts_queued_steering_trace_pending_terminal::PendingOutput {
+                lifecycle_state: after["lifecycle_state"].as_str().unwrap().to_owned(),
+                accepted_input: retains_signed_admission(&before, after),
+                canonical_authored_count: output["AgentMessage"].as_array().unwrap().len() as u64,
+            },
+        ));
     }
-    assert_eq!(
-        covered, 2,
-        "only the two modeled pending terminal paths are bound here"
-    );
+}
+
+fn retains_signed_admission(before: &serde_json::Value, after: &serde_json::Value) -> bool {
+    before["admission_signature"]
+        .as_str()
+        .is_some_and(|signature| !signature.is_empty())
+        && after["content"] == before["content"]
+        && after["input"] == before["input"]
+        && after["admission_signature"] == before["admission_signature"]
 }
 
 #[tokio::test]
 async fn generated_owned_prepublication_terminals_retain_signed_admission_without_output() {
-    let cases = gents_lean_vocab::lean_queued_steering_trace_cases();
-    let mut covered = 0;
-    for case in cases {
-        let outcome = match case.actions.as_slice() {
-            [Action::Enqueue, Action::ClaimAndBegin, Action::PrepareFails, Action::Fail, Action::Capture, Action::Send] => {
-                crate::request::lifecycle::RequestTerminalOutcome::Failed
-            }
-            [Action::Enqueue, Action::ClaimAndBegin, Action::PrepareFails, Action::LatchInterrupt, Action::InterruptProcessing, Action::Capture, Action::Send] => {
-                crate::request::lifecycle::RequestTerminalOutcome::Interrupted
-            }
-            _ => continue,
+    for case in gents_lean_vocab::families::contracts_queued_steering_trace_owned_terminal::cases()
+    {
+        let name = case.input.name.clone();
+        let outcome = if case
+            .input
+            .actions
+            .iter()
+            .any(|action| action == "latchInterrupt")
+        {
+            crate::request::lifecycle::RequestTerminalOutcome::Interrupted
+        } else {
+            crate::request::lifecycle::RequestTerminalOutcome::Failed
         };
-        covered += 1;
-        assert!(case.accepted_input, "{}", case.name);
-        assert!(!case.provider_send_permitted, "{}", case.name);
-        assert_eq!(case.canonical_authored_count, 0, "{}", case.name);
-        assert_eq!(case.queue_active, None, "{}", case.name);
 
         let db = test_db("generated-owned-steering-terminal").await;
         // The session is Agent-owned: created through the Agent's access so the
@@ -294,7 +263,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         .await
         .unwrap()
         .expect("signed parent fixture");
-        let content = format!("steering input token {}", case.content_token);
+        let content = format!("steering input token {}", case.input.content_token);
         let enqueued = enqueue_test_steering(
             &db,
             &parent,
@@ -321,14 +290,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         );
         let before = agent_data(&db, &query).await;
         let original = &before["AgentRequest"][0];
-        assert_eq!(original["content"], content, "{}", case.name);
-        assert!(
-            original["admission_signature"]
-                .as_str()
-                .is_some_and(|signature| !signature.is_empty()),
-            "{}",
-            case.name
-        );
+        assert_eq!(original["content"], content, "{name}");
 
         let parent_row = crate::request::binding::load_agent_request_by_doc_id_with_access(
             &db.agent_access,
@@ -361,8 +323,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         assert_eq!(
             lifecycle.claim().await.unwrap(),
             ClaimOutcome::Claimed,
-            "{}",
-            case.name
+            "{name}"
         );
         let writer = DefraStreamWriter::new_managed(
             db.node.clone(),
@@ -373,7 +334,6 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         lifecycle.begin_owned_execution(&writer).await.unwrap();
 
         if outcome == crate::request::lifecycle::RequestTerminalOutcome::Interrupted {
-            assert!(case.interrupt_at.is_none(), "{}", case.name);
             crate::request::interrupt::interrupt_request_by_doc_id_with_access(
                 &db.agent_access,
                 &enqueued.doc_id,
@@ -393,59 +353,38 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
                 .await
                 .unwrap(),
             crate::request::lifecycle::TerminalizeResult::Won,
-            "{}",
-            case.name
+            "{name}"
         );
         let after = agent_data(&db, &query).await;
         let terminal = &after["AgentRequest"][0];
-        assert_eq!(
-            terminal["lifecycle_state"], case.lifecycle_state,
-            "{}",
-            case.name
-        );
-        assert_eq!(terminal["content"], original["content"], "{}", case.name);
-        assert_eq!(terminal["input"], original["input"], "{}", case.name);
-        assert_eq!(
-            terminal["admission_signature"], original["admission_signature"],
-            "{}",
-            case.name
-        );
         assert_eq!(
             serde_json::from_value::<gents_protocol::output::TerminalOutput>(
                 terminal["terminal_output"].clone(),
             )
             .unwrap(),
             gents_protocol::output::TerminalOutput::NoMessage,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            after["AgentMessage"].as_array().unwrap().len() as u64,
-            case.canonical_authored_count,
-            "{}",
-            case.name
+            "{name}"
         );
         assert!(
             after["AgentOutputSegment"].as_array().unwrap().is_empty(),
-            "{}",
-            case.name
+            "{name}"
         );
-        assert!(
-            crate::request::interrupt::active_session_request_with_access(
-                &db.agent_access,
-                &parent.session_id,
-                db.node_did(),
-                Some(db.agent_did()),
-            )
-            .await
-            .unwrap()
-            .is_none(),
-            "{} left an active request",
-            case.name
-        );
+        let queue_active = crate::request::interrupt::active_session_request_with_access(
+            &db.agent_access,
+            &parent.session_id,
+            db.node_did(),
+            Some(db.agent_did()),
+        )
+        .await
+        .unwrap()
+        .is_some();
+        case.check(Some(
+            gents_lean_vocab::families::contracts_queued_steering_trace_owned_terminal::OwnedOutput {
+                lifecycle_state: terminal["lifecycle_state"].as_str().unwrap().to_owned(),
+                accepted_input: retains_signed_admission(original, terminal),
+                canonical_authored_count: after["AgentMessage"].as_array().unwrap().len() as u64,
+                queue_active,
+            },
+        ));
     }
-    assert_eq!(
-        covered, 2,
-        "the two generated owned pre-publication terminals must be bound"
-    );
 }

@@ -2624,32 +2624,47 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_init_grants_native_operations_once_without_regranting_revocation() {
-        use gents_store::config_client::NodePermission;
-        use gents_store::identity::GrantSet;
         let snapshot: Value =
             tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
                 .await
                 .unwrap();
-        let cases = &gents_lean_vocab::lean_contract_snapshot().identity_bootstrap_cases;
-        assert_eq!(
-            cases
-                .iter()
-                .find(|case| case.name == "fresh")
-                .unwrap()
-                .expected_may_grant,
-            true
-        );
-        assert_eq!(
-            cases
-                .iter()
-                .find(|case| case.name == "crash-after-reservation")
-                .unwrap()
-                .expected_may_grant,
-            false
-        );
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let initial = initialize_disposable_home(&home, false).await.unwrap();
+        for case in gents_lean_vocab::families::node_provisioning_bootstrap_grant::cases() {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path().join("home");
+            if !case.input.fresh_evidence {
+                fs::create_dir_all(&home).unwrap();
+                fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
+            }
+            let granted = match initialize_disposable_home(&home, false).await {
+                Ok(initial) => {
+                    fresh_init_grants_and_keeps_revocation(&home, &initial, &snapshot).await
+                }
+                Err(error) => {
+                    assert!(
+                        format!("{error:#}").contains("bootstrap was already attempted"),
+                        "{}: {error:#}",
+                        case.input.name
+                    );
+                    assert!(
+                        !default_data_dir(&home).join("MANIFEST").exists(),
+                        "{}",
+                        case.input.name
+                    );
+                    false
+                }
+            };
+            case.check(granted);
+        }
+    }
+
+    async fn fresh_init_grants_and_keeps_revocation(
+        home: &Path,
+        initial: &Value,
+        snapshot: &Value,
+    ) -> bool {
+        use gents_store::config_client::NodePermission;
+        use gents_store::identity::GrantSet;
+        let home = home.to_path_buf();
         let stored = read_init_config(&home).unwrap().unwrap();
         let identity =
             gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
@@ -2798,8 +2813,8 @@ mod tests {
         let agent_direct = modeled("default-agent", "direct");
         let mut agent_sets = agent_direct.clone();
         agent_sets.extend(modeled("default-agent", "projected"));
-        assert!(holds(client_did.clone(), client_sets.clone()).await);
-        assert!(holds(agent.clone(), agent_sets).await);
+        let granted = holds(client_did.clone(), client_sets.clone()).await
+            && holds(agent.clone(), agent_sets).await;
         for set in &client_sets {
             set.revoke(&runtime, &client_did).await.unwrap();
         }
@@ -2862,6 +2877,7 @@ mod tests {
             );
         }
         node.shutdown().await.unwrap();
+        granted
     }
 
     #[tokio::test]
@@ -2908,21 +2924,33 @@ mod tests {
         node.shutdown().await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn consumed_bootstrap_reservation_is_not_replayed() {
-        let case = gents_lean_vocab::lean_contract_snapshot()
-            .identity_bootstrap_reservation_cases
-            .iter()
-            .find(|case| case.name == "exists-or-create-failed")
-            .unwrap();
-        assert_eq!(case.expected, false);
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-        fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
-        let error = initialize_disposable_home(&home, false).await.unwrap_err();
-        assert!(format!("{error:#}").contains("bootstrap was already attempted"));
-        assert!(!default_data_dir(&home).join("MANIFEST").exists());
+        use std::os::unix::fs::PermissionsExt;
+        for case in gents_lean_vocab::families::node_provisioning_reservation::cases() {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path().join("home");
+            fs::create_dir_all(&home).unwrap();
+            if !case.input.created {
+                fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
+            }
+            if !case.input.directory_synced {
+                fs::set_permissions(&home, fs::Permissions::from_mode(0o300)).unwrap();
+            }
+            let confirmed = reserve_fresh_bootstrap(&home).await.is_ok();
+            fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+            if !confirmed {
+                let error = initialize_disposable_home(&home, false).await.unwrap_err();
+                assert!(
+                    format!("{error:#}").contains("bootstrap was already attempted"),
+                    "{}: {error:#}",
+                    case.input.name
+                );
+                assert!(!default_data_dir(&home).join("MANIFEST").exists());
+            }
+            case.check(confirmed);
+        }
     }
 
     #[tokio::test]

@@ -492,6 +492,33 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .map_err(|error| anyhow::anyhow!("{error:#}"))?,
     )?;
     assert_eq!(selected["is_default"], true);
+    let other_runtime = KeyIdentity::load_or_create(home.path().join("other-runtime"), None)?;
+    let sibling_signer = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
+    let unmanaged = UnmanagedSigner(signer.clone());
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::node_provisioning_agent_creator::cases()
+    })
+    .await?;
+    for case in cases {
+        let root: &dyn NodeIdentity = if case.input.runtime_matches {
+            runtime.as_ref()
+        } else {
+            &other_runtime
+        };
+        let actor: &dyn NodeIdentity = match (case.input.signer_held, case.input.signer_matches) {
+            (false, _) => &unmanaged,
+            (true, false) => sibling_signer.as_ref(),
+            (true, true) => signer.as_ref(),
+        };
+        let result = gents_store::identity::provision_agent_identity_for_agent(
+            &node,
+            root,
+            actor,
+            &creator.agent_did,
+        )
+        .await;
+        case.check(result.is_ok());
+    }
     let runtime_actor = identity::Did::new(runtime.did())?;
     user_access
         .delete_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
@@ -503,40 +530,6 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .add_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
         .await?;
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .identity_agent_creator_cases
-            .clone()
-    })
-    .await?;
-    let other_runtime = KeyIdentity::load_or_create(home.path().join("other-runtime"), None)?;
-    let sibling_signer = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
-    let unmanaged = UnmanagedSigner(signer.clone());
-    for name in [
-        "authorized-agent",
-        "foreign-runtime",
-        "foreign-signer",
-        "missing-signer",
-    ] {
-        let case = cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .context("modeled creator case missing")?;
-        let (root, actor): (&dyn NodeIdentity, &dyn NodeIdentity) = match name {
-            "foreign-runtime" => (&other_runtime, signer.as_ref()),
-            "foreign-signer" => (runtime.as_ref(), sibling_signer.as_ref()),
-            "missing-signer" => (runtime.as_ref(), &unmanaged),
-            _ => (runtime.as_ref(), signer.as_ref()),
-        };
-        let result = gents_store::identity::provision_agent_identity_for_agent(
-            &node,
-            root,
-            actor,
-            &creator.agent_did,
-        )
-        .await;
-        assert_eq!(result.is_ok(), case["allowed"].as_bool().unwrap(), "{name}");
-    }
     let create = ConfigureAgentParams {
         action: "create".into(),
         display_name: StringUpdate::Set("Child".into()),
@@ -1759,50 +1752,33 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     );
     // A notice that the files are gone, which is not a retirement, keeps the
     // installation evidence, refreshed by the Agent (`retainPluginStoreRecord`).
-    let retain = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_plugin_reference_cases()
-            .iter()
-            .find(|case| {
-                case["root_ships"]
-                    .as_array()
-                    .is_some_and(|ships| !ships.is_empty())
-            })
-            .and_then(|case| case["retain_notification_record"].as_bool())
-    })
-    .await?
-    .context("modeled plugin retirement case missing")?;
     let retained = creator_access
         .execute("{ PackInstallation(filter: {coordinate: {_eq: \"fixture/native_echo_pack\"}}) { _docID } }")
         .await?;
     let retained = retained["data"]["PackInstallation"]
         .as_array()
         .context("removed pack query missing")?;
-    assert_eq!(!retained.is_empty(), retain);
-    if retain {
-        assert_eq!(retained.len(), 1);
-        assert_eq!(retained[0]["_docID"], record_doc);
-        let history = creator_access
-            .execute(&format!(
-                "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
-                gents_store::graphql::escape_graphql_string(record_doc),
-            ))
-            .await?;
-        let notice = gents_store::graphql::composite_commits_at(
-            history["data"].get("_commits"),
-            "_commits",
-        )?
-        .into_iter()
-        .max_by_key(|commit| commit.height)
-        .context("plugin removal notice missing")?;
-        assert!(notice.height > latest.height);
-        assert_eq!(
-            notice
-                .signature
-                .as_ref()
-                .map(|signature| signature.identity.as_str()),
-            Some(creator_signer.as_str())
-        );
-    }
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0]["_docID"], record_doc);
+    let history = creator_access
+        .execute(&format!(
+            "{{ _commits(docID: \"{}\") {{ cid height fieldName signature {{ identity type }} }} }}",
+            gents_store::graphql::escape_graphql_string(record_doc),
+        ))
+        .await?;
+    let notice =
+        gents_store::graphql::composite_commits_at(history["data"].get("_commits"), "_commits")?
+            .into_iter()
+            .max_by_key(|commit| commit.height)
+            .context("plugin removal notice missing")?;
+    assert!(notice.height > latest.height);
+    assert_eq!(
+        notice
+            .signature
+            .as_ref()
+            .map(|signature| signature.identity.as_str()),
+        Some(creator_signer.as_str())
+    );
     let archive =tokio::task::spawn_blocking(|| -> Result<gents_pack::pack::archive::PackArchive> {
         let directory = tempfile::tempdir()?;
         let manifest = json!({"manifest_version":1,"name":"native_child","namespace":"fixture","version":"1.0.0",

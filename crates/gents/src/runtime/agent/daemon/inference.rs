@@ -1015,7 +1015,7 @@ pub(super) mod tests {
 
     #[test]
     fn retry_entry_matches_lean_frontier() {
-        for case in &gents_lean_vocab::lean_contract_snapshot().retry_entry_cases {
+        gents_lean_vocab::families::contracts_retry_entry_frontier::replay(|case| {
             let message = |value: &u64| {
                 use gents_inference::llm::message::{
                     AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
@@ -1063,9 +1063,24 @@ pub(super) mod tests {
             )
             .unwrap();
             actual.push(prompt);
-            let expected: Vec<_> = case.expected.iter().map(message).collect();
-            assert_eq!(actual, expected, "{case:?}");
-        }
+            let candidates = case
+                .history
+                .iter()
+                .copied()
+                .chain([case.authored, 10])
+                .chain(case.context)
+                .collect::<Vec<_>>();
+            actual
+                .iter()
+                .map(|row| {
+                    candidates
+                        .iter()
+                        .copied()
+                        .find(|value| message(value) == *row)
+                        .unwrap_or_else(|| panic!("{case:?}: unmodeled entry row {row:?}"))
+                })
+                .collect::<Vec<u64>>()
+        });
     }
 
     #[tokio::test]
@@ -1426,12 +1441,14 @@ pub(super) mod tests {
             .process_request(successor.clone(), shutdown_rx)
             .await
             .unwrap();
-        let contract = gents_lean_vocab::lean_contract_snapshot()
-            .wake_input_cases
-            .iter()
-            .find(|case| case.name == "successor_wake_moves_only_new_notification")
-            .unwrap();
+        let [contract] = gents_lean_vocab::families::contracts_wake_input_provider_order::cases()
+            .try_into()
+            .unwrap_or_else(|_| panic!("the successor wake scenario replays one modeled wake"));
         let labels = ["notification-a", "notification-b", "answer-0"];
+        assert_eq!(
+            contract.input.observable, labels,
+            "the scenario locates these headers in the provider input"
+        );
         {
             let captured = provider_inputs.lock().unwrap();
             assert_eq!(captured.len(), 2);
@@ -1451,17 +1468,7 @@ pub(super) mod tests {
                 ("answer-0", answer),
             ];
             observed.sort_by_key(|(_, position)| *position);
-            let expected = contract
-                .expected_order
-                .iter()
-                .map(String::as_str)
-                .filter(|header| labels.contains(header))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                observed.map(|(header, _)| header).as_slice(),
-                expected,
-                "current wake order must match the model: {input}"
-            );
+            contract.check(observed.map(|(header, _)| header.to_owned()).to_vec());
             assert_eq!(input.matches("successor native output").count(), 1);
             assert_eq!(input.matches("durable native output").count(), 1);
         }
@@ -1498,6 +1505,8 @@ pub(super) mod tests {
         ];
         durable.sort_by_key(|(_, position)| *position);
         let expected = contract
+            .input
+            .wake
             .rows
             .iter()
             .map(|row| row.header.as_str())

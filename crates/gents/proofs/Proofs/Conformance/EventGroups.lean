@@ -1,5 +1,6 @@
 import Proofs.Automation.Triggers.Groups
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.EventGroupContracts
 
@@ -128,8 +129,53 @@ def scenarioJson (scenario : GroupScenario) : String :=
     ++ "\"marker_count_after\":" ++ toString after.materialized.length
     ++ "}"
 
-def eventGroupCaseCount : Nat := scenarios.length
+structure ConsumerWire where
+  kind : String
+  triggerId : Option String
+  bindingId : Option String
+  deriving Lean.ToJson
 
-def eventGroupCasesJson : String := jsonArray (scenarios.map scenarioJson)
+def ConsumerWire.ofModel : EventConsumer → ConsumerWire
+  | .trigger id => ⟨"trigger", some id, none⟩
+  | .callbackBinding id => ⟨"callback_binding", none, some id⟩
+
+structure KeyWire where
+  nodeDid : String
+  consumer : ConsumerWire
+  consumerConfigKey : String
+  correlation : String
+  deriving Lean.ToJson
+
+def KeyWire.ofModel (value : EventGroupKey) : KeyWire :=
+  ⟨value.nodeDid, ConsumerWire.ofModel value.consumer, value.consumerConfigKey, value.correlation⟩
+
+structure EligibilityInput where
+  name : String
+  candidate : KeyWire
+  actualCount : Nat
+  expectedCount : Option Nat
+  minimumCount : Nat
+  timedOut : Bool
+  wellFormed : Bool
+  deriving Lean.ToJson
+
+structure EligibilityOutput where
+  eligible : Bool
+  deriving Lean.ToJson
+
+/-- Whether `group_candidate_eligible` lets a gathered event group materialize,
+over every group scenario's candidate. -/
+@[conformance_family]
+def eligibility : Family EligibilityInput EligibilityOutput where
+  inputs := scenarios.map fun scenario =>
+    { name := scenario.name, candidate := KeyWire.ofModel scenario.candidate.key
+      actualCount := scenario.candidate.actualCount
+      expectedCount := scenario.candidate.expectedCount
+      minimumCount := scenario.candidate.minimumCount
+      timedOut := scenario.candidate.timedOut, wellFormed := scenario.candidate.wellFormed }
+  model := fun i =>
+    { eligible := ({ key := key "" "", actualCount := i.actualCount, expectedCount := i.expectedCount
+                     minimumCount := i.minimumCount, timedOut := i.timedOut
+                     wellFormed := i.wellFormed } : Candidate).eligible }
 
 end Conformance.EventGroupContracts

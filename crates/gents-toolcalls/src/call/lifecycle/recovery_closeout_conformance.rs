@@ -15,21 +15,16 @@ pub(super) use crate::call::lifecycle::admission_fixture::recovery_identities;
 
 #[tokio::test]
 async fn generated_native_missing_parent_restart_cases_defer() {
-    let cases = gents_lean_vocab::lean_restart_disposition_cases()
-        .iter()
-        .filter(|case| case.parent_observation == "missing")
-        .collect::<Vec<_>>();
-    assert!(cases.iter().any(|case| case.session_message));
-    assert!(cases.iter().any(|case| !case.session_message));
-    for case in cases {
-        let name = case.name.as_str();
-        assert_eq!(case.disposition, "leave_running", "{name}");
-        assert_eq!(case.await_mode, "background", "{name}");
+    for case in
+        gents_lean_vocab::families::contracts_restart_missing_parent::cases::<String, String>()
+    {
+        let input = &case.input;
+        let name = input.name.as_str();
         let admission = published_admission(PublishedAdmissionOptions {
             name: format!("restart-closeout-{name}"),
             real_identity: true,
-            await_mode: AwaitMode::Background,
-            tool_name: case
+            await_mode: AwaitMode::from_persisted(&input.await_mode).expect("modeled await mode"),
+            tool_name: input
                 .session_message
                 .then(|| gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.to_owned()),
             ..Default::default()
@@ -39,7 +34,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
         let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
         let access = admission.tool.access().unwrap();
         remove_parent(&admission.client, admission.tool.request_doc_id().unwrap()).await;
-        if case.deadline_expired {
+        if input.deadline_expired {
             update(
                 &access,
                 &tool_doc_id,
@@ -54,12 +49,27 @@ async fn generated_native_missing_parent_restart_cases_defer() {
         )
         .await
         .unwrap();
-        assert_eq!(report.tool_calls_recovered, 0, "{name}");
         let escaped = gents_store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#)).await.unwrap();
-        assert_eq!(
-            response["data"]["AgentToolCall"][0]["lifecycle_state"], "running",
-            "{name}"
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state await_mode cancel_cause tool_failure_class }} }}"#
+            ))
+            .await
+            .unwrap();
+        let session_id = admission.tool.session_id().to_owned();
+        let (messages, wakes) = completion_obligations(
+            &access,
+            &session_id,
+            &admission.node_did,
+            admission.tool.requester_did(),
+        )
+        .await;
+        let observed = super::recovery_conformance::observed_restart(
+            report.tool_calls_recovered,
+            &response["data"]["AgentToolCall"][0],
+            &messages,
+            &wakes,
+            &session_id,
         );
         admission
             .node
@@ -67,6 +77,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
             .await
             .expect("shut down test node");
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
+        case.check(gents_lean_vocab::family::recode(&observed));
     }
 }
 

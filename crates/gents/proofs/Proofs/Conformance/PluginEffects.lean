@@ -2,6 +2,7 @@ import Proofs.Runtime.CanonicalOutput.Execution.Examples
 import Proofs.Runtime.CanonicalOutput.Execution.Gate
 import Proofs.Runtime.CanonicalOutput.Execution.ToolDeliveryCases
 import Proofs.Conformance.Contracts.Json.ClientRuntime
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.PluginEffects
@@ -59,29 +60,126 @@ theorem admission_regressions :
       [true, true, false, false, false, false, false, false, false, false, false,
        true, false, false, true, true] := by native_decide
 
-private def render (item : String × World × Nat × PluginEffectAdmission) : Json :=
+structure ToolWire where
+  id : String
+  call_id : Option String
+  name : String
+  deriving ToJson, FromJson, Inhabited
+
+structure DeclarationWire where
+  block : Nat
+  part : Nat
+  kind : String
+  tool : Option ToolWire
+  media_kind : Option String
+  deriving ToJson, FromJson, Inhabited
+
+structure RunWire where
+  stream : Nat
+  bytes : Nat
+  declaration : Option DeclarationWire
+  deriving ToJson, FromJson, Inhabited
+
+structure FlushWire where
+  ordinal : Nat
+  runs : List RunWire
+  payload : List Nat
+  deriving ToJson, FromJson, Inhabited
+
+/-- A segment source or writer as its tag and the coordinates that tag carries. -/
+structure TagWire where
+  kind : String
+  call : Option Nat
+  generation : Option Nat
+  key : Option Nat
+  scope : Option Nat
+  turn : Option Nat
+  attempt : Option Nat
+  auxiliary_kind : Option String
+  deriving ToJson, FromJson, Inhabited
+
+structure CoordinateWire where
+  request : Nat
+  source : TagWire
+  deriving ToJson, FromJson, Inhabited
+
+structure CloseWire where
+  kind : String
+  outcome : Option String
+  segments : Option Nat
+  stream_bytes : Option (List Nat)
+  deriving ToJson, FromJson, Inhabited
+
+/-- A canonical segment in the shape `canonicalSegmentJson` writes. -/
+structure SegmentWire where
+  id : Nat
+  coordinate : CoordinateWire
+  writer : TagWire
+  flush : Option FlushWire
+  close : Option CloseWire
+  created_at : Nat
+  deriving ToJson, FromJson, Inhabited
+
+def segmentWire (segment : Segment) : SegmentWire :=
+  match (Json.parse (Conformance.Contracts.canonicalSegmentJson segment)).bind fromJson? with
+  | .ok wire => wire
+  | .error _ => default
+
+/-- The parent the admission names, as the execution owner reads it. -/
+structure ParentWire where
+  present : Bool
+  provenance : Option String
+  state : Option String
+  request : Option Nat
+  session : Option Nat
+  deadline : Option Nat
+  awaitMode : Option String
+  deriving ToJson
+
+structure ChildWire where
+  document : Nat
+  deadline : Nat
+  awaitMode : String
+  deriving ToJson
+
+structure AdmissionInput where
+  name : String
+  generation : Nat
+  ordinal : Nat
+  parent : ParentWire
+  child : ChildWire
+  arguments : SegmentWire
+  prior : Option SegmentWire
+  deriving ToJson
+
+private def awaitSpelling : ToolExecution.AwaitMode → String
+  | .foreground => "foreground" | .background => "background"
+
+private def admissionInput (item : String × World × Nat × PluginEffectAdmission) : AdmissionInput :=
   let (name, before, generation, call) := item
-  let parent := ownedToolByDocument? before call.parentToolDoc
-  let parentJson := match parent with
-    | none => Json.mkObj [("present", toJson false)]
-    | some p => Json.mkObj [("present", toJson true),
-        ("provenance", toJson (match p.provenance with
+  let parent : ParentWire := match ownedToolByDocument? before call.parentToolDoc with
+    | none => ⟨false, none, none, none, none, none, none⟩
+    | some p => ⟨true,
+        some (match p.provenance with
           | .acceptedIntent => "accepted" | .spawnedBackground _ => "spawned"
-          | .pluginEffect _ _ => "plugin_effect")),
-        ("state", toJson (match p.context.state with
+          | .pluginEffect _ _ => "plugin_effect"),
+        some (match p.context.state with
           | .pending => "pending" | .running => "running" | .completed => "completed"
-          | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timed_out")), ("request", toJson p.requestDoc),
-        ("session", toJson p.session), ("deadline", toJson p.context.deadline),
-        ("await_mode", toJson (match p.context.awaitMode with | .foreground => "foreground" | .background => "background"))]
-  Json.mkObj [("name", toJson name), ("generation", toJson generation),
-    ("ordinal", toJson call.ordinal),
-    ("parent", parentJson), ("child", Json.mkObj [("document", toJson call.document),
-      ("deadline", toJson call.context.deadline),
-      ("await_mode", toJson (match call.context.awaitMode with | .foreground => "foreground" | .background => "background"))]),
-    ("arguments", (Json.parse (Conformance.Contracts.canonicalSegmentJson call.arguments)).toOption.getD Json.null),
-    ("prior", if (ownedToolByDocument? before call.document).isSome then
-      (Json.parse (Conformance.Contracts.canonicalSegmentJson arguments)).toOption.getD Json.null else Json.null),
-    ("expected", toJson (succeeds (admitPluginEffect before generation call)))]
+          | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timed_out"),
+        some p.requestDoc, some p.session, some p.context.deadline,
+        some (awaitSpelling p.context.awaitMode)⟩
+  { name, generation, ordinal := call.ordinal, parent
+    child := ⟨call.document, call.context.deadline, awaitSpelling call.context.awaitMode⟩
+    arguments := segmentWire call.arguments
+    prior := if (ownedToolByDocument? before call.document).isSome then
+      some (segmentWire arguments) else none }
+
+@[conformance_family]
+def admissions : Family AdmissionInput Bool where
+  inputs := scenarios.map admissionInput
+  model := fun i => match scenarios.find? (·.1 == i.name) with
+    | some (_, before, generation, call) => succeeds (admitPluginEffect before generation call)
+    | none => false
 
 def output : Segment :=
   { id := 603, coordinate := ⟨10, .tool 601⟩, writer := .tool 601
@@ -107,9 +205,15 @@ theorem terminal_presentation_regressions :
     [terminalCase false false, terminalCase true false, terminalCase true true] =
       [true, true, false] := by native_decide
 
-def terminalCasesJson : Json := toJson <| [(false, false), (true, false), (true, true)].map
-  fun (replay, conflict) => Json.mkObj [("replay", toJson replay), ("conflict", toJson conflict),
-    ("expected", toJson (terminalCase replay conflict))]
+structure TerminalInput where
+  replay : Bool
+  conflict : Bool
+  deriving ToJson
+
+@[conformance_family]
+def terminalPresentation : Family TerminalInput Bool where
+  inputs := [⟨false, false⟩, ⟨true, false⟩, ⟨true, true⟩]
+  model := fun i => terminalCase i.replay i.conflict
 
 private def running : World := match dispatch admitted 7 ⟨601, true, true⟩ with
   | .ok post => post | .error _ => admitted
@@ -186,27 +290,52 @@ theorem live_background_parent_keeps_its_children :
     ((ownedToolByDocument? (accountOwnedTools backgroundRunningChild 7 true) 600).any fun parent =>
       parent.context.state == .running && parent.stuckSince.isSome) = true := by native_decide
 
-def accountingCasesJson : Json := toJson <|
-  [("pending_cancel", admitted, true), ("running_normal", runningWithCompletedParent, false),
-   ("running_exceptional", running, true),
-   ("timed_out_normal", completeParent timedOutChild, false),
-   ("completed_exceptional", completedChild, true),
-   ("background_parent_pending", backgroundAdmitted, true),
-   ("background_parent_running", backgroundRunningChild, true)].map fun (name, before, exceptional) =>
-    let post := if exceptional then accountOwnedTools before 7 exceptional else before
-    let child := (ownedToolByDocument? post 601).getD
-      { document := 601, requestDoc := 10, session := 1, acceptedSequence := 0,
-        context := admission.context }
-    Json.mkObj [("name", toJson name),
-      ("expected_state", toJson (match child.context.state with
-        | .pending => "pending" | .running => "running" | .completed => "completed"
-        | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timedOut")),
-      ("expected_started", toJson child.context.startedAt.isSome),
-      ("expected_stuck", toJson child.stuckSince.isSome),
-      ("expected_terminal_output", toJson child.terminalOutput.isSome),
-      ("expected_normal_ready", toJson (normalCompletionToolsReady post 7))]
+private def accountingWorld : String → World
+  | "pending_cancel" => admitted
+  | "running_normal" => runningWithCompletedParent
+  | "running_exceptional" => running
+  | "timed_out_normal" => completeParent timedOutChild
+  | "completed_exceptional" => completedChild
+  | "background_parent_pending" => backgroundAdmitted
+  | "background_parent_running" => backgroundRunningChild
+  | _ => baseline
 
-def casesJson : Json := toJson (scenarios.map render)
+structure AccountingInput where
+  name : String
+  exceptional : Bool
+  deriving ToJson
+
+structure AccountingOutput where
+  state : String
+  started : Bool
+  stuck : Bool
+  terminalOutput : Bool
+  normalReady : Bool
+  deriving ToJson
+
+private def accountingObservation (i : AccountingInput) : AccountingOutput :=
+  let before := accountingWorld i.name
+  let post := if i.exceptional then accountOwnedTools before 7 i.exceptional else before
+  let child := (ownedToolByDocument? post 601).getD
+    { document := 601, requestDoc := 10, session := 1, acceptedSequence := 0,
+      context := admission.context }
+  { state := match child.context.state with
+      | .pending => "pending" | .running => "running" | .completed => "completed"
+      | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timedOut"
+    started := child.context.startedAt.isSome
+    stuck := child.stuckSince.isSome
+    terminalOutput := child.terminalOutput.isSome
+    normalReady := normalCompletionToolsReady post 7 }
+
+/-- Exceptional accounting runs first; `normalReady` is then whether normal
+completion of the request would be admitted. -/
+@[conformance_family]
+def childAccounting : Family AccountingInput AccountingOutput where
+  inputs :=
+    [ ⟨"pending_cancel", true⟩, ⟨"running_normal", false⟩, ⟨"running_exceptional", true⟩
+    , ⟨"timed_out_normal", false⟩, ⟨"completed_exceptional", true⟩
+    , ⟨"background_parent_pending", true⟩, ⟨"background_parent_running", true⟩ ]
+  model := accountingObservation
 
 private def backgroundRunning : World := Id.run do
   let admission := { admission with context := { admission.context with awaitMode := .background } }
@@ -234,9 +363,16 @@ theorem asynchronous_receipt_regressions :
       receiptAccepted true true false, receiptAccepted false false true] =
     [true, true, false, false] := by native_decide
 
-def receiptCasesJson : Json := toJson <|
-  [(false, false, false), (true, false, false), (true, true, false), (false, false, true)].map
-    fun (replay, changed, terminal) => Json.mkObj [
-      ("replay", toJson replay), ("changed", toJson changed), ("terminal", toJson terminal),
-      ("expected", toJson (receiptAccepted replay changed terminal))]
+structure ReceiptInput where
+  replay : Bool
+  changed : Bool
+  terminal : Bool
+  deriving ToJson
+
+@[conformance_family]
+def receipts : Family ReceiptInput Bool where
+  inputs := [(false, false, false), (true, false, false), (true, true, false), (false, false, true)].map
+    fun (replay, changed, terminal) => { replay, changed, terminal }
+  model := fun i => receiptAccepted i.replay i.changed i.terminal
+
 end Conformance.PluginEffects

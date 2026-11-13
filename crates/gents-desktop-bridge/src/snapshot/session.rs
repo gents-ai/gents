@@ -1227,16 +1227,7 @@ mod paging_coverage_tests {
 
     #[test]
     fn paged_pending_prompt_uses_lean_read_coverage() {
-        let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = contract["session_document_projection_cases"]
-            .as_array()
-            .unwrap();
-        let mut count = 0;
-        for case in cases
-            .iter()
-            .filter(|case| case["operation"] == "tip_coverage")
-        {
-            count += 1;
+        gents_lean_vocab::families::contracts_tip_coverage::replay(|case| {
             let mut rows = ClientStoreRows {
                 requests: vec![AgentRequestRow {
                     doc_id: Some("request-doc".into()),
@@ -1250,7 +1241,7 @@ mod paging_coverage_tests {
                 }],
                 ..Default::default()
             };
-            if case["materialized"].as_bool().unwrap() {
+            if case.materialized {
                 rows.transcript_messages.push(TranscriptMessageRow {
                     doc_id: "prompt-doc".into(),
                     message: serde_json::from_value(serde_json::json!({
@@ -1264,8 +1255,8 @@ mod paging_coverage_tests {
             }
             let store = ClientStore::from_rows(rows);
             let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
-            if case["known"].as_bool().unwrap() {
-                let doc = if case["observed_request"].as_u64().unwrap() == 1 {
+            if case.known {
+                let doc = if case.observed_request == 1 {
                     "request-doc"
                 } else {
                     "other-request-doc"
@@ -1276,7 +1267,7 @@ mod paging_coverage_tests {
                         node_did: "node".into(),
                         session_id: "session".into(),
                         requester_did: None,
-                        materialized: case["materialized"].as_bool().unwrap(),
+                        materialized: case.materialized,
                         first_sequence: None,
                     },
                 );
@@ -1289,7 +1280,7 @@ mod paging_coverage_tests {
                 None,
                 Some(&ownership),
                 true,
-                case["complete"].as_bool().unwrap(),
+                case.complete,
                 false,
                 true,
                 Some("node"),
@@ -1299,15 +1290,12 @@ mod paging_coverage_tests {
             )
             .unwrap();
             assert_eq!(
-                snapshot.pending_turn.is_some(),
-                case["pending"].as_bool().unwrap(),
-                "{case}"
-            );
-            assert_eq!(
                 snapshot.context.transcript_totals_exact,
-                Some(case["complete"].as_bool().unwrap())
+                Some(case.complete)
             );
-        }
-        assert!(count > 0);
+            gents_lean_vocab::families::contracts_tip_coverage::TipCoverageOutput {
+                pending: snapshot.pending_turn.is_some(),
+            }
+        });
     }
 }

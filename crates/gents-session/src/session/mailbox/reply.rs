@@ -85,7 +85,7 @@ pub(crate) async fn claim_reply_in_txn(
             chrono::DateTime::parse_from_rfc3339(deadline).is_ok_and(|deadline| deadline > now_time)
         }
     };
-    validate_reply_claim(
+    let post = validate_reply_claim(
         item,
         &signed_request,
         authenticated,
@@ -105,7 +105,7 @@ pub(crate) async fn claim_reply_in_txn(
             && signed_request.session_id == request.session_id,
         "mailbox reply changed during admission"
     );
-    if item.parsed_status() == Some(MailboxStatus::Acted) {
+    if !post.consumes {
         return Ok(());
     }
     let mutation = {
@@ -115,8 +115,8 @@ pub(crate) async fn claim_reply_in_txn(
         Update::matching(
             Filter::eq(fields::DOC_ID, &item.doc_id).and(Filter::eq(fields::STATUS, "open")),
             Input::new()
-                .set(fields::STATUS, "acted")
-                .set(fields::RESOLVED_DOC_ID, &request.doc_id)
+                .set(fields::STATUS, post.status.as_str())
+                .set(fields::RESOLVED_DOC_ID, &post.resolved_doc_id)
                 .set(fields::RESOLVED_AT, now)
                 .set(fields::UPDATED_AT, now),
         )
@@ -130,13 +130,20 @@ pub(crate) async fn claim_reply_in_txn(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ReplyClaimPost {
+    pub(super) status: MailboxStatus,
+    pub(super) resolved_doc_id: String,
+    pub(super) consumes: bool,
+}
+
 pub(super) fn validate_reply_claim(
     item: &MailboxItem,
     request: &AgentRequest,
     authenticated: bool,
     recipient_authorized: bool,
     deadline_valid: bool,
-) -> Result<()> {
+) -> Result<ReplyClaimPost> {
     ensure!(
         item.parsed_action() == Some(MailboxAction::StartRequest),
         "mailbox item does not accept a request reply"
@@ -198,7 +205,11 @@ pub(super) fn validate_reply_claim(
         "mailbox item is closed or was consumed by another request"
     );
     if item.parsed_status() == Some(MailboxStatus::Acted) {
-        return Ok(());
+        return Ok(ReplyClaimPost {
+            status: MailboxStatus::Acted,
+            resolved_doc_id: item.resolved_doc_id.clone().unwrap_or_default(),
+            consumes: false,
+        });
     }
     let modern_question = item.kind == MailboxKind::Ask.as_str()
         && item
@@ -229,5 +240,9 @@ pub(super) fn validate_reply_claim(
             &request.content,
         )?;
     }
-    Ok(())
+    Ok(ReplyClaimPost {
+        status: MailboxStatus::Acted,
+        resolved_doc_id: request.doc_id.clone(),
+        consumes: true,
+    })
 }

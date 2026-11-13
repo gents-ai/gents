@@ -572,9 +572,9 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
         first.did().parse()?,
         first.as_ref(),
     )?;
-    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_liveness_cases {
-        let visible = case.visible;
-        let terminal = case.terminal;
+    for case in gents_lean_vocab::families::workspace_and_file_requests_liveness::cases() {
+        let visible = case.input.visible;
+        let terminal = case.input.terminal;
         let state = if terminal { "completed" } else { "pending" };
         let request_id = format!("old-{visible}-{terminal}");
         let response = second_access.write("test.workspace.foreign_request", &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{request_id}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_did: "{}", session_id: "session", content: "work", created_at: "2026-11-05T00:00:00Z", workspace_id: "workspace", workspace_owner_node_did: "{}", lifecycle_state: "{state}"}}) {{_docID}} }}"#, runtime.did(), runtime.did(), second.did(), runtime.did())).await?;
@@ -603,12 +603,12 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
             false,
         )
         .await;
-        if visible {
-            assert_eq!(result?, case.may_release, "{case:?}");
-        } else {
-            assert!(result.is_err(), "{case:?}");
-            assert_eq!(case.may_release, false);
-        }
+        assert_eq!(result.is_err(), !visible, "{result:?}");
+        case.check(
+            gents_lean_vocab::families::workspace_and_file_requests_liveness::LivenessOutput {
+                may_release: result.unwrap_or(false),
+            },
+        );
     }
     node.shutdown().await?;
     Ok(())

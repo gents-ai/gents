@@ -1,8 +1,8 @@
 import Proofs.Automation.Mailbox.Handoff
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.MailboxHandoffContracts
-open Mailbox Mailbox.Handoff Conformance.Contracts
+open Mailbox Mailbox.Handoff
 
 private structure Case where
   name : String
@@ -44,8 +44,6 @@ private def cases : List Case :=
         { replyEvidence with requestDocId := Handoff.producer.requestDocId } }
   ]
 
-private def boolJson (value : Bool) : String := if value then "true" else "false"
-
 private structure OwnerOutcome where
   handoffAccepted : Bool
   storedOpenReceipt : Bool
@@ -79,31 +77,74 @@ theorem generated_case_outcomes_follow_owners :
       ] := by
   native_decide
 
-private def caseJson (test : Case) : String :=
-  let outcome := ownerOutcome test
-  "{\"variant\":" ++ jsonString test.name ++
-    ",\"kind\":" ++ jsonString test.question.identity.kind.toDefraDB ++
-    ",\"action\":" ++ jsonString test.question.handling.toDefraDB ++
-    ",\"content\":" ++ jsonString test.question.content ++
-    ",\"request_id\":" ++ toString test.question.requestId ++
-    ",\"producer_request_id\":" ++ toString test.producer.requestId ++
-    ",\"tool_request_id\":" ++ toString test.producer.tool.requestId ++
-    ",\"producer_node_did\":" ++ jsonString test.producer.nodeDid ++
-    ",\"producer_requester_did\":" ++ jsonString test.producer.requesterDid ++
-    ",\"question_node_did\":" ++ jsonString test.question.identity.nodeDid ++
-    ",\"question_requester_did\":" ++ jsonString test.question.identity.requesterDid ++
-    ",\"session_id\":" ++ jsonString test.question.sessionId ++
-    ",\"request_doc_id\":" ++ jsonString test.producer.requestDocId ++
-    ",\"mailbox_doc_id\":" ++ jsonString test.question.docId ++
-    ",\"reply_request_doc_id\":" ++ jsonString test.reply.requestDocId ++
-    ",\"reply_source_doc_id\":" ++ jsonString test.reply.sourceDocId ++
-    ",\"reply_session_id\":" ++ jsonString test.reply.sessionId ++
-    ",\"reply_bound_session_id\":" ++
-      (test.envelope.sessionId.map jsonString).getD "null" ++
-    ",\"handoff_accepted\":" ++ boolJson outcome.handoffAccepted ++
-    ",\"stored_open_receipt\":" ++ boolJson outcome.storedOpenReceipt ++
-    ",\"linked_reply_accepted\":" ++ boolJson outcome.linkedReplyAccepted ++ "}"
+structure HandoffInput where
+  variant : String
+  kind : String
+  action : String
+  content : String
+  requestId : Nat
+  producerRequestId : Nat
+  toolRequestId : Nat
+  producerNodeDid : String
+  producerRequesterDid : String
+  questionNodeDid : String
+  questionRequesterDid : String
+  sessionId : String
+  requestDocId : String
+  mailboxDocId : String
+  replyRequestDocId : String
+  replySourceDocId : String
+  replySessionId : String
+  replyBoundSessionId : Option String
+  deriving Lean.ToJson
 
-def casesJson : String := jsonArray (cases.map caseJson)
+structure HandoffOutput where
+  handoffAccepted : Bool
+  storedOpenReceipt : Bool
+  linkedReplyAccepted : Bool
+  deriving Lean.ToJson
+
+private def handoffInput (test : Case) : HandoffInput :=
+  { variant := test.name, kind := test.question.identity.kind.toDefraDB
+    action := test.question.handling.toDefraDB, content := test.question.content
+    requestId := test.question.requestId, producerRequestId := test.producer.requestId
+    toolRequestId := test.producer.tool.requestId, producerNodeDid := test.producer.nodeDid
+    producerRequesterDid := test.producer.requesterDid
+    questionNodeDid := test.question.identity.nodeDid
+    questionRequesterDid := test.question.identity.requesterDid
+    sessionId := test.question.sessionId, requestDocId := test.producer.requestDocId
+    mailboxDocId := test.question.docId, replyRequestDocId := test.reply.requestDocId
+    replySourceDocId := test.reply.sourceDocId, replySessionId := test.reply.sessionId
+    replyBoundSessionId := test.envelope.sessionId }
+
+private def handoffOutput (test : Case) : HandoffOutput :=
+  let outcome := ownerOutcome test
+  { handoffAccepted := outcome.handoffAccepted, storedOpenReceipt := outcome.storedOpenReceipt
+    linkedReplyAccepted := outcome.linkedReplyAccepted }
+
+private def handoffOf (i : HandoffInput) : HandoffOutput :=
+  match cases.find? (·.name == i.variant) with
+  | some test => handoffOutput test
+  | none => { handoffAccepted := false, storedOpenReceipt := false, linkedReplyAccepted := false }
+
+private def servedNames : List String := ["fresh-linked"]
+
+/-- The served-node scenario files the question through the stamped mailbox
+write from the producer's own claimed request and replies through the signed
+reply claim, so it builds only the linked handoff. -/
+@[conformance_family]
+def linked : Family HandoffInput HandoffOutput where
+  inputs := (cases.filter (servedNames.contains ·.name)).map handoffInput
+  model := handoffOf
+
+/-- model-production-gap: the stamped mailbox write takes the question's
+request, session and owner from the filing request itself, so production
+cannot file a question that names another request, session, tool owner or
+producer; and no scenario replays the reply-side mismatches through the
+signed reply claim after a linked handoff. -/
+@[conformance_family]
+def linkedUnreached : Family HandoffInput HandoffOutput where
+  inputs := (cases.filter (!servedNames.contains ·.name)).map handoffInput
+  model := handoffOf
 
 end Conformance.MailboxHandoffContracts

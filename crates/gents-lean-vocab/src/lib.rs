@@ -86,49 +86,6 @@ impl LeanPluginJobControlCase {
     }
 }
 
-impl LeanPluginJobAuthorityCase {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Provenance { name, .. }
-            | Self::Install { name, .. }
-            | Self::Installer { name, .. }
-            | Self::Origin { name, .. }
-            | Self::PackJobBlock { name, .. }
-            | Self::PolicyValid { name, .. }
-            | Self::ConsentedDynamic { name, .. }
-            | Self::WireTargetsFrom { name, .. }
-            | Self::PublishedRead { name, .. } => name,
-        }
-    }
-}
-
-/// `plugin_resource_host_import_cases`: whether the `gents` imports are
-/// linked for a plugin and what `run_script` answers.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginHostImportCase {
-    pub declared: bool,
-    pub call_has_script: bool,
-    pub linked: bool,
-    pub answer: Option<String>,
-}
-
-/// `plugin_resource_scratch_cases`: `scratchAdmitted`. `handle` is not an
-/// owner input; rows that differ only in it share a path.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginScratchCase {
-    pub cwd: String,
-    pub cwd_allowed: bool,
-    pub tool_call_id: String,
-    pub handle: String,
-    pub name: String,
-    pub size: u64,
-    pub count: u32,
-    #[serde(deserialize_with = "required_nullable")]
-    pub expected: Option<String>,
-}
-
 impl LeanSurface {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -145,18 +102,13 @@ impl LeanSurface {
 mod generated;
 pub use generated::*;
 
-mod background_transcript;
 mod canonical_execution;
 mod canonical_output;
 pub mod canonical_presentation;
+pub mod claude_replay;
 mod compaction_canonical_projection;
-mod compaction_projection_join;
 pub mod consumer_scan;
 pub mod family;
-mod hooks;
-mod prompt_assembly;
-mod request_execution_lease;
-mod session_documents;
 mod title;
 
 /// Family types generated from `families.schema.json`, which Lean emits.
@@ -169,10 +121,7 @@ pub use canonical_output::*;
 pub use canonical_presentation::native_adapter::native_presentation;
 pub use canonical_presentation::*;
 pub use compaction_canonical_projection::*;
-pub use compaction_projection_join::*;
-pub use hooks::*;
-pub use prompt_assembly::*;
-pub use request_execution_lease::*;
+pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use title::*;
 
 #[cfg(test)]
@@ -203,26 +152,6 @@ where
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
-pub fn lean_plugin_host_import_cases() -> &'static [LeanPluginHostImportCase] {
-    static CASES: OnceLock<Vec<LeanPluginHostImportCase>> = OnceLock::new();
-    CASES.get_or_init(|| {
-        lean_plugin_resource_group(
-            "plugin_resource_host_import_cases",
-            &lean_contract_snapshot().plugin_resource_host_import_cases,
-        )
-    })
-}
-
-pub fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {
-    static CASES: OnceLock<Vec<LeanPluginScratchCase>> = OnceLock::new();
-    CASES.get_or_init(|| {
-        lean_plugin_resource_group(
-            "plugin_resource_scratch_cases",
-            &lean_contract_snapshot().plugin_resource_scratch_cases,
-        )
-    })
-}
-
 pub fn lean_vocabulary_contract(domain: &str) -> &'static LeanVocabularyContract {
     lean_contract_snapshot()
         .vocabularies
@@ -247,43 +176,12 @@ pub fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileC
         .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
 }
 
-pub fn lean_tool_policy_case(name: &str) -> &'static LeanToolPolicyCase {
-    lean_tool_policy_cases()
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean tool-policy case {name:?} was not emitted"))
-}
-
-pub fn lean_session_recovery_case(name: &str) -> &'static LeanSessionRecoveryCase {
-    lean_contract_snapshot()
-        .session_recovery_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean session-recovery case {name:?} was not emitted"))
-}
-
 pub fn lean_client_shell_case(name: &str) -> &'static LeanClientShellCase {
     lean_contract_snapshot()
         .frontend_client_shell_cases
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean ClientShell case {name:?} was not emitted"))
-}
-
-pub fn lean_inference_slot_accounting_case(name: &str) -> &'static LeanInferenceSlotAccountingCase {
-    lean_contract_snapshot()
-        .inference_slot_accounting_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean inference slot-accounting case {name:?} was not emitted"))
-}
-
-pub fn lean_fleet_slot_accounting_case(name: &str) -> &'static LeanFleetSlotAccountingCase {
-    lean_contract_snapshot()
-        .fleet_slot_accounting_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean fleet slot-accounting case {name:?} was not emitted"))
 }
 
 pub fn lean_queue_deadline_case(name: &str) -> &'static LeanQueueDeadlineConformanceCase {
@@ -300,14 +198,6 @@ pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
-}
-
-pub fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBackgroundWorkCase {
-    lean_contract_snapshot()
-        .r4c_background_work_cases
-        .iter()
-        .find(|case| case.witness() == witness)
-        .unwrap_or_else(|| panic!("Lean R4c background-work witness {witness:?} was not emitted"))
 }
 
 pub fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {
@@ -339,18 +229,6 @@ pub fn lean_composed_invariant_witness_by_scenario(
         .find(|witness| witness.scenario == scenario)
         .unwrap_or_else(|| {
             panic!("Lean composed invariant witness scenario {scenario:?} was not emitted")
-        })
-}
-
-pub fn lean_r6_background_theorem_witness(
-    theorem_name: &str,
-) -> &'static LeanBackgroundTheoremWitness {
-    lean_contract_snapshot()
-        .r6_background_theorem_witnesses
-        .iter()
-        .find(|witness| witness.theorem_name == theorem_name)
-        .unwrap_or_else(|| {
-            panic!("Lean R6 background theorem witness {theorem_name:?} was not emitted")
         })
 }
 
@@ -387,52 +265,12 @@ impl LeanQueueManagementState {
     }
 }
 
-pub fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReducerCase {
-    lean_contract_snapshot()
-        .compaction_reducer_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean compaction-reducer case {name:?} was not emitted"))
-}
-
-pub fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {
-    lean_contract_snapshot()
-        .tool_retry_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean tool retry case {name:?} was not emitted"))
-}
-
-pub fn lean_command_policy_case(name: &str) -> &'static LeanCommandPolicyCase {
-    lean_contract_snapshot()
-        .command_policy_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean command policy case {name:?} was not emitted"))
-}
-
-pub fn lean_command_env_case(name: &str) -> &'static LeanCommandEnvCase {
-    lean_contract_snapshot()
-        .command_env_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean command env case {name:?} was not emitted"))
-}
-
 pub fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
     lean_vocabulary_contract(domain)
         .values
         .iter()
         .map(String::as_str)
         .collect()
-}
-
-pub fn lean_trigger_dispatch_case_count() -> usize {
-    lean_contract_snapshot().trigger_dispatch_case_count
-}
-
-pub fn lean_event_group_case_count() -> usize {
-    lean_contract_snapshot().event_group_case_count
 }
 
 pub fn assert_lean_contract_vocabulary_matches(spec: LeanContractVocabulary<'_>) {

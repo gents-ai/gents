@@ -90,17 +90,13 @@ fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
 
 #[test]
 fn generated_live_cursor_contract() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().client_live_delta_cases;
-    assert_eq!(cases.len(), 18);
-    for case in cases {
-        let base = case.base.map(|v| v.to_string());
-        let current = case.current.map(|v| v.to_string());
-        assert_eq!(
-            accepts_live_cursor(base.as_deref(), current.as_deref(), case.terminal),
-            case.accepted,
-            "{case:?}"
-        );
-    }
+    gents_lean_vocab::families::client_live_delta_contracts_cursor::replay(|i| {
+        let base = i.base.map(|v| v.to_string());
+        let current = i.current.map(|v| v.to_string());
+        gents_lean_vocab::families::client_live_delta_contracts_cursor::CursorOutput {
+            accepted: accepts_live_cursor(base.as_deref(), current.as_deref(), i.terminal),
+        }
+    });
 }
 
 #[test]

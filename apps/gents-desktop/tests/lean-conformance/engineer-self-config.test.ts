@@ -7,7 +7,7 @@ import { expect, it } from "vitest";
 import { deployment } from "../config-panel-wiring/fixtures";
 import { engineerPatches } from "../../src/ui/lib/engineer";
 
-type Group = { name: string; enabled: boolean; effective: string[] };
+type Preset = { enabled: boolean; effective: string[] };
 const run = promisify(execFile);
 
 it("grants the Engineer exactly the executed Lean engineerGroup categories", async () => {
@@ -24,9 +24,7 @@ it("grants the Engineer exactly the executed Lean engineerGroup categories", asy
     ["env", "lean", "--run", "EngineerSelfConfigConformance.lean"],
     { cwd, timeout: 240_000 },
   );
-  const { groups } = JSON.parse(stdout) as { groups: Group[] };
-  const modeled = groups.find((group) => group.name === "engineer");
-  expect(modeled, "engineer group row").toBeDefined();
+  const modeled = JSON.parse(stdout) as Preset;
   const context = {
     context_id: "context-a",
     node_did: deployment.nodeDid,
@@ -47,8 +45,8 @@ it("grants the Engineer exactly the executed Lean engineerGroup categories", asy
   }).find((patch) => patch.collection === "Tools");
   const selfConfig = tools?.changes.self_config as
     { enable_self_config?: boolean; self_config_categories?: string[] } | undefined;
-  expect(selfConfig?.enable_self_config).toBe(modeled!.enabled);
+  expect(selfConfig?.enable_self_config).toBe(modeled.enabled);
   expect([...(selfConfig?.self_config_categories ?? [])].sort()).toEqual(
-    [...modeled!.effective].sort(),
+    [...modeled.effective].sort(),
   );
 }, 300_000);

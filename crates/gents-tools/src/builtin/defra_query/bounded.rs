@@ -626,18 +626,15 @@ mod tests {
             &node, "test.scalar_filter.seed",
             r#"mutation { add_ScalarRecord(input: {text: "measurement", count: 86, measure: 0.5, enabled: false}) {_docID} }"#,
         ).await.unwrap();
-        for case in gents_lean_vocab::lean_write_input_cases() {
-            if case["nullable"] != false || case["required"] != true || case["filled"] != false {
-                continue;
-            }
-            let (field, kind) = match case["expected"].as_str().unwrap() {
+        for case in gents_lean_vocab::families::contracts_write_input_query_filter::cases::<String>() {
+            let (field, kind) = match case.input.expected.as_str() {
                 "text" => ("text", "string"),
                 "integer" => ("count", "integer"),
                 "number" => ("measure", "number"),
                 "boolean" => ("enabled", "boolean"),
                 other => panic!("unknown kind {other}"),
             };
-            let value = match case["actual"].as_str() {
+            let value = match case.input.actual.as_deref() {
                 None => None,
                 Some("text") => Some(json!("measurement")),
                 Some("integer") => Some(json!(86)),
@@ -657,7 +654,7 @@ mod tests {
                     fields: vec![field.into()],
                     filter_fields: vec![WriteToolField {
                         name: field.into(),
-                        required: true,
+                        required: case.input.required,
                         fill: None,
                     }],
                 },
@@ -671,15 +668,11 @@ mod tests {
                 .map(|value| Map::from_iter([(field.into(), value)]))
                 .unwrap_or_default();
             let result = tool.call(BoundedQueryParams(args)).await;
-            assert_eq!(
-                result.is_ok(),
-                case["accepted"] == true,
-                "{case}: {result:?}"
-            );
-            if case["expected"] == case["actual"] {
-                let payload: Value = serde_json::from_str(&result.unwrap()).unwrap();
-                assert_eq!(payload["count"], 1, "{case}");
+            if case.input.actual.as_ref() == Some(&case.input.expected) {
+                let payload: Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
+                assert_eq!(payload["count"], 1, "{:?}", case.input);
             }
+            case.check(result.is_ok());
         }
     }
 

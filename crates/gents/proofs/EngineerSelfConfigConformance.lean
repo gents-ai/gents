@@ -1,4 +1,4 @@
 import Proofs.Conformance.Contracts.Json.SelfConfig
 
 def main : IO Unit :=
-  IO.println Conformance.Contracts.selfConfigScopeCasesJson
+  IO.println (Lean.toJson (Conformance.Contracts.presetOutput SelfConfig.engineerGroup)).compress

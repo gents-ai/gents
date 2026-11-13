@@ -8,252 +8,238 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 
 #[tokio::test]
 async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back_together() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_backed_runtime_cases;
-    let modeled = |name: &str| cases.iter().find(|case| case.name == name).unwrap();
-    let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
-        "runtime-goal-opening",
-        crate::lifecycle_hooks::composition(),
-    )
-    .await;
-    let node = db.node.clone();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let access = ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent.did()).unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let mut request = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        "task-opening",
-        db.node_identity.did(),
-        agent.did(),
-        agent.did(),
-        "task-session",
-        "work",
-        "scheduled",
-        "2026-11-04T00:00:00Z",
-        AgentRequestAdmissionRecord::runtime_automated_trigger(agent.did(), "trigger"),
-    );
-    request.retry_key = Some("task-retry".into());
-    request.caused_by_trigger_id = Some("trigger".into());
-    request.caused_by_trigger_kind = Some("schedule".into());
-    request.caused_by_trigger_doc_id = Some("trigger-doc".into());
-    gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut request)
-        .await
+    for case in gents_lean_vocab::families::contracts_goal_backed_runtime::cases() {
+        let name = case.input.name.as_str();
+        let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+            &format!("runtime-goal-opening-{name}"),
+            crate::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = db.node.clone();
+        let agent =
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
         .unwrap();
-    let submitted = crate::goal::submit_goal_backed_request_with_identity(
-        &node,
-        identity::Did::new(agent.did()).unwrap(),
-        db.node_identity.did(),
-        "task-session",
-        "finish work",
-        None,
-        &request,
-        Some(agent.as_ref()),
-    )
-    .await
-    .unwrap();
-    let rows = access.execute(&format!("{{ AgentSession {{_docID provenance}} AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} relationships_pending }} Goal {{_docID}} GoalCreationClaim {{_docID}} }}", gents_store::graphql::escape_graphql_string(&submitted.doc_id), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
-    let session = &rows["data"]["AgentSession"][0];
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
-    assert_eq!(
-        !rows["data"]["Goal"].as_array().unwrap().is_empty(),
-        modeled("created").goal
-    );
-    assert_eq!(
-        !rows["data"]["AgentRequest"].as_array().unwrap().is_empty(),
-        modeled("created").request
-    );
-    assert_eq!(row.session_doc_id.as_deref(), session["_docID"].as_str());
-    assert!(row
-        .agent_doc_id
-        .as_deref()
-        .is_some_and(|doc| !doc.is_empty()));
-    assert_eq!(
-        session["provenance"]["opening_request_doc_id"],
-        submitted.doc_id
-    );
-    gents_store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
-    let user_rows = client
-        .execute("{ AgentSession {_docID} AgentRequest {_docID} }")
-        .await
-        .unwrap();
-    assert_eq!(
-        !user_rows["data"]["AgentSession"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        modeled("created").session
-    );
-    assert_eq!(
-        !user_rows["data"]["AgentRequest"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        modeled("created").grants
-    );
-    let other_home = tempfile::tempdir().unwrap();
-    let other = KeyIdentity::load_or_create(other_home.path().join("other.key"), None).unwrap();
-    let admin = ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
-    );
-    for permission in [
-        gents_store::config_client::NodePermission::DocumentRead,
-        gents_store::config_client::NodePermission::CollectionGet,
-    ] {
-        admin
-            .grant_node_permission(&identity::Did::new(other.did()).unwrap(), permission)
+        let admin = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(db.node_identity.did()).unwrap(),
+        );
+        let mut request = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            "task-opening",
+            db.node_identity.did(),
+            agent.did(),
+            agent.did(),
+            "task-session",
+            "work",
+            "scheduled",
+            "2026-11-04T00:00:00Z",
+            AgentRequestAdmissionRecord::runtime_automated_trigger(agent.did(), "trigger"),
+        );
+        request.retry_key = Some("task-retry".into());
+        request.caused_by_trigger_id = Some("trigger".into());
+        request.caused_by_trigger_kind = Some("schedule".into());
+        request.caused_by_trigger_doc_id = Some("trigger-doc".into());
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut request)
             .await
             .unwrap();
-    }
-    let other_access =
-        ConfigAccess::local_as(node.clone(), identity::Did::new(other.did()).unwrap());
-    let hidden = other_access
-        .execute("{ AgentRequest {_docID} }")
-        .await
-        .unwrap();
-    assert!(hidden["data"]["AgentRequest"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    let retry = crate::goal::submit_goal_backed_request_with_identity(
-        &node,
-        identity::Did::new(agent.did()).unwrap(),
-        db.node_identity.did(),
-        "task-session",
-        "finish work",
-        None,
-        &request,
-        Some(agent.as_ref()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(retry.doc_id, submitted.doc_id);
-    for (field, name) in [("session", "wrong-session"), ("agent", "wrong-agent")] {
-        let mut wrong = request.clone();
-        if field == "session" {
-            wrong.session_doc_id = Some("foreign-session".into());
+        let opened_doc_id = if case.input.fresh {
+            None
         } else {
-            wrong.agent_doc_id = Some("foreign-agent".into());
-        }
-        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut wrong)
-            .await
-            .unwrap();
-        assert!(
-            crate::goal::submit_goal_backed_request_with_identity(
+            let opened = crate::goal::submit_goal_backed_request_with_identity(
                 &node,
                 identity::Did::new(agent.did()).unwrap(),
                 db.node_identity.did(),
                 "task-session",
                 "finish work",
                 None,
-                &wrong,
+                &request,
                 Some(agent.as_ref()),
             )
             .await
-            .is_err(),
-            "{name}"
-        );
-        assert!(!modeled(name).request);
-    }
-    assert!(crate::goal::submit_goal_backed_request_with_identity(
-        &node,
-        identity::Did::new(db.node_identity.did()).unwrap(),
-        db.node_identity.did(),
-        "task-session",
-        "finish work",
-        None,
-        &request,
-        Some(db.node_identity.as_ref()),
-    )
-    .await
-    .is_err());
-    assert!(!modeled("foreign-actor").request);
-    admin
-        .grant_node_permission(
-            &identity::Did::new(agent.did()).unwrap(),
-            gents_store::config_client::NodePermission::DacRelationDelete,
+            .unwrap();
+            let rows = access.execute(&format!("{{ AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} relationships_pending }} }}", gents_store::graphql::escape_graphql_string(&opened.doc_id), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
+            let row: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
+            admin
+                .grant_node_permission(
+                    &identity::Did::new(agent.did()).unwrap(),
+                    gents_store::config_client::NodePermission::DacRelationDelete,
+                )
+                .await
+                .unwrap();
+            gents_store::test_support::relationships::resource_in_txn(
+                &access,
+                "AgentRequest",
+                &opened.doc_id,
+                "parent",
+                "agents",
+                row.agent_doc_id.as_deref().unwrap(),
+                true,
+            )
+            .await
+            .unwrap();
+            gents_store::test_support::relationships::resource_in_txn(
+                &access,
+                "AgentRequest",
+                &opened.doc_id,
+                "session",
+                "sessions",
+                row.session_doc_id.as_deref().unwrap(),
+                true,
+            )
+            .await
+            .unwrap();
+            Some(opened.doc_id)
+        };
+        let mut attempt = request.clone();
+        let altered = case.input.target_session != case.input.observed_session
+            || case.input.target_agent != case.input.observed_agent
+            || !case.input.commit;
+        if case.input.target_session != case.input.observed_session {
+            attempt.session_doc_id = Some("foreign-session".into());
+        }
+        if case.input.target_agent != case.input.observed_agent {
+            attempt.agent_doc_id = Some("foreign-agent".into());
+        }
+        if !case.input.commit {
+            attempt.input.goal_assignment =
+                Some(gents_protocol::request_input::GoalAssignmentInput {
+                    goal_id: "wrong-goal".into(),
+                    root_request_doc_id: None,
+                });
+        }
+        if altered {
+            gents_session::request::admission::sign_agent_request_create(
+                agent.as_ref(),
+                &mut attempt,
+            )
+            .await
+            .unwrap();
+        }
+        let foreign_actor = case.input.actor != case.input.selected;
+        let (actor, signer): (&str, &dyn NodeIdentity) = if foreign_actor {
+            (db.node_identity.did(), db.node_identity.as_ref())
+        } else {
+            (agent.did(), agent.as_ref())
+        };
+        let submitted = crate::goal::submit_goal_backed_request_with_identity(
+            &node,
+            identity::Did::new(actor).unwrap(),
+            db.node_identity.did(),
+            "task-session",
+            "finish work",
+            None,
+            &attempt,
+            Some(signer),
         )
-        .await
-        .unwrap();
-    gents_store::test_support::relationships::resource_in_txn(
-        &access,
-        "AgentRequest",
-        &submitted.doc_id,
-        "parent",
-        "agents",
-        row.agent_doc_id.as_deref().unwrap(),
-        true,
-    )
-    .await
-    .unwrap();
-    gents_store::test_support::relationships::resource_in_txn(
-        &access,
-        "AgentRequest",
-        &submitted.doc_id,
-        "session",
-        "sessions",
-        row.session_doc_id.as_deref().unwrap(),
-        true,
-    )
-    .await
-    .unwrap();
-    let retry = crate::goal::submit_goal_backed_request_with_identity(
-        &node,
-        identity::Did::new(agent.did()).unwrap(),
-        db.node_identity.did(),
-        "task-session",
-        "finish work",
-        None,
-        &request,
-        Some(agent.as_ref()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(retry.doc_id, submitted.doc_id);
-    let observed = client.execute("{ AgentRequest {_docID} }").await.unwrap();
-    assert_eq!(
-        !observed["data"]["AgentRequest"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        modeled("duplicate-after-revocation").grants
-    );
-    let mut rejected = request.clone();
-    rejected.request_id = "rejected-opening".into();
-    rejected.session_id = "rejected-session".into();
-    rejected.retry_key = Some("rejected-retry".into());
-    rejected.input.goal_assignment = Some(gents_protocol::request_input::GoalAssignmentInput {
-        goal_id: "wrong-goal".into(),
-        root_request_doc_id: None,
-    });
-    gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut rejected)
-        .await
-        .unwrap();
-    assert!(crate::goal::submit_goal_backed_request_with_identity(
-        &node,
-        identity::Did::new(agent.did()).unwrap(),
-        db.node_identity.did(),
-        "rejected-session",
-        "finish work",
-        None,
-        &rejected,
-        Some(agent.as_ref()),
-    )
-    .await
-    .is_err());
-    let after = access.execute("{ AgentSession {_docID} AgentRequest {_docID} Goal {_docID} GoalCreationClaim {_docID} }").await.unwrap();
-    for name in ["AgentSession", "AgentRequest", "Goal", "GoalCreationClaim"] {
-        assert_eq!(after["data"][name].as_array().unwrap().len(), 1, "{name}");
+        .await;
+        let agent_rows = access
+            .execute("{ AgentSession {_docID} AgentRequest {_docID} Goal {_docID} GoalCreationClaim {_docID} }")
+            .await
+            .unwrap();
+        let user_rows = client
+            .execute("{ AgentSession {_docID} AgentRequest {_docID} }")
+            .await
+            .unwrap();
+        let observed =
+            gents_lean_vocab::families::contracts_goal_backed_runtime::RuntimeGoalPublication {
+                session: !user_rows["data"]["AgentSession"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                goal: !agent_rows["data"]["Goal"].as_array().unwrap().is_empty(),
+                request: !agent_rows["data"]["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+                grants: !user_rows["data"]["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+            };
+        if case.input.fresh && !observed.request {
+            assert!(
+                submitted.is_err(),
+                "{name}: a refused opening reported success"
+            );
+            for collection in ["AgentSession", "GoalCreationClaim"] {
+                assert!(
+                    agent_rows["data"][collection]
+                        .as_array()
+                        .unwrap()
+                        .is_empty(),
+                    "{name}: a refused opening left a {collection} behind"
+                );
+            }
+        }
+        if let Some(opened_doc_id) = &opened_doc_id {
+            assert_eq!(
+                &submitted.as_ref().expect("duplicate opening recovers").doc_id,
+                opened_doc_id,
+                "{name}: a duplicate opening returns the request it opened"
+            );
+        }
+        if name == "created" {
+            let submitted = submitted.unwrap();
+            let rows = access.execute(&format!("{{ AgentSession {{_docID provenance}} AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} relationships_pending }} }}", gents_store::graphql::escape_graphql_string(&submitted.doc_id), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
+            let session = &rows["data"]["AgentSession"][0];
+            let row: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
+            assert_eq!(row.session_doc_id.as_deref(), session["_docID"].as_str());
+            assert!(row
+                .agent_doc_id
+                .as_deref()
+                .is_some_and(|doc| !doc.is_empty()));
+            assert_eq!(
+                session["provenance"]["opening_request_doc_id"],
+                submitted.doc_id
+            );
+            gents_store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
+            let other_home = tempfile::tempdir().unwrap();
+            let other =
+                KeyIdentity::load_or_create(other_home.path().join("other.key"), None).unwrap();
+            for permission in [
+                gents_store::config_client::NodePermission::DocumentRead,
+                gents_store::config_client::NodePermission::CollectionGet,
+            ] {
+                admin
+                    .grant_node_permission(&identity::Did::new(other.did()).unwrap(), permission)
+                    .await
+                    .unwrap();
+            }
+            let other_access =
+                ConfigAccess::local_as(node.clone(), identity::Did::new(other.did()).unwrap());
+            let hidden = other_access
+                .execute("{ AgentRequest {_docID} }")
+                .await
+                .unwrap();
+            assert!(hidden["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+            let retry = crate::goal::submit_goal_backed_request_with_identity(
+                &node,
+                identity::Did::new(agent.did()).unwrap(),
+                db.node_identity.did(),
+                "task-session",
+                "finish work",
+                None,
+                &request,
+                Some(agent.as_ref()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(retry.doc_id, submitted.doc_id);
+        }
+        case.check(observed);
+        drop(user);
     }
-    assert!(!modeled("aborted").session);
-    assert!(!modeled("aborted").goal);
-    assert!(!modeled("aborted").request);
-    drop(user);
 }
 
 #[tokio::test]

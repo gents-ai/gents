@@ -42,14 +42,6 @@ def privateAccessCases : List (String × String × Bool) :=
     ["read", "update", "delete"].map fun action =>
       (role, action, Household.allowedIn privatePolicy 5 privateFixture actor "journals" "record" action)
 
-def privatePolicyCasesJson : String :=
-  (Json.mkObj [("policy_yaml", toJson (Household.policyYamlOf privatePolicy)),
-    ("checks", toJson (privateAccessCases.map fun (role, action, expected) =>
-      Json.mkObj [("role", toJson role), ("action", toJson action), ("expected", toJson expected)])),
-    ("signer_checks", toJson (["client", "other", "empty"].map fun role =>
-      let actor := if role == "client" then "user" else if role == "other" then "other" else ""
-      Json.mkObj [("role", toJson role), ("expected", toJson (localSignerMatches actor "user"))]))]).compress
-
 /-- Client-only publication records are not pack or agent datastore data. -/
 def protectedCollection : String := "PendingChatSubmission"
 
@@ -202,9 +194,6 @@ def applyAction (j : Journal) : Action → Journal
   | .restart => restart j
   | .saveUnrelated => saveUnrelated j
 
-def statusString : Status → String
-  | .fresh => "fresh" | .pending => "pending" | .succeeded => "succeeded" | .failed => "failed"
-
 def initial : Journal := { client := "client", agentDid := "agent", nodeDid := "node", agentDoc := "agent-doc", nodeDoc := "node-doc" }
 
 structure RecoveryCase where
@@ -230,20 +219,6 @@ def recoveryCases : List RecoveryCase :=
   , ⟨"executor-pending", true, true, true, .succeeded, .succeeded, .pending⟩
   , ⟨"executor-failed", true, true, true, .succeeded, .succeeded, .failed⟩
   , ⟨"all-complete", true, true, true, .succeeded, .succeeded, .succeeded⟩ ]
-
-def recoveryString : RecoveryDisposition → String
-  | .proceed => "proceed" | .bindingMismatch => "binding_mismatch"
-  | .commitUnknown => "commit_unknown" | .explicitRepair => "explicit_repair"
-
-def recoveryCaseJson (c : RecoveryCase) : Json :=
-  let j := { initial with commit := c.commit, parent := c.parent, executor := c.executor }
-  Json.mkObj [("name", toJson c.name), ("actor_matches", toJson c.actorMatches),
-    ("record_present", toJson c.recordPresent), ("binding_matches", toJson c.bindingMatches),
-    ("commit", toJson (statusString c.commit)), ("parent", toJson (statusString c.parent)),
-    ("executor", toJson (statusString c.executor)),
-    ("expected", toJson (recoveryString (recoveryDisposition c.actorMatches c.recordPresent c.bindingMatches j)))]
-
-def recoveryCasesJson : String := (toJson (recoveryCases.map recoveryCaseJson)).compress
 
 def commitSuccess : List Action := [.record .commit true, .dispatch .commit, .finish .commit true false]
 def parentSuccess : List Action := [.record .parent true, .dispatch .parent, .finish .parent true false]

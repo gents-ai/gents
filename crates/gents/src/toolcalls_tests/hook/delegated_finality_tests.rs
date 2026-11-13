@@ -295,114 +295,117 @@ async fn observed(fixture: &Fixture) -> (String, Vec<serde_json::Value>) {
     )
 }
 
-fn model(name: &str) -> &'static gents_lean_vocab::LeanDelegatedFinalityCase {
-    gents_lean_vocab::lean_contract_snapshot()
-        .delegated_finality_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap()
-}
-
-#[tokio::test]
-async fn competing_failure_and_child_commit_obey_the_native_compare() {
-    for failure_first in [true, false] {
-        let mut fixture = fixture(if failure_first {
-            "failure-first"
-        } else {
-            "child-first"
-        })
-        .await;
-        let expected = model(if failure_first {
-            "failure-wins-before-child"
-        } else {
-            "child-wins-after-pending-read"
-        });
-        let mut child_tool = fixture.tool.clone();
-        let mut competitor = fixture.tool.clone();
-        let reached = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Notify::new());
-        let mut child = Box::pin(ConfigApplyTxn::with_embedded_before_commit_pause(
-            reached.clone(),
-            release.clone(),
-            gents_session::session::message::commit(
-                &fixture.node,
-                &gents_automation::goal::session_message::SessionGoals,
-                &fixture.cause,
-                &mut child_tool,
-                fixture.plan.take().unwrap(),
-                false,
-            ),
-        ));
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::select! {
-                _ = reached.notified() => {}
-                result = &mut child => panic!("child did not reach native commit boundary: {result:?}"),
-            }
-        }).await.expect("child reaches its native commit boundary");
-        let (state, children) = observed(&fixture).await;
-        assert_eq!(state, "pending");
-        assert!(children.is_empty());
-        if failure_first {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                competitor.spawn_failed(FailureClass::External, "competing failure"),
-            )
-            .await
-            .expect("competing failure completes while the child commit is held")
-            .unwrap();
-            release.notify_one();
-            assert!(child.await.is_err());
-            let (state, children) = observed(&fixture).await;
-            assert_eq!(expected.expected_native, "failure_committed");
-            assert_eq!(state, "failed");
-            assert!(children.is_empty());
-        } else {
-            release.notify_one();
-            let receipt = child.await.unwrap();
-            assert!(competitor
-                .spawn_failed(FailureClass::External, "competing failure")
-                .await
-                .is_err());
-            let (state, children) = observed(&fixture).await;
-            assert_eq!(expected.expected_native, "child_committed");
-            assert_eq!(state, "running");
-            assert_eq!(children.len(), 1);
-            assert_eq!(children[0]["_docID"], receipt.request_doc_id);
+fn native(state: &str, children: &[serde_json::Value], receipt: Option<&str>) -> String {
+    match (state, children, receipt) {
+        ("pending", [], _) => "pending".into(),
+        ("failed", [], _) => "failure_committed".into(),
+        ("running", [child], Some(receipt)) if child["_docID"] == receipt => {
+            "child_committed".into()
         }
-        fixture.node.shutdown().await.unwrap();
+        other => panic!("unmodeled native observation {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn lost_commit_ack_recovers_the_exact_child_receipt() {
-    let mut fixture = fixture("lost-ack").await;
-    let expected = model("child-committed-ack-lost");
-    let mut tool = fixture.tool.clone();
-    let (result, fired) = ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
-        Some("session_message.commit_request"),
-        gents_session::session::message::commit(
-            &fixture.node,
-            &gents_automation::goal::session_message::SessionGoals,
-            &fixture.cause,
-            &mut tool,
-            fixture.plan.take().unwrap(),
-            false,
-        ),
-    )
-    .await;
-    assert!(
-        fired,
-        "the transaction must lose its post-commit acknowledgement"
-    );
-    let receipt = result.unwrap();
-    let (state, children) = observed(&fixture).await;
-    assert_eq!(expected.expected_knowledge, "confirmed");
-    assert_eq!(state, "running");
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0]["_docID"], receipt.request_doc_id);
-    assert_eq!(children[0]["request_id"], receipt.request_id);
-    assert_eq!(children[0]["session_id"], receipt.session_id);
-    fixture.node.shutdown().await.unwrap();
+async fn delegated_commit_finality_follows_the_lean_traces() {
+    for case in
+        gents_lean_vocab::families::delegated_finality_served::cases::<String, String, String>()
+    {
+        let name = case.input.name.as_str();
+        let mut fixture = fixture(name).await;
+        let mut child_tool = fixture.tool.clone();
+        let observation = if name == "child-committed-ack-lost" {
+            let (result, fired) = ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+                Some("session_message.commit_request"),
+                gents_session::session::message::commit(
+                    &fixture.node,
+                    &gents_automation::goal::session_message::SessionGoals,
+                    &fixture.cause,
+                    &mut child_tool,
+                    fixture.plan.take().unwrap(),
+                    false,
+                ),
+            )
+            .await;
+            assert!(
+                fired,
+                "the transaction must lose its post-commit acknowledgement"
+            );
+            let receipt = result.unwrap();
+            let (state, children) = observed(&fixture).await;
+            assert_eq!(children.len(), 1);
+            assert_eq!(children[0]["request_id"], receipt.request_id);
+            assert_eq!(children[0]["session_id"], receipt.session_id);
+            (
+                native(&state, &children, Some(&receipt.request_doc_id)),
+                "confirmed",
+            )
+        } else {
+            let failure_first = name == "failure-wins-before-child";
+            let mut competitor = fixture.tool.clone();
+            let reached = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let mut child = Box::pin(ConfigApplyTxn::with_embedded_before_commit_pause(
+                reached.clone(),
+                release.clone(),
+                gents_session::session::message::commit(
+                    &fixture.node,
+                    &gents_automation::goal::session_message::SessionGoals,
+                    &fixture.cause,
+                    &mut child_tool,
+                    fixture.plan.take().unwrap(),
+                    false,
+                ),
+            ));
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::select! {
+                    _ = reached.notified() => {}
+                    result = &mut child => panic!("child did not reach native commit boundary: {result:?}"),
+                }
+            }).await.expect("child reaches its native commit boundary");
+            let (state, children) = observed(&fixture).await;
+            assert_eq!(native(&state, &children, None), "pending");
+            if failure_first {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    competitor.spawn_failed(FailureClass::External, "competing failure"),
+                )
+                .await
+                .expect("competing failure completes while the child commit is held")
+                .unwrap();
+                release.notify_one();
+                let outcome = child.await;
+                let (state, children) = observed(&fixture).await;
+                (
+                    native(&state, &children, None),
+                    if outcome.is_err() {
+                        "aborted"
+                    } else {
+                        "confirmed"
+                    },
+                )
+            } else {
+                release.notify_one();
+                let receipt = child.await.unwrap();
+                assert!(competitor
+                    .spawn_failed(FailureClass::External, "competing failure")
+                    .await
+                    .is_err());
+                let (state, children) = observed(&fixture).await;
+                (
+                    native(&state, &children, Some(&receipt.request_doc_id)),
+                    "confirmed",
+                )
+            }
+        };
+        fixture.node.shutdown().await.unwrap();
+        case.check(
+            gents_lean_vocab::families::delegated_finality_served::Finality {
+                native: observation.0,
+                knowledge: observation.1.to_string(),
+            },
+        );
+    }
 }
 
 #[tokio::test]

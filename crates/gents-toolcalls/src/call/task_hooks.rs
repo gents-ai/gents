@@ -19,9 +19,6 @@ use gents_store::graphql::escape_graphql_string;
 mod generated_policy_tests;
 #[path = "task_hooks/records.rs"]
 mod records;
-#[cfg(any(test, feature = "test-fixtures"))]
-#[path = "task_hooks/test_support.rs"]
-pub mod test_support;
 #[cfg(test)]
 #[path = "task_hooks/tests.rs"]
 mod tests;

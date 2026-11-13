@@ -356,42 +356,6 @@ structure ManagedExecToolBoundaryCase where
   captureDrainBounded : Bool
   deriving Repr
 
-structure PairingReconcileShutdownBoundaryCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  perAdminCallTimeoutMs : Nat
-  cancellationObservedInsideSweep : Bool
-  currentAdminFutureDropped : Bool
-  remainingPeersSkipped : Bool
-  shutdownJoinBounded : Bool
-  deriving Repr
-
-structure PairingReconcileSweepRetryBoundaryCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  failureScope : String
-  failureTerminal : Bool
-  retryTrigger : String
-  cancellationPrioritized : Bool
-  convergenceRetried : Bool
-  deriving Repr
-
-structure PairingReconcileSweepSchedulingCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  maxConcurrentPeerPreparations : Nat
-  peerPreparationBounded : Bool
-  topologyMutationSerialized : Bool
-  stalePeerBlocksReadyPeer : Bool
-  everyPeerResultAccounted : Bool
-  deriving Repr
-
 structure ManagedExecLivenessCase where
   name : String
   trigger : String
@@ -564,14 +528,6 @@ structure R6BackgroundingCase where
   wakeCreated : Option Bool := none
   redriveAllowed : Option Bool := none
   operation : Option String := none
-  deriving Repr
-
-structure BackgroundTheoremWitness where
-  theoremName : String
-  witnessKind : String
-  scenario : String
-  numericBound : Nat
-  kindFields : List (String × String)
   deriving Repr
 
 structure ComposedInvariantWitness where

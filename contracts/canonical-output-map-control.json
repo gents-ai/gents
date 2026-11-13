@@ -184,7 +184,7 @@
       { "file": "crates/gents/proofs/Proofs/Session/SessionQueue/InterruptCases.lean", "symbol": "SessionQueue.InterruptCases.cases" }
     ],
     "constructors": ["SessionQueue.Action.drainObservedAutomated"],
-    "generated_groups": ["interrupt_queue_cases"],
+    "generated_groups": ["families"],
     "fixture_status": "concrete_inputs",
     "native_owner_paths": ["crates/gents-session/src/request/interrupt.rs", "crates/gents-session/src/request/lifecycle/queue/draining.rs"],
     "consumer_paths": ["crates/gents-lean-vocab/src/lib.rs", "crates/gents-session/src/request/interrupt/queue_tests.rs"],
@@ -315,14 +315,8 @@
       "SessionQueue.Action.claimFolding",
       "SessionQueue.Action.consumeFolded"
     ],
-    "generated_groups": [
-      "fold_queue_cases",
-      "handover_fold_cases",
-      "fold_turn_input_cases",
-      "fold_publication_cases",
-      "retry_selection_cases"
-    ],
-    "fixture_status": "concrete_inputs",
+    "generated_groups": [],
+    "fixture_status": "not_exported",
     "native_owner_paths": [
       "crates/gents-session/src/request/lifecycle/claim.rs",
       "crates/gents-session/src/request/lifecycle/queue/folding.rs",

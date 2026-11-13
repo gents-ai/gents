@@ -424,10 +424,14 @@ async fn startup_claim_demotes_a_killed_process_ready_row_before_any_runtime_wor
     let db = test_node().await;
     let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap().to_owned();
-    let case = gents_lean_vocab::lean_client_agent_readiness_cases()
-        .iter()
-        .find(|case| case.name == "restart_claim_demotes_stale_ready")
-        .expect("modeled restart claim case");
+    let claim = gents_lean_vocab::families::client_agent_readiness_restart_claim::cases::<
+        gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+        gents_protocol::node_readiness::NodeReadinessProcessState,
+    >()
+    .into_iter()
+    .find(|claim| claim.input.name == "restart_claim_demotes_stale_ready")
+    .expect("modeled restart claim case");
+    let case = &claim.input;
     let (dispatcher, _requests) = mpsc::channel(1);
 
     let (killed_owner, killed) = RuntimeStatusHandle::start(
@@ -465,18 +469,31 @@ async fn startup_claim_demotes_a_killed_process_ready_row_before_any_runtime_wor
         .unwrap();
 
     let claimed = read_node_readiness_row(&node, &node_did).await;
-    assert_eq!(
-        gents_protocol::node_readiness::project_node_readiness_summary(Some(&claimed), &node_did),
-        gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Unknown(
-            serde_json::from_value(serde_json::json!(case.expected_reason))
-                .expect("modeled unknown reason")
+    let (state, reason) = match gents_protocol::node_readiness::project_node_readiness_summary(
+        Some(&claimed),
+        &node_did,
+    ) {
+        gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Observed(_) => {
+            ("observed", None)
+        }
+        gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Unknown(reason) => (
+            "unknown",
+            serde_json::to_value(reason)
+                .unwrap()
+                .as_str()
+                .map(str::to_owned),
         ),
-        "a claimed row must be unobservable to every reader of the canonical projection"
+    };
+    claim.check(
+        gents_lean_vocab::families::client_agent_readiness_restart_claim::ClaimedRowOutput {
+            state: state.to_owned(),
+            reason,
+        },
     );
     let snapshot =
         gents_protocol::node_readiness::decode_node_readiness_snapshot(&claimed, &node_did)
             .unwrap();
-    assert_eq!(snapshot.process_state.as_str(), case.process_state);
+    assert_eq!(snapshot.process_state, case.process_state);
     assert_eq!(snapshot.active_generation, case.active_generation);
     assert_eq!(snapshot.router_generation, case.router_generation);
     assert_eq!(snapshot.default_agent_did, "general");

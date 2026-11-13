@@ -26,10 +26,9 @@ use admission_slot_accounting::{
 };
 use gents_lean_vocab::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    lean_compaction_cursor_cases, lean_compaction_reducer_cases, lean_contract_snapshot,
-    lean_queue_deadline_cases, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
-    lean_recovery_sweep_cases, lean_request_transition_cases, lean_session_control_cases,
-    lean_startup_readiness_cases, LeanLifecycleTransitionCase,
+    lean_contract_snapshot, lean_queue_deadline_cases, lean_r6_backgrounding_case,
+    lean_r6_backgrounding_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
+    LeanLifecycleTransitionCase,
 };
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
@@ -47,14 +46,10 @@ mod coverage;
 mod enrollment;
 #[path = "conformance/eval.rs"]
 mod eval;
-#[path = "conformance/hooks.rs"]
-mod hooks;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
 #[path = "conformance/p2p_replication.rs"]
 mod p2p_replication;
-#[path = "conformance/plugin_job.rs"]
-mod plugin_job;
 #[path = "conformance/prompt_template.rs"]
 mod prompt_template;
 #[path = "conformance/recovery_sweeps.rs"]
@@ -117,8 +112,8 @@ fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
 }
 
 #[test]
-fn generated_compaction_reducer_cases_pin_contract() {
-    streaming_compaction::generated_compaction_reducer_cases_pin_contract();
+fn compaction_reducers_follow_the_lean_model() {
+    streaming_compaction::compaction_reducers_follow_the_lean_model();
 }
 
 #[test]

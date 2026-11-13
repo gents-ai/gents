@@ -486,11 +486,8 @@ mod tests {
 
     #[tokio::test]
     async fn generated_plugin_job_lineage_cases_drive_desktop_opening_request() {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["plugin_job_lineage_cases"].as_array().unwrap();
-        assert!(!cases.is_empty());
         let did = "did:test:node";
-        for case in cases {
+        for case in gents_lean_vocab::families::plugin_job_lineage_opening::cases() {
             let dir = tempfile::tempdir().unwrap();
             let node = Arc::new(
                 crate::tests::support::node_builder()
@@ -502,28 +499,37 @@ mod tests {
             gents_store::schema::ensure_runtime_schemas(node.as_ref())
                 .await
                 .unwrap();
-            let ids = seed_lineage_case(&node, case, did).await;
+            let mut seed = serde_json::to_value(&case.input).unwrap();
+            for row in seed["rows"].as_array_mut().unwrap() {
+                let doc_id = row.as_object_mut().unwrap().remove("doc_id").unwrap();
+                row["_docID"] = doc_id;
+            }
+            let ids = seed_lineage_case(&node, &seed, did).await;
+            let model_ids = ids
+                .iter()
+                .map(|(model, native)| (native.clone(), model.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>();
             let access = ConfigAccess::local(node.clone());
-            for query in case["queries"].as_array().unwrap() {
-                let cause = query["cause_request_doc_id"].as_str().unwrap();
+            let mut openings = Vec::new();
+            for query in &case.input.queries {
+                let cause = query.cause_request_doc_id.as_str();
                 let link = SessionLink {
                     scope: SessionScope {
                         node_did: did.into(),
-                        session_id: query["session_id"].as_str().unwrap().into(),
+                        session_id: query.session_id.clone(),
                         requester_did: Some(did.into()),
                     },
                     cause_request_doc_id: ids.get(cause).cloned().unwrap_or(cause.into()),
                 };
-                let expected = query["expected_opening_doc_id"]
-                    .as_str()
-                    .map(|id| ids[id].clone());
                 let found = opening_request(&access, &link)
                     .await
                     .unwrap()
                     .and_then(|row| row.doc_id);
-                assert_eq!(found, expected, "{}: {query}", case["name"]);
+                openings
+                    .push(found.map(|native| model_ids.get(&native).cloned().unwrap_or(native)));
             }
             node.shutdown().await.unwrap();
+            case.check(openings);
         }
     }
 }

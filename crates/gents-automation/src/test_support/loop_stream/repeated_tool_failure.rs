@@ -1,6 +1,8 @@
 use super::*;
 pub struct RepeatProbe {
-    pub script: Arc<std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>>,
+    pub events: Vec<serde_json::Value>,
+    pub model: ScriptedModel,
+    pub dispatched: Arc<std::sync::Mutex<Vec<usize>>>,
 }
 
 impl ToolDyn for RepeatProbe {
@@ -23,27 +25,24 @@ impl ToolDyn for RepeatProbe {
         Box::pin(async move {
             use gents_loop::tool_call_lifecycle::FailureClass;
             let args: serde_json::Value = serde_json::from_str(&args).unwrap();
-            let event = self
-                .script
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| panic!("dispatched undispatchable call {args}"));
+            let turn = self.model.seen_requests().await.len() - 1;
+            self.dispatched.lock().unwrap().push(turn);
+            let event = &self.events[turn];
             assert_eq!(event["call"], args["call"], "dispatched out of model order");
             let (class, text) = match (event["outcome"].as_str().unwrap(), &event["error"]) {
                 ("success", _) => return Ok("ok".into()),
-                ("ordinaryFailure", serde_json::Value::Null) => (
+                ("ordinary_failure", serde_json::Value::Null) => (
                     FailureClass::ToolReturnedError,
                     "gents_exec: {unparseable\nfixture error".to_string(),
                 ),
-                ("ordinaryFailure", error) => (
+                ("ordinary_failure", error) => (
                     FailureClass::ToolReturnedError,
                     format!("fixture error {error}"),
                 ),
-                ("invalidArguments", _) => {
+                ("invalid_arguments", _) => {
                     (FailureClass::ArgumentInvalid, "fixture invalid".to_string())
                 }
-                ("policyDenied", _) => (FailureClass::PolicyDenied, "fixture denied".to_string()),
+                ("policy_denied", _) => (FailureClass::PolicyDenied, "fixture denied".to_string()),
                 (other, _) => panic!("fixture outcome {other} is not dispatched to the probe"),
             };
             Err(ToolError::ReportedFailure { class, text })
@@ -69,7 +68,7 @@ pub async fn tool_call_rows(
 pub fn repeat_call(index: usize, event: &serde_json::Value) -> RawStreamingChoice<()> {
     let (tool, args) = match event["outcome"].as_str().unwrap() {
         "skipped" => ("list_processes", serde_json::json!({})),
-        "unknownTool" => ("missing", serde_json::json!({"call": event["call"]})),
+        "unknown_tool" => ("missing", serde_json::json!({"call": event["call"]})),
         _ => ("repeat_probe", serde_json::json!({"call": event["call"]})),
     };
     RawStreamingChoice::ToolCall(RawStreamingToolCall::new(

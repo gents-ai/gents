@@ -508,11 +508,6 @@ pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {
 #[path = "request_head_tests.rs"]
 pub(crate) mod tests;
 
-#[cfg(test)]
-pub(crate) fn assignment_allows(assigned: Option<&str>, observed: Option<&str>) -> bool {
-    assigned.is_none_or(|root| observed == Some(root))
-}
-
 pub(super) const STALE_ASSIGNMENT_REASON: &str = "superseded by a newer Task Goal assignment";
 
 /// A pending Goal continuation that is not a member of the Goal's current

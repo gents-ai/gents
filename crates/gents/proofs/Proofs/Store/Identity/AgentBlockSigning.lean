@@ -99,18 +99,4 @@ def cases : List Case :=
   , ⟨"unconfigured-explicit-actor", false, false, false, "", "agent-a", none, none⟩
   , ⟨"ordinary-user-key-is-not-adopted", false, true, false, "node", "user", some "user", none⟩ ]
 
-def routeString : Route → String
-  | .native => "native" | .agent => "agent" | .refuse => "refuse"
-
-def casesJson : String :=
-  (Lean.toJson (cases.map fun c => Lean.Json.mkObj [
-    ("name", Lean.toJson c.name), ("managed", Lean.toJson c.managed),
-    ("valid", Lean.toJson c.valid), ("root_held", Lean.toJson c.rootHeld),
-    ("node", Lean.toJson c.node), ("actor", Lean.toJson c.actor),
-    ("signer", Lean.toJson c.signer), ("binding_node", Lean.toJson c.bindingNode),
-    ("expected", Lean.toJson (routeString
-      (route c.managed c.valid c.rootHeld c.node c.actor c.signer c.bindingNode))),
-    ("config_tool", Lean.toJson (routeString
-      (configToolRoute c.valid c.rootHeld c.node c.actor c.signer c.bindingNode)))])).compress
-
 end Identity.AgentBlockSigning

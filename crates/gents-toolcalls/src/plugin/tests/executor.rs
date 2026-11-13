@@ -12,18 +12,14 @@ use gents_pack::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
 
 #[test]
 fn staged_plugin_resolution_conforms_to_lean() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().pack_wire_lock_cases;
     let (home, _) = installed_echo();
     let executor = PluginExecutor::new(Some(home.path().to_owned()));
-    for case in cases {
-        let held = case["held"].as_bool().unwrap();
-        let _stage = held.then(|| store::try_lock_store(home.path()).unwrap());
-        assert_eq!(
-            executor.resolve("team/plugin", None).is_ok(),
-            case["resolve_allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+    gents_lean_vocab::families::contracts_pack_installation_wire_lock_resolution::replay(|i| {
+        let _stage = i.held.then(|| store::try_lock_store(home.path()).unwrap());
+        gents_lean_vocab::families::contracts_pack_installation_wire_lock_resolution::WireLockResolution {
+            resolve_allowed: executor.resolve("team/plugin", None).is_ok(),
+        }
+    });
 }
 
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
@@ -982,62 +978,63 @@ mod bound {
 
 #[tokio::test]
 async fn generated_plugin_invocation_retry_revalidates_current_installation() {
-    let cases = gents_lean_vocab::lean_contract_snapshot();
-    for case in cases.plugin_resource_invocation_cases.as_array().unwrap() {
+    for case in gents_lean_vocab::families::plugin_resources_invocations::cases() {
         let (home, original) = installed_plugin(ECHO_WAT, Some(gents_pack::pack::BindAccess::Read));
         let mut executor = PluginExecutor::new(Some(home.path().to_owned()));
         executor
             .call(&original, serde_json::json!({"attempt":"first"}))
             .await
             .unwrap();
-        if case["restart"] == true {
+        if case.input.restart {
             executor = PluginExecutor::new(Some(home.path().to_owned()));
         }
         let mut current = original.clone();
-        if case["current"].is_null() {
-            store::remove_record(home.path(), &original.namespace, &original.name).unwrap();
-        } else {
-            let snapshot = &case["current"];
-            match snapshot["digest"].as_str().unwrap() {
-                "artifact" => {}
-                "replacement" => current.digest = format!("sha256:{}", "0".repeat(64)),
-                other => panic!("unknown modeled artifact {other}"),
+        match &case.input.current {
+            None => {
+                store::remove_record(home.path(), &original.namespace, &original.name).unwrap();
             }
-            match snapshot["grant"].as_str().unwrap() {
-                "sealed" => {}
-                "changed" => current.granted = Some(gents_pack::plugin::Manifold::sealed()),
-                other => panic!("unknown modeled grant {other}"),
+            Some(snapshot) => {
+                match snapshot.digest.as_str() {
+                    "artifact" => {}
+                    "replacement" => current.digest = format!("sha256:{}", "0".repeat(64)),
+                    other => panic!("unknown modeled artifact {other}"),
+                }
+                match snapshot.grant.as_str() {
+                    "sealed" => {}
+                    "changed" => current.granted = Some(gents_pack::plugin::Manifold::sealed()),
+                    other => panic!("unknown modeled grant {other}"),
+                }
+                match snapshot.declaration.as_str() {
+                    "original" => {}
+                    "changed" => current.declaration.description.push_str(" updated"),
+                    other => panic!("unknown modeled declaration {other}"),
+                }
+                match snapshot.binding.as_str() {
+                    "original" => {}
+                    "changed" => current.instructions = Some("updated instructions".into()),
+                    other => panic!("unknown modeled binding {other}"),
+                }
+                store::write_record(home.path(), &current).unwrap();
             }
-            match snapshot["declaration"].as_str().unwrap() {
-                "original" => {}
-                "changed" => current.declaration.description.push_str(" updated"),
-                other => panic!("unknown modeled declaration {other}"),
-            }
-            match snapshot["binding"].as_str().unwrap() {
-                "original" => {}
-                "changed" => current.instructions = Some("updated instructions".into()),
-                other => panic!("unknown modeled binding {other}"),
-            }
-            store::write_record(home.path(), &current).unwrap();
         }
-        let reusable = !case["current"].is_null() && executor.cached_admission_matches(&current);
-        assert_eq!(reusable, case["reusable"].as_bool().unwrap(), "{case}");
+        let reusable = case.input.current.is_some() && executor.cached_admission_matches(&current);
         let input = serde_json::json!({"attempt":"retry"});
-        let result = if case["bound"] == true {
+        let result = if case.input.bound {
             let directory = tempfile::tempdir().unwrap();
             let bound = gents_pack::plugin::BoundDir::new(directory.path(), None).unwrap();
             executor.call_bound(&original, input.clone(), bound).await
         } else {
             executor.call(&original, input.clone()).await
         };
-        assert_eq!(
-            result.is_ok(),
-            case["admitted"].as_bool().unwrap(),
-            "{case}: {result:?}"
-        );
-        if let Ok(call) = result {
-            assert_eq!(call.outcome.output["attempt"], input["attempt"], "{case}");
+        if let Ok(call) = &result {
+            assert_eq!(call.outcome.output["attempt"], input["attempt"]);
         }
+        case.check(
+            gents_lean_vocab::families::plugin_resources_invocations::InvocationOutput {
+                admitted: result.is_ok(),
+                reusable,
+            },
+        );
     }
 }
 
@@ -1895,8 +1892,6 @@ mod job_calls {
             )
             .await
             .unwrap();
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_opening_cases;
-        let expected = |name: &str| cases.iter().find(|case| case.name == name).unwrap().commits;
         let mut wrong_pin = create.clone();
         wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
         let wrong_plan =
@@ -1916,7 +1911,6 @@ mod job_calls {
                 })
             })
             .await;
-        assert_eq!(rejected.is_ok(), expected("wrong_pin"));
         let escaped = gents_store::graphql::escape_graphql_string(&session);
         let absent = access.execute(&format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID }} }}"#
@@ -1948,7 +1942,6 @@ mod job_calls {
                 })
             })
             .await;
-        assert_eq!(rolled_back.is_ok(), expected("failed_transaction"));
         assert!(
             staged_before_abort.load(std::sync::atomic::Ordering::SeqCst),
             "{rolled_back:?}"
@@ -1979,7 +1972,20 @@ mod job_calls {
                 })
             })
             .await;
-        assert_eq!(committed.is_ok(), expected("valid"), "{committed:?}");
+        for case in gents_lean_vocab::families::contracts_plugin_job_opening::cases::<String>() {
+            let commits = match case.input.name.as_str() {
+                "valid" => committed.is_ok(),
+                "wrong_pin" => rejected.is_ok(),
+                "failed_transaction" => rolled_back.is_ok(),
+                other => panic!("unknown modeled plugin-job opening attempt {other}"),
+            };
+            case.check(
+                gents_lean_vocab::families::contracts_plugin_job_opening::PluginJobOpeningOutput {
+                    commits,
+                },
+            );
+        }
+        committed.unwrap();
 
         let origin = gents_session::session::origin::verified_creation_origin(
             &access,

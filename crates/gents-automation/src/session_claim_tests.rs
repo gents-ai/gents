@@ -357,109 +357,103 @@ async fn claim_queue_uses_arrival_order_and_scopes_sessions_to_owner() {
 
 #[tokio::test]
 async fn serial_claim_considers_active_owner_requests_across_pages() {
-    let node = test_node().await;
-    let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    let queue_cases = contract["trigger_delivery_queue_cases"].as_array().unwrap();
-    let identity = |source_doc_id: &str| gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: test_node_did(),
-        trigger_id: "serial-trigger".into(),
-        source_collection: "Work".into(),
-        source_doc_id: source_doc_id.into(),
-    };
-    let first_identity = identity("serial-first-source");
-    let next_identity = identity("serial-next-source");
-    let mut cohort = vec![
-        (first_identity.clone(), "serial-first-session".to_owned()),
-        (next_identity.clone(), "serial-next-session".to_owned()),
-    ];
-    cohort.extend((0..63).map(|index| {
-        (
-            identity(&format!("serial-later-source-{index}")),
-            format!("serial-later-session-{index}"),
-        )
-    }));
-    let first_request_id = first_identity.request_id();
-    let next_request_id = next_identity.request_id();
-    let first = insert_pending_request(
-        &node,
-        &first_request_id,
-        "serial-first-session",
-        "2026-01-01T00:00:00Z",
-        None,
-        "scheduled",
-    )
-    .await;
-    let next = insert_pending_request(
-        &node,
-        &next_request_id,
-        "serial-next-session",
-        "2026-01-01T00:00:01Z",
-        None,
-        "scheduled",
-    )
-    .await;
-    for (identity, session_id) in cohort.iter().skip(2) {
-        let request_id = identity.request_id();
-        insert_pending_request(
+    for case in gents_lean_vocab::families::trigger_delivery_queue_paged_claims::cases() {
+        let node = test_node().await;
+        let identity = |source_doc_id: &str| gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: test_node_did(),
+            trigger_id: "serial-trigger".into(),
+            source_collection: "Work".into(),
+            source_doc_id: source_doc_id.into(),
+        };
+        let first_identity = identity("serial-first-source");
+        let next_identity = identity("serial-next-source");
+        let mut cohort = vec![
+            (first_identity.clone(), "serial-first-session".to_owned()),
+            (next_identity.clone(), "serial-next-session".to_owned()),
+        ];
+        cohort.extend((0..63).map(|index| {
+            (
+                identity(&format!("serial-later-source-{index}")),
+                format!("serial-later-session-{index}"),
+            )
+        }));
+        let first_request_id = first_identity.request_id();
+        let next_request_id = next_identity.request_id();
+        let first = insert_pending_request(
             &node,
-            &request_id,
-            session_id,
-            "2026-01-01T00:00:02Z",
+            &first_request_id,
+            "serial-first-session",
+            "2026-01-01T00:00:00Z",
             None,
             "scheduled",
         )
         .await;
-    }
-    let receipts = cohort
-        .iter()
-        .map(|(identity, session_id)| {
-            let fire_key = identity.fire_key();
-            let request_id = identity.request_id();
-            serde_json::json!({
-                "fire_key": fire_key,
-                "owner_did": identity.owner_did.as_str(),
-                "trigger_id": identity.trigger_id.as_str(),
-                "source_collection": identity.source_collection.as_str(),
-                "source_doc_id": identity.source_doc_id.as_str(),
-                "request_id": request_id,
-                "session_id": session_id,
-                "task_id": "serial-task",
-                "queued_serial": true,
-                "emit_outcome": false,
-                "created_at": "2026-01-01T00:00:00Z"
-            })
-        })
-        .collect::<Vec<_>>();
-    // The firing Agent stages each receipt beside the request it creates.
-    agent_access(&node).transact_write(
-            "test.seed_serial_claim_receipts",
-            |txn| {
-                let receipts = receipts.clone();
-                Box::pin(async move {
-                    for receipt in receipts {
-                        txn.execute_with_variables(
-                            "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
-                            &serde_json::json!({"input": receipt}),
-                        )
-                        .await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                })
-            },
+        let next = insert_pending_request(
+            &node,
+            &next_request_id,
+            "serial-next-session",
+            "2026-01-01T00:00:01Z",
+            None,
+            "scheduled",
         )
-        .await
-        .unwrap();
-
-    for (name, request) in [
-        ("serial_first_claims", &first),
-        ("serial_second_waits", &next),
-    ] {
-        let expected = queue_cases
+        .await;
+        for (identity, session_id) in cohort.iter().skip(2) {
+            let request_id = identity.request_id();
+            insert_pending_request(
+                &node,
+                &request_id,
+                session_id,
+                "2026-01-01T00:00:02Z",
+                None,
+                "scheduled",
+            )
+            .await;
+        }
+        let receipts = cohort
             .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["can_claim"]
-            .as_bool()
+            .map(|(identity, session_id)| {
+                let fire_key = identity.fire_key();
+                let request_id = identity.request_id();
+                serde_json::json!({
+                    "fire_key": fire_key,
+                    "owner_did": identity.owner_did.as_str(),
+                    "trigger_id": identity.trigger_id.as_str(),
+                    "source_collection": identity.source_collection.as_str(),
+                    "source_doc_id": identity.source_doc_id.as_str(),
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "task_id": "serial-task",
+                    "queued_serial": true,
+                    "emit_outcome": false,
+                    "created_at": "2026-01-01T00:00:00Z"
+                })
+            })
+            .collect::<Vec<_>>();
+        // The firing Agent stages each receipt beside the request it creates.
+        agent_access(&node).transact_write(
+                "test.seed_serial_claim_receipts",
+                |txn| {
+                    let receipts = receipts.clone();
+                    Box::pin(async move {
+                        for receipt in receipts {
+                            txn.execute_with_variables(
+                                "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
+                                &serde_json::json!({"input": receipt}),
+                            )
+                            .await?;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })
+                },
+            )
+            .await
             .unwrap();
+
+        let request = match case.input.identity.source_doc_id.as_str() {
+            "a" => &first,
+            "b" => &next,
+            other => panic!("the serial cohort has no fire for modeled document {other}"),
+        };
         let allowed = agent_access(&node)
             .transact_write("test.serial_claim_trigger_cohort", |txn| {
                 Box::pin(async move {
@@ -468,7 +462,11 @@ async fn serial_claim_considers_active_owner_requests_across_pages() {
             })
             .await
             .unwrap();
-        assert_eq!(allowed, expected, "{name}");
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_queue_paged_claims::QueueClaimOutput {
+                can_claim: allowed,
+            },
+        );
     }
 }
 
@@ -1099,20 +1097,27 @@ async fn background_claim_keeps_fork_imports_out_of_notification_input() {
             .unwrap(),
     )
     .unwrap();
-    let contract = gents_lean_vocab::lean_contract_snapshot()
-        .wake_input_cases
-        .iter()
-        .find(|case| case.name == "imported_notification_stays_in_history")
-        .unwrap();
-    let expected = contract
-        .current_keys
-        .iter()
-        .map(|key| {
-            assert_eq!(key, "a");
-            origin_key.to_owned()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(keys, expected);
+    let [contract] = gents_lean_vocab::families::contracts_wake_input_claimed_keys::cases()
+        .try_into()
+        .unwrap_or_else(|_| panic!("the imported-notification scenario replays one modeled wake"));
+    let modeled = [
+        (origin_key, "a"),
+        (
+            "background-completion-notification:imported:tool",
+            "imported",
+        ),
+    ];
+    contract.check(
+        keys.iter()
+            .map(|key| {
+                modeled
+                    .iter()
+                    .find(|(native, _)| native == key)
+                    .map(|(_, modeled)| (*modeled).to_owned())
+                    .unwrap_or_else(|| panic!("claimed an unmodeled notification key {key}"))
+            })
+            .collect::<Vec<_>>(),
+    );
     assert_eq!(
         lifecycle.background_completion_input_through_sequence(),
         Some(2)

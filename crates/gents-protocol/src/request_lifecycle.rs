@@ -304,7 +304,10 @@ mod tests {
 
 #[cfg(test)]
 mod conformance {
-    use super::RequestLifecycleState;
+    use super::{
+        next_request_hop, request_hop_within_bound, RequestHopCapObservation, RequestHopCause,
+        RequestLifecycleState,
+    };
 
     #[test]
     fn lifecycle_states_are_the_lean_request_states() {
@@ -312,8 +315,87 @@ mod conformance {
     }
 
     #[test]
+    fn hop_cap_observations_follow_the_lean_causal_hop_model() {
+        gents_lean_vocab::families::causal_hop_contracts_cap_observation::replay(|case| {
+            let hop = u32::try_from(case.hop).unwrap();
+            let observation = if case.visible {
+                RequestHopCapObservation::Visible(case.cap.map(|cap| u32::try_from(cap).unwrap()))
+            } else {
+                RequestHopCapObservation::Unavailable
+            };
+            let expected = observation.admit(hop);
+            let bound = observation.bound();
+            if hop > 0 {
+                assert_eq!(
+                    request_hop_within_bound(bound, hop),
+                    expected.unwrap_or(false),
+                    "{}",
+                    case.name
+                );
+            }
+            gents_lean_vocab::families::causal_hop_contracts_cap_observation::CapObservationOutput {
+                expected,
+                bound: bound.map(u64::from),
+            }
+        });
+    }
+
+    #[test]
+    fn causal_hop_chains_follow_the_lean_causal_hop_model() {
+        gents_lean_vocab::families::causal_hop_contracts_chain::replay::<String>(|chain| {
+            let max_request_hop = chain
+                .max_request_hop
+                .map(|bound| u32::try_from(bound).unwrap());
+            let mut hop = 0;
+            let mut hops = Vec::new();
+            let mut admitted = Vec::new();
+            for step in &chain.steps {
+                hop = match step.kind.as_str() {
+                    "cross_session" => next_request_hop(
+                        RequestHopCause::CrossSession { cause_hop: hop },
+                        u32::try_from(
+                            step.own_predecessor_hop
+                                .expect("cross-session step names its own predecessor hop"),
+                        )
+                        .unwrap(),
+                    ),
+                    "continuation" => next_request_hop(RequestHopCause::Continuation, hop),
+                    other => panic!("unknown Lean causal-hop step {other:?}"),
+                };
+                hops.push(u64::from(hop));
+                admitted.push(request_hop_within_bound(max_request_hop, hop));
+            }
+            gents_lean_vocab::families::causal_hop_contracts_chain::HopTrace { hops, admitted }
+        });
+    }
+
+    #[test]
+    fn causal_hop_calls_follow_the_lean_causal_hop_model() {
+        gents_lean_vocab::families::causal_hop_contracts_call::replay::<String>(|call| {
+            let max_request_hop = call
+                .max_request_hop
+                .map(|bound| u32::try_from(bound).unwrap());
+            let (mut a, mut b) = (0, 0);
+            let mut hops = Vec::new();
+            let mut admitted = Vec::new();
+            for event in &call.events {
+                let (target, cause) = match event.as_str() {
+                    "a_sends_b" => (&mut b, RequestHopCause::CrossSession { cause_hop: a }),
+                    "b_sends_a" => (&mut a, RequestHopCause::CrossSession { cause_hop: b }),
+                    "return_to_a" => (&mut a, RequestHopCause::Return),
+                    "return_to_b" => (&mut b, RequestHopCause::Return),
+                    other => panic!("unknown Lean call event {other:?}"),
+                };
+                *target = next_request_hop(cause, *target);
+                hops.push(u64::from(*target));
+                admitted.push(request_hop_within_bound(max_request_hop, *target));
+            }
+            gents_lean_vocab::families::causal_hop_contracts_call::HopTrace { hops, admitted }
+        });
+    }
+
+    #[test]
     fn causal_hop_step_admission_matches_lean_model() {
-        use super::{next_request_hop, request_hop_within_bound, RequestHopCause};
         use gents_lean_vocab::families::causal_hop_contracts_step_admission::StepOutput;
         gents_lean_vocab::families::causal_hop_contracts_step_admission::replay(|case| {
             let cause = match case.cause.as_str() {

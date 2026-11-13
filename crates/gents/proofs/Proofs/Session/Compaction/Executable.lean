@@ -195,10 +195,10 @@ private instance (msgs : List MessageRow) : Decidable (StrictlyIncreasingMessage
       unfold StrictlyIncreasingMessages
       exact instDecidableAnd
 
-private inductive Reducer where
+inductive Reducer where
   | identity | strip | summarize | providerView
 
-private def Reducer.name : Reducer → String
+def Reducer.name : Reducer → String
   | .identity => "identity"
   | .strip => "strip"
   | .summarize => "summarize"
@@ -371,7 +371,7 @@ theorem distinct_native_keys_have_distinct_symbols :
 
 
 
-private def reducerCase (name group : String) (reducer : Reducer)
+def reducerCase (name group : String) (reducer : Reducer)
     (count splitIndex : Nat) (publicationReady : Bool := true)
     (inputOverride : Option (List MessageRow) := none) :
     CompactionReducerCase :=

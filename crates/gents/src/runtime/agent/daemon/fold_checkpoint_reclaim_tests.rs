@@ -429,10 +429,14 @@ async fn scripted_daemon(
 /// its own turn.
 #[tokio::test]
 async fn generated_retry_selection_cases_bind_to_the_daemon() {
-    let cases = gents_lean_vocab::lean_retry_selection_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(case.selected.len(), 1, "{}: one queued message", case.name);
+    for case in gents_lean_vocab::families::fold_queue_contracts_retry_selection::cases() {
+        let input = &case.input;
+        assert_eq!(
+            input.selected.len(),
+            1,
+            "{}: one queued message",
+            input.name
+        );
         let (db, user, client, agent_config) = held_daemon_fixture("daemon-retry-selection").await;
         let node = db.node.clone();
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -468,7 +472,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
         failed.begin_owned_execution(&writer).await.unwrap();
-        if case.parent_published {
+        if input.parent_published {
             writer
                 .publish_authored_message(
                     &failed,
@@ -524,7 +528,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             persisted_request_state(&client, &retry.doc_id).await,
             gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
             "{}: {:?}",
-            case.name,
+            input.name,
             retry_diagnostic
         );
         let retry_keys = authored_user_entries(&client, &retry)
@@ -533,42 +537,31 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             .map(|(key, _)| key)
             .collect::<Vec<_>>();
         let retry_input = provider_inputs.lock().unwrap()[0].clone();
-        assert_eq!(
-            retry_keys.is_empty(),
-            case.resume,
-            "{}: a resumed retry publishes no input",
-            case.name
-        );
-        let answered = !case.answered.is_empty();
-        assert_eq!(
-            retry_keys.contains(&gents_protocol::output::rows::authored_message_key(
-                &retry.doc_id,
-                &queued_key
-            )),
-            answered,
-            "{}: the retry publishes the selected message only when it answers it",
-            case.name
-        );
+        let resume = retry_keys.is_empty();
+        let answered = retry_keys.contains(&gents_protocol::output::rows::authored_message_key(
+            &retry.doc_id,
+            &queued_key,
+        ));
         assert_eq!(
             retry_input.contains(&queued.content),
             answered,
-            "{}: the selected message reaches the retry's provider only when answered",
-            case.name
+            "{}: the selected message reaches the retry's provider only when the retry publishes it",
+            input.name
         );
         if answered {
             assert_eq!(
                 persisted_request_state(&client, &queued.doc_id).await,
                 gents_protocol::request_lifecycle::RequestLifecycleState::Superseded,
                 "{}",
-                case.name
+                input.name
             );
-            assert_eq!(provider_inputs.lock().unwrap().len(), 1, "{}", case.name);
+            assert_eq!(provider_inputs.lock().unwrap().len(), 1, "{}", input.name);
         } else {
             assert_eq!(
                 persisted_request_state(&client, &queued.doc_id).await,
                 gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
                 "{}: the unanswered message stays queued",
-                case.name
+                input.name
             );
             daemon
                 .process_request(queued.clone(), shutdown_rx)
@@ -578,17 +571,27 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 persisted_request_state(&client, &queued.doc_id).await,
                 gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
                 "{}",
-                case.name
+                input.name
             );
             let inputs = provider_inputs.lock().unwrap().clone();
             assert_eq!(
                 inputs.len(),
                 2,
                 "{}: it runs exactly once, on its own turn",
-                case.name
+                input.name
             );
-            assert!(inputs[1].contains(&queued.content), "{}", case.name);
+            assert!(inputs[1].contains(&queued.content), "{}", input.name);
         }
         node.shutdown().await.expect("node shutdown");
+        case.check(
+            gents_lean_vocab::families::fold_queue_contracts_retry_selection::RetrySelectionOutput {
+                resume,
+                answered: if answered {
+                    input.selected.clone()
+                } else {
+                    Vec::new()
+                },
+            },
+        );
     }
 }

@@ -146,46 +146,21 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
 }
 
 #[test]
-fn generated_repair_cases_drive_tool_argument_repair() {
-    use gents_lean_vocab::lean_prompt_assembly_repair_cases;
-
-    let cases = lean_prompt_assembly_repair_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly repair cases"
-    );
-
-    for case in cases {
+fn tool_argument_repair_follows_the_lean_repair_model() {
+    use gents_lean_vocab::families::prompt_assembly_repair_args::{ArgsInput, ArgsOutput};
+    gents_lean_vocab::families::prompt_assembly_repair_args::replay(|case: &ArgsInput| {
         let input = repair_vector(&case.input);
-        let once = repaired_arguments(input.clone());
-        assert_eq!(
-            repair_shape(&once),
-            case.expected,
-            "repair disagrees with the Lean model on case {:?}",
-            case.name
-        );
-
-        let twice = repaired_arguments(once.clone());
-        assert_eq!(
-            repair_shape(&twice),
-            case.expected_twice,
-            "repair is not idempotent on case {:?}",
-            case.name
-        );
-        assert_eq!(
-            twice, once,
-            "repair_idempotent: a second pass must not change the payload ({:?})",
-            case.name
-        );
-
         if case.payload_only {
-            assert!(
-                input.is_object(),
-                "the contract marks {:?} payload-only, so its input must be an object",
-                case.name
-            );
+            assert!(input.is_object(), "{case:?}");
         }
-    }
+        let once = repaired_arguments(input);
+        let twice = repaired_arguments(once.clone());
+        assert_eq!(twice, once, "{case:?}");
+        ArgsOutput {
+            expected: repair_shape(&once),
+            expected_twice: repair_shape(&twice),
+        }
+    });
 }
 
 fn repair_vector(name: &str) -> serde_json::Value {

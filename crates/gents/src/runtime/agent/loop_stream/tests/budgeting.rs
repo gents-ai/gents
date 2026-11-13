@@ -1,73 +1,20 @@
 #[test]
-fn generated_turn_budget_cases_drive_every_completion_dispatch() {
-    let cases = gents_lean_vocab::lean_prompt_assembly_turn_budget_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no owned-loop turn budget cases"
-    );
-
-    for case in cases {
+fn turn_budgets_follow_the_lean_model() {
+    gents_lean_vocab::families::contracts_prompt_assembly_turn_budget::replay(|case| {
+        let context_window = usize::try_from(case.context_window).unwrap();
+        let max_output_tokens = usize::try_from(case.max_output_tokens).unwrap();
+        let turn_input_tokens = case
+            .turn_input_tokens
+            .iter()
+            .map(|tokens| usize::try_from(*tokens).unwrap())
+            .collect::<Vec<_>>();
         let threshold = case.threshold_basis_points as f64 / 10_000.0;
-        assert_eq!(
-            crate::turn::provider_input::budget::threshold_budget(case.context_window, threshold),
-            case.configured_threshold_budget,
-            "{}: configured threshold drifted from Lean",
-            case.name
-        );
-        assert_eq!(
-            crate::turn::provider_input::budget::effective_input_budget(
-                case.context_window,
-                threshold
-            ),
-            case.effective_input_budget,
-            "{}: effective input budget drifted from Lean",
-            case.name
-        );
-        let actual_output = case
-            .turn_input_tokens
-            .iter()
-            .map(|tokens| {
-                crate::turn::provider_input::budget::effective_output_budget(
-                    *tokens,
-                    case.context_window,
-                    case.max_output_tokens,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            actual_output, case.turn_output_tokens,
-            "{}: per-turn output clamp drifted from Lean",
-            case.name
-        );
         let compaction_budget = crate::turn::provider_input::budget::compaction_input_budget(
-            case.context_window,
+            context_window,
             threshold,
-            case.max_output_tokens,
+            max_output_tokens,
         );
-        assert_eq!(
-            compaction_budget, case.compaction_input_budget,
-            "{}: compaction input budget drifted from Lean",
-            case.name
-        );
-        let actual = case
-            .turn_input_tokens
-            .iter()
-            .map(|tokens| {
-                gents_inference::compaction::ReductionAdmission::for_context(
-                    crate::turn::provider_input::budget::ContextCalibration::default()
-                        .context(*tokens),
-                    compaction_budget,
-                )
-                .is_some()
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            actual, case.turn_should_compact,
-            "{}: a later completion turn bypassed the Lean dispatch gate",
-            case.name
-        );
-        let actual_can_dispatch = case
-            .turn_input_tokens
+        let turn_can_dispatch = turn_input_tokens
             .iter()
             .map(|tokens| {
                 let mut request = CompletionRequest {
@@ -79,14 +26,14 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
                     documents: Vec::new(),
                     tools: Vec::new(),
                     temperature: None,
-                    max_tokens: u64::try_from(case.max_output_tokens).ok(),
+                    max_tokens: u64::try_from(max_output_tokens).ok(),
                     tool_choice: None,
                     additional_params: None,
                     output_schema: None,
                 };
                 let mut witness_config = config(0);
-                witness_config.context_window = case.context_window;
-                witness_config.max_tokens = u64::try_from(case.max_output_tokens).ok();
+                witness_config.context_window = context_window;
+                witness_config.max_tokens = u64::try_from(max_output_tokens).ok();
                 clamp_request_output_budget(&mut request, &witness_config, *tokens);
                 let clamped = request
                     .max_tokens
@@ -96,43 +43,62 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
                     clamped,
                     crate::turn::provider_input::budget::effective_output_budget(
                         *tokens,
-                        case.context_window,
-                        case.max_output_tokens,
+                        context_window,
+                        max_output_tokens,
                     ),
-                    "{}: production request clamp drifted from Lean",
-                    case.name
+                    "{case:?}: production request clamp differs from the output budget owner"
                 );
                 ensure_context_can_dispatch(&request, &witness_config, *tokens).is_ok()
             })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            actual_can_dispatch, case.turn_can_dispatch,
-            "{}: a zero-capacity completion passed the Lean dispatch gate",
-            case.name
-        );
-    }
+            .collect();
+        gents_lean_vocab::families::contracts_prompt_assembly_turn_budget::PromptAssemblyTurnBudgetOutput {
+            configured_threshold_budget: crate::turn::provider_input::budget::threshold_budget(
+                context_window,
+                threshold,
+            ) as u64,
+            effective_input_budget: crate::turn::provider_input::budget::effective_input_budget(
+                context_window,
+                threshold,
+            ) as u64,
+            compaction_input_budget: compaction_budget as u64,
+            turn_output_tokens: turn_input_tokens
+                .iter()
+                .map(|tokens| {
+                    crate::turn::provider_input::budget::effective_output_budget(
+                        *tokens,
+                        context_window,
+                        max_output_tokens,
+                    ) as u64
+                })
+                .collect(),
+            turn_should_compact: turn_input_tokens
+                .iter()
+                .map(|tokens| {
+                    gents_inference::compaction::ReductionAdmission::for_context(
+                        crate::turn::provider_input::budget::ContextCalibration::default()
+                            .context(*tokens),
+                        compaction_budget,
+                    )
+                    .is_some()
+                })
+                .collect(),
+            turn_can_dispatch,
+        }
+    });
 }
 
 /// A staged per-turn reduction writes its row only once the rebuilt request
-/// fits (#3283). Each expected row count is the model's
-/// `commitRequestLocalAfterRebuild` for the matching rebuilt result.
+/// fits (#3283).
 #[tokio::test]
 async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fits() {
     use gents_store::identity::NodeIdentity as _;
-    let cases = gents_lean_vocab::lean_compaction_projection_join_cases();
-    let committed = |result: &str| {
-        cases
-            .iter()
-            .find(|case| case.result == result)
-            .unwrap_or_else(|| panic!("Lean emitted no {result} projection-join case"))
-            .committed_reductions
-    };
-    for (retained, max_tokens, rebuilt_result) in [
-        ("x".repeat(8_000), 1_000, "rebuilt_still_over"),
-        ("compacted prompt".to_string(), 0, "zero_output_capacity"),
-        ("compacted prompt".to_string(), 1_000, "dispatch"),
-    ] {
-        let expected_rows = committed(rebuilt_result);
+    for case in gents_lean_vocab::families::contract_cases_compaction_projection_join_staged_turn_reduction::cases() {
+        let (retained, max_tokens) = match case.input.name.as_str() {
+            "rebuilt_still_over" => ("x".repeat(8_000), 1_000),
+            "zero_output_capacity" => ("compacted prompt".to_string(), 0),
+            "threshold_plus_one" => ("compacted prompt".to_string(), 1_000),
+            other => panic!("no staged-turn fixture builds {other}"),
+        };
         let (node_db, _user, _user_access, binding) =
             gents_inference::test_support::signed_test_node(
                 "staged-turn-reduction-commits-its-row-on",
@@ -253,170 +219,116 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         )
         .await
         .unwrap();
-        assert_eq!(
-            rows.len(),
-            expected_rows,
-            "{rebuilt_result}: durable reduction rows after the request (error: {error:?})"
+        let result = match error.as_deref() {
+            None if text == "done" => "dispatch",
+            Some(error) if error.contains("NoOutputCapacity") => "zero_output_capacity",
+            Some(error) if error.contains("CannotFit") => "rebuilt_still_over",
+            _ => panic!("{}: unexpected terminal state: {error:?} after {text:?}", case.input.name),
+        };
+        case.check(
+            gents_lean_vocab::families::contract_cases_compaction_projection_join_staged_turn_reduction::StagedTurnOutput {
+                result: result.to_owned(),
+                committed_reductions: rows.len() as u64,
+            },
         );
-        if expected_rows == 0 {
-            assert!(
-                error.as_deref().is_some_and(|error| error.contains(
-                    if rebuilt_result == "zero_output_capacity" {
-                        "NoOutputCapacity"
-                    } else {
-                        "CannotFit"
-                    }
-                )),
-                "{rebuilt_result}: unexpected terminal state: {error:?}"
-            );
-        } else {
-            assert_eq!(error, None, "{rebuilt_result}");
-            assert_eq!(text, "done", "{rebuilt_result}");
-        }
     }
 }
 
 #[test]
-fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
-    let cases = gents_lean_vocab::lean_prompt_assembly_budget_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no PromptAssembly budget cases"
-    );
-
-    for case in cases {
+fn prompt_budgets_follow_the_lean_model() {
+    gents_lean_vocab::families::contracts_prompt_assembly_budget::replay(|case| {
+        let context_window = usize::try_from(case.context_window).unwrap();
+        let max_output_tokens = usize::try_from(case.max_output_tokens).unwrap();
         let threshold = case.threshold_basis_points as f64 / 10_000.0;
-        let configured =
-            crate::turn::provider_input::budget::threshold_budget(case.context_window, threshold);
-        let effective = crate::turn::provider_input::budget::effective_input_budget(
-            case.context_window,
-            threshold,
-        );
-        let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
+        let input_tokens = usize::try_from(case.prompt_tokens)
+            .unwrap()
+            .saturating_add(usize::try_from(case.request_tokens).unwrap());
         let effective_output = crate::turn::provider_input::budget::effective_output_budget(
             input_tokens,
-            case.context_window,
-            case.max_output_tokens,
-        );
-
-        assert_eq!(
-            configured, case.configured_threshold_budget,
-            "{}: configured threshold budget drifted from Lean",
-            case.name
-        );
-        assert_eq!(
-            effective, case.effective_input_budget,
-            "{}: effective input budget drifted from Lean",
-            case.name
-        );
-        assert_eq!(
-            effective_output, case.effective_output_tokens,
-            "{}: effective output budget drifted from Lean",
-            case.name
-        );
-        assert_eq!(
-            input_tokens.saturating_add(effective_output) <= case.context_window,
-            case.provider_safe,
-            "{}: provider-safety witness drifted from Lean",
-            case.name
-        );
-        assert_eq!(
-            crate::turn::provider_input::budget::can_dispatch(
-                input_tokens,
-                case.context_window,
-                case.max_output_tokens,
-            ),
-            case.can_dispatch,
-            "{}: provider dispatch legality drifted from Lean",
-            case.name
+            context_window,
+            max_output_tokens,
         );
         let compaction_budget = crate::turn::provider_input::budget::compaction_input_budget(
-            case.context_window,
+            context_window,
             threshold,
-            case.max_output_tokens,
+            max_output_tokens,
         );
-        assert_eq!(
-            compaction_budget, case.compaction_input_budget,
-            "{}: compaction input budget drifted from Lean",
-            case.name
-        );
-        assert_eq!(
-            gents_inference::compaction::ReductionAdmission::for_context(
+        gents_lean_vocab::families::contracts_prompt_assembly_budget::PromptAssemblyBudgetOutput {
+            configured_threshold_budget: crate::turn::provider_input::budget::threshold_budget(
+                context_window,
+                threshold,
+            ) as u64,
+            effective_input_budget: crate::turn::provider_input::budget::effective_input_budget(
+                context_window,
+                threshold,
+            ) as u64,
+            compaction_input_budget: compaction_budget as u64,
+            effective_output_tokens: effective_output as u64,
+            should_compact: gents_inference::compaction::ReductionAdmission::for_context(
                 crate::turn::provider_input::budget::ContextCalibration::default()
                     .context(input_tokens),
                 compaction_budget,
             )
             .is_some(),
-            case.should_compact,
-            "{}: production compaction trigger drifted from Lean",
-            case.name
-        );
-    }
+            provider_safe: input_tokens.saturating_add(effective_output) <= context_window,
+            can_dispatch: crate::turn::provider_input::budget::can_dispatch(
+                input_tokens,
+                context_window,
+                max_output_tokens,
+            ),
+        }
+    });
 }
 
 #[test]
 fn generated_compaction_trigger_cases_drive_the_production_trigger() {
     use crate::turn::provider_input::budget::{ContextAnchor, ContextCalibration};
-    let cases = gents_lean_vocab::lean_prompt_assembly_compaction_trigger_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean emitted no compaction trigger cases"
-    );
-
-    for case in cases {
+    let native = |tokens: u64| usize::try_from(tokens).expect("modeled tokens fit");
+    let modeled = |tokens: usize| u64::try_from(tokens).expect("native tokens fit");
+    gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::replay(|case| {
         let calibration = ContextCalibration::with_observations(
             case.prior_basis_points,
             case.seeded_observations.iter().copied(),
         );
-        if let Some(anchor) = case.anchor {
+        if let Some(anchor) = &case.anchor {
             calibration.anchor_accepted(ContextAnchor {
                 input_tokens: anchor.input_tokens,
                 output_tokens: anchor.output_tokens,
-                estimated_input_tokens: anchor.estimated_input_tokens,
+                estimated_input_tokens: native(anchor.estimated_input_tokens),
             });
         }
-        for (provider, estimate) in &case.observed {
-            calibration.observe(*provider, *estimate);
+        for count in &case.observed {
+            calibration.observe(count.provider, native(count.estimate));
         }
         if case.invalidate {
             calibration.invalidate_anchor();
         }
-        let context = calibration.context(case.raw_input_tokens);
-        assert_eq!(
-            (
-                context.ratio_basis_points,
-                context.calibrated,
-                context.anchored,
-                context.tokens,
-            ),
-            (
-                case.ratio_basis_points,
-                case.calibrated_tokens,
-                case.anchored_tokens,
-                case.context_tokens,
-            ),
-            "{}: production context size drifted from Lean",
-            case.name
-        );
+        let context = calibration.context(native(case.raw_input_tokens));
         let budget = crate::turn::provider_input::budget::compaction_input_budget(
-            case.context_window,
+            native(case.context_window),
             case.threshold_basis_points as f64 / 10_000.0,
-            case.max_output_tokens,
+            native(case.max_output_tokens),
         );
-        assert_eq!(
-            budget, case.compaction_input_budget,
-            "{}: compaction input budget drifted from Lean",
-            case.name
-        );
-        let admission =
-            gents_inference::compaction::ReductionAdmission::for_context(context, budget)
-                .map(|admission| (admission.input_tokens(), admission.effective_input_budget()));
-        assert_eq!(
+        let ratio_basis_points = context.ratio_basis_points;
+        let calibrated_tokens = modeled(context.calibrated);
+        let anchored_tokens = context.anchored.map(modeled);
+        let context_tokens = modeled(context.tokens);
+        let admission = gents_inference::compaction::ReductionAdmission::for_context(
+            context, budget,
+        )
+        .map(|admission| {
+            gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::Admission {
+                input_tokens: modeled(admission.input_tokens()),
+                input_budget: modeled(admission.effective_input_budget()),
+            }
+        });
+        gents_lean_vocab::families::contracts_prompt_assembly_compaction_trigger::CompactionTriggerOutput {
+            ratio_basis_points,
+            calibrated_tokens,
+            anchored_tokens,
+            context_tokens,
+            compaction_input_budget: modeled(budget),
             admission,
-            case.admission
-                .map(|admission| (admission.input_tokens, admission.input_budget)),
-            "{}: production compaction trigger drifted from Lean",
-            case.name
-        );
-    }
+        }
+    });
 }

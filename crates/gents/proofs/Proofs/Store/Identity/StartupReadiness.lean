@@ -52,25 +52,4 @@ def cases : List Case :=
   , ⟨"shutting-at-deadline", .pending, true, false, true⟩
   , ⟨"shutting-with-ready", .pending, true, true, false⟩ ]
 
-def joinJson : Join → Json
-  | .pending => Json.mkObj [("kind", toJson "pending")]
-  | .clean => Json.mkObj [("kind", toJson "clean")]
-  | .failed message => Json.mkObj [("kind", toJson "failed"), ("message", toJson message)]
-
-def outcomeJson : Outcome → Json
-  | .wait => Json.mkObj [("kind", toJson "wait")]
-  | .awaitJoin => Json.mkObj [("kind", toJson "await_join")]
-  | .ready => Json.mkObj [("kind", toJson "ready")]
-  | .timeout => Json.mkObj [("kind", toJson "timeout")]
-  | .premature => Json.mkObj [("kind", toJson "premature")]
-  | .failed message => Json.mkObj [("kind", toJson "failed"), ("message", toJson message)]
-
-def caseJson (c : Case) : Json := Json.mkObj
-  [("name", toJson c.name), ("join", joinJson c.join),
-   ("shutting_down", toJson c.shuttingDown), ("readiness", toJson c.readiness),
-   ("deadline", toJson c.deadline),
-   ("expected", outcomeJson (observe c.join c.shuttingDown c.readiness c.deadline))]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
-
 end Identity.StartupReadiness

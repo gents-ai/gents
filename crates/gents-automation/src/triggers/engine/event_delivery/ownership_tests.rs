@@ -283,8 +283,8 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
     };
     let group = load_or_create_group(&worker, delivery, "batch").await?;
     let runtime_did = modeled_runtime.as_str();
-    for observation in &contract.event_group_cases {
-        let actor = observation["actor"].as_str().unwrap();
+    for observation in contract.event_group_state_cases.as_ref().unwrap() {
+        let actor = observation.actor.as_str();
         let access = if actor == modeled_user {
             &owner
         } else if actor == modeled_agent {
@@ -302,7 +302,7 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
                     .as_array()
                     .unwrap()
                     .is_empty(),
-                observation["expected"].as_bool().unwrap()
+                observation.expected
             );
             continue;
         };
@@ -312,7 +312,7 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            observation["expected"].as_bool().unwrap()
+            observation.expected
         );
     }
     quiesce_group(&worker, &group, "done").await?;

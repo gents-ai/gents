@@ -3,7 +3,6 @@ use super::slot_accounting::{
 };
 use crate::test_support::test_db;
 use defra_node::Node as EmbeddedNode;
-use gents_lean_vocab::{lean_contract_snapshot, lean_inference_slot_accounting_cases};
 use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
@@ -19,12 +18,7 @@ struct PersistedSlotRow {
 
 #[tokio::test]
 async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstruction() {
-    let cases = lean_inference_slot_accounting_cases();
-    assert_eq!(
-        cases.len(),
-        11,
-        "Lean should emit the finite InferenceCall slot-accounting cases"
-    );
+    use gents_lean_vocab::families::inference_slot_accounting_reconstruction as wire;
 
     let db = test_db(
         "inference-slot-accounting",
@@ -32,59 +26,58 @@ async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstructio
     )
     .await;
 
-    for case in cases {
+    for (case_index, case) in gents_lean_vocab::families::inference_slot_accounting_reconstruction::cases().into_iter().enumerate() {
+        let input = &case.input;
         assert_eq!(
-            case.row_backend_ids.len(),
-            case.row_states.len(),
-            "Lean case {} emitted mismatched row arrays",
-            case.name
+            input.row_backend_ids.len(),
+            input.row_states.len(),
+            "{input:?} has mismatched row arrays"
         );
-
-        for (index, (backend_id, state)) in case
+        let case_name = format!("slot-case-{case_index}");
+        for (index, (backend_id, state)) in input
             .row_backend_ids
             .iter()
-            .zip(&case.row_states)
+            .zip(&input.row_states)
             .enumerate()
         {
-            insert_inference_call_row(&db.node, &case.name, index, backend_id, state).await;
+            insert_inference_call_row(&db.node, &case_name, index, backend_id, state).await;
         }
 
-        let rows = fetch_persisted_slot_rows_for_case(&db.node, &case.name).await;
+        let rows = fetch_persisted_slot_rows_for_case(&db.node, &case_name).await;
         assert_eq!(
             rows.len(),
-            case.row_states.len(),
-            "case {} must read back every seeded InferenceCall row",
-            case.name
+            input.row_states.len(),
+            "{input:?} must read back every seeded InferenceCall row"
         );
-
-        if let [row] = rows.as_slice() {
-            assert_eq!(
-                slot_contribution(
-                    InferenceCallSlotRow::new(&row.backend_id, &row.call_state),
-                    &case.backend_id,
-                ),
-                case.expected_contribution,
-                "case {} drifted from admission slot contribution over the persisted row",
-                case.name
-            );
-        }
 
         let reconstructed = reconstructed_running_slot_count(
             rows.iter()
                 .map(|row| InferenceCallSlotRow::new(&row.backend_id, &row.call_state)),
-            &case.backend_id,
+            &input.backend_id,
         );
-        assert_eq!(
-            reconstructed, case.reconstructed_running_count,
-            "case {} drifted from admission reconstruction over persisted rows",
-            case.name
+        let contribution = match rows.as_slice() {
+            [row] => slot_contribution(
+                InferenceCallSlotRow::new(&row.backend_id, &row.call_state),
+                &input.backend_id,
+            ),
+            _ => reconstructed,
+        };
+        let pre_contribution = slot_contribution(
+            InferenceCallSlotRow::new(&input.backend_id, &input.pre_state),
+            &input.backend_id,
         );
-        assert_eq!(
-            case.bounded_by_max_concurrent,
-            reconstructed <= case.max_concurrent,
-            "case {} drifted from the max_concurrent capacity bound",
-            case.name
+        let post_contribution = slot_contribution(
+            InferenceCallSlotRow::new(&input.backend_id, &input.post_state),
+            &input.backend_id,
         );
+        case.check(wire::ReconstructionOutput {
+            contribution: contribution as u64,
+            pre_contribution: pre_contribution as u64,
+            post_contribution: post_contribution as u64,
+            released_slot: pre_contribution == 1 && post_contribution == 0,
+            reconstructed_running_count: reconstructed as u64,
+            bounded_by_max_concurrent: reconstructed as u64 <= input.max_concurrent,
+        });
     }
 }
 
@@ -164,65 +157,4 @@ async fn fetch_persisted_slot_rows_for_case(
         .into_iter()
         .filter(|row| row.call_id.starts_with(&prefix))
         .collect()
-}
-
-fn slot_rows_from_contract<'a>(
-    backend_ids: &'a [String],
-    row_states: &'a [String],
-) -> impl Iterator<Item = InferenceCallSlotRow<'a>> {
-    backend_ids
-        .iter()
-        .zip(row_states)
-        .map(|(backend_id, state)| InferenceCallSlotRow::new(backend_id.as_str(), state.as_str()))
-}
-
-#[test]
-fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
-    for case in &lean_contract_snapshot().fleet_slot_accounting_cases {
-        assert_eq!(
-            case.row_backend_ids.len(),
-            case.row_states.len(),
-            "Fleet slot case {} emitted mismatched projection row arrays",
-            case.name
-        );
-        if case.property == "admission_contribution" {
-            assert!(
-                matches!(
-                    case.admission_state.as_str(),
-                    "waiting" | "acquired" | "executing" | "released"
-                ),
-                "Fleet admission case {} must carry an admission phase of an existing claimed request, got {:?}",
-                case.name,
-                case.admission_state
-            );
-        } else {
-            assert_eq!(
-                case.property, "fleet_reconstructed_running_bound",
-                "Fleet slot case {} has an unknown property",
-                case.name
-            );
-            assert!(case.admission_state.is_empty(), "{}", case.name);
-        }
-
-        let reconstructed = reconstructed_running_slot_count(
-            slot_rows_from_contract(&case.row_backend_ids, &case.row_states),
-            &case.backend_id,
-        );
-        assert_eq!(
-            reconstructed, case.reconstructed_running_count,
-            "Fleet slot case {} drifted from the Rust admission reconstruction of the projected rows",
-            case.name
-        );
-        assert_eq!(
-            reconstructed, case.slot_count,
-            "Fleet slot case {} drifted from the Lean slotCountFor aggregate over the same rows",
-            case.name
-        );
-        assert_eq!(
-            case.bounded_by_max_concurrent,
-            reconstructed <= case.max_concurrent,
-            "Fleet slot case {} drifted from the max_concurrent capacity bound recomputed by the Rust count owner",
-            case.name
-        );
-    }
 }

@@ -333,96 +333,98 @@ mod tests {
 
     #[test]
     fn boundary_selection_matches_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().agent_steering_boundary_cases;
-        for case in cases {
-            let rows = case
-                .inputs
-                .iter()
-                .map(|input| {
-                    let (delivery, source, parent) = match input.kind.as_str() {
-                        "queued" => (QueueDelivery::Queue, QueueSource::User, None),
-                        "user_steer" => (QueueDelivery::Steer, QueueSource::User, None),
-                        "blocked" => (
-                            QueueDelivery::Queue,
-                            QueueSource::BackgroundCompletion,
-                            None,
-                        ),
-                        "agent_steer" => (
-                            QueueDelivery::Steer,
-                            QueueSource::Steering,
-                            Some("tool".to_owned()),
-                        ),
-                        other => panic!("unknown boundary kind {other}"),
-                    };
-                    AgentRequestRow {
-                        doc_id: Some(input.id.to_string()),
-                        request_id: input.id.to_string(),
-                        execution_origin: Some("interactive".to_owned()),
-                        caused_by_parent_request_doc_id: parent
-                            .as_ref()
-                            .map(|_| "request".to_owned()),
-                        caused_by_parent_tool_call_doc_id: parent,
-                        input: Some(RequestInput {
-                            queue: Some(RequestQueue {
-                                delivery,
-                                source,
-                                policy: QueuePolicy::Append,
-                                position: None,
-                                key: None,
-                                queued_after_request_id: None,
-                                interrupted_request_id: None,
-                                background_completion_wake_version: None,
+        gents_lean_vocab::families::contracts_steering_boundary_selection::replay::<String>(
+            |case| {
+                let rows = case
+                    .inputs
+                    .iter()
+                    .map(|input| {
+                        let (delivery, source, parent) = match input.kind.as_str() {
+                            "queued" => (QueueDelivery::Queue, QueueSource::User, None),
+                            "user_steer" => (QueueDelivery::Steer, QueueSource::User, None),
+                            "blocked" => (
+                                QueueDelivery::Queue,
+                                QueueSource::BackgroundCompletion,
+                                None,
+                            ),
+                            "agent_steer" => (
+                                QueueDelivery::Steer,
+                                QueueSource::Steering,
+                                Some("tool".to_owned()),
+                            ),
+                            other => panic!("unknown boundary kind {other}"),
+                        };
+                        AgentRequestRow {
+                            doc_id: Some(input.id.to_string()),
+                            request_id: input.id.to_string(),
+                            execution_origin: Some("interactive".to_owned()),
+                            caused_by_parent_request_doc_id: parent
+                                .as_ref()
+                                .map(|_| "request".to_owned()),
+                            caused_by_parent_tool_call_doc_id: parent,
+                            input: Some(RequestInput {
+                                queue: Some(RequestQueue {
+                                    delivery,
+                                    source,
+                                    policy: QueuePolicy::Append,
+                                    position: None,
+                                    key: None,
+                                    queued_after_request_id: None,
+                                    interrupted_request_id: None,
+                                    background_completion_wake_version: None,
+                                }),
+                                ..RequestInput::default()
                             }),
-                            ..RequestInput::default()
-                        }),
-                        ..AgentRequestRow::default()
-                    }
-                })
-                .collect::<Vec<_>>();
-            let actual =
-                boundary_candidate(&rows).map(|row| row.request_id.parse::<u64>().unwrap());
-            assert_eq!(actual, case.expected, "{case:?}");
-            if let Some(index) = case.inputs.iter().position(|input| input.kind == "blocked") {
-                let mut wake = rows.clone();
-                let queue = wake[index].input.as_mut().unwrap().queue.as_mut().unwrap();
-                queue.source = QueueSource::User;
-                queue.background_completion_wake_version = Some(1);
-                assert_eq!(
-                    boundary_candidate(&wake).map(|row| row.request_id.parse::<u64>().unwrap()),
-                    case.expected,
-                    "wake marker {case:?}"
-                );
-                let mut internal = rows.clone();
-                let queue = internal[index]
-                    .input
-                    .as_mut()
-                    .unwrap()
-                    .queue
-                    .as_mut()
-                    .unwrap();
-                queue.source = QueueSource::Goal;
-                assert_eq!(
-                    boundary_candidate(&internal).map(|row| row.request_id.parse::<u64>().unwrap()),
-                    case.expected,
-                    "internal source {case:?}"
-                );
-                let mut internal_issuance = rows.clone();
-                let queue = internal_issuance[index]
-                    .input
-                    .as_mut()
-                    .unwrap()
-                    .queue
-                    .as_mut()
-                    .unwrap();
-                queue.source = QueueSource::User;
-                internal_issuance[index].admission_kind = Some("runtime-internal".to_owned());
-                assert_eq!(
-                    boundary_candidate(&internal_issuance)
-                        .map(|row| row.request_id.parse::<u64>().unwrap()),
-                    case.expected,
-                    "internal issuance {case:?}"
-                );
-            }
-        }
+                            ..AgentRequestRow::default()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let actual =
+                    boundary_candidate(&rows).map(|row| row.request_id.parse::<u64>().unwrap());
+                if let Some(index) = case.inputs.iter().position(|input| input.kind == "blocked") {
+                    let mut wake = rows.clone();
+                    let queue = wake[index].input.as_mut().unwrap().queue.as_mut().unwrap();
+                    queue.source = QueueSource::User;
+                    queue.background_completion_wake_version = Some(1);
+                    assert_eq!(
+                        boundary_candidate(&wake).map(|row| row.request_id.parse::<u64>().unwrap()),
+                        actual,
+                        "wake marker {case:?}"
+                    );
+                    let mut internal = rows.clone();
+                    let queue = internal[index]
+                        .input
+                        .as_mut()
+                        .unwrap()
+                        .queue
+                        .as_mut()
+                        .unwrap();
+                    queue.source = QueueSource::Goal;
+                    assert_eq!(
+                        boundary_candidate(&internal)
+                            .map(|row| row.request_id.parse::<u64>().unwrap()),
+                        actual,
+                        "internal source {case:?}"
+                    );
+                    let mut internal_issuance = rows.clone();
+                    let queue = internal_issuance[index]
+                        .input
+                        .as_mut()
+                        .unwrap()
+                        .queue
+                        .as_mut()
+                        .unwrap();
+                    queue.source = QueueSource::User;
+                    internal_issuance[index].admission_kind = Some("runtime-internal".to_owned());
+                    assert_eq!(
+                        boundary_candidate(&internal_issuance)
+                            .map(|row| row.request_id.parse::<u64>().unwrap()),
+                        actual,
+                        "internal issuance {case:?}"
+                    );
+                }
+                actual
+            },
+        );
     }
 }

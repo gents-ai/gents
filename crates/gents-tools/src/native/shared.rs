@@ -5,7 +5,7 @@ mod filesystem;
 #[cfg(test)]
 pub(crate) use command::apply_workspace_authority;
 #[cfg(test)]
-pub(super) use command::command_env::build_shell_env_from_vars;
+pub(super) use command::command_env::{build_shell_env_from_vars, FALLBACK_PATH};
 pub(crate) use command::command_host_executable::admit_host_executable;
 pub(crate) use command::command_launch::prepare_declared_cli_command;
 #[cfg(test)]

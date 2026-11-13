@@ -267,8 +267,8 @@ async fn workspace_preferences_route_commands_as_the_lean_model() {
         match case.input.preference.as_deref() {
             None => {}
             Some("ask") => fixture.select(workspace::Mode::Ask),
-            Some("full_access") => fixture.select(workspace::Mode::FullAccess),
-            Some("auto_review") => {
+            Some("fullAccess") => fixture.select(workspace::Mode::FullAccess),
+            Some("autoReview") => {
                 workspace::save_mode(
                     fixture.home.path(),
                     &fixture.key,

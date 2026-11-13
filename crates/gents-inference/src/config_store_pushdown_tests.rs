@@ -213,11 +213,12 @@ pub(crate) async fn agent_step(
 
 #[tokio::test]
 async fn agent_baseline_projection_follows_modeled_lifecycle() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_agent_baseline_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
+    use gents_lean_vocab::families::agent_baseline_lifecycle as wire;
+
+    for (index, case) in gents_lean_vocab::families::agent_baseline_lifecycle::cases::<String>().into_iter().enumerate() {
+        let case_name = format!("agent-baseline-{index}");
         let (db, owner, owner_access) = crate::test_support::signed_test_node_without_agent(
-            &case.name,
+            &case_name,
             gents_store::node_extension::Extensions::none(),
         )
         .await;
@@ -225,14 +226,14 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
         let runtime_did = runtime.did().to_owned();
         let admin =
             ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
-        let actor_name = format!("{}-actor", case.name);
+        let actor_name = format!("{case_name}-actor");
         let actor = tokio::task::spawn_blocking(move || {
             gents_store::test_support::test_identity(&actor_name)
         })
         .await
         .unwrap();
         let actor_did = identity::Did::new(actor.did()).unwrap();
-        for set in recipient_sets(&case.actor) {
+        for set in recipient_sets(&case.input.actor) {
             set.grant(&admin, &actor_did).await.unwrap();
         }
         let node_doc = owner_access.execute("{ Node { _docID } }").await.unwrap()["data"]["Node"]
@@ -248,15 +249,9 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
         let actor_access = db.client_access(&actor);
         let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
         let agent = identity::Did::new(&binding.agent_did).unwrap();
-        for step in &case.steps {
-            let result = agent_step(&actor_access, &runtime_did, &binding, &step.action).await;
-            assert_eq!(
-                result.is_ok(),
-                step.committed,
-                "{} {}: {result:?}",
-                case.name,
-                step.action
-            );
+        let mut steps = Vec::new();
+        for action in &case.input.actions {
+            let result = agent_step(&actor_access, &runtime_did, &binding, action).await;
             if let Err(error) = &result {
                 assert!(
                     gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| {
@@ -265,8 +260,7 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
                             .filter(|error| error.is_permission_denied())
                     })
                     .is_some(),
-                    "{}: {error:#}",
-                    case.name
+                    "{case_name} {action}: {error:#}"
                 );
             }
             let mut installed = Vec::new();
@@ -281,8 +275,13 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
                     installed.push(permission.as_str().to_owned());
                 }
             }
-            assert_eq!(installed, step.installed, "{} {}", case.name, step.action);
+            steps.push(wire::StepObservation {
+                action: action.clone(),
+                committed: result.is_ok(),
+                installed,
+            });
         }
+        case.check(wire::LifecycleOutput { steps });
         db.node.shutdown().await.unwrap();
     }
 }

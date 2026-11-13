@@ -94,6 +94,55 @@ fn plugin_job_keys_reexports_the_encoders_and_the_decoder() {
 pub mod executor;
 mod policy_tests;
 
+fn call_access_record(
+    declared: &str,
+    write_fields: bool,
+) -> (
+    tempfile::TempDir,
+    gents_pack::plugin::store::InstalledPlugin,
+) {
+    let (home, mut record) = gents_pack::plugin::test_fixtures::installed_plugin(
+        ECHO_WAT,
+        Some(declared.parse().unwrap()),
+    );
+    let binding = record.declaration.bind_dir.as_mut().unwrap();
+    if write_fields {
+        binding.write_fields = vec!["output".into()];
+    }
+    record.declaration.input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "output": {"type": "string"}},
+    });
+    (home, record)
+}
+
+fn call_access_input(folder: &std::path::Path, sets_write_field: bool) -> serde_json::Value {
+    let mut input = serde_json::json!({ "path": folder });
+    if sets_write_field {
+        input["output"] = serde_json::json!("out.json");
+    }
+    input
+}
+
+#[test]
+fn generated_plugin_call_bindings_drive_validation_and_call_access() {
+    gents_lean_vocab::families::plugin_resources_call_bindings::replay::<String>(|i| {
+        let (_home, record) = call_access_record(&i.declared, i.write_fields);
+        let folder = tempfile::tempdir().unwrap();
+        let input = call_access_input(folder.path(), i.sets_write_field);
+        let call = record
+            .declaration
+            .bind_dir
+            .as_ref()
+            .unwrap()
+            .call_access(&input);
+        gents_lean_vocab::families::plugin_resources_call_bindings::BindingOutput {
+            valid: record.declaration.validate().is_ok(),
+            call: call.as_str().to_owned(),
+        }
+    });
+}
+
 #[tokio::test]
 async fn generated_plugin_call_access_cases_drive_bind_admission() {
     const CHILD_ENV: &str = "GENTS_PLUGIN_CALL_ACCESS_FIXTURE";
@@ -103,19 +152,6 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
         // modeled cases require a stable filesystem, independent of those tests.
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("verified");
-        let cases = tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .plugin_resource_call_access_cases
-                .clone()
-        })
-        .await
-        .unwrap();
-        tokio::fs::write(
-            directory.path().join("cases.json"),
-            serde_json::to_vec(&cases).unwrap(),
-        )
-        .await
-        .unwrap();
         let output_path = directory.path().join("output");
         let output = tokio::fs::File::create(&output_path)
             .await
@@ -150,56 +186,26 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
             "isolated admission cases failed: {status:?}\n{}",
             String::from_utf8_lossy(&diagnostics)
         );
-        assert_eq!(tokio::fs::read(marker).await.unwrap(), b"24 cases verified");
+        assert_eq!(tokio::fs::read(marker).await.unwrap(), b"cases verified");
         return;
     };
-    use gents_pack::pack::BindAccess;
     let marker = std::path::PathBuf::from(marker);
-    let cases: serde_json::Value = serde_json::from_slice(
-        &tokio::fs::read(marker.parent().unwrap().join("cases.json"))
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    let access = |value: &serde_json::Value| -> Option<BindAccess> {
-        value.as_str().map(|text| text.parse().unwrap())
-    };
-    let cases = cases.as_array().unwrap();
-    assert_eq!(cases.len(), 24);
-    for case in cases {
-        let declared = access(&case["declared"]).unwrap();
-        let write_fields = case["write_fields"].as_bool().unwrap();
-        let sets = case["sets_write_field"].as_bool().unwrap();
-        let (home, mut record) =
-            gents_pack::plugin::test_fixtures::installed_plugin(ECHO_WAT, Some(declared));
-        let binding = record.declaration.bind_dir.as_mut().unwrap();
-        if write_fields {
-            binding.write_fields = vec!["output".into()];
-        }
-        record.declaration.input_schema = serde_json::json!({
-            "type": "object",
-            "properties": {"path": {"type": "string"}, "output": {"type": "string"}},
-        });
-        assert_eq!(
-            record.declaration.validate().is_ok(),
-            case["valid"].as_bool().unwrap(),
-            "{case}"
-        );
-        if !case["valid"].as_bool().unwrap() {
-            continue;
-        }
+    for case in gents_lean_vocab::families::plugin_resources_call_admissions::cases::<String>() {
+        let (home, record) = call_access_record(&case.input.declared, case.input.write_fields);
+        record.declaration.validate().unwrap();
         gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
         let folder = tempfile::tempdir().unwrap();
-        if let Some(granted) = access(&case["granted"]) {
-            gents_pack::plugin::allowed::add(home.path(), folder.path(), granted).unwrap();
+        if let Some(granted) = &case.input.granted {
+            gents_pack::plugin::allowed::add(home.path(), folder.path(), granted.parse().unwrap())
+                .unwrap();
         }
-        let mut input = serde_json::json!({ "path": folder.path() });
-        if sets {
-            input["output"] = serde_json::json!("out.json");
-        }
-        let binding = record.declaration.bind_dir.as_ref().unwrap();
-        let call = access(&case["call"]).unwrap();
-        assert_eq!(binding.call_access(&input), call, "{case}");
+        let input = call_access_input(folder.path(), case.input.sets_write_field);
+        let call = record
+            .declaration
+            .bind_dir
+            .as_ref()
+            .unwrap()
+            .call_access(&input);
         let bound = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()))
             .bind_input(
                 &record,
@@ -207,22 +213,29 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
                 &crate::plugin::executor::BindContext::headless(None),
             )
             .await;
-        match bound {
+        let admitted = match bound {
             Ok(Some(bound)) => {
-                assert!(case["admitted"].as_bool().unwrap(), "{case}");
-                assert_eq!(bound.access(), call, "{case}");
+                assert_eq!(
+                    bound.access(),
+                    call,
+                    "the bound access is the call's access"
+                );
+                true
             }
-            Ok(None) => panic!("the path field is set: {case}"),
+            Ok(None) => panic!("the path field is set"),
             Err(reason) => {
-                assert!(!case["admitted"].as_bool().unwrap(), "{case}: {reason}");
                 assert!(
                     reason.contains("gents config pack plugin dirs add"),
                     "{reason}"
                 );
+                false
             }
-        }
+        };
+        case.check(
+            gents_lean_vocab::families::plugin_resources_call_admissions::AdmissionOutput {
+                admitted,
+            },
+        );
     }
-    tokio::fs::write(marker, b"24 cases verified")
-        .await
-        .unwrap();
+    tokio::fs::write(marker, b"cases verified").await.unwrap();
 }

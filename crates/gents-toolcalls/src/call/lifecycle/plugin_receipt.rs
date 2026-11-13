@@ -2,7 +2,8 @@ use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
 use gents_session::session::tool_call_state::ToolCallState;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReceiptDecision {
     Commit,
     Adopt,
@@ -55,48 +56,62 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_lean_vocab::families::plugin_receipt_commits::Receipt;
 
-    fn modeled(value: &serde_json::Value) -> PluginExecutionReceipt {
+    fn modeled(value: &Receipt<String>) -> PluginExecutionReceipt {
         PluginExecutionReceipt {
             coordinate: "team/plugin".into(),
             artifact_digest: "sha256:artifact".into(),
-            input_digest: value["evidence"].as_str().unwrap().into(),
-            output_digest: value["output"].as_str().map(str::to_owned),
+            input_digest: value.evidence.clone(),
+            output_digest: value.output.clone(),
             authority: None,
             limits: None,
-            verdict: serde_json::from_value(value["verdict"].clone()).unwrap(),
+            verdict: serde_json::from_value(serde_json::Value::String(value.verdict.clone()))
+                .unwrap(),
+        }
+    }
+
+    fn observed(receipt: &PluginExecutionReceipt) -> Receipt<String> {
+        assert_eq!(receipt.coordinate, "team/plugin");
+        assert_eq!(receipt.artifact_digest, "sha256:artifact");
+        assert_eq!(receipt.authority, None);
+        assert_eq!(receipt.limits, None);
+        Receipt {
+            evidence: receipt.input_digest.clone(),
+            output: receipt.output_digest.clone(),
+            verdict: serde_json::to_value(receipt.verdict)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned(),
         }
     }
 
     #[test]
+    fn receipt_terminals_are_the_terminal_tool_call_states() {
+        let terminal: Vec<ToolCallState> = ToolCallState::ALL
+            .into_iter()
+            .filter(|state| state.is_terminal())
+            .collect();
+        gents_lean_vocab::families::tool_policy_plugin_receipt_terminal_vocabulary::replay(
+            &terminal,
+        );
+    }
+
+    #[test]
     fn generated_receipt_commit_cases() {
-        for case in gents_lean_vocab::lean_contract_snapshot()
-            .plugin_resource_receipt_cases
-            .as_array()
-            .expect("modeled plugin receipt cases")
-        {
-            let terminal = ToolCallState::from_persisted(case["terminal"].as_str().unwrap())
-                .expect("modeled terminal");
-            let candidate = published(terminal, &modeled(&case["receipt"]));
-            assert_eq!(candidate, modeled(&case["published"]), "{case}");
-            let existing = (!case["existing"].is_null()).then(|| modeled(&case["existing"]));
-            let decision = match case["decision"].as_str().unwrap() {
-                "commit" => ReceiptDecision::Commit,
-                "adopt" => ReceiptDecision::Adopt,
-                "replay" => ReceiptDecision::Replay,
-                "conflict" => ReceiptDecision::Conflict,
-                other => panic!("unknown modeled decision {other}"),
-            };
-            assert_eq!(
-                decide(
-                    case["row_terminal"].as_bool().unwrap(),
-                    existing.as_ref(),
-                    &candidate
-                ),
-                decision,
-                "{case}"
-            );
-        }
+        gents_lean_vocab::families::plugin_receipt_commits::replay::<
+            ReceiptDecision,
+            ToolCallState,
+            String,
+        >(|i| {
+            let candidate = published(i.terminal, &modeled(&i.receipt));
+            let existing = i.existing.as_ref().map(modeled);
+            gents_lean_vocab::families::plugin_receipt_commits::CommitOutput {
+                published: observed(&candidate),
+                decision: decide(i.row_terminal, existing.as_ref(), &candidate),
+            }
+        });
     }
 }
 

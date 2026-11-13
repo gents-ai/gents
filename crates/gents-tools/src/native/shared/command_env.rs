@@ -1,7 +1,7 @@
 use gents_documents::callback::is_secret_env_name;
 use rapidhash::RapidHashMap;
 
-const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+pub(crate) const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 const CORE_ENV_VARS: &[&str] = &[
     "PATH",
     "SHELL",

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::model_test_support::{model_session, model_time};
+use super::model_test_support::{model_session, model_time, wire_session};
 use super::observations::{apply_title_in_txn, GeneratedTitleNeed};
 use super::query::load_agent_session;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
@@ -182,18 +182,8 @@ async fn title_transitions_preserve_session_and_request_observation() {
 
 #[tokio::test]
 async fn generated_user_title_cases_drive_the_shared_session_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_projection_cases;
-    let cases = cases
-        .iter()
-        .filter(|case| case["operation"] == "rename")
-        .collect::<Vec<_>>();
-    assert!(cases.iter().any(|case| case["title"].is_null()));
-    assert!(cases
-        .iter()
-        .any(|case| !case["before"]["title"].is_null() && !case["title"].is_null()));
-    for case in cases {
-        let before = model_session(&case["before"]);
-        let expected = model_session(&case["after"]);
+    for case in gents_lean_vocab::families::contracts_session_rename::cases::<String>() {
+        let before = model_session(&serde_json::to_value(&case.input.before).unwrap());
         let node = Arc::new(
             gents_store::test_support::node_builder()
                 .build()
@@ -216,8 +206,11 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
                     Ok::<_, anyhow::Error>(())
                 })
             }).await.unwrap();
-        let now = model_time(&case["now"]).as_str().unwrap().to_owned();
-        let title = case["title"]["text"].as_str();
+        let now = model_time(&serde_json::json!(case.input.now))
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let title = case.input.title.as_ref().map(|title| title.text.as_str());
         gents_store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
@@ -250,7 +243,11 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(after, expected, "Lean user title case {}", case["name"]);
+        case.check(
+            gents_lean_vocab::families::contracts_session_rename::DocumentAfter {
+                after: gents_lean_vocab::family::recode(&wire_session(&after)),
+            },
+        );
         node.shutdown().await.expect("shut down test node");
     }
 }
@@ -271,12 +268,7 @@ async fn verified_signer_as_user(
 #[tokio::test]
 async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<()> {
     use gents_store::identity::NodeIdentity;
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_projection_cases
-        .iter()
-        .find(|case| case["operation"] == "rename" && case["title"]["text"].is_string())
-        .expect("modeled user rename");
-    let title = case["title"]["text"].as_str().unwrap();
+    let title = "renamed";
     let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
         "http-user-title",
         crate::test_support::no_lifecycle_plugins(),
@@ -324,7 +316,10 @@ async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<(
         r#"{ AgentSession(filter: {session_id: {_eq: "http-title-session"}}) {title _version {cid}} }"#,
     ).await?;
     let row = &response["data"]["AgentSession"][0];
-    assert_eq!(row["title"], case["after"]["title"]);
+    assert_eq!(
+        row["title"],
+        serde_json::json!({"text": title, "source": "user"})
+    );
     let cid = row["_version"][0]["cid"]
         .as_str()
         .expect("signed title version");

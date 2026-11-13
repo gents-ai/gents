@@ -9,7 +9,6 @@ const CONTRACT_METADATA: &[&str] = &[
     "deviations",
     "feature_matrix",
     "feature_surface_requirements",
-    "follow_up_hooks",
 ];
 
 const DOMAIN_FAMILIES: &[(&str, &str)] = &[

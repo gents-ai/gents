@@ -23,11 +23,7 @@ use gents_documents::automation::{ResolvedEventTrigger, ResolvedSchedule, Resolv
 use gents_documents::{ConcurrencyMode, ScheduleCadence};
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::{ResolvedAgent, SamplingConfig};
-use gents_lean_vocab::{
-    assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
-    lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
-    LeanVocabulary,
-};
+use gents_lean_vocab::{assert_lean_to_defradb_vocabulary_matches, LeanVocabulary};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, RuntimeNode};
 use gents_store::schema::ensure_runtime_schemas;
@@ -527,12 +523,12 @@ fn concurrency_from_lean(value: &str) -> ConcurrencyMode {
 }
 
 fn snapshot_from_trigger_contract(
-    case: &LeanTriggerDispatchCase,
+    active_schedule_ids: &[String],
+    active_event_trigger_ids: &[String],
     task: &ResolvedTask,
     concurrency: ConcurrencyMode,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    let active_schedules = case
-        .active_schedule_ids
+    let active_schedules = active_schedule_ids
         .iter()
         .map(|id| {
             (
@@ -541,8 +537,7 @@ fn snapshot_from_trigger_contract(
             )
         })
         .collect();
-    let active_event_triggers = case
-        .active_event_trigger_ids
+    let active_event_triggers = active_event_trigger_ids
         .iter()
         .map(|id| {
             (

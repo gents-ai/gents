@@ -54,13 +54,6 @@ def preflightCasesJson : String := (toJson (bindingCases.map fun (name, binding)
 
 def recoveryCasesJson : String := (toJson (recoveryCases.map recoveryCaseJson)).compress
 
-def secretPublicationCasesJson : String :=
-  let before : State := { objects := [], relations := [], enrolled := [] }
-  let after := publishSecret before "user" "runtime" "secret" "node" true false true true
-  (toJson [Json.mkObj [("name", toJson "missing-node"),
-    ("expected_created", toJson (after.objects.any (fun object =>
-      object.resource == "secret_configuration" && object.id == "secret")))]]).compress
-
 structure DeferredCase where
   name : String
   before : DeferredOperation
@@ -80,34 +73,11 @@ def deferredCases : List DeferredCase :=
   , ⟨"failed-commit", beginDeferredOperation, "runtime", "runtime", some "runtime", some "node", true, false⟩
   , ⟨"revoked-after-publication", ⟨some "node", false, true⟩, "runtime", "runtime", some "runtime", some "node", true, true⟩ ]
 
-def deferredCaseJson (c : DeferredCase) : Json :=
-  let after := attachDeferredOperation c.before c.runtime c.embeddedRuntime c.nativeOwner c.node
-    c.nodeRegistered c.committed
-  Json.mkObj [("name", toJson c.name), ("runtime", toJson c.runtime),
-    ("embedded_runtime", toJson c.embeddedRuntime), ("native_owner", toJson c.nativeOwner),
-    ("node", toJson c.node), ("node_registered", toJson c.nodeRegistered),
-    ("committed", toJson c.committed), ("before_parent", toJson c.before.parent),
-    ("before_granted", toJson c.before.parentGranted), ("before_linked", toJson c.before.parentLinked),
-    ("expected_parent", toJson after.parent), ("expected_granted", toJson after.parentGranted),
-    ("expected_linked", toJson after.parentLinked)]
-
-def deferredCasesJson : String := (toJson (deferredCases.map deferredCaseJson)).compress
-
 def pairingPartitionCasesJson : String := (toJson
   ([("local", "runtime", "runtime", "peer"), ("foreign", "other", "other", "peer"),
     ("forged", "runtime", "other", "peer"), ("other-peer", "runtime", "runtime", "other-peer")].map fun (name, source, owner, peer) =>
     Json.mkObj [("name", toJson name), ("source", toJson source), ("peer", toJson peer),
       ("owner", toJson owner), ("selected", toJson (pairingInPartition "runtime" source owner peer "peer"))])).compress
-
-def desiredPublisherCasesJson : String := (toJson
-  ([("runtime", "runtime", "runtime", "runtime", true),
-    ("client", "client", "client", "remote", true),
-    ("foreign", "other", "client", "remote", true),
-    ("unheld", "client", "client", "remote", false)].map
-    fun (name, actor, localNode, targetNode, held) =>
-      Json.mkObj [("name", toJson name), ("actor", toJson actor),
-        ("local", toJson localNode), ("target", toJson targetNode), ("held", toJson held),
-        ("allowed", toJson (desiredRoutePublisher actor localNode targetNode held))])).compress
 
 def validObservation : ReadinessObservation :=
   ⟨"runtime", "runtime", 1, 1, some "node", some "user", some "runtime", some "node", true, true⟩
@@ -179,26 +149,6 @@ def pairingReaderCaseJson (c : PairingReaderCase) : Json :=
 
 def pairingReaderCasesJson : String := (toJson (pairingReaderCases.map pairingReaderCaseJson)).compress
 
-def pairingReaderPolicyCasesJson : String :=
-  let route : Relation := ⟨"pairing_observations", "route", "route_reader", .actor "agent"⟩
-  let tool : Relation := ⟨"pairing_observations", "route", "tool_reader", .actor "agent"⟩
-  let manager : Relation := ⟨"pairing_observations", "route", "reader_manager", .actor "user"⟩
-  let both := apply pairingReaderFixture (.grantAs "user" tool)
-  let routeOnly := apply both (.revokeAs "user" tool)
-  let neither := apply routeOnly (.revokeAs "user" route)
-  let toolOnly := apply neither (.grantAs "user" tool)
-  let noManager := apply neither (.revokeAs "runtime" manager)
-  let cases : List (String × State × DID) :=
-    [("runtime", pairingReaderFixture, "runtime"), ("user", pairingReaderFixture, "user"),
-     ("agent", pairingReaderFixture, "agent"), ("sibling", pairingReaderFixture, "sibling"),
-     ("tool-revoked", routeOnly, "agent"), ("both-revoked", neither, "agent"),
-     ("tool-only", toolOnly, "agent"),
-     ("manager-revoked", noManager, "user")]
-  (toJson (cases.map fun (name, state, actor) => Json.mkObj
-    [("name", toJson name), ("read", toJson (allowed 5 state actor "pairing_observations" "route" "read")),
-     ("update", toJson (allowed 5 state actor "pairing_observations" "route" "update")),
-     ("manage_reader", toJson (mayManage state actor route))])).compress
-
 def enrollmentPolicyCasesJson : String :=
   let empty : State := { objects := [], relations := [], enrolled := [] }
   let thin := publishEnrollmentRequest empty "client" "admin" "request" none
@@ -248,21 +198,5 @@ def replicaGrantCasesJson : String :=
     ("outsider_read", toJson (allowed 5 state "outsider" "enrollment_records" "remote" "read")),
     ("app_read", toJson (allowed 5 state "runtime" "children" "application" "read")),
     ("pending", toJson (state.relations.contains ⟨"enrollment_records", "remote", "pending_parent", .actor "runtime"⟩))])).compress
-
-def discoveryPolicyCasesJson : String :=
-  let cases : List (String × State × String × String × String) :=
-    [("outsider-read", publicDiscoveryFixture, "outsider", "directory", "read"),
-     ("outsider-write", publicDiscoveryFixture, "outsider", "directory", "update"),
-     ("local-user-write", localRegistryWriterFixture, "user", "self", "update"),
-     ("revoked-user-write", localRegistryWriterRevoked, "user", "self", "update")]
-  (toJson (cases.map fun (name, state, actor, id, permission) => Json.mkObj [("name", toJson name),
-    ("allowed", toJson (allowed 5 state actor "discovery" id permission))])).compress
-
-def localRegistryWriterCasesJson : String :=
-  let cases := [("runtime-owner", "runtime", true), ("user-owner", "user", true),
-    ("foreign-owner", "foreign", true), ("other-node", "user", false)]
-  (toJson (cases.map fun (name, creator, namesRuntime) => Json.mkObj [("name", toJson name),
-    ("creator", toJson creator), ("names_runtime", toJson namesRuntime),
-    ("writer", toJson (localRegistryWriter creator "runtime" "user" namesRuntime))])).compress
 
 end Identity.OperationsConformance

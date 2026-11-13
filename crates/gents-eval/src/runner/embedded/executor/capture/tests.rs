@@ -227,23 +227,17 @@ fn document_captures_reject_secret_fields_and_oauth_documents() {
 fn generated_document_capture_cases_match_lean() {
     use std::collections::BTreeSet;
 
-    let cases = gents_lean_vocab::lean_eval_document_capture_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
+    gents_lean_vocab::families::eval_document_capture::replay(|case| {
+        let filter: Value = serde_json::from_str(&case.filter).unwrap();
         let mut filter_fields = Vec::new();
-        gents_tools::builtin::defra_query::collect_filter_field_keys(
-            &case.filter,
-            &mut filter_fields,
-        );
+        gents_tools::builtin::defra_query::collect_filter_field_keys(&filter, &mut filter_fields);
         assert_eq!(
             filter_fields.into_iter().collect::<BTreeSet<_>>(),
             case.filter_fields.iter().cloned().collect::<BTreeSet<_>>(),
             "{case:?}"
         );
-        let query =
-            documents_capture_query(&case.collection, &case.filter, &case.fields, "did:test");
-        assert_eq!(query.is_ok(), case.allowed, "{case:?}: {query:?}");
-    }
+        documents_capture_query(&case.collection, &filter, &case.fields, "did:test").is_ok()
+    });
 }
 
 #[tokio::test]

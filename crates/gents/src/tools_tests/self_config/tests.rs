@@ -96,48 +96,95 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
         &gents_store::identity::provision_agent_identity(foreign.as_ref()).unwrap(),
     )
     .unwrap();
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .identity_agent_block_signing_cases
-            .clone()
-    })
+    let user = tokio::task::spawn_blocking(|| node_identity("ordinary-user"))
+        .await
+        .unwrap();
+    let mut tampered = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+    tampered.agent_did = user.did().to_owned();
+    let invalid_binding =
+        gents_store::identity::resolve_agent_identity(runtime.as_ref(), &tampered);
+    assert!(invalid_binding.is_err());
+    let claimed_root =
+        gents_store::identity::RegisteredIdentity::from_registered_did(runtime.did(), None)
+            .unwrap();
+    let spoofed_root = gents_store::identity::resolve_agent_identity(
+        &claimed_root,
+        &gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap(),
+    );
+    assert!(spoofed_root.is_err());
+    let cases = tokio::task::spawn_blocking(
+        gents_lean_vocab::families::agent_block_signing_config_tool::cases::<String>,
+    )
     .await
     .unwrap();
-    let mut checked = 0;
     for case in &cases {
-        let (actor, signer) = match case.name.as_str() {
+        let name = case.input.name.as_str();
+        let (node_did, actor, signer) = match name {
             "managed-agent" => (
+                fixture.node_did().to_owned(),
                 fixture.agent_did().to_owned(),
                 fixture.agent.managed_agent_signer(),
             ),
-            "missing-key" => (fixture.agent_did().to_owned(), None),
+            "missing-key" => (
+                fixture.node_did().to_owned(),
+                fixture.agent_did().to_owned(),
+                None,
+            ),
             "sibling-key" => (
+                fixture.node_did().to_owned(),
                 fixture.agent_did().to_owned(),
                 sibling.managed_agent_signer(),
             ),
+            "invalid-binding" => (
+                fixture.node_did().to_owned(),
+                fixture.agent_did().to_owned(),
+                invalid_binding
+                    .as_ref()
+                    .ok()
+                    .and_then(|identity| identity.managed_agent_signer()),
+            ),
+            "spoofed-root" => (
+                fixture.node_did().to_owned(),
+                fixture.agent_did().to_owned(),
+                spoofed_root
+                    .as_ref()
+                    .ok()
+                    .and_then(|identity| identity.managed_agent_signer()),
+            ),
             "foreign-runtime" => (
+                fixture.node_did().to_owned(),
                 foreign_agent.did().to_owned(),
                 foreign_agent.managed_agent_signer(),
             ),
-            "empty-actor" => (String::new(), fixture.agent.managed_agent_signer()),
-            "ordinary-node" => (fixture.node_did().to_owned(), None),
-            _ => continue,
+            "empty-actor" => (
+                fixture.node_did().to_owned(),
+                String::new(),
+                fixture.agent.managed_agent_signer(),
+            ),
+            "ordinary-node" => (
+                fixture.node_did().to_owned(),
+                fixture.node_did().to_owned(),
+                None,
+            ),
+            "ordinary-default-node" => (fixture.node_did().to_owned(), String::new(), None),
+            "unconfigured-explicit-actor" => (String::new(), fixture.agent_did().to_owned(), None),
+            "ordinary-user-key-is-not-adopted" => (
+                fixture.node_did().to_owned(),
+                user.did().to_owned(),
+                user.managed_agent_signer(),
+            ),
+            other => panic!("the config tool scenario has no fixture for {other}"),
         };
-        let access = SelfConfigCore::new(
-            fixture.db.node.clone(),
-            fixture.node_did().to_owned(),
-            actor,
-        )
-        .and_then(|core| core.with_agent_signer(signer).access());
+        let access = SelfConfigCore::new(fixture.db.node.clone(), node_did, actor)
+            .and_then(|core| core.with_agent_signer(signer).access());
         let route = match &access {
             Ok(access) => {
-                assert!(access.has_managed_agent_signer(), "{}", case.name);
+                assert!(access.has_managed_agent_signer(), "{name}");
                 "agent"
             }
             Err(_) => "refuse",
         };
-        assert_eq!(route, case.config_tool, "{}", case.name);
-        if case.name == "missing-key" {
+        if name == "missing-key" {
             let error = access.err().expect("a missing signer is refused");
             assert!(
                 matches!(
@@ -147,9 +194,8 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
                 "{error:#}"
             );
         }
-        checked += 1;
+        case.check(route.to_owned());
     }
-    assert_eq!(checked, 6);
 }
 
 #[tokio::test]
@@ -687,6 +733,15 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
 #[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
+    for case in gents_lean_vocab::families::contracts_self_config_case_raw_key_scenario::cases() {
+        raw_key_scenario(&case.input, |accepted| case.check(Some(accepted))).await;
+    }
+}
+
+async fn raw_key_scenario(
+    model: &gents_lean_vocab::families::contracts_self_config_case_raw_key_scenario::SelfConfigCaseInput,
+    report: impl FnOnce(bool),
+) {
     let fixture = gents_automation::test_support::self_config_fixture("self-config-secret").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_selected_backend_writer().await;
@@ -697,10 +752,6 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     )];
     assert!(core.preview(backend_request(raw.clone())).await.is_err());
     assert!(core.apply(backend_request(raw)).await.is_err());
-    let model = gents_lean_vocab::lean_self_config_cases()
-        .iter()
-        .find(|case| case.name == "backend_credential_to_raw_key_rejected")
-        .unwrap();
     let stored: Value = serde_json::from_str(
         &model
             .doc
@@ -755,20 +806,24 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     )
     .await
     .unwrap();
-    for result in [
-        core.preview(backend_request(vec![(
+    let previewed = core
+        .preview(backend_request(vec![(
             "auth".into(),
             Some(raw_key.clone()),
         )]))
-        .await,
-        core.apply(backend_request(vec![(
+        .await
+        .is_ok();
+    let applied = core
+        .apply(backend_request(vec![(
             "auth".into(),
             Some(raw_key.clone()),
         )]))
-        .await,
-    ] {
-        assert_eq!(result.is_ok(), model.accepted);
-    }
+        .await
+        .is_ok();
+    assert_eq!(
+        previewed, applied,
+        "preview and apply decide the same patch"
+    );
     assert!(core
         .apply(backend_request(vec![(
             "auth".into(),
@@ -789,6 +844,7 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     assert!(!serde_json::to_string(&preview)
         .unwrap()
         .contains("operator-secret"));
+    report(applied);
 }
 
 #[tokio::test]
@@ -938,30 +994,25 @@ async fn a_profile_edit_is_fenced_alike_through_its_agent_and_by_its_exact_id() 
 
 #[tokio::test]
 async fn modeled_job_policy_updates_follow_native_tools_authorization() {
-    let cases = &gents_lean_vocab::lean_self_config_selection_cases().job_guard_cases;
-    let native_cases: Vec<_> = cases
-        .iter()
-        .filter(|case| case.name.starts_with("native_agent_update_"))
-        .collect();
-    assert!(native_cases
-        .iter()
-        .any(|case| case.native_authorized && case.native_source_authorized));
-    assert!(native_cases.iter().any(|case| !case.native_authorized));
-    assert!(native_cases.iter().any(|case| {
-        case.native_authorized && !case.native_source_authorized && case.add_schema_tool
-    }));
-    for case in native_cases {
-        let fixture = gents_automation::test_support::self_config_fixture(&case.name).await;
+    for case in gents_lean_vocab::families::contracts_self_config_job_guard_native::cases() {
+        let candidate_integrations =
+            serde_json::to_value(&case.input.candidate_integrations).expect("integrations encode");
+        let stored_integrations = case
+            .input
+            .stored_integrations
+            .as_ref()
+            .map(|stored| serde_json::to_value(stored).expect("integrations encode"));
+        let fixture = gents_automation::test_support::self_config_fixture(&case.input.name).await;
         let tools_id = format!("{}:tools", fixture.agent_did());
         let node_did = fixture.node_did().to_owned();
         fixture
             .update_signed_configuration(
                 gents_store::collection::Collection::Tools,
                 &tools_id,
-                json!({"integrations": case.stored_integrations}),
+                json!({"integrations": stored_integrations}),
             )
             .await;
-        if case.native_authorized {
+        if case.input.native_authorized {
             fixture.grant_selected_configuration().await;
         }
         let (doc_id, before) = fixture
@@ -1007,9 +1058,9 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
         .unwrap();
         assert_eq!(
             decisions == [defra_node::DocumentAccessDecision::Allowed],
-            case.native_authorized,
+            case.input.native_authorized,
             "{}: native Tools update",
-            case.name
+            case.input.name
         );
         assert!(!fixture
             .db
@@ -1020,9 +1071,9 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             .unwrap());
         let mut patch = vec![(
             "integrations".into(),
-            Some(case.candidate_integrations.clone()),
+            Some(candidate_integrations.clone()),
         )];
-        if case.add_schema_tool {
+        if case.input.add_schema_tool {
             let mut built_ins = before
                 .get("built_ins")
                 .filter(|value| value.is_object())
@@ -1034,10 +1085,9 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
         }
         let core = fixture.core();
         let result = core.apply(tools_request(&core, patch)).await;
-        assert_eq!(result.is_ok(), case.accepted, "{}: {result:?}", case.name);
-        if let Err(error) = result {
-            if !case.native_authorized {
-                let denied = gents_protocol::error_chain::find_map_source(&error, |cause| {
+        if let Err(error) = &result {
+            if !case.input.native_authorized {
+                let denied = gents_protocol::error_chain::find_map_source(error, |cause| {
                     cause
                     .downcast_ref::<gents_store::config_client::ConfigClientError>()
                     .map(|error| {
@@ -1046,7 +1096,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
                             || matches!(error, gents_store::config_client::ConfigClientError::ConfigurationMutationNotApplied { .. })
                     })
                 });
-                assert_eq!(denied, Some(true), "{}: {error:#}", case.name);
+                assert_eq!(denied, Some(true), "{}: {error:#}", case.input.name);
             }
         }
         let (_, after) = fixture
@@ -1067,18 +1117,18 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
             .await
             .unwrap()
             .expect("selected Tools remains visible");
-        let expected = if case.accepted {
-            &case.candidate_integrations["plugins"][0]["job"]["policy"]["dynamic"]
+        let expected = if result.is_ok() {
+            &candidate_integrations["plugins"][0]["job"]["policy"]["dynamic"]
         } else {
             &before["integrations"]["plugins"][0]["job"]["policy"]["dynamic"]
         };
         assert_eq!(
             &after["integrations"]["plugins"][0]["job"]["policy"]["dynamic"], expected,
             "{}",
-            case.name
+            case.input.name
         );
-        if case.add_schema_tool {
-            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.name);
+        if case.input.add_schema_tool {
+            assert_eq!(after["built_ins"], before["built_ins"], "{}", case.input.name);
             assert!(!fixture
                 .db
                 .node
@@ -1090,6 +1140,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
                 .await
                 .unwrap());
         }
+        case.check(result.is_ok());
         fixture.db.node.shutdown().await.unwrap();
     }
 }

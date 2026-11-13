@@ -4771,7 +4771,7 @@ dependencies = [
  "gents-documents",
  "gents-fs-runner",
  "gents-inference",
- "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-observe",
  "gents-p2p",
  "gents-pack",

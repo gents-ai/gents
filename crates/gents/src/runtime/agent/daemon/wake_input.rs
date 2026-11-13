@@ -262,18 +262,11 @@ mod tests {
 
     #[test]
     fn current_wake_input_matches_lean_owner() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().wake_input_cases;
-        assert!(cases.len() >= 6);
-        for case in cases {
-            assert_eq!(
-                current_keys(&case.claimed, &case.acknowledged),
-                case.current_keys,
-                "{}",
-                case.name
-            );
-            let native = |row: &gents_lean_vocab::LeanWakeInputRow| {
+        gents_lean_vocab::families::contracts_wake_input_projection::replay(|case| {
+            let current = current_keys(&case.claimed, &case.acknowledged);
+            let native = |row: &gents_lean_vocab::families::contracts_wake_input_projection::WakeInputRow| {
                 if let Some(key) = &row.notification_key {
-                    assert!(case.claimed.contains(key) || !case.current_keys.contains(key));
+                    assert!(case.claimed.contains(key) || !current.contains(key));
                 }
                 let mut native = TaggedMessage::unassociated(
                     gents_inference::llm::message::Message::user("equal content"),
@@ -283,12 +276,14 @@ mod tests {
             };
             let history = case.rows.iter().map(native).collect();
             let notifications = case.notifications.iter().map(native).collect::<Vec<_>>();
-            let actual = project(history, &notifications)
-                .into_iter()
-                .map(|row| row.physical_header.unwrap())
-                .collect::<Vec<_>>();
-            assert_eq!(actual, case.expected_order, "{}", case.name);
-        }
+            gents_lean_vocab::families::contracts_wake_input_projection::WakeInputOutput {
+                expected_order: project(history, &notifications)
+                    .into_iter()
+                    .map(|row| row.physical_header.unwrap())
+                    .collect(),
+                current_keys: current,
+            }
+        });
     }
 }
 

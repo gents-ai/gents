@@ -652,16 +652,7 @@ pub fn loop_verdict_error(verdict: LoopVerdict, message: String) -> LoopStreamEr
 mod tests {
     #[test]
     fn raw_provider_counters_follow_the_usage_model() {
-        let snapshot: serde_json::Value =
-            serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
-        let case = snapshot["provider_usage_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == "wire_response")
-            .unwrap();
-        let expected: gents_protocol::usage::TokenUsage =
-            serde_json::from_value(case["observations"][0].clone()).unwrap();
+        let expected = gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: Some(20), cached_input_tokens: Some(64), cache_creation_input_tokens: Some(36), reasoning_output_tokens: Some(5), provider_total_tokens: Some(120), final_response: true };
         for raw in [
             serde_json::json!({"usage": {
                 "input_tokens":100, "output_tokens":20, "total_tokens":120,
@@ -683,27 +674,23 @@ mod tests {
     #[cfg(feature = "native")]
     #[test]
     fn typed_responses_usage_preserves_missing_and_optional_details() {
-        let snapshot: serde_json::Value =
-            serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
-        for (name, wire) in [
+        for (name, wire, expected) in [
             (
                 "wire_chat",
                 serde_json::json!({"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":64},"output_tokens_details":{"reasoning_tokens":5}}}),
+                gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: Some(20), cached_input_tokens: Some(64), cache_creation_input_tokens: None, reasoning_output_tokens: Some(5), provider_total_tokens: Some(120), final_response: true },
             ),
             (
                 "wire_responses_no_details",
                 serde_json::json!({"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}),
+                gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: Some(20), cached_input_tokens: None, cache_creation_input_tokens: None, reasoning_output_tokens: None, provider_total_tokens: Some(120), final_response: true },
             ),
-            ("wire_missing_final", serde_json::json!({"usage":null})),
+            (
+                "wire_missing_final",
+                serde_json::json!({"usage":null}),
+                gents_protocol::usage::TokenUsage { input_tokens: None, output_tokens: None, cached_input_tokens: None, cache_creation_input_tokens: None, reasoning_output_tokens: None, provider_total_tokens: None, final_response: false },
+            ),
         ] {
-            let case = snapshot["provider_usage_cases"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|case| case["name"] == name)
-                .unwrap();
-            let expected: gents_protocol::usage::TokenUsage =
-                serde_json::from_value(case["observations"][0].clone()).unwrap();
             let raw: rig::providers::openai::responses_api::streaming::StreamingCompletionResponse =
                 serde_json::from_value(wire).unwrap();
             assert_eq!(super::observed_token_usage(&raw), expected, "{name}");
@@ -713,27 +700,23 @@ mod tests {
     #[cfg(feature = "native")]
     #[test]
     fn typed_chat_and_missing_final_usage_follow_the_executable_model() {
-        let snapshot: serde_json::Value =
-            serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
-        for (name, wire) in [
+        for (name, wire, expected) in [
             (
                 "wire_chat",
                 serde_json::json!({"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":64},"completion_tokens_details":{"reasoning_tokens":5}}}),
+                gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: Some(20), cached_input_tokens: Some(64), cache_creation_input_tokens: None, reasoning_output_tokens: Some(5), provider_total_tokens: Some(120), final_response: true },
             ),
             (
                 "wire_chat_missing_output",
                 serde_json::json!({"usage":{"prompt_tokens":100,"total_tokens":120}}),
+                gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: None, cached_input_tokens: None, cache_creation_input_tokens: None, reasoning_output_tokens: None, provider_total_tokens: Some(120), final_response: true },
             ),
-            ("wire_missing_final", serde_json::json!({"usage":null})),
+            (
+                "wire_missing_final",
+                serde_json::json!({"usage":null}),
+                gents_protocol::usage::TokenUsage { input_tokens: None, output_tokens: None, cached_input_tokens: None, cache_creation_input_tokens: None, reasoning_output_tokens: None, provider_total_tokens: None, final_response: false },
+            ),
         ] {
-            let expected = snapshot["provider_usage_cases"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|case| case["name"] == name)
-                .unwrap();
-            let expected: gents_protocol::usage::TokenUsage =
-                serde_json::from_value(expected["observations"][0].clone()).unwrap();
             let chat: rig::providers::openai::completion::streaming::StreamingCompletionResponse =
                 serde_json::from_value(wire.clone()).unwrap();
             let router: rig::providers::openrouter::streaming::StreamingCompletionResponse =

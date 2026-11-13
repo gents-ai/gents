@@ -248,41 +248,10 @@ def clientAgentReadinessCase
 
 /-- The process state a restarting runtime's claim leaves on a predecessor's
 fully ready row, derived by running the model's claim rather than stated, so a
-claim that stopped demoting would flip the readiness case below. -/
+claim that stopped demoting would flip the restart-claim case of
+`Conformance.ClientAgentReadiness.projection`. -/
 def restartClaimedProcessState : ProcessState :=
   (ProcessState.step? .ready .restartClaim).getD .ready
-
-def clientAgentReadinessCases : List ClientAgentReadinessCase :=
-  [ clientAgentReadinessCase "runtime_ready_same_generation" "observed" .ready 4 4 true false false
-  , clientAgentReadinessCase "runtime_explicitly_unavailable" "observed" .ready 4 4 false true false
-  , clientAgentReadinessCase "runtime_unavailable_wins_overlap" "observed" .ready 4 4 true true false
-  , clientAgentReadinessCase "startup_demotion_overrides_runnable" "observed" .ready 4 4 true false true
-  , clientAgentReadinessCase "missing_runtime_observation" "missing" .ready 4 4 true false false
-  , clientAgentReadinessCase "malformed_runtime_observation" "malformed" .ready 4 4 true false false
-  , clientAgentReadinessCase "unsupported_runtime_observation" "unsupported_version" .ready 4 4 true false false
-  , clientAgentReadinessCase "runtime_process_recovering" "observed" .recovering 4 4 true false false
-  , clientAgentReadinessCase "runtime_process_uninitialized" "observed" .uninitialized 4 4 true false false
-  , clientAgentReadinessCase "runtime_process_shutting_down" "observed" .shuttingDown 4 4 true false false
-  , clientAgentReadinessCase "runtime_process_shutdown" "observed" .shutdown 4 4 true false false
-  , clientAgentReadinessCase "router_generation_stale" "observed" .ready 5 4 true false false
-  , clientAgentReadinessCase "zero_generation_is_stale" "observed" .ready 0 0 true false false
-  , clientAgentReadinessCase "agent_absent_from_runtime_projection" "observed" .ready 4 4 false false false
-  , clientAgentReadinessCase "disabled_agent_is_unavailable" "observed" .ready 4 4 false true false .agentDisabled
-  , clientAgentReadinessCase "invalid_runtime_configuration_is_unavailable" "observed" .ready 4 4 false true false .runtimeConfigurationInvalid
-  , clientAgentReadinessCase "missing_backend_is_unavailable" "observed" .ready 4 4 false true false .backendNotConfigured
-  , clientAgentReadinessCase "disabled_backend_is_unavailable" "observed" .ready 4 4 false true false .backendDisabled
-  , clientAgentReadinessCase "missing_credential_is_unavailable" "observed" .ready 4 4 false true false .credentialsRequired
-  , clientAgentReadinessCase "rejected_subscription_credential_is_unavailable" "observed" .ready 4 4 false true false .credentialsRequired
-  , clientAgentReadinessCase "subscription_not_entitled_is_unavailable" "observed" .ready 4 4 false true false .subscriptionNotEntitled
-  , clientAgentReadinessCase "invalid_inference_profile_is_unavailable" "observed" .ready 4 4 false true false .inferenceProfileInvalid
-  , clientAgentReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
-  , clientAgentReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
-  , clientAgentReadinessCase "restart_claim_demotes_stale_ready" "observed" restartClaimedProcessState 4 4 true false false
-  , clientAgentReadinessCase "storage_fault_closes_a_ready_row" "observed" .ready 4 4 true false false
-      (storageUnavailable := true)
-  , clientAgentReadinessCase "storage_fault_closes_a_missing_row" "missing" .ready 4 4 true false false
-      (storageUnavailable := true)
-  ]
 
 /-- Settings a generation can hold, spanning an unset selection, an explicit
 effort and an explicit Fast tier. -/

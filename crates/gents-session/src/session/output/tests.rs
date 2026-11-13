@@ -36,11 +36,8 @@ fn session_header_index_preserves_coordinate_observations() {
 
 #[test]
 fn current_input_selection_matches_lean_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().current_input_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let retained = case
-            .headers
+    gents_lean_vocab::families::contracts_current_input_selection::replay(|case| {
+        case.headers
             .iter()
             .enumerate()
             .filter_map(|(index, input)| {
@@ -71,9 +68,9 @@ fn current_input_selection_matches_lean_owner() {
                     gents_protocol::output::rows::authored_message_key(&input.request, &key);
                 (!is_current_admission_input(&row.message, &case.current_request)).then_some(index)
             })
-            .collect::<Vec<_>>();
-        assert_eq!(retained, case.retained_indices, "{}", case.name);
-    }
+            .map(|index| index as u64)
+            .collect::<Vec<_>>()
+    });
 }
 
 fn header(

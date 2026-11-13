@@ -1,5 +1,6 @@
 use super::SessionGoals;
 use crate::goal::operator_resume_test_support::Fixture;
+use gents_lean_vocab::families::goal_request_assignment_contracts_message_input as message_input;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -11,20 +12,48 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::json;
 
+fn label(id: &str, known: &[(&str, Option<u64>)]) -> u64 {
+    known
+        .iter()
+        .find(|(known, _)| *known == id)
+        .and_then(|(_, label)| *label)
+        .unwrap_or(u64::MAX)
+}
+
+fn prepared(
+    selected: &anyhow::Result<Option<GoalAssignmentInput>>,
+    goals: &[(&str, Option<u64>)],
+    roots: &[(&str, Option<u64>)],
+) -> message_input::PreparedWire {
+    match selected {
+        Err(_) => message_input::PreparedWire {
+            kind: "pending".into(),
+            reference: None,
+        },
+        Ok(selected) => message_input::PreparedWire {
+            kind: "prepared".into(),
+            reference: selected.as_ref().map(|goal| message_input::Reference {
+                goal: label(&goal.goal_id, goals),
+                root: goal
+                    .root_request_doc_id
+                    .as_deref()
+                    .map(|root| label(root, roots)),
+            }),
+        },
+    }
+}
+
 #[tokio::test]
 async fn generated_session_messages_capture_target_goal_before_signing() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().session_message_goal_input_cases;
-    assert_eq!(cases.len(), 5);
+    let cases =
+        gents_lean_vocab::families::goal_request_assignment_contracts_message_input::cases();
     let before = json!({"status":"active","sequence":0,"last_continued_from":null,
         "latest_request":10,"children":[],"blocked_audits":0,"wrapup_requested":false,
         "wrapup_completed":false,"tokens_used":37,"token_budget":1000});
     for (index, case) in cases.iter().enumerate() {
-        let name = case.name.as_str();
+        let input = &case.input;
+        let name = input.name.as_str();
         let f = Fixture::new(&before).await;
-        assert_eq!(
-            case.owner, 1,
-            "{name}: delivery stays on the calling runtime"
-        );
         let caller_agent = &f.agent;
         let session_id = format!("goal-input-{index}");
         let target = SessionMessageTarget {
@@ -33,7 +62,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             session_id: session_id.clone(),
         };
         let agent_access = f.agent_access();
-        if case.session_readable {
+        if input.session_readable {
             agent_access
                 .transact_write("test.goal_input.session", |txn| {
                     Box::pin(async {
@@ -63,11 +92,11 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
         }
         let mut goal_id = None;
         let mut root_doc = None;
-        if case.observed.is_some() && !case.session_readable {
+        if input.observed.is_some() && !input.session_readable {
             agent_access.write("test.goal_input.orphan", &format!(r#"mutation {{ create_Goal(input: {{ goal_id: "orphan", node_did: "{}", agent_did: "{}", session_id: "{}", objective: "Orphan", status: "active" }}) {{ _docID }} }}"#,
                 escape_graphql_string(f.identity.did()), escape_graphql_string(f.agent.did()), escape_graphql_string(&session_id))).await.unwrap();
         }
-        if case.observed.is_some() && case.session_readable {
+        if input.observed.is_some() && input.session_readable {
             let mut opening = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 format!("opening-{index}"),
@@ -106,7 +135,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             .await
             .unwrap();
             goal_id = Some(goal.goal_id);
-            if case.observed.as_ref().unwrap().root.is_some() {
+            if input.observed.as_ref().unwrap().root.is_some() {
                 agent_access.write("test.goal_input.root", &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ assignment_root_request_doc_id: "{}" }}) {{ _docID }} }}"#,
                     escape_graphql_string(&goal.doc_id), escape_graphql_string(&doc))).await.unwrap();
                 root_doc = Some(doc);
@@ -145,11 +174,29 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             correlation: None,
         };
         let selected = target_goal_assignment(&f.node, &SessionGoals, &cause, &target).await;
-        if case.expected.kind == "pending" {
-            assert!(
-                selected.is_err(),
-                "{name}: unknown goal must remain pending"
-            );
+        let observed = input.observed.as_ref();
+        let caller = input.caller_reference.as_ref();
+        let goals = [
+            (
+                goal_id.as_deref().unwrap_or_default(),
+                observed.map(|a| a.goal),
+            ),
+            (f.goal.goal_id.as_str(), caller.map(|r| r.goal)),
+        ];
+        let caller_root = f
+            .goal
+            .assignment_root_request_doc_id
+            .clone()
+            .unwrap_or_default();
+        let roots = [
+            (
+                root_doc.as_deref().unwrap_or_default(),
+                observed.and_then(|a| a.root),
+            ),
+            (caller_root.as_str(), caller.and_then(|r| r.root)),
+        ];
+        let output = prepared(&selected, &goals, &roots);
+        if selected.is_err() {
             let signer = caller_agent.managed_agent_signer().unwrap();
             let planned = plan(
                 &f.node,
@@ -170,15 +217,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 "{name}: unknown destination input must not be signed as unassigned"
             );
         } else {
-            let expected = case
-                .expected
-                .reference
-                .is_some()
-                .then(|| GoalAssignmentInput {
-                    goal_id: goal_id.unwrap(),
-                    root_request_doc_id: root_doc,
-                });
-            assert_eq!(selected.unwrap(), expected, "{name}");
+            let expected = selected.as_ref().unwrap().clone();
             let signer = caller_agent.managed_agent_signer().unwrap();
             let source_access = ConfigAccess::local_managed_agent(
                 f.node.clone(),
@@ -242,7 +281,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                     })
                 })
                 .await;
-            if !case.session_readable {
+            if !input.session_readable {
                 // Session messages publish only into an existing session the
                 // caller can see; a fresh session is opened by its own flow.
                 let error = staged.err().unwrap_or_else(|| {
@@ -253,6 +292,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                     "{name}: {error:#}"
                 );
                 f.node.shutdown().await.expect("shut down test node");
+                case.check(output);
                 continue;
             }
             let staged = staged.unwrap_or_else(|error| panic!("{name}: {error:#}"));
@@ -292,5 +332,6 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             }
         }
         f.node.shutdown().await.expect("shut down test node");
+        case.check(output);
     }
 }

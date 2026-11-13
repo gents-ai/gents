@@ -15,17 +15,15 @@ use crate::auth::credential::test_support::{
     TOKEN_URL_ENV,
 };
 use gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
-use gents_lean_vocab::lean_backend_health_cases;
 
-fn state_from_lean(name: &str, state: &str) -> BackendHealthState {
-    match state {
-        "unknown" => BackendHealthState::Unknown,
-        "healthy" => BackendHealthState::Healthy,
-        "degraded" => BackendHealthState::Degraded,
-        "unhealthy" => BackendHealthState::Unhealthy,
-        "credentials_required" => BackendHealthState::CredentialsRequired,
-        "subscription_not_entitled" => BackendHealthState::SubscriptionNotEntitled,
-        other => panic!("Lean backend health case {name} produced unknown state {other:?}"),
+fn probe_event(event: &str) -> ProbeEvent {
+    match event {
+        "probeSuccess" => ProbeEvent::ProbeSuccess,
+        "probeFail" => ProbeEvent::ProbeFail,
+        "credentialsRejected" => ProbeEvent::CredentialsRejected,
+        "subscriptionNotEntitled" => ProbeEvent::SubscriptionNotEntitled,
+        "configurationChanged" => ProbeEvent::ConfigurationChanged,
+        other => panic!("unknown probe event {other:?}"),
     }
 }
 
@@ -47,68 +45,58 @@ async fn every_health_measurement_notifies_parked_request_watchers() {
 }
 
 #[test]
-fn generated_backend_health_cases_match_prober_transitions() {
-    let cases = lean_backend_health_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean must emit at least one backend health case"
-    );
-
+fn backend_health_transitions_follow_the_lean_model() {
+    let cases = gents_lean_vocab::families::contracts_backend_health_transition::cases::<
+        ProbeEvent,
+        BackendHealthState,
+    >();
+    assert!(cases.iter().any(|case| {
+        case.input.threshold_k == u64::from(BackendProberOptions::default().failure_threshold_k)
+    }));
+    for state in [
+        BackendHealthState::Unknown,
+        BackendHealthState::Healthy,
+        BackendHealthState::Degraded,
+        BackendHealthState::Unhealthy,
+        BackendHealthState::CredentialsRequired,
+        BackendHealthState::SubscriptionNotEntitled,
+    ] {
+        assert!(
+            cases.iter().any(|case| case.input.start_state == state),
+            "no modeled transition starts from {state:?}"
+        );
+    }
     for case in cases {
-        let start = (
-            state_from_lean(&case.name, &case.start_state),
-            u32::try_from(case.start_count).unwrap(),
-        );
-        let event = match case.event.as_str() {
-            "probeSuccess" => ProbeEvent::ProbeSuccess,
-            "probeFail" => ProbeEvent::ProbeFail,
-            "credentialsRejected" => ProbeEvent::CredentialsRejected,
-            "subscriptionNotEntitled" => ProbeEvent::SubscriptionNotEntitled,
-            "configurationChanged" => ProbeEvent::ConfigurationChanged,
-            other => panic!(
-                "Lean backend health case {} produced unknown event {other:?}",
-                case.name
+        let (next_state, next_count) = step_backend(
+            (
+                case.input.start_state,
+                u32::try_from(case.input.start_count).unwrap(),
             ),
-        };
-
-        let (next_state, next_count) =
-            step_backend(start, event, u32::try_from(case.threshold_k).unwrap());
-
-        assert_eq!(
-            next_state,
-            state_from_lean(&case.name, &case.next_state),
-            "Lean backend health case {} must match next_state",
-            case.name
+            case.input.event,
+            u32::try_from(case.input.threshold_k).unwrap(),
         );
-        assert_eq!(
-            next_count as usize, case.next_count,
-            "Lean backend health case {} must match next_count",
-            case.name
-        );
-        assert_eq!(
-            next_state.blocks_routing(),
-            case.blocks_routing,
-            "Lean backend health case {} must match the blocksRouting projection",
-            case.name
-        );
-        assert_eq!(
-            next_state
-                .readiness_reason()
-                .map(|reason| serde_json::to_value(reason)
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_owned()),
-            case.readiness_reason,
-            "Lean backend health case {} must match the readiness reason",
-            case.name
+        case.check(
+            gents_lean_vocab::families::contracts_backend_health_transition::Output {
+                next_state,
+                next_count: u64::from(next_count),
+                blocks_routing: next_state.blocks_routing(),
+                readiness_reason: next_state.readiness_reason().map(|reason| {
+                    serde_json::to_value(reason)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                }),
+            },
         );
     }
 }
 
 #[test]
 fn generated_backend_probe_schedule_cases_match_runtime_selection() {
-    fn configuration(value: &gents_lean_vocab::LeanBackendProbeConfiguration) -> InferenceBackend {
+    use gents_lean_vocab::families::backend_probe_schedule_select as wire;
+
+    fn configuration(value: &wire::ProbeConfiguration) -> InferenceBackend {
         let mut backend = backend(
             &format!("backend-{}", value.backend_id),
             format!("http://localhost/revision-{}", value.revision),
@@ -117,106 +105,94 @@ fn generated_backend_probe_schedule_cases_match_runtime_selection() {
         backend
     }
 
-    for case in gents_lean_vocab::lean_backend_probe_schedule_cases() {
+    fn backend_number(backend_id: &str) -> u64 {
+        backend_id
+            .strip_prefix("backend-")
+            .and_then(|id| id.parse().ok())
+            .unwrap_or_else(|| panic!("schedule fixture backend id {backend_id:?}"))
+    }
+
+    gents_lean_vocab::families::backend_probe_schedule_select::replay(|input: &wire::SelectInput| {
         let mut schedule = ProbeSchedule::default();
         schedule.select(
-            &case.known.iter().map(configuration).collect::<Vec<_>>(),
+            &input.known.iter().map(configuration).collect::<Vec<_>>(),
             true,
         );
         let selected = schedule.select(
-            &case.current.iter().map(configuration).collect::<Vec<_>>(),
-            case.periodic,
+            &input.current.iter().map(configuration).collect::<Vec<_>>(),
+            input.periodic,
         );
-        let expected = case
-            .due
+        let mut due = selected
             .iter()
-            .map(|id| format!("backend-{id}"))
-            .collect::<RapidHashSet<_>>();
-        assert_eq!(selected, expected, "{}", case.name);
-        let observed = case
-            .observed
+            .map(|id| backend_number(id))
+            .collect::<Vec<_>>();
+        due.sort_unstable();
+        let mut observed = schedule
+            .known
             .iter()
-            .map(configuration)
-            .map(|backend| (backend.backend_id.clone(), backend))
-            .collect::<RapidHashMap<_, _>>();
-        assert_eq!(
-            serde_json::to_value(&schedule.known).unwrap(),
-            serde_json::to_value(observed).unwrap(),
-            "{}",
-            case.name
-        );
-    }
+            .map(|(backend_id, backend)| {
+                assert_eq!(backend_id, &backend.backend_id);
+                wire::ProbeConfiguration {
+                    backend_id: backend_number(&backend.backend_id),
+                    revision: backend
+                        .endpoint
+                        .strip_prefix("http://localhost/revision-")
+                        .and_then(|revision| revision.parse().ok())
+                        .unwrap_or_else(|| panic!("schedule fixture endpoint {}", backend.endpoint)),
+                    enabled: backend.enabled,
+                }
+            })
+            .collect::<Vec<_>>();
+        observed.sort_unstable_by_key(|configuration| configuration.backend_id);
+        wire::SelectOutput { due, observed }
+    });
 }
 
 #[test]
 fn backend_fields_refine_the_modeled_probe_revision() {
-    type Edit = (&'static str, fn(&mut InferenceBackend), u32);
-    let edits: &[Edit] = &[
-        (
-            "provider",
-            |value| {
-                value.provider_kind = crate::backends::provider::BackendProviderKind::OpenRouter
-            },
-            1,
-        ),
-        ("endpoint", |value| value.endpoint.push_str("/changed"), 1),
-        (
-            "auth",
-            |value| {
-                value.auth = gents_documents::BackendAuth::ApiKey {
+    use gents_lean_vocab::families::backend_probe_schedule_field_edit as wire;
+
+    gents_lean_vocab::families::backend_probe_schedule_field_edit::replay::<String>(|input: &wire::FieldEditInput<String>| {
+        let base = backend("backend-0", "http://localhost/v1".into());
+        let mut changed = base.clone();
+        match input.field.as_str() {
+            "provider" => {
+                changed.provider_kind = crate::backends::provider::BackendProviderKind::OpenRouter
+            }
+            "wire_api" => {
+                changed.openai_wire_api = Some(gents_loop::openai_wire::OpenAiWireApi::Responses)
+            }
+            "endpoint" => changed.endpoint.push_str("/changed"),
+            "auth" => {
+                changed.auth = gents_documents::BackendAuth::ApiKey {
                     key: "test-key".into(),
                 }
-            },
-            1,
-        ),
-        (
-            "connect timeout",
-            |value| value.connect_timeout_secs = Some(20),
-            1,
-        ),
-        (
-            "discovery timeout",
-            |value| value.discovery_timeout_secs = Some(20),
-            1,
-        ),
-        ("name", |value| value.name = "Renamed".into(), 0),
-        ("tags", |value| value.tags = vec!["changed".into()], 0),
-        ("capacity", |value| value.max_concurrent = Some(2), 0),
-        ("queue capacity", |value| value.max_queue_depth = Some(2), 0),
-    ];
-    let base = backend("backend-0", "http://localhost/v1".into());
-    for (name, edit, revision) in edits {
-        let mut changed = base.clone();
-        edit(&mut changed);
+            }
+            "connect_timeout" => changed.connect_timeout_secs = Some(20),
+            "discovery_timeout" => changed.discovery_timeout_secs = Some(20),
+            "name" => changed.name = "Renamed".into(),
+            "tags" => changed.tags = vec!["changed".into()],
+            "capacity" => changed.max_concurrent = Some(2),
+            "queue_capacity" => changed.max_queue_depth = Some(2),
+            other => panic!("unknown modeled backend field {other:?}"),
+        }
         let mut schedule = ProbeSchedule::default();
         schedule.select(std::slice::from_ref(&base), true);
-        for known_revision in [0, *revision] {
-            let modeled = gents_lean_vocab::lean_backend_probe_schedule_cases()
-                .iter()
-                .find(|case| {
-                    !case.periodic
-                        && case.known.len() == 1
-                        && case.current.len() == 1
-                        && case.known[0].backend_id == 0
-                        && case.known[0].revision == known_revision
-                        && case.known[0].enabled
-                        && case.current[0].backend_id == 0
-                        && case.current[0].revision == *revision
-                        && case.current[0].enabled
-                })
-                .expect("the model emits changed and unchanged enabled configurations");
-            let expected = modeled
-                .due
-                .iter()
-                .map(|id| format!("backend-{id}"))
-                .collect::<RapidHashSet<_>>();
-            assert_eq!(
-                schedule.select(std::slice::from_ref(&changed), false),
-                expected,
-                "{name}"
-            );
+        let mut selected = schedule.select(std::slice::from_ref(&changed), false);
+        if input.repeated {
+            selected = schedule.select(std::slice::from_ref(&changed), false);
         }
-    }
+        let mut due = selected
+            .iter()
+            .map(|id| {
+                id.strip_prefix("backend-")
+                    .and_then(|id| id.parse().ok())
+                    .unwrap_or_else(|| panic!("schedule fixture backend id {id:?}"))
+            })
+            .collect::<Vec<u64>>();
+        due.sort_unstable();
+        due
+    });
 }
 
 struct ModelsListener {
@@ -346,33 +322,16 @@ fn assert_modeled_probe(
     current: &BackendHealthSnapshot,
     event: &str,
 ) {
-    let (mut state, mut count) = previous
+    let threshold_k = probe_options().failure_threshold_k;
+    let mut model = previous
         .map(|snapshot| (snapshot.state, snapshot.failure_count))
         .unwrap_or((BackendHealthState::Unknown, 0));
     if previous.is_some_and(|snapshot| {
         snapshot.configuration_fingerprint != current.configuration_fingerprint
     }) {
-        let reset = lean_backend_health_cases()
-            .iter()
-            .find(|case| {
-                case.start_state == state.as_str()
-                    && case.start_count == count as usize
-                    && case.event == "configurationChanged"
-                    && case.threshold_k == probe_options().failure_threshold_k as usize
-            })
-            .expect("the model emits this connection change");
-        state = state_from_lean(&reset.name, &reset.next_state);
-        count = reset.next_count.try_into().unwrap();
+        model = step_backend(model, ProbeEvent::ConfigurationChanged, threshold_k);
     }
-    let modeled = lean_backend_health_cases()
-        .iter()
-        .find(|case| {
-            case.start_state == state.as_str()
-                && case.start_count == count as usize
-                && case.event == event
-                && case.threshold_k == probe_options().failure_threshold_k as usize
-        })
-        .expect("the model emits this probe transition");
-    assert_eq!(current.state.as_str(), modeled.next_state);
-    assert_eq!(current.failure_count as usize, modeled.next_count);
+    let (state, count) = step_backend(model, probe_event(event), threshold_k);
+    assert_eq!(current.state, state);
+    assert_eq!(current.failure_count, count);
 }

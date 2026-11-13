@@ -87,60 +87,62 @@ mod tests {
 
     #[test]
     fn waiting_questions_follow_the_model_and_keep_the_exact_parent_scope() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_question_cases;
         let now = "2030-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        for case in cases {
+        gents_lean_vocab::families::mailbox_question_contracts_awaiting::replay(|case| {
+            let policy = &case.policy;
             let payload = json!({
-                "version": case.version, "prompt": "Choose a plan", "optional": case.optional,
-                "allow_free_text": case.free_text, "options": (0..case.option_count)
+                "version": policy.version, "prompt": "Choose a plan", "optional": policy.optional,
+                "allow_free_text": policy.free_text, "options": (0..policy.option_count)
                     .map(|index| json!({"id":index.to_string(), "label":index.to_string()})).collect::<Vec<_>>(),
             }).to_string();
-            for wait in &case.waits {
-                let parent = AgentRequestRow {
-                    doc_id: Some("physical-parent".into()),
-                    request_id: "parent".into(),
-                    node_did: Some("node".into()),
-                    requester_did: Some("person".into()),
-                    agent_did: Some("worker".into()),
-                    session_id: Some("chat".into()),
-                    lifecycle_state: Some(if wait.completed {
-                        RequestLifecycleState::Completed
-                    } else {
-                        RequestLifecycleState::Interrupted
-                    }),
-                    ..Default::default()
-                };
-                let base = json!({
-                    "_docID":"question", "item_key":"question", "requester_did":"person", "node_did":"node",
-                    "status":if wait.open {"open"} else {"acted"}, "kind":"ask", "action":"start_request",
-                    "title":"Plan", "payload":payload, "source_kind":"agent", "source_id":"source",
-                    "session_id":"chat", "request_id":"parent", "target_node_did":"node", "target_agent_did":"worker",
-                    "created_at":"2030-01-01T00:00:00Z"
-                });
-                for field in [
-                    "node_did",
-                    "requester_did",
-                    "session_id",
-                    "request_id",
-                    "target_node_did",
-                    "target_agent_did",
-                ] {
-                    let mut value = base.clone();
-                    if !wait.same_parent {
-                        value[field] = Value::String("other".into());
-                    }
-                    let item: MailboxItemRow = serde_json::from_value(value).unwrap();
-                    assert_eq!(
-                        !awaiting_question_ids(&[item], &parent, now).is_empty(),
-                        wait.waiting,
-                        "{case:?}: {wait:?}: {field}"
-                    );
+            let parent = AgentRequestRow {
+                doc_id: Some("physical-parent".into()),
+                request_id: "parent".into(),
+                node_did: Some("node".into()),
+                requester_did: Some("person".into()),
+                agent_did: Some("worker".into()),
+                session_id: Some("chat".into()),
+                lifecycle_state: Some(if case.completed {
+                    RequestLifecycleState::Completed
+                } else {
+                    RequestLifecycleState::Interrupted
+                }),
+                ..Default::default()
+            };
+            let base = json!({
+                "_docID":"question", "item_key":"question", "requester_did":"person", "node_did":"node",
+                "status":if case.is_open {"open"} else {"acted"}, "kind":"ask", "action":"start_request",
+                "title":"Plan", "payload":payload, "source_kind":"agent", "source_id":"source",
+                "session_id":"chat", "request_id":"parent", "target_node_did":"node", "target_agent_did":"worker",
+                "created_at":"2030-01-01T00:00:00Z"
+            });
+            let observed = [
+                "node_did",
+                "requester_did",
+                "session_id",
+                "request_id",
+                "target_node_did",
+                "target_agent_did",
+            ]
+            .map(|field| {
+                let mut value = base.clone();
+                if !case.same_parent {
+                    value[field] = Value::String("other".into());
                 }
-                let mut expired = base;
-                expired["deadline_at"] = json!("2020-01-01T00:00:00Z");
-                let item = serde_json::from_value(expired).unwrap();
-                assert!(awaiting_question_ids(&[item], &parent, now).is_empty());
+                let item: MailboxItemRow = serde_json::from_value(value).unwrap();
+                !awaiting_question_ids(&[item], &parent, now).is_empty()
+            });
+            assert!(
+                observed.iter().all(|waiting| *waiting == observed[0]),
+                "{case:?}: {observed:?}"
+            );
+            let mut expired = base;
+            expired["deadline_at"] = json!("2020-01-01T00:00:00Z");
+            let item = serde_json::from_value(expired).unwrap();
+            assert!(awaiting_question_ids(&[item], &parent, now).is_empty());
+            gents_lean_vocab::families::mailbox_question_contracts_awaiting::WaitOutput {
+                waiting: observed[0],
             }
-        }
+        });
     }
 }

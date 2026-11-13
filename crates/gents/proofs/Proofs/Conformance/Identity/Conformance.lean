@@ -2153,7 +2153,7 @@ def json : Json := Json.mkObj
        callbackModuleReaderJson agentDid false true]),
    ("event_generation_cases", toJson eventGenerationCases),
    ("event_execution_cases", toJson eventExecutionCases),
-   ("event_group_cases", toJson
+   ("event_group_state_cases", toJson
       [eventGroupCaseJson userDid, eventGroupCaseJson agentDid,
        eventGroupCaseJson runtimeDid, eventGroupCaseJson siblingDid]),
    ("task_receipt_cases", toJson

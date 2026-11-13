@@ -17,8 +17,7 @@ use super::{
 use gents_lean_vocab::{
     assert_lean_contract_vocabulary_set_matches, assert_lean_transition_is_illegal,
     assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_cases, lean_vocabulary_values,
-    LeanContractVocabulary, LeanFleetSlotAccountingCase,
+    lean_vocabulary_values, LeanContractVocabulary,
 };
 use gents_protocol::row::AgentRequest;
 use gents_store::identity::NodeIdentity as _;
@@ -27,7 +26,6 @@ pub(super) async fn test_node() -> (
     crate::test_support::TestDb,
     gents_store::identity::ManagedAgentSigner,
 ) {
-    lean_inference_slot_accounting_cases();
     let (db, _user, _access, binding) = crate::test_support::signed_test_node(
         "inference-admission",
         gents_store::node_extension::Extensions::none(),
@@ -471,77 +469,6 @@ fn assert_reconstructed_slot_count(rows: &[Value], backend_id: &str, expected: u
     );
 }
 
-fn assert_fleet_case_matches_call_row(case: &LeanFleetSlotAccountingCase, row: &Value) {
-    assert!(
-        case.row_backend_ids == vec![case.backend_id.clone()],
-        "single-row Fleet slot helper called with non-single-backend case {}: {:?}",
-        case.name,
-        case.row_backend_ids
-    );
-    assert!(
-        case.row_states.len() == 1,
-        "single-row Fleet slot helper called with multi-row case {}: {:?}",
-        case.name,
-        case.row_states
-    );
-    if case.admission_state == "released" {
-        let expected_terminal_state = match case.request_state.as_str() {
-            "completed" => "completed",
-            "failed" => "failed",
-            "interrupted" | "superseded" | "dead" => "cancelled",
-            other => panic!(
-                "Fleet slot released case {} has non-terminal request_state={other}",
-                case.name
-            ),
-        };
-        assert_eq!(
-            case.row_states[0].as_str(),
-            expected_terminal_state,
-            "Fleet slot released case {} projected the wrong terminal InferenceCall state",
-            case.name
-        );
-    }
-    assert_eq!(
-        row.get("backend_id").and_then(Value::as_str),
-        Some(case.row_backend_ids[0].as_str()),
-        "Fleet slot case {} projected backend drifted from persisted InferenceCall row",
-        case.name
-    );
-    assert_eq!(
-        row.get("call_state").and_then(Value::as_str),
-        Some(case.row_states[0].as_str()),
-        "Fleet slot case {} projected call_state drifted from persisted InferenceCall row",
-        case.name
-    );
-
-    let contribution = slot_contribution(slot_row_from_value(row), &case.backend_id);
-    assert_eq!(
-        contribution, case.expected_contribution,
-        "Fleet slot case {} drifted from admission slot contribution",
-        case.name
-    );
-    assert_eq!(
-        contribution, case.reconstructed_running_count,
-        "Fleet slot case {} one-row projection drifted from admission reconstruction",
-        case.name
-    );
-}
-
-fn sorted_call_states_for_backend(rows: &[Value], backend_id: &str) -> Vec<String> {
-    let mut states = rows
-        .iter()
-        .filter(|row| row.get("backend_id").and_then(Value::as_str) == Some(backend_id))
-        .map(|row| {
-            row.get("call_state")
-                .and_then(Value::as_str)
-                .expect("InferenceCall row must include call_state")
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    states.sort();
-    states
-}
-
 async fn wait_for_call_row_count(
     node: &Arc<EmbeddedNode>,
     signer: &gents_store::identity::ManagedAgentSigner,
@@ -619,91 +546,46 @@ fn rust_inference_call_transition_table_matches_lean_contract() {
     assert_lean_transition_is_illegal("InferenceCall", "completed", "running");
 }
 
-#[test]
-fn generated_inference_slot_accounting_cases_match_admission_reconstruction_logic() {
-    let cases = lean_inference_slot_accounting_cases();
-    assert_eq!(
-        cases.len(),
-        11,
-        "Lean should emit the finite InferenceCall slot-accounting cases"
-    );
-
-    for case in cases {
-        assert_eq!(
-            case.row_backend_ids.len(),
-            case.row_states.len(),
-            "Lean case {} emitted mismatched row arrays",
-            case.name
-        );
-
-        if case.row_states.len() == 1 {
-            let row = InferenceCallSlotRow::new(
-                case.row_backend_ids[0].as_str(),
-                case.row_states[0].as_str(),
-            );
-            assert_eq!(
-                slot_contribution(row, &case.backend_id),
-                case.expected_contribution,
-                "generated case {} drifted from admission slot contribution",
-                case.name
-            );
-            assert_eq!(
-                case.contribution, case.expected_contribution,
-                "Lean case {} should compute its expected contribution",
-                case.name
-            );
-        }
-
-        let reconstructed = reconstructed_running_slot_count(
-            case.row_backend_ids
-                .iter()
-                .zip(&case.row_states)
-                .map(|(backend_id, state)| {
-                    InferenceCallSlotRow::new(backend_id.as_str(), state.as_str())
-                }),
-            &case.backend_id,
-        );
-        assert_eq!(
-            reconstructed, case.reconstructed_running_count,
-            "generated case {} drifted from admission reconstructed running count",
-            case.name
-        );
-        assert_eq!(
-            case.bounded_by_max_concurrent,
-            reconstructed <= case.max_concurrent,
-            "generated case {} drifted from max_concurrent bound",
-            case.name
-        );
-
-        if matches!(
-            case.property.as_str(),
-            "terminal_release" | "permit_drop_terminalization"
-        ) {
-            assert_eq!(case.pre_state.as_str(), "running", "{}", case.name);
-            assert_eq!(case.pre_contribution, 1, "{}", case.name);
-            assert_eq!(case.post_contribution, 0, "{}", case.name);
-            assert!(case.released_slot, "{}", case.name);
-        }
-        if case.property == "permit_drop_terminalization" {
-            assert!(case.permit_drop_terminalization, "{}", case.name);
-        }
+fn fleet_observation(
+    rows: &[&Value],
+    backend_id: &str,
+    max_concurrent: u64,
+) -> gents_lean_vocab::families::fleet_slot_accounting_contribution::SlotObservation {
+    let reconstructed =
+        reconstructed_running_slot_count(rows.iter().map(|row| slot_row_from_value(row)), backend_id)
+            as u64;
+    let contribution = match rows {
+        [row] => slot_contribution(slot_row_from_value(row), backend_id) as u64,
+        _ => reconstructed,
+    };
+    let field = |row: &Value, name: &str| {
+        row.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("InferenceCall row must include {name}: {row:?}"))
+            .to_owned()
+    };
+    gents_lean_vocab::families::fleet_slot_accounting_contribution::SlotObservation {
+        contribution,
+        row_states: rows.iter().map(|row| field(row, "call_state")).collect(),
+        row_backend_ids: rows.iter().map(|row| field(row, "backend_id")).collect(),
+        reconstructed_running_count: reconstructed,
+        slot_count: reconstructed,
+        bounded_by_max_concurrent: reconstructed <= max_concurrent,
     }
 }
 
 #[tokio::test]
 async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary() {
-    let waiting = lean_fleet_slot_accounting_case("fleet_waiting_contributes_zero");
-    let acquired = lean_fleet_slot_accounting_case("fleet_acquired_contributes_one");
-    let executing = lean_fleet_slot_accounting_case("fleet_executing_contributes_one");
-    let released = lean_fleet_slot_accounting_case("fleet_released_terminal_contributes_zero");
-    let bounded = lean_fleet_slot_accounting_case(
-        "fleet_reconstructed_running_count_bounded_by_max_concurrent",
-    );
-    let backend_id = acquired.backend_id.clone();
-    assert_eq!(waiting.backend_id, backend_id);
-    assert_eq!(executing.backend_id, backend_id);
-    assert_eq!(released.backend_id, backend_id);
-    assert_eq!(bounded.backend_id, backend_id);
+    let contribution_cases =
+        gents_lean_vocab::families::fleet_slot_accounting_contribution::cases::<String, String>();
+    let bound_cases = gents_lean_vocab::families::fleet_slot_accounting_bound::cases();
+    let backend_id = contribution_cases[0].input.backend_id.clone();
+    for case in &contribution_cases {
+        assert_eq!(case.input.backend_id, backend_id);
+    }
+    for case in &bound_cases {
+        assert_eq!(case.input.backend_id, backend_id);
+    }
 
     let (db, signer) = test_node().await;
     let node = db.node.clone();
@@ -716,17 +598,11 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     let running_context = test_context(&registry, "req-fleet-running", &backend_id).await;
     let queued_context = test_context(&registry, "req-fleet-waiting", &backend_id).await;
 
-    scope_request(running_context, async {
+    let (running_row, queued_row) = scope_request(running_context, async {
         let mut running_permit = registry.acquire_current_call_for_test().await.unwrap();
-        let running_row = wait_for_request_call_state(
-            &node,
-            &registry.signer,
-            "req-fleet-running",
-            &acquired.row_states[0],
-        )
-        .await;
-        assert_fleet_case_matches_call_row(acquired, &running_row);
-        assert_fleet_case_matches_call_row(executing, &running_row);
+        let running_row =
+            wait_for_request_call_state(&node, &registry.signer, "req-fleet-running", "running")
+                .await;
 
         let queued_registry = registry.clone();
         let queued = tokio::spawn(async move {
@@ -739,120 +615,123 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
             })
             .await;
         });
-        let queued_row = wait_for_request_call_state(
-            &node,
-            &registry.signer,
-            "req-fleet-waiting",
-            &waiting.row_states[0],
-        )
-        .await;
-        assert_fleet_case_matches_call_row(waiting, &queued_row);
+        let queued_row =
+            wait_for_request_call_state(&node, &registry.signer, "req-fleet-waiting", "queued")
+                .await;
 
         running_permit.finish_success(None).await.unwrap();
         drop(running_permit);
         queued.await.unwrap();
+        (running_row, queued_row)
     })
     .await;
 
-    let completed_row = wait_for_request_call_state(
-        &node,
-        &registry.signer,
-        "req-fleet-running",
-        &released.row_states[0],
-    )
-    .await;
-    assert_fleet_case_matches_call_row(released, &completed_row);
+    let completed_row =
+        wait_for_request_call_state(&node, &registry.signer, "req-fleet-running", "completed")
+            .await;
 
-    let (bounded_db, bounded_signer) = test_node().await;
-    let bounded_node = bounded_db.node.clone();
-    let bounded_registry = TestRegistry::new(bounded_node.clone(), bounded_signer);
-    bounded_registry.reconcile(
-        1,
-        &RapidHashMap::from_iter([(
-            backend_id.clone(),
-            config(&backend_id, bounded.max_concurrent, 1),
-        )]),
-    );
+    for case in contribution_cases {
+        let row = match case.input.admission_state.as_str() {
+            "acquired" | "executing" => &running_row,
+            "waiting" => &queued_row,
+            "released" => &completed_row,
+            other => panic!("the admission scenario has no {other} checkpoint"),
+        };
+        let observation = fleet_observation(&[row], &backend_id, case.input.max_concurrent);
+        case.check(observation);
+    }
 
-    let completed_context =
-        test_context(&bounded_registry, "req-fleet-bound-completed", &backend_id).await;
-    scope_request(completed_context, async {
-        let mut permit = bounded_registry
-            .acquire_current_call_for_test()
-            .await
-            .unwrap();
-        permit.finish_success(None).await.unwrap();
-        drop(permit);
-    })
-    .await;
+    for case in bound_cases {
+        let (bounded_db, bounded_signer) = test_node().await;
+        let bounded_node = bounded_db.node.clone();
+        let bounded_registry = TestRegistry::new(bounded_node.clone(), bounded_signer);
+        bounded_registry.reconcile(
+            1,
+            &RapidHashMap::from_iter([(
+                backend_id.clone(),
+                config(&backend_id, case.input.max_concurrent as usize, 1),
+            )]),
+        );
 
-    let first_context =
-        test_context(&bounded_registry, "req-fleet-bound-running-1", &backend_id).await;
-    let second_context =
-        test_context(&bounded_registry, "req-fleet-bound-running-2", &backend_id).await;
-    let queued_context =
-        test_context(&bounded_registry, "req-fleet-bound-queued", &backend_id).await;
-
-    let mut first = scope_request(first_context, async {
-        bounded_registry
-            .acquire_current_call_for_test()
-            .await
-            .unwrap()
-    })
-    .await;
-    let mut second = scope_request(second_context, async {
-        bounded_registry
-            .acquire_current_call_for_test()
-            .await
-            .unwrap()
-    })
-    .await;
-    let queued_registry = bounded_registry.clone();
-    let queued = tokio::spawn(async move {
-        scope_request(queued_context, async move {
-            let mut permit = queued_registry
+        let completed_context =
+            test_context(&bounded_registry, "req-fleet-bound-completed", &backend_id).await;
+        scope_request(completed_context, async {
+            let mut permit = bounded_registry
                 .acquire_current_call_for_test()
                 .await
                 .unwrap();
             permit.finish_success(None).await.unwrap();
+            drop(permit);
         })
         .await;
-    });
 
-    wait_for_request_call_state(
-        &bounded_node,
-        &bounded_registry.signer,
-        "req-fleet-bound-queued",
-        "queued",
-    )
-    .await;
-    let rows = wait_for_call_row_count(
-        &bounded_node,
-        &bounded_registry.signer,
-        bounded.active_count,
-    )
-    .await;
-    let reconstructed = running_slot_count_for_backend(&rows, &backend_id);
-    assert_eq!(
-        reconstructed, bounded.reconstructed_running_count,
-        "generated fleet bounded case drifted from runtime admission reconstruction"
-    );
-    assert_eq!(reconstructed, bounded.slot_count);
-    assert!(reconstructed <= bounded.max_concurrent);
+        let first_context =
+            test_context(&bounded_registry, "req-fleet-bound-running-1", &backend_id).await;
+        let second_context =
+            test_context(&bounded_registry, "req-fleet-bound-running-2", &backend_id).await;
+        let queued_context =
+            test_context(&bounded_registry, "req-fleet-bound-queued", &backend_id).await;
 
-    let mut expected_states = bounded.row_states.clone();
-    expected_states.sort();
-    assert_eq!(
-        sorted_call_states_for_backend(&rows, &backend_id),
-        expected_states,
-        "generated fleet bounded projection must match the real admission row states"
-    );
+        let mut first = scope_request(first_context, async {
+            bounded_registry
+                .acquire_current_call_for_test()
+                .await
+                .unwrap()
+        })
+        .await;
+        let mut second = scope_request(second_context, async {
+            bounded_registry
+                .acquire_current_call_for_test()
+                .await
+                .unwrap()
+        })
+        .await;
+        let queued_registry = bounded_registry.clone();
+        let queued = tokio::spawn(async move {
+            scope_request(queued_context, async move {
+                let mut permit = queued_registry
+                    .acquire_current_call_for_test()
+                    .await
+                    .unwrap();
+                permit.finish_success(None).await.unwrap();
+            })
+            .await;
+        });
 
-    first.finish_success(None).await.unwrap();
-    drop(first);
-    queued.await.unwrap();
-    second.finish_success(None).await.unwrap();
-    drop(second);
+        wait_for_request_call_state(
+            &bounded_node,
+            &bounded_registry.signer,
+            "req-fleet-bound-queued",
+            "queued",
+        )
+        .await;
+        let rows = wait_for_call_row_count(
+            &bounded_node,
+            &bounded_registry.signer,
+            case.input.active_count as usize,
+        )
+        .await;
+        let ordered = [
+            "req-fleet-bound-running-1",
+            "req-fleet-bound-running-2",
+            "req-fleet-bound-queued",
+            "req-fleet-bound-completed",
+        ]
+        .map(|request_id| {
+            rows.iter()
+                .find(|row| row.get("request_id").and_then(Value::as_str) == Some(request_id))
+                .unwrap_or_else(|| panic!("no InferenceCall row for {request_id}: {rows:?}"))
+        });
+        assert_eq!(rows.len(), ordered.len(), "{rows:?}");
+        let observation = fleet_observation(&ordered, &backend_id, case.input.max_concurrent);
+        case.check(gents_lean_vocab::family::recode(&observation));
+
+        first.finish_success(None).await.unwrap();
+        drop(first);
+        queued.await.unwrap();
+        second.finish_success(None).await.unwrap();
+        drop(second);
+    }
 }
 
 #[tokio::test]
@@ -2015,8 +1894,8 @@ async fn transit_permit_of_pruned_pool_cannot_admit() {
 
 #[tokio::test]
 async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation() {
-    let snapshot: Value =
-        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
+    use gents_lean_vocab::families::provider_usage_invalid_storage as wire;
+
     let (db, signer) = test_node().await;
     let node = db.node.clone();
     let registry = TestRegistry::new(node.clone(), signer);
@@ -2030,68 +1909,58 @@ async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation
         registry.signer.clone(),
     )
     .unwrap();
-    let mut exercised = 0;
-    for case in snapshot["provider_usage_cases"].as_array().unwrap() {
-        for (observation, expected) in case["observations"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .zip(case["expected"].as_array().unwrap())
-        {
-            if expected["valid"] != false {
-                continue;
-            }
-            let request_id = format!("invalid-usage-{exercised}");
-            let context = test_context(&registry, &request_id, "usage-backend").await;
-            let usage = serde_json::from_value(observation.clone()).unwrap();
-            scope_request(context, async {
-                let mut permit = registry.acquire_current_call_for_test().await.unwrap();
-                permit
-                    .finish_success(Some(super::ProviderCallUsage(usage)))
-                    .await
-                    .unwrap();
-            })
-            .await;
-            let response = access.execute(&format!(
-                r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#,
-                gents_store::graphql::escape_graphql_string(&request_id)
-            )).await.unwrap();
-            let rows = response["data"]["InferenceCall"].as_array().unwrap();
-            assert_eq!(rows.len(), 1, "{}", case["name"]);
-            let stored = &rows[0];
-            let columns: gents_protocol::usage::TokenUsageColumns =
-                serde_json::from_value(stored.clone()).unwrap();
-            let decoded = columns.observation().unwrap();
-            let expected_usage: gents_protocol::usage::TokenUsage =
-                serde_json::from_value(expected["for_storage"].clone()).unwrap();
-            assert_eq!(decoded, expected_usage, "{}", case["name"]);
-            let summary =
-                gents_protocol::usage::TokenUsageSummary::from_observations([decoded]).unwrap();
-            assert_eq!(summary.incomplete_calls, 1);
-            assert!(summary.charged_total().is_none());
-            assert_eq!(stored["call_state"], "completed", "{}", case["name"]);
-            assert!(stored["ended_at"].is_string());
+    for (index, case) in gents_lean_vocab::families::provider_usage_invalid_storage::cases::<
+        gents_protocol::usage::UsageCompleteness,
+    >()
+        .into_iter()
+        .enumerate()
+    {
+        let request_id = format!("invalid-usage-{index}");
+        let context = test_context(&registry, &request_id, "usage-backend").await;
+        let usage: gents_protocol::usage::TokenUsage =
+            gents_lean_vocab::family::recode(&case.input.observation);
+        scope_request(context, async {
+            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
+            permit
+                .finish_success(Some(super::ProviderCallUsage(usage)))
+                .await
+                .unwrap();
+        })
+        .await;
+        let response = access.execute(&format!(
+            r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ call_state ended_at prompt_tokens completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness }} }}"#,
+            gents_store::graphql::escape_graphql_string(&request_id)
+        )).await.unwrap();
+        let rows = response["data"]["InferenceCall"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{request_id}");
+        let stored = &rows[0];
+        assert_eq!(stored["call_state"], "completed", "{request_id}");
+        assert!(stored["ended_at"].is_string(), "{request_id}");
+        let columns: gents_protocol::usage::TokenUsageColumns =
+            serde_json::from_value(stored.clone()).unwrap();
+        let decoded = columns.observation().unwrap();
+        let stored_completeness: gents_protocol::usage::UsageCompleteness =
+            serde_json::from_value(stored["usage_completeness"].clone()).unwrap();
+        let decoded_value = serde_json::to_value(decoded).unwrap();
+        for (column, observation) in [
+            ("prompt_tokens", "input_tokens"),
+            ("completion_tokens", "output_tokens"),
+            ("cached_input_tokens", "cached_input_tokens"),
+            ("cache_creation_input_tokens", "cache_creation_input_tokens"),
+            ("reasoning_output_tokens", "reasoning_output_tokens"),
+            ("provider_total_tokens", "provider_total_tokens"),
+        ] {
             assert_eq!(
-                stored["usage_completeness"], expected["storage_completeness"],
-                "{}",
-                case["name"]
+                stored[column], decoded_value[observation],
+                "{request_id} {column}"
             );
-            for (column, observation) in [
-                ("prompt_tokens", "input_tokens"),
-                ("completion_tokens", "output_tokens"),
-                ("cached_input_tokens", "cached_input_tokens"),
-                ("cache_creation_input_tokens", "cache_creation_input_tokens"),
-                ("reasoning_output_tokens", "reasoning_output_tokens"),
-                ("provider_total_tokens", "provider_total_tokens"),
-            ] {
-                assert_eq!(
-                    stored[column], expected["for_storage"][observation],
-                    "{} {column}",
-                    case["name"]
-                );
-            }
-            exercised += 1;
         }
+        let summary = gents_protocol::usage::TokenUsageSummary::from_observations([decoded]).ok();
+        case.check(wire::StoredOutput {
+            for_storage: gents_lean_vocab::family::recode(&decoded),
+            storage_completeness: stored_completeness,
+            incomplete_calls: summary.map(|summary| summary.incomplete_calls),
+            charged_total: summary.and_then(|summary| summary.charged_total()),
+        });
     }
-    assert!(exercised > 0);
 }

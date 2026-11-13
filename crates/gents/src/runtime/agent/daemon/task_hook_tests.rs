@@ -1331,55 +1331,80 @@ async fn revocation_during_an_after_success_hook_cancels_it_and_still_cleans_up(
 
 #[tokio::test]
 async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
-    let mut harness = Harness::new().await;
-    Arc::get_mut(&mut harness.agent_config)
-        .unwrap()
-        .stream_liveness_timeout = Duration::from_secs(120);
-    let gate = harness.mark("revoked");
-    let first = format!(
-        "sleep 0.3; {}; while [ ! -e {} ]; do sleep 0.01; done",
-        harness.touch("ready"),
-        gate.display()
-    );
-    harness.install_task(json!([
-        {"hook_id":"first", "phase":"before", "command":["sh","-c",first], "timeout_secs":10},
-        {"hook_id":"second", "phase":"before", "command":["sh","-c",harness.touch("second")], "timeout_secs":10},
-        {"hook_id":"cleanup", "phase":"finally", "command":["sh","-c",harness.touch("cleanup")], "timeout_secs":10}
-    ])).await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let doc_id = request.doc_id.clone();
-    let mut daemon = harness.daemon(false);
-    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let revoke = async {
-        while !harness.mark("ready").exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        harness.agent_access.write("test.revoke_between_task_hooks", &format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-            gents_store::graphql::escape_graphql_string(&doc_id)
-        )).await.unwrap();
-        std::fs::write(gate, "revoked").unwrap();
-    };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
-        tokio::join!(daemon.process_request(request, shutdown_rx), revoke)
-    })
-    .await
-    .unwrap();
-    result.unwrap();
-    let modeled = gents_lean_vocab::lean_task_hook_run_cases()
-        .iter()
-        .find(|case| case.name == "revoked_between_before_hooks_refuses_the_next_launch")
+    for case in gents_lean_vocab::families::task_hooks_contracts_daemon_revocation::cases::<
+        String,
+        String,
+        gents_documents::TaskHookPhase,
+    >() {
+        let mut harness = Harness::new().await;
+        Arc::get_mut(&mut harness.agent_config)
+            .unwrap()
+            .stream_liveness_timeout = Duration::from_secs(120);
+        let gate = harness.mark("revoked");
+        let gated = case
+            .input
+            .hooks
+            .iter()
+            .find(|hook| {
+                hook.phase == gents_documents::TaskHookPhase::Before
+                    && !case.input.revoked.contains(&hook.hook_id)
+            })
+            .map(|hook| hook.hook_id.clone())
+            .expect("the scenario revokes after an owned before hook");
+        let hooks = case
+            .input
+            .hooks
+            .iter()
+            .map(|hook| {
+                let command = if hook.hook_id == gated {
+                    format!(
+                        "sleep 0.3; {}; {}; while [ ! -e {} ]; do sleep 0.01; done",
+                        harness.touch(&hook.hook_id),
+                        harness.touch("ready"),
+                        gate.display()
+                    )
+                } else {
+                    harness.touch(&hook.hook_id)
+                };
+                json!({"hook_id": hook.hook_id, "phase": hook.phase,
+                       "command": ["sh", "-c", command], "timeout_secs": 10})
+            })
+            .collect::<Vec<_>>();
+        harness.install_task(json!(hooks)).await;
+        let request = harness.create_request(Lineage::ManualFire, false).await;
+        let doc_id = request.doc_id.clone();
+        let mut daemon = harness.daemon(false);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let revoke = async {
+            while !harness.mark("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            harness.agent_access.write("test.revoke_between_task_hooks", &format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
+                gents_store::graphql::escape_graphql_string(&doc_id)
+            )).await.unwrap();
+            std::fs::write(&gate, "revoked").unwrap();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(daemon.process_request(request, shutdown_rx), revoke)
+        })
+        .await
         .unwrap();
-    assert!(modeled
-        .refused_before_launch
-        .iter()
-        .any(|id| id == "second"));
-    assert_eq!(harness.calls() > 0, modeled.expected_agent_ran);
-    assert!(harness.mark("cleanup").exists());
-    assert!(
-        !harness.mark("second").exists(),
-        "second ordinary hook launched AFTER the revocation write committed"
-    );
+        result.unwrap();
+        let refused_before_launch = case
+            .input
+            .hooks
+            .iter()
+            .filter(|hook| !harness.mark(&hook.hook_id).exists())
+            .map(|hook| hook.hook_id.clone())
+            .collect();
+        case.check(
+            gents_lean_vocab::families::task_hooks_contracts_daemon_revocation::DaemonOutput {
+                refused_before_launch,
+                agent_ran: harness.calls() > 0,
+            },
+        );
+    }
 }
 
 #[tokio::test]

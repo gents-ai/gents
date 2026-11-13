@@ -209,13 +209,12 @@ fn plugins_pack(slots: serde_json::Value, model_slot: Option<&str>) -> PackManif
 }
 
 #[test]
-fn generated_plugin_model_slots_require_optional_agent_free_declarations() {
-    let cases = gents_lean_vocab::lean_contract_snapshot();
-    for case in cases.plugin_resource_model_slot_cases.as_array().unwrap() {
-        let slots = if case["declared"].as_bool().unwrap() {
+fn plugin_model_slots_follow_the_lean_model() {
+    gents_lean_vocab::families::tool_policy_plugin_model_slot_allowed::replay(|i| {
+        let slots = if i.declared {
             serde_json::json!([{"name":"remote_ocr", "description":"d",
-                "optional":case["optional"],
-                "agents":if case["agent_free"].as_bool().unwrap() {vec![]} else {vec!["scan"]}}])
+                "optional":i.optional,
+                "agents":if i.agent_free {vec![]} else {vec!["scan"]}}])
         } else {
             serde_json::json!([])
         };
@@ -223,12 +222,8 @@ fn generated_plugin_model_slots_require_optional_agent_free_declarations() {
         manifest.metadata.kind = PackKind::Documents;
         manifest.config = Some("config.json".to_owned());
         manifest.metadata.assets.push("config.json".to_owned());
-        assert_eq!(
-            validate_pack_manifest(&manifest).is_ok(),
-            case["expected"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+        validate_pack_manifest(&manifest).is_ok()
+    });
 }
 
 /* ---- ux plugins ---- */

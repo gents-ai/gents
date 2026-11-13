@@ -3,9 +3,7 @@ use super::ToolRowKind;
 use crate::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
-use gents_lean_vocab::{
-    lean_r6_backgrounding_case, lean_restart_disposition_cases, LeanRestartRowKind,
-};
+use gents_lean_vocab::lean_r6_backgrounding_case;
 use gents_session::session::tool_call_state::CancelCause;
 use gents_store::config_client::ConfigAccess;
 
@@ -134,29 +132,82 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
 /// foregrounded. Each row supplies its own kind and await mode.
 #[tokio::test]
 async fn generated_plugin_job_restart_and_foreground_rows_match_owners() {
-    let restarts = lean_restart_disposition_cases()
-        .iter()
-        .filter(|case| case.kind == LeanRestartRowKind::PluginJob)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        restarts.len(),
-        3,
-        "Lean should emit the plugin-job restart rows"
-    );
-    for case in restarts {
-        let name = case.name.as_str();
-        assert!(!case.session_message, "{name}");
-        assert_eq!(case.disposition, "leave_running", "{name}");
-        assert_eq!(case.cause, None, "{name}");
-        assert_eq!(case.terminal_state, None, "{name}");
-        assert_eq!(case.notification_reason, None, "{name}");
-        assert_eq!(case.queue_source, None, "{name}");
-        let await_mode = AwaitMode::from_persisted(&case.await_mode)
-            .unwrap_or_else(|| panic!("{name}: unknown await mode {:?}", case.await_mode));
+    for case in gents_lean_vocab::families::contracts_restart_plugin_job::cases::<String, String>() {
+        let input = &case.input;
+        let name = input.name.as_str();
+        let await_mode = AwaitMode::from_persisted(&input.await_mode)
+            .unwrap_or_else(|| panic!("{name}: unknown await mode {:?}", input.await_mode));
         assert!(
             !ToolRowKind::PluginJob.in_orphan_sweep_scope(await_mode),
             "{name}: the orphan sweep must never select a plugin-job row"
         );
+        let admission = published_admission(PublishedAdmissionOptions {
+            name: format!("restart-{name}"),
+            real_identity: true,
+            await_mode,
+            job_pin: true,
+            start_running: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let access = admission.tool.access().unwrap();
+        let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
+        let request_doc_id = admission.tool.request_doc_id().unwrap().to_owned();
+        if input.deadline_expired {
+            crate::call::lifecycle::admission_fixture::update(
+                &access,
+                &tool_doc_id,
+                r#"deadline_at: "2020-01-01T00:00:00Z""#,
+            )
+            .await;
+        }
+        let parent_state = match input.parent_observation.as_str() {
+            "live" => None,
+            "interrupted" => Some("interrupted"),
+            "cleanlyCompleted" => Some("completed"),
+            "otherTerminal" => Some("failed"),
+            other => panic!("unsupported plugin-job restart parent observation {other}"),
+        };
+        if let Some(state) = parent_state {
+            crate::call::lifecycle::admission_fixture::update_request(
+                &access,
+                &request_doc_id,
+                &format!(r#"lifecycle_state: "{state}""#),
+            )
+            .await;
+        }
+        let report = super::ToolCallLifecycle::recover_all(
+            &admission.node,
+            &admission.node_did,
+            &crate::call::lifecycle::admission_fixture::recovery_identities(&admission),
+        )
+        .await
+        .unwrap();
+        let escaped = gents_store::graphql::escape_graphql_string(&tool_doc_id);
+        let response = access
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state await_mode cancel_cause tool_failure_class }} }}"#
+            ))
+            .await
+            .unwrap();
+        let session_id = admission.tool.session_id().to_owned();
+        let (messages, wakes) = crate::call::lifecycle::admission_fixture::completion_obligations(
+            &access,
+            &session_id,
+            &admission.node_did,
+            admission.tool.requester_did(),
+        )
+        .await;
+        let observed = super::recovery_conformance::observed_restart(
+            report.tool_calls_recovered,
+            &response["data"]["AgentToolCall"][0],
+            &messages,
+            &wakes,
+            &session_id,
+        );
+        teardown(admission).await;
+        case.check(gents_lean_vocab::family::recode(&observed));
     }
 
     let refusal = lean_r6_backgrounding_case("plugin_job_row_refuses_foreground");

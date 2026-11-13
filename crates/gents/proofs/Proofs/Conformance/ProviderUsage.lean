@@ -48,53 +48,120 @@ def cases : List Case := componentCases ++
    ⟨"equal_counters_from_distinct_calls", [base, base]⟩,
    ⟨"summary_overflow", [{ input := some counterLimit }, { input := some 1 }]⟩]
 
-def optionalNat : Option Nat → String
-  | none => "null"
-  | some n => toString n
+@[conformance_vocabulary]
+def completenessName : Completeness → String
+  | .missing => "missing"
+  | .incomplete => "partial"
+  | .complete => "complete"
 
-def observationJson (usage : Observation) : String :=
-  "{\"input_tokens\":" ++ optionalNat usage.input ++
-  ",\"output_tokens\":" ++ optionalNat usage.output ++
-  ",\"cached_input_tokens\":" ++ optionalNat usage.cacheRead ++
-  ",\"cache_creation_input_tokens\":" ++ optionalNat usage.cacheWrite ++
-  ",\"reasoning_output_tokens\":" ++ optionalNat usage.reasoning ++
-  ",\"provider_total_tokens\":" ++ optionalNat usage.providerTotal ++
-  ",\"final_response\":" ++ toString usage.finalResponse ++ "}"
+deriving instance Lean.ToJson for Completeness
 
-def completenessJson : Completeness → String
-  | .missing => jsonString "missing"
-  | .incomplete => jsonString "partial"
-  | .complete => jsonString "complete"
+structure UsageWire where
+  inputTokens : Option Nat
+  outputTokens : Option Nat
+  cachedInputTokens : Option Nat
+  cacheCreationInputTokens : Option Nat
+  reasoningOutputTokens : Option Nat
+  providerTotalTokens : Option Nat
+  finalResponse : Bool
+  deriving Lean.ToJson
 
-def expectedJson (usage : Observation) : String :=
-  "{\"valid\":" ++ toString (valid usage) ++
-  ",\"completeness\":" ++ completenessJson (completeness usage) ++
-  ",\"charged_tokens\":" ++ optionalNat (charged usage) ++
-  ",\"for_storage\":" ++ observationJson (forStorage usage) ++
-  ",\"separate_reasoning\":" ++ observationJson (withSeparateReasoning usage) ++
-  ",\"storage_completeness\":" ++ completenessJson (completeness (forStorage usage)) ++ "}"
+def UsageWire.ofModel (u : Observation) : UsageWire :=
+  { inputTokens := u.input, outputTokens := u.output, cachedInputTokens := u.cacheRead
+    cacheCreationInputTokens := u.cacheWrite, reasoningOutputTokens := u.reasoning
+    providerTotalTokens := u.providerTotal, finalResponse := u.finalResponse }
 
-def columnJson (column : Column) : String :=
-  "{\"known\":" ++ toString column.known ++
-  ",\"reported\":" ++ toString column.reported ++ "}"
+def UsageWire.toModel (u : UsageWire) : Observation :=
+  { input := u.inputTokens, output := u.outputTokens, cacheRead := u.cachedInputTokens
+    cacheWrite := u.cacheCreationInputTokens, reasoning := u.reasoningOutputTokens
+    providerTotal := u.providerTotalTokens, finalResponse := u.finalResponse }
 
-def summaryJson (summary : Summary) : String :=
-  "{\"calls\":" ++ toString summary.calls ++
-  ",\"incomplete_calls\":" ++ toString summary.incompleteCalls ++
-  ",\"input\":" ++ columnJson summary.input ++
-  ",\"output\":" ++ columnJson summary.output ++
-  ",\"cache_read\":" ++ columnJson summary.cacheRead ++
-  ",\"cache_write\":" ++ columnJson summary.cacheWrite ++
-  ",\"reasoning\":" ++ columnJson summary.reasoning ++
-  ",\"provider_total\":" ++ columnJson summary.providerTotal ++ "}"
+structure ObservationOutcome where
+  valid : Bool
+  completeness : Completeness
+  chargedTokens : Option Nat
+  forStorage : UsageWire
+  separateReasoning : UsageWire
+  storageCompleteness : Completeness
+  deriving Lean.ToJson
 
-def casesJson : String := jsonArray (cases.map fun c =>
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"observations\":" ++ jsonArray (c.observations.map observationJson) ++
-  ",\"expected\":" ++ jsonArray (c.observations.map expectedJson) ++
-  ",\"charged_total\":" ++ optionalNat ((summarize c.observations).bind Summary.chargedTotal) ++
-  ",\"fresh_input\":" ++ optionalNat ((summarize c.observations).bind Summary.freshInput) ++
-  ",\"summary\":" ++ ((summarize c.observations).map summaryJson).getD "null" ++ "}")
+def ObservationOutcome.ofModel (u : Observation) : ObservationOutcome :=
+  { valid := InferenceCall.Usage.valid u
+    completeness := InferenceCall.Usage.completeness u
+    chargedTokens := charged u
+    forStorage := .ofModel (InferenceCall.Usage.forStorage u)
+    separateReasoning := .ofModel (withSeparateReasoning u)
+    storageCompleteness := InferenceCall.Usage.completeness (InferenceCall.Usage.forStorage u) }
+
+structure ColumnWire where
+  known : Nat
+  reported : Nat
+  deriving Lean.ToJson
+
+def ColumnWire.ofModel (c : Column) : ColumnWire := { known := c.known, reported := c.reported }
+
+structure SummaryWire where
+  calls : Nat
+  incompleteCalls : Nat
+  input : ColumnWire
+  output : ColumnWire
+  cacheRead : ColumnWire
+  cacheWrite : ColumnWire
+  reasoning : ColumnWire
+  providerTotal : ColumnWire
+  deriving Lean.ToJson
+
+def SummaryWire.ofModel (s : Summary) : SummaryWire :=
+  { calls := s.calls, incompleteCalls := s.incompleteCalls, input := .ofModel s.input
+    output := .ofModel s.output, cacheRead := .ofModel s.cacheRead
+    cacheWrite := .ofModel s.cacheWrite, reasoning := .ofModel s.reasoning
+    providerTotal := .ofModel s.providerTotal }
+
+structure UsageInput where
+  observations : List UsageWire
+  deriving Lean.ToJson
+
+structure UsageOutput where
+  expected : List ObservationOutcome
+  chargedTotal : Option Nat
+  freshInput : Option Nat
+  summary : Option SummaryWire
+  deriving Lean.ToJson
+
+@[conformance_family]
+def observations : Conformance.Family UsageInput UsageOutput where
+  inputs := cases.map fun c => { observations := c.observations.map UsageWire.ofModel }
+  model := fun i =>
+    let observed := i.observations.map UsageWire.toModel
+    { expected := observed.map ObservationOutcome.ofModel
+      chargedTotal := (summarize observed).bind Summary.chargedTotal
+      freshInput := (summarize observed).bind Summary.freshInput
+      summary := (summarize observed).map SummaryWire.ofModel }
+
+structure StoredInput where
+  observation : UsageWire
+  deriving Lean.ToJson
+
+structure StoredOutput where
+  forStorage : UsageWire
+  storageCompleteness : Completeness
+  incompleteCalls : Option Nat
+  chargedTotal : Option Nat
+  deriving Lean.ToJson
+
+/-- The invalid observations: a terminal publication must survive a malformed
+provider report, so these are the reports an admission permit stores through
+`forStorage`. -/
+@[conformance_family]
+def invalidStorage : Conformance.Family StoredInput StoredOutput where
+  inputs := (cases.flatMap (·.observations)).filter (!valid ·) |>.map fun o =>
+    { observation := .ofModel o }
+  model := fun i =>
+    let stored := InferenceCall.Usage.forStorage i.observation.toModel
+    { forStorage := .ofModel stored
+      storageCompleteness := InferenceCall.Usage.completeness stored
+      incompleteCalls := (summarize [stored]).map (·.incompleteCalls)
+      chargedTotal := (summarize [stored]).bind Summary.chargedTotal }
 
 theorem witnesses_keep_zero_distinct_from_missing :
     completeness {} = .missing ∧

@@ -110,19 +110,9 @@ structure PromptAssemblyRowCase where
   content : List PromptAssemblyItemCase
   deriving Repr
 
-/-- The same shape with an unpaired call between reasoning and text: pairing
-drops that block, so the retained persisted indices are not contiguous. -/
-structure PromptAssemblySplitCase where
-  index : Nat
-  expected : List PromptAssemblyRowCase
-  deriving Repr
-
 structure PromptAssemblySanitizeCase where
   name : String
   input : List PromptAssemblyRowCase
-  expected : List PromptAssemblyRowCase
-  expectedTwice : List PromptAssemblyRowCase
-  splits : List PromptAssemblySplitCase
   deriving Repr
 
 structure PromptAssemblyLayerCase where
@@ -131,14 +121,6 @@ structure PromptAssemblyLayerCase where
   summaryCount : Nat
   conversationLen : Nat
   slots : List String
-  deriving Repr
-
-structure PromptAssemblyRepairCase where
-  name : String
-  input : String
-  expected : String
-  expectedTwice : String
-  payloadOnly : Bool
   deriving Repr
 
 structure PromptAssemblyBudgetCase where
@@ -171,64 +153,21 @@ structure PromptAssemblyTurnBudgetCase where
   turnCanDispatch : List Bool
   deriving Repr
 
-/-- One compaction-trigger witness: the calibration state, a raw estimate
-and the budget inputs, with the trigger's decision derived by
-`ContextCalibration.State.admission`. -/
-structure PromptAssemblyCompactionTriggerCase where
-  name : String
-  contextWindow : Nat
-  maxOutputTokens : Nat
-  thresholdBasisPoints : Nat
-  priorBasisPoints : Nat
-  seededObservations : List Nat
-  observed : List (Nat × Nat)
-  anchor : Option PromptAssembly.ContextCalibration.Anchor
-  invalidate : Bool
-  rawInputTokens : Nat
-  ratioBasisPoints : Nat
-  calibratedTokens : Nat
-  anchoredTokens : Option Nat
-  contextTokens : Nat
-  compactionInputBudget : Nat
-  admission : Option PromptAssembly.ContextCalibration.Admission
-  deriving Repr
-
-structure PromptAssemblyRetentionCase where
-  name : String
-  configuredKeepRecent : Nat
-  effectiveInputBudget : Nat
-  fixedInput : Nat
-  availableInput : Nat
-  retentionTarget : Nat
-  summaryMaxOutput : Nat
-  effectiveSummaryOutput : Nat
-  rollingSummaryInputBudget : Nat
-  deriving Repr
-
-private def itemCase : Item → PromptAssemblyItemCase
+def itemCase : Item → PromptAssemblyItemCase
   | .text index => { item := "text", value := index }
   | .other index => { item := "other", value := index }
   | .call callId => { item := "call", value := callId }
 
 structure PromptAssemblyAssistantOrderCase where
   name : String
-  orderMode : String
+  orderMode : PromptAssembly.Content.OrderMode
   input : List PromptAssemblyItemCase
-  expected : List PromptAssemblyItemCase
-  expectedTwice : List PromptAssemblyItemCase
   deriving Repr
 
 private def assistantOrderCase (name : String)
     (mode : PromptAssembly.Content.OrderMode) (items : List Item) :
     PromptAssemblyAssistantOrderCase :=
-  let once := PromptAssembly.Content.normalizeFor mode items
-  { name
-  , orderMode := match mode with
-      | .grouped => "grouped"
-      | .nativePreserved => "nativePreserved"
-  , input := items.map itemCase
-  , expected := once.map itemCase
-  , expectedTwice := (PromptAssembly.Content.normalizeFor mode once).map itemCase }
+  { name, orderMode := mode, input := items.map itemCase }
 
 def promptAssemblyAssistantOrderCases : List PromptAssemblyAssistantOrderCase :=
   [ assistantOrderCase "interleaved-grouped" .grouped
@@ -241,14 +180,14 @@ def promptAssemblyAssistantOrderCases : List PromptAssemblyAssistantOrderCase :=
       [.text 4, .other 5, .call 13, .other 6]
   ]
 
-private def announcedIds (content : List Item) : List Nat :=
+def announcedIds (content : List Item) : List Nat :=
   content.filterMap Item.callId?
 
-private def roleName : Transcript.MessageRole → String
+def roleName : Transcript.MessageRole → String
   | .user => "user"
   | .assistant => "assistant"
 
-private def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
+def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
   match pr.row.kind with
   | .ordinary =>
     { role := roleName pr.row.role
@@ -266,7 +205,7 @@ private def rowCase (pr : ProviderRow) : PromptAssemblyRowCase :=
     , callIds := [callId]
     , content := pr.content.map itemCase }
 
-private def rowCases (rows : List ProviderRow) : List PromptAssemblyRowCase :=
+def rowCases (rows : List ProviderRow) : List PromptAssemblyRowCase :=
   rows.map rowCase
 
 private def mkRow (sequence : Nat) (role : Transcript.MessageRole)
@@ -289,15 +228,11 @@ private def assistantText (sequence : Nat) (index : Nat) : ProviderRow :=
 
 structure PromptAssemblyModeSanitizeCase where
   name : String
-  orderMode : String
+  orderMode : PromptAssembly.Content.OrderMode
   input : List PromptAssemblyRowCase
-  expected : List PromptAssemblyRowCase
-  expectedTwice : List PromptAssemblyRowCase
-  association : List PromptAssemblyRowCase
-  associationIndices : List (List Nat)
   deriving Repr
 
-private def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) :
+def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) :
     List Nat :=
   match out.row.role, input.find? (fun pr => pr.row.sequence == out.row.sequence) with
   | .assistant, some source => out.content.map fun item => source.content.idxOf item
@@ -306,20 +241,7 @@ private def retainedBlockIndices (input : List ProviderRow) (out : ProviderRow) 
 private def modeSanitizeCase (name : String)
     (mode : PromptAssembly.Content.OrderMode) (rows : List ProviderRow) :
     PromptAssemblyModeSanitizeCase :=
-  let once := PromptAssembly.Provider.sanitizeForProviderGlobalFor mode rows
-  { name
-  , orderMode := match mode with
-      | .grouped => "grouped"
-      | .nativePreserved => "nativePreserved"
-  , input := rowCases rows
-  , expected := rowCases once
-  , expectedTwice := rowCases
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor mode once)
-  , association := rowCases
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor .nativePreserved rows)
-  , associationIndices :=
-      (PromptAssembly.Provider.sanitizeForProviderGlobalFor .nativePreserved rows).map
-        (retainedBlockIndices rows) }
+  { name, orderMode := mode, input := rowCases rows }
 
 private def interleavedCoherentRows : List ProviderRow :=
   [ mkRow 0 .assistant (.assistantToolCalls [1].toFinset)
@@ -431,25 +353,14 @@ theorem witnessOutputsAreProviderValid :
     (witnessesHaveUniqueCallIds witness hwitness)
     (witnessesAreCoherent witness hwitness)
 
-private def splitCases (rows : List ProviderRow) : List PromptAssemblySplitCase :=
-  (List.range (rows.length + 1)).map fun index =>
-    { index := index
-    , expected := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal (rows.drop index)) }
-
 private def sanitizeCase (witness : String × List ProviderRow) :
     PromptAssemblySanitizeCase :=
-  let rows := witness.2
-  let once := PromptAssembly.Provider.sanitizeForProviderGlobal rows
-  { name := witness.1
-  , input := rowCases rows
-  , expected := rowCases once
-  , expectedTwice := rowCases (PromptAssembly.Provider.sanitizeForProviderGlobal once)
-  , splits := splitCases rows }
+  { name := witness.1, input := rowCases witness.2 }
 
 def promptAssemblySanitizeCases : List PromptAssemblySanitizeCase :=
   witnessTranscripts.map sanitizeCase
 
-private def slotName : PromptAssembly.Slot → String
+def slotName : PromptAssembly.Slot → String
   | .preamble _ => "preamble"
   | .summaryReminder => "summaryReminder"
   | .skillReminder index => s!"skillReminder:{index}"
@@ -474,57 +385,7 @@ def promptAssemblyLayerCases : List PromptAssemblyLayerCase :=
         (PromptAssembly.assemble
           shape.2.1 shape.2.2.1 shape.2.2.2).map slotName }
 
-private inductive Payload where
-  | empty
-  | raw
-  | sanitized
-  deriving DecidableEq, Repr
-
-private def sanitizePayload : Payload → Payload
-  | .empty => .empty
-  | .raw => .sanitized
-  | .sanitized => .sanitized
-
-private instance : PromptAssembly.LeafSanitizer Payload where
-  sanitize := sanitizePayload
-  idempotent := by intro p; cases p <;> rfl
-
-private def argsName : PromptAssembly.ToolArgs Payload → String
-  | .object .empty => "object:empty"
-  | .object .raw => "object:raw"
-  | .object .sanitized => "object:sanitized"
-  | .str none => "str:unparsed"
-  | .str (some .empty) => "str:object:empty"
-  | .str (some .raw) => "str:object:raw"
-  | .str (some .sanitized) => "str:object:sanitized"
-  | .array => "array"
-  | .scalar => "scalar"
-  | .null => "null"
-
-private def repairVectors : List (String × PromptAssembly.ToolArgs Payload) :=
-  [ ("object-passes-through", .object .raw)
-  , ("empty-object-passes-through", .object .empty)
-  , ("stringified-object-salvages", .str (some .raw))
-  , ("unparsable-string-collapses", .str none)
-  , ("array-collapses", .array)
-  , ("scalar-collapses", .scalar)
-  , ("null-collapses", .null)
-  ]
-
-private def isPayloadOnly : PromptAssembly.ToolArgs Payload → Bool
-  | .object _ => true
-  | _ => false
-
-def promptAssemblyRepairCases : List PromptAssemblyRepairCase :=
-  repairVectors.map fun vector =>
-    let once := PromptAssembly.repairArgs Payload.empty vector.2
-    { name := vector.1
-    , input := argsName vector.2
-    , expected := argsName once
-    , expectedTwice := argsName (PromptAssembly.repairArgs Payload.empty once)
-    , payloadOnly := isPayloadOnly vector.2 }
-
-private structure BudgetWitness where
+structure BudgetWitness where
   name : String
   contextWindow : Nat
   maxOutputTokens : Nat
@@ -615,7 +476,7 @@ per estimated token, unanchored. -/
 private def unitCalibration : PromptAssembly.ContextCalibration.State :=
   PromptAssembly.ContextCalibration.seed PromptAssembly.ContextCalibration.unitRatio []
 
-private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
+def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
   let configured := PromptAssembly.Budget.configuredThresholdBudget
     witness.contextWindow witness.thresholdBasisPoints
   let effective := PromptAssembly.Budget.effectiveInputBudget configured
@@ -644,7 +505,7 @@ private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
 def promptAssemblyBudgetCases : List PromptAssemblyBudgetCase :=
   budgetWitnesses.map budgetCase
 
-private structure TurnBudgetWitness where
+structure TurnBudgetWitness where
   name : String
   contextWindow : Nat
   maxOutputTokens : Nat
@@ -674,7 +535,7 @@ private def turnBudgetWitnesses : List TurnBudgetWitness :=
     , turnInputTokens := [0, 7499, 7500, 7501] }
   ]
 
-private def turnBudgetCase
+def turnBudgetCase
     (witness : TurnBudgetWitness) : PromptAssemblyTurnBudgetCase :=
   let configured := PromptAssembly.Budget.configuredThresholdBudget
     witness.contextWindow witness.thresholdBasisPoints
@@ -702,7 +563,9 @@ private def turnBudgetCase
 def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
   turnBudgetWitnesses.map turnBudgetCase
 
-private structure TriggerWitness where
+/-- One compaction-trigger witness: the calibration state, a raw estimate
+and the budget inputs. -/
+structure PromptAssemblyCompactionTriggerCase where
   name : String
   contextWindow : Nat := 1000000
   maxOutputTokens : Nat := 32000
@@ -715,7 +578,7 @@ private structure TriggerWitness where
   invalidate : Bool := false
   rawInputTokens : Nat
 
-private def triggerWitnesses : List TriggerWitness :=
+private def triggerWitnesses : List PromptAssemblyCompactionTriggerCase :=
   [ { name := "unit-prior-below-budget", rawInputTokens := 700000 }
   , { name := "unit-prior-at-budget", rawInputTokens := 750000 }
   , { name := "unit-prior-one-over-budget", rawInputTokens := 750001 }
@@ -765,131 +628,15 @@ private def triggerWitnesses : List TriggerWitness :=
     , thresholdBasisPoints := 7500, priorBasisPoints := 20000, rawInputTokens := 376 }
   ]
 
-open PromptAssembly.ContextCalibration in
-private def triggerCase (witness : TriggerWitness) : PromptAssemblyCompactionTriggerCase :=
-  let seeded := { seed witness.priorBasisPoints witness.seededObservations with
-    anchor := witness.anchor }
-  let observedState := witness.observed.foldl
-    (fun state (provider, estimate) => state.observe provider estimate) seeded
-  let state := if witness.invalidate then observedState.invalidate else observedState
-  { name := witness.name
-  , contextWindow := witness.contextWindow
-  , maxOutputTokens := witness.maxOutputTokens
-  , thresholdBasisPoints := witness.thresholdBasisPoints
-  , priorBasisPoints := witness.priorBasisPoints
-  , seededObservations := witness.seededObservations
-  , observed := witness.observed
-  , anchor := witness.anchor
-  , invalidate := witness.invalidate
-  , rawInputTokens := witness.rawInputTokens
-  , ratioBasisPoints := state.ratio
-  , calibratedTokens := calibrated witness.rawInputTokens state.ratio
-  , anchoredTokens := state.anchor.bind fun anchor =>
-      anchored anchor witness.rawInputTokens state.ratio
-  , contextTokens := state.tokens witness.rawInputTokens
-  , compactionInputBudget := PromptAssembly.Budget.compactionInputBudget
-      witness.contextWindow witness.thresholdBasisPoints witness.maxOutputTokens
-  , admission := state.admission witness.rawInputTokens witness.contextWindow
-      witness.thresholdBasisPoints witness.maxOutputTokens }
-
 def promptAssemblyCompactionTriggerCases : List PromptAssemblyCompactionTriggerCase :=
-  triggerWitnesses.map triggerCase
+  triggerWitnesses
 
-private structure RetentionWitness where
-  name : String
-  configuredKeepRecent : Nat
-  effectiveInputBudget : Nat
-  fixedInput : Nat
-  summaryMaxOutput : Nat
-
-private def retentionWitnesses : List RetentionWitness :=
-  [ { name := "zero-capacity", configuredKeepRecent := 0
-    , effectiveInputBudget := 0, fixedInput := 0, summaryMaxOutput := 0 }
-  , { name := "one-token-capacity", configuredKeepRecent := 1
-    , effectiveInputBudget := 1, fixedInput := 0, summaryMaxOutput := 1 }
-  , { name := "configured-cap-wins", configuredKeepRecent := 2
-    , effectiveInputBudget := 100, fixedInput := 0, summaryMaxOutput := 2 }
-  , { name := "fifth-boundary-minus-one", configuredKeepRecent := 100
-    , effectiveInputBudget := 4, fixedInput := 0, summaryMaxOutput := 1 }
-  , { name := "fifth-boundary-exact", configuredKeepRecent := 100
-    , effectiveInputBudget := 5, fixedInput := 0, summaryMaxOutput := 5 }
-  , { name := "fifth-boundary-one-over", configuredKeepRecent := 100
-    , effectiveInputBudget := 6, fixedInput := 0, summaryMaxOutput := 6 }
-  , { name := "fixed-input-leaves-one", configuredKeepRecent := 100
-    , effectiveInputBudget := 100, fixedInput := 99, summaryMaxOutput := 25 }
-  , { name := "fixed-input-consumes-capacity", configuredKeepRecent := 100
-    , effectiveInputBudget := 100, fixedInput := 100, summaryMaxOutput := 100 }
-  , { name := "fixed-input-exceeds-capacity", configuredKeepRecent := 100
-    , effectiveInputBudget := 100, fixedInput := 101, summaryMaxOutput := 101 }
-  , { name := "large-uncapped-json-safe", configuredKeepRecent := 200000
-    , effectiveInputBudget := 200000, fixedInput := 1, summaryMaxOutput := 32768 }
-  , { name := "large-configured-cap", configuredKeepRecent := 20000
-    , effectiveInputBudget := 200000, fixedInput := 58000, summaryMaxOutput := 200000 }
-  , { name := "small-context-large-summary-ceiling", configuredKeepRecent := 20
-    , effectiveInputBudget := 2000, fixedInput := 0, summaryMaxOutput := 32768 }
-  , { name := "summary-ceiling-smaller-than-fifth", configuredKeepRecent := 20
-    , effectiveInputBudget := 6000, fixedInput := 0, summaryMaxOutput := 512 }
-  , { name := "recovery-band-750k-budget", configuredKeepRecent := 1000000
-    , effectiveInputBudget := 750000, fixedInput := 50000, summaryMaxOutput := 32000 }
-  , { name := "summary-reserve-exhausts-band", configuredKeepRecent := 1000000
-    , effectiveInputBudget := 1000, fixedInput := 500, summaryMaxOutput := 300 }
-  ]
-
-private def retentionCase (witness : RetentionWitness) : PromptAssemblyRetentionCase :=
-  let summaryOutput := PromptAssembly.Budget.summaryOutputCeiling
-    witness.summaryMaxOutput witness.effectiveInputBudget
-  { name := witness.name
-  , configuredKeepRecent := witness.configuredKeepRecent
-  , effectiveInputBudget := witness.effectiveInputBudget
-  , fixedInput := witness.fixedInput
-  , availableInput := witness.effectiveInputBudget - witness.fixedInput
-  , retentionTarget := PromptAssembly.Budget.compactionRetentionTarget
-      witness.configuredKeepRecent witness.effectiveInputBudget witness.fixedInput
-      summaryOutput
-  , summaryMaxOutput := witness.summaryMaxOutput
-  , effectiveSummaryOutput := summaryOutput
-  , rollingSummaryInputBudget := PromptAssembly.Budget.rollingSummaryInputBudget
-      witness.effectiveInputBudget summaryOutput
-  }
-
-def promptAssemblyRetentionCases : List PromptAssemblyRetentionCase :=
-  retentionWitnesses.map retentionCase
-
-structure PromptAssemblyClaudeMapCase where
-  name : String
-  surface : List String
-  blocks : List String
-  outcome : String
-  ids : List Nat
-  deriving Repr
-
-private def surfaceOf (names : List String) : PromptAssembly.ClaudeMap.Surface :=
-  names.toFinset
-
-private def claudeMapCase (name : String) (surface : List String)
-    (blocks : List PromptAssembly.ClaudeMap.Block) : PromptAssemblyClaudeMapCase :=
-  let tagged := blocks.map PromptAssembly.ClaudeMap.blockTag
-  match PromptAssembly.ClaudeMap.mapTurn (surfaceOf surface) blocks with
-  | .ok _ =>
-    { name := name
-    , surface := surface
-    , blocks := tagged
-    , outcome := "ok"
-    , ids := (PromptAssembly.ClaudeMap.toolUsePairs blocks).map (·.1) }
-  | .error e =>
-    { name := name
-    , surface := surface
-    , blocks := tagged
-    , outcome := PromptAssembly.ClaudeMap.errorName e
-    , ids := [] }
-
-def promptAssemblyClaudeMapCases : List PromptAssemblyClaudeMapCase :=
-  [ claudeMapCase "text-only-empty-surface" [] [.text]
-  , claudeMapCase "mapped-echo" ["echo"] [.toolUse 1 "echo"]
-  , claudeMapCase "bash-is-not-bash" ["bash"] [.toolUse 1 "Bash"]
-  , claudeMapCase "empty-surface-tool-use" [] [.toolUse 1 "echo"]
-  , claudeMapCase "duplicate-id" ["echo"]
-      [.toolUse 1 "echo", .toolUse 1 "echo"]
+def promptAssemblyClaudeMapWitnesses : List (List String × List PromptAssembly.ClaudeMap.Block) :=
+  [ ([], [.text])
+  , (["echo"], [.toolUse 1 "echo"])
+  , (["bash"], [.toolUse 1 "Bash"])
+  , ([], [.toolUse 1 "echo"])
+  , (["echo"], [.toolUse 1 "echo", .toolUse 1 "echo"])
   ]
 
 structure PromptAssemblyClaudeBodyCase where
@@ -1247,104 +994,37 @@ def promptAssemblyClaudeCacheCases : List PromptAssemblyClaudeCacheCase :=
       (skipWrite := true)
   ]
 
-structure PromptAssemblyClaudeStreamCase where
-  name : String
-  surface : List String
-  events : List String
-  outcome : String
-  calls : List String
-  deriving Repr
-
-private def streamEventTag : PromptAssembly.ClaudeMap.StreamEvent → String
-  | .text t => "text:" ++ t
-  | .start id name input => s!"start:{id}:{name}:{input.getD ""}"
-  | .delta fragment => "delta:" ++ fragment
-  | .stop => "stop"
-  | .thinkingStart index initialText => s!"thinking-start:{index}:{initialText}"
-  | .thinkingDelta index fragment => s!"thinking-delta:{index}:{fragment}"
-  | .signatureDelta index fragment => s!"signature-delta:{index}:{fragment}"
-  | .redactedStart index data => s!"redacted-start:{index}:{data}"
-  | .contentStop index => s!"content-stop:{index}"
-
-private def claudeStreamCase (name : String) (surface : List String)
-    (events : List PromptAssembly.ClaudeMap.StreamEvent) : PromptAssemblyClaudeStreamCase :=
-  match PromptAssembly.ClaudeMap.runStream (surfaceOf surface) events with
-  | .ok calls =>
-    { name := name, surface := surface, events := events.map streamEventTag
-    , outcome := "ok", calls := calls.map (fun (id, args) => s!"{id}={args}") }
-  | .error e =>
-    { name := name, surface := surface, events := events.map streamEventTag
-    , outcome := PromptAssembly.ClaudeMap.errorName e, calls := [] }
-
-def promptAssemblyClaudeStreamCases : List PromptAssemblyClaudeStreamCase :=
-  [ claudeStreamCase "text-only" [] [.text "hi"]
-  , claudeStreamCase "deltas-win-over-start" ["echo"]
-      [.start 1 "echo" (some "{}"), .delta "{\"text\":", .delta " \"hi\"}", .stop]
-  , claudeStreamCase "start-input-without-deltas" ["echo"]
-      [.start 1 "echo" (some "{\"a\":1}"), .stop]
-  , claudeStreamCase "no-input-is-empty-object" ["echo"] [.start 1 "echo" none, .stop]
-  , claudeStreamCase "overlapping-block" ["echo"]
-      [.start 1 "echo" none, .start 2 "echo" none, .stop]
-  , claudeStreamCase "duplicate-id" ["echo"]
-      [.start 1 "echo" none, .stop, .start 1 "echo" none, .stop]
-  , claudeStreamCase "unmapped-name" ["bash"] [.start 1 "Bash" none, .stop]
-  , claudeStreamCase "empty-surface-tool-use" [] [.start 1 "echo" none, .stop]
-  , claudeStreamCase "unterminated-flushes" ["echo"] [.start 1 "echo" none, .delta "{}"]
-  , claudeStreamCase "two-blocks-in-order" ["echo", "list_files"]
-      [.start 1 "echo" none, .delta "{}", .stop, .text "then", .start 2 "list_files" none, .delta "{\"path\":\".\"}", .stop]
+def promptAssemblyClaudeStreamWitnesses :
+    List (List String × List PromptAssembly.ClaudeMap.StreamEvent) :=
+  [ ([], [.text "hi"])
+  , (["echo"], [.start 1 "echo" (some "{}"), .delta "{\"text\":", .delta " \"hi\"}", .stop])
+  , (["echo"], [.start 1 "echo" (some "{\"a\":1}"), .stop])
+  , (["echo"], [.start 1 "echo" none, .stop])
+  , (["echo"], [.start 1 "echo" none, .start 2 "echo" none, .stop])
+  , (["echo"], [.start 1 "echo" none, .stop, .start 1 "echo" none, .stop])
+  , (["bash"], [.start 1 "Bash" none, .stop])
+  , ([], [.start 1 "echo" none, .stop])
+  , (["echo"], [.start 1 "echo" none, .delta "{}"])
+  , (["echo", "list_files"],
+      [.start 1 "echo" none, .delta "{}", .stop, .text "then", .start 2 "list_files" none,
+       .delta "{\"path\":\".\"}", .stop])
   ]
 
-structure PromptAssemblyClaudeThinkingStreamCase where
-  name : String
-  surface : List String
-  events : List PromptAssembly.ClaudeMap.StreamEvent
-  outcome : String
-  steps : List PromptAssembly.ClaudeMap.ContentStep
-  content : List PromptAssembly.ClaudeMap.StreamBlock
-  deriving Repr
-
-private def claudeThinkingStreamCase (name : String) (surface : List String)
-    (events : List PromptAssembly.ClaudeMap.StreamEvent) :
-    PromptAssemblyClaudeThinkingStreamCase :=
-  match PromptAssembly.ClaudeMap.runContentTrace (surfaceOf surface) events with
-  | .ok (steps, content) => { name, surface, events, outcome := "ok", steps, content }
-  | .error error =>
-      let steps := match PromptAssembly.ClaudeMap.runDecodedPrefixTrace
-          (surfaceOf surface) events with
-        | .ok (steps, _) => steps
-        | .error _ => []
-      { name, surface, events, outcome := PromptAssembly.ClaudeMap.errorName error,
-        steps, content := [] }
-
-def promptAssemblyClaudeThinkingStreamCases : List PromptAssemblyClaudeThinkingStreamCase :=
-  [ claudeThinkingStreamCase "unicode-fragmented-signature" []
-      [.thinkingStart 0 "", .thinkingDelta 0 "考", .thinkingDelta 0 "慮",
-       .signatureDelta 0 "署", .signatureDelta 0 "名", .contentStop 0]
-  , claudeThinkingStreamCase "initial-text-then-delta" []
-      [.thinkingStart 0 "初", .thinkingDelta 0 "続",
-       .signatureDelta 0 "sig", .contentStop 0]
-  , claudeThinkingStreamCase "empty-text-signed" []
-      [.thinkingStart 0 "", .signatureDelta 0 "signature", .contentStop 0]
-  , claudeThinkingStreamCase "redacted-before-tool" ["echo"]
-      [.redactedStart 0 "opaque", .contentStop 0,
-       .start 1 "echo" none, .delta "{}", .stop]
-  , claudeThinkingStreamCase "missing-signature" []
-      [.thinkingStart 0 "", .thinkingDelta 0 "thinking", .contentStop 0]
-  , claudeThinkingStreamCase "wrong-index" []
-      [.thinkingStart 0 "", .signatureDelta 1 "sig"]
-  , claudeThinkingStreamCase "reused-block-index" []
-      [.thinkingStart 0 "", .signatureDelta 0 "sig", .contentStop 0,
-       .redactedStart 0 "opaque"]
-  , claudeThinkingStreamCase "interleaved-text" []
-      [.thinkingStart 0 "", .text "not-this-block"]
-  , claudeThinkingStreamCase "text-during-tool" ["echo"]
-      [.start 1 "echo" none, .text "not-this-block"]
-  , claudeThinkingStreamCase "thinking-after-signature" []
-      [.thinkingStart 0 "", .signatureDelta 0 "sig", .thinkingDelta 0 "late"]
-  , claudeThinkingStreamCase "abort-after-signature-delta" []
-      [.thinkingStart 0 "", .signatureDelta 0 "sig"]
-  , claudeThinkingStreamCase "abort-after-redacted-start" []
-      [.redactedStart 0 "opaque"]
+def promptAssemblyClaudeThinkingStreamWitnesses :
+    List (List String × List PromptAssembly.ClaudeMap.StreamEvent) :=
+  [ ([], [.thinkingStart 0 "", .thinkingDelta 0 "考", .thinkingDelta 0 "慮",
+       .signatureDelta 0 "署", .signatureDelta 0 "名", .contentStop 0])
+  , ([], [.thinkingStart 0 "初", .thinkingDelta 0 "続", .signatureDelta 0 "sig", .contentStop 0])
+  , ([], [.thinkingStart 0 "", .signatureDelta 0 "signature", .contentStop 0])
+  , (["echo"], [.redactedStart 0 "opaque", .contentStop 0, .start 1 "echo" none, .delta "{}", .stop])
+  , ([], [.thinkingStart 0 "", .thinkingDelta 0 "thinking", .contentStop 0])
+  , ([], [.thinkingStart 0 "", .signatureDelta 1 "sig"])
+  , ([], [.thinkingStart 0 "", .signatureDelta 0 "sig", .contentStop 0, .redactedStart 0 "opaque"])
+  , ([], [.thinkingStart 0 "", .text "not-this-block"])
+  , (["echo"], [.start 1 "echo" none, .text "not-this-block"])
+  , ([], [.thinkingStart 0 "", .signatureDelta 0 "sig", .thinkingDelta 0 "late"])
+  , ([], [.thinkingStart 0 "", .signatureDelta 0 "sig"])
+  , ([], [.redactedStart 0 "opaque"])
   ]
 
 structure PromptAssemblyClaudeReplayCase where
@@ -1563,6 +1243,7 @@ def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCas
 
 structure PromptAssemblyReasoningSuffixCase where
   name : String
+  context : List UInt8
   issuer : PromptAssembly.ClaudeMap.ReplayIssuer
   wire : PromptAssembly.ClaudeMap.ReplayWire
   rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
@@ -1572,7 +1253,7 @@ structure PromptAssemblyReasoningSuffixCase where
   replay : List PromptAssembly.ClaudeMap.TaggedReplayRow
   deriving Repr
 
-private def resolveFrom (resolutions : List PromptAssemblyClaudeCheckpointResolution)
+def resolveFrom (resolutions : List PromptAssemblyClaudeCheckpointResolution)
     (tag : PromptAssembly.ClaudeMap.ReplayTag) :
     List PromptAssembly.ClaudeMap.ResolvedReplayEvidence :=
   (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
@@ -1586,7 +1267,7 @@ private def reasoningSuffixCase (name : String) (context : List UInt8)
   let resolve := resolveFrom resolutions
   let projected := rows.map (PromptAssembly.ClaudeMap.projectRecoveredPrefix resolve)
   let stage := PromptAssembly.ClaudeMap.replayStage projected issuer wire resolve
-  { name, issuer, wire, rows, resolutions, stage,
+  { name, context, issuer, wire, rows, resolutions, stage,
     assembled := replayCaseAssemble wire context stage,
     replay := PromptAssembly.ClaudeMap.restoreHistoricalReasoningSuffix projected issuer wire
       resolve (replayCaseAssemble wire context) }
@@ -1955,7 +1636,7 @@ structure PromptAssemblyReplayPrefixCase where
   leadingRemoval : Bool
   deriving Repr
 
-private def replayPrefixCase (name : String)
+def replayPrefixCase (name : String)
     (captured current : List PromptAssembly.ClaudeMap.ReplayFlatItem) :
     PromptAssemblyReplayPrefixCase :=
   let anchoredCaptured := PromptAssembly.ReplayFrontier.anchored captured
@@ -2019,10 +1700,6 @@ structure ProviderToolIdentityCase where
   name : String
   responses : Bool
   input : List PromptAssembly.ToolCallIdentity.Identity
-
-def ProviderToolIdentityCase.expected (row : ProviderToolIdentityCase) :
-    List PromptAssembly.ToolCallIdentity.Identity :=
-  row.input.map (PromptAssembly.ToolCallIdentity.project row.responses)
 
 def providerToolIdentityCases : List ProviderToolIdentityCase :=
   [ ⟨"foreign_tool_use_ids", true, [⟨"toolu_first", none⟩, ⟨"toolu_second", none⟩]⟩

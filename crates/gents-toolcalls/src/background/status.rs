@@ -572,20 +572,10 @@ mod tests {
         assert_eq!(malformed.lifecycle_state.as_deref(), Some("failed"));
     }
 
-    /// Drives the Lean `tool_output_paging_cases` (#937) through the real
-    /// `read_retained_output_slice`; the rows are computed from the Lean
-    /// `ToolOutput.readSlice` model, so paging drift in either direction
-    /// fails here. ASCII payloads keep byte and UTF-8 boundaries identical.
-
+    /// ASCII payloads keep byte and UTF-8 boundaries identical.
     #[test]
     fn generated_tool_output_paging_cases_match_slice_function() {
-        let cases = gents_lean_vocab::lean_tool_output_paging_cases();
-        assert!(
-            !cases.is_empty(),
-            "Lean emitted no tool-output paging cases"
-        );
-
-        for case in cases {
+        gents_lean_vocab::families::contracts_tool_output_paging::replay(|case| {
             let retained = "x".repeat(case.retained_len as usize);
             let slice = read_retained_output_slice(
                 &retained,
@@ -594,38 +584,14 @@ mod tests {
                 case.offset,
                 case.max_bytes as usize,
             );
-            assert_eq!(
-                slice.output.len() as u64,
-                case.slice_len,
-                "paging case {} returned the wrong slice length",
-                case.name
-            );
-            assert_eq!(
-                slice.next_offset, case.next_offset,
-                "paging case {} continuation cursor drifted",
-                case.name
-            );
-            assert_eq!(
-                slice.first_available_offset, case.first_available_offset,
-                "paging case {} eviction floor drifted",
-                case.name
-            );
-            assert_eq!(
-                slice.total_bytes, case.total_bytes_out,
-                "paging case {} total drifted",
-                case.name
-            );
-            assert_eq!(
-                slice.has_more, case.has_more,
-                "paging case {} has_more drifted",
-                case.name
-            );
-            assert_eq!(
-                slice.next_offset,
-                case.start + case.slice_len,
-                "paging case {} pages must be contiguous from the clamped start",
-                case.name
-            );
-        }
+            gents_lean_vocab::families::contracts_tool_output_paging::Output {
+                start: slice.next_offset - slice.output.len() as u64,
+                slice_len: slice.output.len() as u64,
+                next_offset: slice.next_offset,
+                first_available_offset: slice.first_available_offset,
+                total_bytes_out: slice.total_bytes,
+                has_more: slice.has_more,
+            }
+        });
     }
 }

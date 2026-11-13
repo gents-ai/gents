@@ -192,7 +192,6 @@ mod tests {
     use rmcp::model::{ListToolsResult, Tool as McpTool};
 
     use crate::mcp::health::{HealthStatus, ServiceHealth};
-    use gents_lean_vocab::lean_tool_preflight_cases;
 
     use super::super::tests::seed_registry_service;
 
@@ -291,9 +290,8 @@ mod tests {
         let node = db.node.clone();
         seed_registry_service(&node, "x-data", "elsewhere", 9198).await;
 
-        for case in lean_tool_preflight_cases()
-            .iter()
-            .filter(|case| case.schema_status == "unchecked")
+        for case in
+            gents_lean_vocab::families::contracts_tool_preflight_discover::cases::<String, String>()
         {
             let contacted = Arc::new(AtomicBool::new(false));
             let contacted_in_handler = Arc::clone(&contacted);
@@ -312,14 +310,14 @@ mod tests {
                 .set_for_test(
                     "x-data",
                     ServiceHealth {
-                        status: match case.health.as_str() {
+                        status: match case.input.health.as_str() {
                             "healthy" => HealthStatus::Healthy,
                             "stale" => HealthStatus::Stale,
                             "unreachable" => HealthStatus::Unreachable,
                             other => panic!("unknown Lean health status {other:?}"),
                         },
                         last_seen: Utc::now(),
-                        last_error: (case.health == "unreachable")
+                        last_error: (case.input.health == "unreachable")
                             .then(|| "probe timed out".to_string()),
                     },
                 )
@@ -331,18 +329,12 @@ mod tests {
                 .await
                 .expect("discover returns model-readable text");
 
-            let expected_contact = case.decision == "dispatch";
-            assert_eq!(
-                contacted.load(Ordering::SeqCst),
-                expected_contact,
-                "Lean ToolExecution preflight case {} must gate discover's \
-                 list_tools contact (output: {output})",
-                case.name
-            );
+            let contacted = contacted.load(Ordering::SeqCst);
             assert!(
                 output.contains("x-data"),
                 "service must appear in the index regardless of health: {output}"
             );
+            case.check(if contacted { "dispatch" } else { "block" }.to_string());
         }
     }
 

@@ -1,63 +1,4 @@
 use super::*;
-pub fn generated_steering_prepared_prompt(
-    case: &gents_lean_vocab::LeanQueuedSteeringTraceCase,
-) -> Message {
-    use gents_lean_vocab::{
-        LeanCanonicalClosure, LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock,
-        LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind, LeanPresentation,
-    };
-
-    let candidate = case
-        .prepared_candidate
-        .as_ref()
-        .expect("generated publication has no prepared candidate");
-    let segment = &candidate.closing;
-    let message = &candidate.message;
-    assert_eq!(segment.coordinate.request, case.request_doc_id);
-    assert!(matches!(
-        &segment.coordinate.source,
-        LeanCanonicalSource::Authored { .. }
-    ));
-    let LeanCanonicalWriter::Request { generation } = &segment.writer else {
-        panic!("{} has a non-request authored writer", case.name)
-    };
-    assert!(matches!(&message.header.publication,
-        LeanMessagePublication::RequestExecution { generation: owner } if owner == generation));
-    assert_eq!(message.header.request, Some(case.request_doc_id));
-    assert!(matches!(&message.header.role, LeanMessageRole::User));
-    assert!(matches!(&message.header.outcome, LeanOutcome::Complete));
-    let [LeanMessageBlock::Text { payload }] = message.blocks.as_slice() else {
-        panic!("{} is not a single prepared user text block", case.name)
-    };
-    assert!(matches!(&payload.presentation, LeanPresentation::Full));
-    assert_eq!(payload.reference.close_id, segment.id);
-    assert_eq!(payload.reference.stream, 0);
-    assert_eq!(
-        message.header.refs.as_slice(),
-        std::slice::from_ref(&payload.reference)
-    );
-    let flush = segment.flush.as_ref().expect("prepared text lacks a flush");
-    assert_eq!(flush.ordinal, 0);
-    let [run] = flush.runs.as_slice() else {
-        panic!("{} is not a single prepared text stream", case.name)
-    };
-    assert_eq!(run.stream, payload.reference.stream);
-    assert_eq!(
-        usize::try_from(run.bytes).expect("prepared run exceeds usize"),
-        flush.payload.len()
-    );
-    let declaration = run
-        .declaration
-        .as_ref()
-        .expect("prepared text lacks declaration");
-    assert_eq!((declaration.block, declaration.part), (0, 0));
-    assert!(matches!(&declaration.kind, LeanPayloadKind::Text));
-    assert!(matches!(&segment.close,
-        Some(LeanCanonicalClosure::Closed { outcome: LeanOutcome::Complete, segments: 1, stream_bytes })
-        if stream_bytes.as_slice() == [run.bytes]));
-    Message::user(String::from_utf8(flush.payload.clone()).expect("prepared text is UTF-8"))
-}
-
 pub fn assert_provider_request_invariants(turn: usize, history: &[Message]) {
     let mut pending_call_keys: Vec<String> = Vec::new();
     for message in history {
@@ -172,24 +113,53 @@ pub fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut 
     slot
 }
 
-pub fn generated_authored_key(
-    key: &gents_lean_vocab::LeanFoldAuthoredKey,
+fn observed_authored_key(
+    message_key: &str,
+    head_doc_id: &str,
     docs: &rapidhash::RapidHashMap<u64, String>,
-) -> String {
-    use gents_lean_vocab::LeanFoldAuthoredKey as Key;
-    match key {
-        Key::Context => "context".to_owned(),
-        Key::Prompt => "prompt".to_owned(),
-        Key::Folded { request_id } => {
-            gents_session::request::lifecycle::queue::folded_input_key(&docs[request_id])
-        }
+) -> gents_lean_vocab::families::fold_queue_contracts_turn_input::AuthoredKeyWire<String> {
+    let key =
+        |authored: &str| gents_protocol::output::rows::authored_message_key(head_doc_id, authored);
+    if message_key == key("context") {
+        return gents_lean_vocab::families::fold_queue_contracts_turn_input::AuthoredKeyWire {
+            kind: "context".to_owned(),
+            request_id: None,
+        };
+    }
+    if message_key == key("prompt") {
+        return gents_lean_vocab::families::fold_queue_contracts_turn_input::AuthoredKeyWire {
+            kind: "prompt".to_owned(),
+            request_id: None,
+        };
+    }
+    let request_id = docs
+        .iter()
+        .find(|(_, doc)| {
+            message_key
+                == key(&gents_session::request::lifecycle::queue::folded_input_key(
+                    doc,
+                ))
+        })
+        .map(|(request_id, _)| *request_id)
+        .unwrap_or_else(|| panic!("authored message key {message_key} names no turn input"));
+    gents_lean_vocab::families::fold_queue_contracts_turn_input::AuthoredKeyWire {
+        kind: "folded".to_owned(),
+        request_id: Some(request_id),
     }
 }
 
+fn trailing_user_texts(messages: &[Message]) -> Vec<String> {
+    let start = messages
+        .iter()
+        .rposition(|message| !matches!(message, Message::User { .. }))
+        .map_or(0, |index| index + 1);
+    messages[start..].iter().map(sole_user_text).collect()
+}
+
 pub async fn drive_generated_turn_input(
-    case: &gents_lean_vocab::LeanFoldTurnInputCase,
+    case: &gents_lean_vocab::families::fold_queue_contracts_turn_input::TurnInputCase,
     first_turn_compaction: bool,
-) {
+) -> gents_lean_vocab::families::fold_queue_contracts_turn_input::TurnInputObservation<String> {
     let (db, hook, writer, mut lifecycle, docs) = owned_test_hook_with_folded_case(case).await;
     let node = db.node.clone();
     let head = lifecycle.request().clone();
@@ -285,12 +255,6 @@ pub async fn drive_generated_turn_input(
     .await;
     assert_eq!(collected.error, None, "{}", case.name);
 
-    let expected_input = case
-        .provider_input
-        .iter()
-        .cloned()
-        .map(Message::user)
-        .collect::<Vec<_>>();
     let histories = model.seen_histories().await;
     assert_eq!(
         histories.len(),
@@ -298,30 +262,15 @@ pub async fn drive_generated_turn_input(
         "{}: one inference answers every message",
         case.name
     );
-    if first_turn_compaction {
-        let saw = compactor_saw.lock().unwrap().clone();
-        assert!(
-            saw.ends_with(&expected_input),
-            "{}: compaction input",
-            case.name
-        );
-        assert_eq!(
-            *published_before_reduction.lock().unwrap(),
-            case.authored.len(),
-            "{}: the admitted input is accepted before any reduction",
-            case.name
-        );
+    let provider_input = if first_turn_compaction {
         assert_eq!(
             histories[0].last(),
             Some(&Message::user("compacted prompt"))
         );
+        trailing_user_texts(&compactor_saw.lock().unwrap())
     } else {
-        assert!(
-            histories[0].ends_with(&expected_input),
-            "{}: provider order",
-            case.name
-        );
-    }
+        trailing_user_texts(&histories[0])
+    };
 
     let scoped_doc_id = gents_store::graphql::escape_graphql_string(&head.doc_id);
     let observed = agent_response(&lifecycle.access().unwrap(), &format!(
@@ -330,22 +279,16 @@ pub async fn drive_generated_turn_input(
     assert!(!observed.has_errors(), "{:?}", observed.errors);
     let observed = observed.data.unwrap();
     let headers = observed["AgentMessage"].as_array().unwrap();
-    assert_eq!(
-        headers.len(),
-        case.authored.len(),
-        "{}: authored entries",
-        case.name
-    );
-    for (header, authored) in headers.iter().zip(&case.authored) {
+    if first_turn_compaction {
         assert_eq!(
-            header["message_key"],
-            gents_protocol::output::rows::authored_message_key(
-                &head.doc_id,
-                &generated_authored_key(&authored.key, &docs)
-            ),
-            "{}",
+            *published_before_reduction.lock().unwrap(),
+            headers.len(),
+            "{}: the admitted input is accepted before any reduction",
             case.name
         );
+    }
+    let mut authored = Vec::with_capacity(headers.len());
+    for header in headers {
         let (_, native) = gents_session::session::load_canonical_message(
             &lifecycle.access().unwrap(),
             header["_docID"].as_str().unwrap(),
@@ -354,11 +297,15 @@ pub async fn drive_generated_turn_input(
         )
         .await
         .unwrap();
-        assert_eq!(
-            native,
-            Message::user(authored.content.clone()),
-            "{}",
-            case.name
+        authored.push(
+            gents_lean_vocab::families::fold_queue_contracts_turn_input::AuthoredWire {
+                key: observed_authored_key(
+                    header["message_key"].as_str().unwrap(),
+                    &head.doc_id,
+                    &docs,
+                ),
+                content: sole_user_text(&native),
+            },
         );
     }
     for doc in docs.values() {
@@ -406,4 +353,8 @@ pub async fn drive_generated_turn_input(
     assert!(resumed_history
         .iter()
         .any(|row| matches!(&row.message, Message::User { .. })));
+    gents_lean_vocab::families::fold_queue_contracts_turn_input::TurnInputObservation {
+        authored,
+        provider_input,
+    }
 }

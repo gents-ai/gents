@@ -6,14 +6,24 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use gents_lean_vocab::lean_tool_retry_case;
-
 #[tokio::test]
 async fn list_tools_transport_failure_retries_generated_safe_read_case() {
-    let case = lean_tool_retry_case("retry_mcpListTools_unknown_transport_retrySafeRead");
-    assert_eq!(case.operation, "mcpListTools");
-    assert_eq!(case.failure_class, "transport");
-    assert_eq!(case.disposition, "retrySafeRead");
+    for case in gents_lean_vocab::families::contracts_tool_retry_list_tools::cases::<
+        String,
+        String,
+        String,
+    >() {
+        assert_eq!(case.input.failure_class, "transport");
+        list_tools_after_transport_failure(case).await;
+    }
+}
+
+async fn list_tools_after_transport_failure(
+    case: gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::contracts_tool_retry_list_tools::ToolRetryInput<String, String>,
+        String,
+    >,
+) {
 
     let connect_attempts = Arc::new(AtomicUsize::new(0));
     let list_calls = Arc::new(AtomicUsize::new(0));
@@ -50,26 +60,42 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
         },
     );
 
-    pool.list_tools("read-service", "http://mcp.test/mcp")
-        .await
-        .expect("Lean safe-read case should retry list_tools transport failure");
-
-    assert_eq!(connect_attempts.load(Ordering::SeqCst), 2, "{:?}", case);
-    assert_eq!(list_calls.load(Ordering::SeqCst), 2, "{:?}", case);
+    let listed = pool.list_tools("read-service", "http://mcp.test/mcp").await;
+    let connects = connect_attempts.load(Ordering::SeqCst);
+    let lists = list_calls.load(Ordering::SeqCst);
+    assert_eq!(connects, lists, "{:?}", case.input);
+    case.check(
+        if listed.is_ok() && lists == 2 {
+            "retry_safe_read"
+        } else {
+            "do_not_retry"
+        }
+        .to_string(),
+    );
 }
 
 #[tokio::test]
 async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata() {
-    let case = lean_tool_retry_case("retry_mcpCall_unknown_transport_doNotRetry");
-    assert_eq!(case.operation, "mcpCall");
-    assert_eq!(case.failure_class, "transport");
-    assert_eq!(case.disposition, "doNotRetry");
+    for case in
+        gents_lean_vocab::families::contracts_tool_retry_call::cases::<String, String, String>()
+    {
+        assert_eq!(case.input.failure_class, "transport");
+        call_tool_after_transport_failure(case).await;
+    }
+}
+
+async fn call_tool_after_transport_failure(
+    case: gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::contracts_tool_retry_call::ToolRetryInput<String, String>,
+        String,
+    >,
+) {
 
     let pool = McpPool::new();
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_fn = Arc::clone(&calls);
     let endpoint = "http://mcp.test/mcp";
-    let service_id = format!("mutating-service-{}", case.idempotency);
+    let service_id = format!("mutating-service-{}", case.input.idempotency);
 
     {
         let mut guard = pool.inner.write().await;
@@ -104,18 +130,24 @@ async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idem
         .expect_err("dispatch failure should propagate");
 
     assert!(error.to_string().contains("transport dropped"));
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "generated ToolExecution case {} must not retry call_tool",
-        case.name
-    );
+    let calls = calls.load(Ordering::SeqCst);
+    let parked = pool
+        .inner
+        .read()
+        .await
+        .contains_key(&super::ParkKey::new(&service_id, endpoint, None));
     assert!(
-        pool.inner
-            .read()
-            .await
-            .contains_key(&super::ParkKey::new(&service_id, endpoint, None)),
-        "a failed call_tool must not evict and reconnect without idempotency evidence"
+        parked,
+        "{}: a failed call_tool must not evict and reconnect without idempotency evidence",
+        case.input.name
+    );
+    case.check(
+        if calls > 1 {
+            "retry_idempotent_tool_call"
+        } else {
+            "do_not_retry"
+        }
+        .to_string(),
     );
 }
 

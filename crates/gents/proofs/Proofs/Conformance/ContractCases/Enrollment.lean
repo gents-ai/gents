@@ -6,18 +6,18 @@ namespace Conformance.ContractCases
 
 open Enrollment
 
-private def requestAdmissionKindName : AgentRequestAdmissionKind → String
+def requestAdmissionKindName : AgentRequestAdmissionKind → String
   | .enrollment => "enrollment"
   | .client => "client"
   | .localSelf => "local-self"
   | .runtimeInternal => "runtime-internal"
   | .peer => "peer"
 
-private def runtimeInternalSourceKindName : RuntimeInternalSourceKind → String
+def runtimeInternalSourceKindName : RuntimeInternalSourceKind → String
   | .localControl => "local-control"
   | .automatedTrigger => "automated-trigger"
 
-private def requestAdmissionDispositionName : AgentRequestAdmissionDisposition → String
+def requestAdmissionDispositionName : AgentRequestAdmissionDisposition → String
   | .admit => "admit"
   | .deny => "deny"
   | .retry => "retry"
@@ -398,22 +398,6 @@ def titleRequestAdmissionCases : List TitleRequestAdmissionCase :=
         { titleAdmissionUnsigned with runtimeSourceKind := .automatedTrigger })
       (some titleEvidence)
   ]
-
-structure TitlePurposeWireCase where
-  name : String
-  wire : Option String
-  expectedDecoded : Option RequestPurpose
-  deriving Repr
-
-def titlePurposeWireCases : List TitlePurposeWireCase :=
-  let makeCase (name : String) (wire : Option String) : TitlePurposeWireCase :=
-    { name, wire, expectedDecoded := wire.bind RequestPurpose.fromWire? }
-  [ makeCase "missing-purpose-is-invalid" none
-  , makeCase "unknown-purpose-is-invalid" (some "titleAudit")
-  , makeCase "normal-purpose-explicit" (some "normal")
-  , makeCase "title-purpose-explicit" (some "title-audit")
-  , makeCase "access-review-purpose-explicit" (some "access-review")
-  , makeCase "access-review-camel-case-is-invalid" (some "accessReview") ]
 
 open Enrollment
 

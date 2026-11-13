@@ -1,4 +1,7 @@
 use super::*;
+use gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::{
+    NotificationWire, ReceiptOutput, ScopeWire,
+};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -6,10 +9,6 @@ use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSourc
 use gents_protocol::row::AgentRequestRow;
 use gents_session::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
-};
-use gents_lean_vocab::{
-    LeanGoalWakeReceiptCaseClaimScope, LeanGoalWakeReceiptCaseNotificationsItem,
-    LeanGoalWakeReceiptCaseNotificationsItemScope, LeanGoalWakeReceiptCasePriorItemClaimScope,
 };
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{collections::BTreeMap, sync::Arc};
@@ -155,28 +154,8 @@ struct ClaimScope<'a> {
     root: Option<u64>,
 }
 
-impl<'a> From<&'a LeanGoalWakeReceiptCaseClaimScope> for ClaimScope<'a> {
-    fn from(scope: &'a LeanGoalWakeReceiptCaseClaimScope) -> Self {
-        Self {
-            kind: &scope.kind,
-            goal: scope.goal,
-            root: scope.root,
-        }
-    }
-}
-
-impl<'a> From<&'a LeanGoalWakeReceiptCaseNotificationsItemScope> for ClaimScope<'a> {
-    fn from(scope: &'a LeanGoalWakeReceiptCaseNotificationsItemScope) -> Self {
-        Self {
-            kind: &scope.kind,
-            goal: scope.goal,
-            root: scope.root,
-        }
-    }
-}
-
-impl<'a> From<&'a LeanGoalWakeReceiptCasePriorItemClaimScope> for ClaimScope<'a> {
-    fn from(scope: &'a LeanGoalWakeReceiptCasePriorItemClaimScope) -> Self {
+impl<'a> From<&'a ScopeWire<String>> for ClaimScope<'a> {
+    fn from(scope: &'a ScopeWire<String>) -> Self {
         Self {
             kind: &scope.kind,
             goal: scope.goal,
@@ -313,7 +292,7 @@ async fn wake(
 async fn append_through(
     fixture: &ScopeFixture,
     session: &str,
-    notifications: &[LeanGoalWakeReceiptCaseNotificationsItem],
+    notifications: &[NotificationWire<String>],
     sources: &BTreeMap<u64, AgentRequestRow>,
     appended: &mut u64,
     cutoff: u64,
@@ -459,11 +438,11 @@ async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestL
 
 #[tokio::test]
 async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_wake_receipt_cases;
-    assert_eq!(cases.len(), 11);
     let mut conflicting_history_cases = 0;
-    for case in cases {
-        let name = case.name.as_str();
+    for case in
+        gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::cases::<String, String>()
+    {
+        let name = case.input.name.as_str();
         let fixture = ScopeFixture::new(&format!("goal-wake-scope-{name}")).await;
         let node = fixture.db.node.clone();
         let access = &fixture.access;
@@ -484,9 +463,13 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         };
         let parent = write_request(&fixture, make("unassigned-parent".into())).await;
         terminal_source(&fixture, &parent).await;
-        let notifications = &case.notifications;
+        let notifications = &case.input.notifications;
         let mut roots = BTreeMap::new();
-        let claim_scope = case.retry_parent.is_none().then(|| ClaimScope::from(&case.claim.scope));
+        let claim_scope = case
+            .input
+            .retry_parent
+            .is_none()
+            .then(|| ClaimScope::from(&case.input.claim.scope));
         for scope in notifications
             .iter()
             .map(|row| ClaimScope::from(&row.scope))
@@ -515,7 +498,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             create.input.goal_assignment =
                 reference(&ClaimScope::from(&notification.scope), &roots);
             let row = write_request(&fixture, create.clone()).await;
-            if case.superseded_origins {
+            if case.input.superseded_origins {
                 create.request_id = format!("source-{id}-replacement");
                 let replacement = write_request(&fixture, create).await;
                 let mutation = gents_session::request::lifecycle::queue::supersede_pending_mutation(
@@ -542,9 +525,9 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             }
             sources.insert(id, row);
         }
-        if case.prior.is_empty()
-            && case.retry_parent.is_none()
-            && case.claim.scope.kind == "referenced"
+        if case.input.prior.is_empty()
+            && case.input.retry_parent.is_none()
+            && case.input.claim.scope.kind == "referenced"
             && notifications
                 .iter()
                 .all(|notice| notice.scope.kind == "referenced")
@@ -576,9 +559,9 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             .unwrap();
             conflicting_history_cases += 1;
         }
-        if case.prior.is_empty()
-            && case.retry_parent.is_none()
-            && case.claim.scope.kind == "referenced"
+        if case.input.prior.is_empty()
+            && case.input.retry_parent.is_none()
+            && case.input.claim.scope.kind == "referenced"
             && notifications
                 .iter()
                 .all(|notice| notice.scope.kind == "referenced")
@@ -592,7 +575,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         }
         let mut appended = 0;
         let mut retry_parent = None;
-        for prior in &case.prior {
+        for prior in &case.input.prior {
             let prior_claim = &prior.claim;
             append_through(
                 &fixture,
@@ -655,7 +638,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .await
                 .unwrap();
             drop(lifecycle);
-            if case.retry_parent == Some(prior_claim.wake) {
+            if case.input.retry_parent == Some(prior_claim.wake) {
                 let response = access
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
@@ -672,7 +655,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 );
             }
         }
-        let current_claim = &case.claim;
+        let current_claim = &case.input.claim;
         append_through(
             &fixture,
             &session,
@@ -700,12 +683,17 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .unwrap(),
         )
         .unwrap();
-        let expected = |ids: &[u64]| ids.iter().map(|id| key(*id)).collect::<Vec<_>>();
-        assert_eq!(
-            captured,
-            expected(&case.captured),
-            "{name}: claim admitted another assignment's notification"
-        );
+        let captured = captured
+            .iter()
+            .map(|captured| {
+                captured
+                    .strip_prefix("background-completion-notification:scope-")
+                    .and_then(|rest| rest.strip_suffix(":tool"))
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .filter(|id| key(*id) == *captured)
+                    .unwrap_or_else(|| panic!("{name}: captured key {captured} names no source"))
+            })
+            .collect::<Vec<_>>();
         append_through(
             &fixture,
             &session,
@@ -722,21 +710,18 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         )
         .await
         .unwrap();
-        let actual = rows
+        let current = rows
             .iter()
-            .map(|row| row.message.rag_text().expect("notification user text"))
+            .map(|row| {
+                let text = row.message.rag_text().expect("notification user text");
+                text.strip_prefix("Notification ")
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .unwrap_or_else(|| panic!("{name}: provider input {text} is no notification"))
+            })
             .collect::<Vec<_>>();
-        let expected_content = case
-            .current
-            .iter()
-            .map(|id| format!("Notification {id}"))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            actual, expected_content,
-            "{name}: provider input or exact acknowledgement changed"
-        );
         drop(lifecycle);
         node.shutdown().await.expect("node shutdown");
+        case.check(ReceiptOutput { captured, current });
     }
     assert!(conflicting_history_cases > 0);
 }

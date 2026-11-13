@@ -46,3 +46,17 @@ pub fn engine_guard_next(plugin: &InstalledPlugin) -> String {
         "Next: reinstall {pack} with `gents config pack install`, or through config as an agent that holds pack authority (self_config.enable_pack_authority)"
     )
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn call_origin_matches_lean() {
+        gents_lean_vocab::families::plugin_job_script_origin::replay::<JobOrigin>(|i| {
+            gents_lean_vocab::families::plugin_job_script_origin::OriginOutput {
+                origin: call_origin(i.call.script.as_deref()),
+            }
+        });
+    }
+}

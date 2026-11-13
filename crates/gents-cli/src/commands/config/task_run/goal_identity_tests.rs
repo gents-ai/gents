@@ -202,15 +202,14 @@ async fn signed_request(
 
 #[tokio::test]
 async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> Result<()> {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_first_request_binding_cases;
-    assert_eq!(cases.len(), 14);
     let home = gents_host::test_support::ClientHome::new().await;
     let binding = home.agent("Engineer").await;
     enable_goal_creation(&home, &binding).await?;
     let access = &home.access;
     let owner = home.node_did().to_owned();
-    for case in cases {
-        let session = format!("manual-task:{}", case.name);
+    for case in gents_lean_vocab::families::goal_first_request_binding_manual_task::cases() {
+        let task = &case.input;
+        let session = format!("manual-task:{}", task.name);
         home.agent_session(&binding, &session).await;
         let initial = gents_protocol::goal::deterministic_goal_id(&owner, &session);
         let goal_id = |value: &str| {
@@ -224,25 +223,23 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
             &home,
             &binding,
             &session,
-            case.current_task_goal.as_deref().map(goal_id).as_deref(),
+            task.current_task_goal.as_deref().map(goal_id).as_deref(),
         )
         .await?;
         let selected = prepare_task_run_goal_id(access, &owner, &session, true, None).await?;
-        assert_eq!(
-            selected,
-            Some(goal_id(&case.expected_task_goal)),
-            "{case:?}"
-        );
+        let task_goal = selected
+            .clone()
+            .context("goal-backed Task selects a Goal")?;
         set_goal(
             &home,
             &binding,
             &session,
-            case.observed_task_goal.as_deref().map(goal_id).as_deref(),
+            task.observed_task_goal.as_deref().map(goal_id).as_deref(),
         )
         .await?;
         let identity = FireIdentity {
             owner_did: owner.clone(),
-            trigger_id: format!("manual:task:{}", case.name),
+            trigger_id: format!("manual:task:{}", task.name),
             source_collection: "Task".into(),
             source_doc_id: "task-document".into(),
         };
@@ -269,11 +266,15 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
         assert_eq!(request.input, input);
         let admitted =
             gents_automation::triggers::write_task_delivery(access, &fire, true, &request).await;
-        assert_eq!(
-            admitted.is_ok(),
-            case.task_binding_valid,
-            "{case:?}: {:?}",
-            admitted.as_ref().err()
+        case.check(
+            gents_lean_vocab::families::goal_first_request_binding_manual_task::TaskOutput {
+                task_goal: if task_goal == initial {
+                    "initial-goal".to_owned()
+                } else {
+                    task_goal
+                },
+                task_binding_valid: admitted.is_ok(),
+            },
         );
         let row = lookup_request_by_retry_key(access, &owner, &fire.fire_key).await?;
         if let Err(error) = admitted {
@@ -281,7 +282,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                 format!("{error:#}").contains("Task Goal assignment changed"),
                 "{error:#}"
             );
-            assert!(row.is_none(), "{case:?}");
+            assert!(row.is_none(), "{task:?}");
             let persisted = access
                 .execute(&format!(
                     "{{TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}) {{goal_id}}}}",
@@ -293,12 +294,12 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                     .as_array()
                     .unwrap()
                     .is_empty(),
-                "{case:?}"
+                "{task:?}"
             );
         } else {
             let row = row.context("admitted signed request is missing")?;
-            assert_eq!(row.input, Some(input.clone()), "{case:?}");
-            if case.name == "task-after-client-replacement" {
+            assert_eq!(row.input, Some(input.clone()), "{task:?}");
+            if task.name == "task-after-client-replacement" {
                 set_goal(&home, &binding, &session, None).await?;
                 let retained = prepare_task_run_input(
                     access,

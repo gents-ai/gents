@@ -277,46 +277,4 @@ def managedExecToolBoundaryCases : List ManagedExecToolBoundaryCase :=
   , managedExecToolBoundaryCase "bash_unrestricted" "shellCommand"
   ]
 
-def pairingReconcileShutdownBoundaryCases :
-    List PairingReconcileShutdownBoundaryCase :=
-  [ { name := "shutdown_preempts_in_flight_pairing_reconcile_sweep"
-    , supervisor := "pairingReconciler"
-    , workClass := "p2pReconcileSweep"
-    , boundary := "pairingReconcileSupervisorBoundary"
-    , perAdminCallTimeoutMs := 10000
-    , cancellationObservedInsideSweep := true
-    , currentAdminFutureDropped := true
-    , remainingPeersSkipped := true
-    , shutdownJoinBounded := true
-    }
-  ]
-
-def pairingReconcileSweepRetryBoundaryCases :
-    List PairingReconcileSweepRetryBoundaryCase :=
-  [ { name := "initial_top_level_sweep_failure_retries_without_terminating_reconciler"
-    , supervisor := "pairingReconciler"
-    , workClass := "p2pReconcileSweep"
-    , boundary := "pairingReconcileSupervisorBoundary"
-    , failureScope := "topLevelSweepEnumeration"
-    , failureTerminal := false
-    , retryTrigger := "immediateFirstIntervalTick"
-    , cancellationPrioritized := true
-    , convergenceRetried := true
-    }
-  ]
-
-def pairingReconcileSweepSchedulingCases :
-    List PairingReconcileSweepSchedulingCase :=
-  [ { name := "stale_peer_dial_does_not_block_ready_peer"
-    , supervisor := "pairingReconciler"
-    , workClass := "p2pReconcileSweep"
-    , boundary := "pairingReconcilePeerPreparationBoundary"
-    , maxConcurrentPeerPreparations := 8
-    , peerPreparationBounded := true
-    , topologyMutationSerialized := true
-    , stalePeerBlocksReadyPeer := false
-    , everyPeerResultAccounted := true
-    }
-  ]
-
 end Conformance.ContractCases

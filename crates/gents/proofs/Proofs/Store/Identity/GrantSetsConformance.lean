@@ -32,11 +32,6 @@ def delegationCases : List (String × Recipient × Change) :=
    ("agent-refused-held", .agent, grant "read-document"),
    ("agent-refused-revoke", .agent, revoke "read-document")]
 
-def delegationCasesJson : String := (toJson (delegationCases.map fun (name, r, c) =>
-  Json.mkObj [("name", toJson name), ("holder", toJson r.name),
-    ("relation", toJson (relationName c.relation)), ("delete", toJson c.delete),
-    ("expected", toJson (admits (holderOf (receives r)) c))])).compress
-
 inductive Step where
   | publish
   | disable
@@ -55,23 +50,11 @@ def Step.after : Step → AgentObservation
   | .disable => ⟨true, false, true⟩
   | .delete => ⟨false, false, true⟩
 
-def trace (actor : Holder) (installed : List String) : List Step → List Json
-  | [] => []
-  | step :: rest =>
-      let result := projectBaseline actor step.after installed
-      let next := result.getD installed
-      Json.mkObj [("action", toJson step.name), ("committed", toJson result.isSome),
-        ("installed", toJson next)] :: trace actor next rest
-
 def baselineCases : List (String × String × Holder × List Step) :=
   let lifecycle := [Step.publish, .disable, .enable, .delete]
   [("enrolled-user-lifecycle", Recipient.enrolledUser.name, holderOf (receives .enrolledUser), lifecycle),
    ("household-owner-lifecycle", Recipient.initUser.name, holderOf (receives .initUser), lifecycle),
    ("default-agent-publishes", Recipient.defaultAgent.name, holderOf (receives .defaultAgent), [.publish]),
    ("baseline-agent-cannot-publish", Recipient.agent.name, holderOf (receives .agent), [.publish])]
-
-def baselineCasesJson : String := (toJson (baselineCases.map fun (name, actor, holder, steps) =>
-  Json.mkObj [("name", toJson name), ("actor", toJson actor),
-    ("steps", toJson (trace holder [] steps))])).compress
 
 end Identity.GrantSetsConformance

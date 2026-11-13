@@ -1,15 +1,22 @@
 import Proofs.Tools.ToolPolicy.Configuration
-import Lean
-
-
-
+import Proofs.Conformance.Family
 
 namespace Conformance.ToolTimeouts
 open ToolPolicy Lean
 
-private def pairJson : Option (Nat × Nat) → Json
-  | none => Json.null
-  | some (value, maximum) => Json.mkObj [("default", toJson value), ("maximum", toJson maximum)]
+structure Pair where
+  default : Nat
+  maximum : Nat
+  deriving ToJson
+
+private def pair? : Option (Nat × Nat) → Option Pair
+  | none => none
+  | some (d, m) => some { default := d, maximum := m }
+
+structure Authored where
+  timeoutSecs : Option Int
+  maxTimeoutSecs : Option Int
+  deriving ToJson
 
 private def foregroundCases : List (String × Nat × Nat × Option Int × Option Int) := [
   ("unconfigured_uses_host_pair", 120, 120, none, none),
@@ -24,13 +31,20 @@ private def foregroundCases : List (String × Nat × Nat × Option Int × Option
   ("zero_default_rejected", 120, 120, some 0, none),
   ("maximum_below_default_rejected", 120, 3600, some 300, some 200)]
 
-private def foregroundJson : Json := toJson (foregroundCases.map
-  fun (name, hostDefault, hostMaximum, execution, maximum) =>
-    Json.mkObj [("name", toJson name), ("host_default", toJson hostDefault),
-      ("host_maximum", toJson hostMaximum), ("timeout_secs", toJson execution),
-      ("max_timeout_secs", toJson maximum),
-      ("expected", pairJson (effectiveBashForeground ⟨hostDefault, hostMaximum⟩
-        ⟨execution, maximum, none, none, none⟩))])
+structure ForegroundInput where
+  name : String
+  hostDefault : Nat
+  hostMaximum : Nat
+  foreground : Authored
+  deriving ToJson
+
+@[conformance_family]
+def foregroundPair : Family ForegroundInput (Option Pair) where
+  inputs := foregroundCases.map fun (name, hostDefault, hostMaximum, execution, maximum) =>
+    { name, hostDefault, hostMaximum
+      foreground := { timeoutSecs := execution, maxTimeoutSecs := maximum } }
+  model := fun i => pair? (effectiveBashForeground ⟨i.hostDefault, i.hostMaximum⟩
+    ⟨i.foreground.timeoutSecs, i.foreground.maxTimeoutSecs, none, none, none⟩)
 
 private def cliCases : List (String × Nat × Nat × Nat × Option Int) := [
   ("unauthored_keeps_registration", 120, 120, 10, none),
@@ -39,12 +53,24 @@ private def cliCases : List (String × Nat × Nat × Nat × Option Int) := [
   ("authored_clamped_to_host_cap", 120, 120, 10, some 900),
   ("zero_rejected", 120, 120, 10, some 0)]
 
-private def cliJson : Json := toJson (cliCases.map
-  fun (name, hostDefault, hostMaximum, registration, authored) =>
-    Json.mkObj [("name", toJson name), ("host_default", toJson hostDefault),
-      ("host_maximum", toJson hostMaximum), ("registration_secs", toJson registration),
-      ("timeout_secs", toJson authored),
-      ("expected", toJson (effectiveCliTimeout ⟨hostDefault, hostMaximum⟩ registration authored))])
+structure CliInput where
+  name : String
+  hostDefault : Nat
+  hostMaximum : Nat
+  registrationSecs : Nat
+  timeoutSecs : Option Int
+  deriving ToJson
+
+structure CliOutput where
+  cli : Option Nat
+  deriving ToJson
+
+@[conformance_family]
+def cliTimeout : Family CliInput CliOutput where
+  inputs := cliCases.map fun (name, hostDefault, hostMaximum, registrationSecs, timeoutSecs) =>
+    { name, hostDefault, hostMaximum, registrationSecs, timeoutSecs }
+  model := fun i =>
+    { cli := effectiveCliTimeout ⟨i.hostDefault, i.hostMaximum⟩ i.registrationSecs i.timeoutSecs }
 
 private def backgroundCases : List (String × Option Int) := [
   ("unconfigured_keeps_ceiling", none),
@@ -53,20 +79,42 @@ private def backgroundCases : List (String × Option Int) := [
   ("zero_rejected", some 0),
   ("negative_rejected", some (-5))]
 
-private def backgroundJson : Json := toJson (backgroundCases.map fun (name, authored) =>
-  Json.mkObj [("name", toJson name), ("background_timeout_secs", toJson authored),
-    ("expected", toJson (effectiveBackgroundLifetime authored))])
+structure BackgroundInput where
+  name : String
+  backgroundTimeoutSecs : Option Int
+  deriving ToJson
 
+structure BackgroundOutput where
+  background : Option Nat
+  deriving ToJson
+
+@[conformance_family]
+def backgroundLifetime : Family BackgroundInput BackgroundOutput where
+  inputs := backgroundCases.map fun (name, backgroundTimeoutSecs) => { name, backgroundTimeoutSecs }
+  model := fun i => { background := effectiveBackgroundLifetime i.backgroundTimeoutSecs }
 
 private def requests : List (Option Nat) := [none, some 0, some 1, some 45, some 5000]
 
-private def boundedJson (name : String) (authored maximum : Option Int)
-    (policy : Option (Nat × Nat)) (effective : Nat × Nat → Option Nat → Nat) : Json :=
-  Json.mkObj [("name", toJson name), ("timeout_secs", toJson authored),
-    ("max_timeout_secs", toJson maximum), ("expected", pairJson policy),
-    ("requests", toJson (requests.map fun requested => Json.mkObj
-      [("requested", toJson requested),
-       ("effective", toJson (policy.map fun pair => effective pair requested))]))]
+structure Request where
+  requested : Option Nat
+  effective : Option Nat
+  deriving ToJson
+
+structure BoundedOutput where
+  expected : Option Pair
+  requests : List Request
+  deriving ToJson
+
+private def bounded (policy : Option (Nat × Nat)) (effective : Nat × Nat → Option Nat → Nat)
+    (requested : List (Option Nat)) : BoundedOutput :=
+  { expected := pair? policy
+    requests := requested.map fun r => { requested := r, effective := policy.map (effective · r) } }
+
+structure WaitInput where
+  name : String
+  wait : Authored
+  requests : List (Option Nat)
+  deriving ToJson
 
 private def waitCases : List (String × Option Int × Option Int) := [
   ("unconfigured_keeps_fixed_defaults", none, none),
@@ -77,9 +125,19 @@ private def waitCases : List (String × Option Int × Option Int) := [
   ("zero_rejected", some 0, none),
   ("maximum_below_documented_default_rejected", none, some 5)]
 
-private def waitJson : Json := toJson (waitCases.map fun (name, wait, maximum) =>
-  boundedJson name wait maximum
-    ((resolvedRemoteWait wait maximum).map (underCeiling waitCeiling)) waitFor)
+@[conformance_family]
+def waitPolicy : Family WaitInput BoundedOutput where
+  inputs := waitCases.map fun (name, wait, maximum) =>
+    { name, wait := { timeoutSecs := wait, maxTimeoutSecs := maximum }, requests }
+  model := fun i => bounded
+    ((resolvedRemoteWait i.wait.timeoutSecs i.wait.maxTimeoutSecs).map (underCeiling waitCeiling))
+    waitFor i.requests
+
+structure LspInput where
+  name : String
+  lsp : Authored
+  requests : List (Option Nat)
+  deriving ToJson
 
 private def lspCases : List (String × Option Int × Option Int) := [
   ("unconfigured_keeps_fixed_defaults", none, none),
@@ -89,13 +147,13 @@ private def lspCases : List (String × Option Int × Option Int) := [
   ("zero_rejected", some 0, none),
   ("maximum_below_documented_default_rejected", none, some 5)]
 
-private def lspJson : Json := toJson (lspCases.map fun (name, timeout, maximum) =>
-  boundedJson name timeout maximum
-    ((resolvedLspTimeout timeout maximum).map (underCeiling lspActionCeiling)) lspActionFor)
-
-def casesJson : String := (Json.mkObj
-  [("foreground", foregroundJson), ("cli", cliJson), ("background", backgroundJson),
-   ("wait", waitJson), ("lsp", lspJson)]).compress
+@[conformance_family]
+def lspPolicy : Family LspInput BoundedOutput where
+  inputs := lspCases.map fun (name, timeout, maximum) =>
+    { name, lsp := { timeoutSecs := timeout, maxTimeoutSecs := maximum }, requests }
+  model := fun i => bounded
+    ((resolvedLspTimeout i.lsp.timeoutSecs i.lsp.maxTimeoutSecs).map (underCeiling lspActionCeiling))
+    lspActionFor i.requests
 
 example : effectiveBashForeground ⟨120, 3600⟩ ⟨some 60, none, none, none, none⟩ =
     some (60, 60) := by decide

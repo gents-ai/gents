@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use serde::de::DeserializeOwned;
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::{Map, Number, Value};
 
 const CHECKED_IN_SCHEMA: &str = include_str!("../families.schema.json");
 
@@ -31,6 +31,98 @@ fn assert_shape_is_checked_in(kind: &str, key: &str) {
         "family {key} changed shape in Lean; regenerate families.schema.json with \
          GENTS_WRITE_FAMILY_SCHEMA=1 cargo test -p gents-lean-vocab family_schema"
     );
+}
+
+const NUMBER_TOKEN: &str = "$number";
+
+/// A Lean `Json` family field. On the wire a number that is not an `i64` or
+/// `u64` integer is `{"$number": token}` (`Conformance.jsonNumberWire`). A
+/// token decodes only when serde_json reads it as a float that writes the same
+/// token back, so a decoded value re-encodes to its own wire form and
+/// `Case::check` compares such numbers by token: `1` and `1.0` differ.
+#[derive(Debug, Clone)]
+pub struct Json(pub Value);
+
+fn is_number_token(fields: &Map<String, Value>) -> bool {
+    fields.len() == 1 && fields.contains_key(NUMBER_TOKEN)
+}
+
+fn json_wire(value: &Value) -> Result<Value, String> {
+    Ok(match value {
+        Value::Number(number) if number.is_f64() => Value::Object(Map::from_iter([(
+            NUMBER_TOKEN.to_owned(),
+            Value::String(number.to_string()),
+        )])),
+        Value::Array(items) => Value::Array(items.iter().map(json_wire).collect::<Result<_, _>>()?),
+        Value::Object(fields) if is_number_token(fields) => {
+            return Err(format!(
+                "family JSON object {value} uses the reserved {NUMBER_TOKEN} key"
+            ))
+        }
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, field)| Ok((key.clone(), json_wire(field)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        other => other.clone(),
+    })
+}
+
+fn json_native(value: Value) -> Result<Value, String> {
+    Ok(match value {
+        Value::Object(fields) if is_number_token(&fields) => {
+            let token = fields[NUMBER_TOKEN].as_str().ok_or_else(|| {
+                format!(
+                    "family JSON number token {} is not a string",
+                    fields[NUMBER_TOKEN]
+                )
+            })?;
+            let number: Number = serde_json::from_str(token)
+                .map_err(|error| format!("family JSON number {token:?}: {error}"))?;
+            if !number.is_f64() || number.to_string() != token {
+                return Err(format!(
+                    "family JSON number {token:?} has no exact serde_json value"
+                ));
+            }
+            Value::Number(number)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(json_native)
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, field)| Ok((key, json_native(field)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        other => other,
+    })
+}
+
+impl Serialize for Json {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        json_wire(&self.0)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Json {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        json_native(Value::deserialize(deserializer)?)
+            .map(Json)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 pub fn replay_vocabulary<T>(key: &str, all: &[T])
@@ -208,6 +300,44 @@ mod tests {
             })
             .collect();
         format!("{{\n{}\n}}\n", kinds.join(",\n"))
+    }
+
+    #[test]
+    fn json_numbers_compare_by_integer_value_or_token() {
+        let native = serde_json::json!({
+            "integers": [1, -42, u64::MAX, i64::MIN],
+            "decimals": [1.0, -0.5, 12.75],
+            "nested": [null, [], {}],
+        });
+        let wire = serde_json::to_value(Json(native.clone())).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "integers": [1, -42, u64::MAX, i64::MIN],
+                "decimals": [{"$number": "1.0"}, {"$number": "-0.5"}, {"$number": "12.75"}],
+                "nested": [null, [], {}],
+            })
+        );
+        let decoded: Json = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(decoded.0, native);
+        assert_ne!(
+            serde_json::to_value(Json(serde_json::json!(1))).unwrap(),
+            serde_json::to_value(Json(serde_json::json!(1.0))).unwrap()
+        );
+        assert_ne!(perturbed(&wire["decimals"][0]), wire["decimals"][0]);
+    }
+
+    #[test]
+    fn json_tokens_without_an_exact_native_value_are_rejected() {
+        for token in ["1.00", "18446744073709551616", "5", "1e1", "x"] {
+            let wire = serde_json::json!({ "$number": token });
+            assert!(
+                serde_json::from_value::<Json>(wire).is_err(),
+                "{token} decoded"
+            );
+        }
+        assert!(serde_json::from_value::<Json>(serde_json::json!({ "$number": 1 })).is_err());
+        assert!(serde_json::to_value(Json(serde_json::json!({ "$number": "1.0" }))).is_err());
     }
 
     #[test]

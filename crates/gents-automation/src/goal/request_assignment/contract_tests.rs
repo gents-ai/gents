@@ -1,8 +1,5 @@
 use super::*;
-use gents_lean_vocab::{
-    LeanGoalRequestAssignmentCaseEntry, LeanGoalRequestAssignmentCaseExpectedObservation,
-    LeanGoalRequestAssignmentCaseExpectedQueueScope,
-};
+use gents_lean_vocab::families::goal_request_assignment_contracts_signed_binding as signed_binding;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -35,6 +32,20 @@ async fn physical_goal_caller_reuses_the_signed_session_observation() {
     assert!(
         request_assignments(identity.did(), "session-1", vec![row.clone(), row], vec![]).is_err()
     );
+}
+
+#[test]
+fn task_goal_assignment_root_matches_lean() {
+    gents_lean_vocab::families::trigger_delivery_assignment_root::replay(|input| {
+        entry_matches_assignment(
+            "goal",
+            input.assigned.as_deref(),
+            &AgentRequestRow {
+                doc_id: input.observed.clone(),
+                ..AgentRequestRow::default()
+            },
+        )
+    });
 }
 
 pub(super) fn goal(value: &Value, identities: &[KeyIdentity]) -> GoalDocument {
@@ -81,45 +92,53 @@ pub(super) async fn entry(value: &Value, identities: &[KeyIdentity]) -> AgentReq
     serde_json::from_value(row).unwrap()
 }
 
-pub(super) fn case_entry_value(case: &LeanGoalRequestAssignmentCaseEntry) -> Value {
-    json!({
-        "doc": case.doc,
-        "owner": case.owner,
-        "session": case.session,
-        "reference": case.reference.as_ref().map(|reference| json!({
-            "goal": reference.goal,
-            "root": reference.root,
-        })),
-        "signature_valid": case.signature_valid,
-    })
+fn label(value: &str, prefix: &str) -> u64 {
+    value.strip_prefix(prefix).unwrap().parse::<u64>().unwrap()
+}
+
+pub(super) fn queue_scope_wire(scope: RequestAssignmentScope) -> signed_binding::QueueScopeWire {
+    match scope {
+        RequestAssignmentScope::Unassigned => signed_binding::QueueScopeWire {
+            kind: "unassigned".into(),
+            entry: None,
+            goal: None,
+            root: None,
+        },
+        RequestAssignmentScope::Unresolved { entry_doc_id } => signed_binding::QueueScopeWire {
+            kind: "unresolved".into(),
+            entry: Some(label(&entry_doc_id, "physical-")),
+            goal: None,
+            root: None,
+        },
+        RequestAssignmentScope::Referenced(reference) => signed_binding::QueueScopeWire {
+            kind: "referenced".into(),
+            entry: None,
+            goal: Some(label(&reference.goal_id, "goal-")),
+            root: Some(label(
+                reference.root_request_doc_id.as_deref().unwrap(),
+                "physical-",
+            )),
+        },
+    }
 }
 
 #[tokio::test]
 async fn generated_goal_request_assignments_drive_signed_binding() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_assignment_cases;
-    assert_eq!(cases.len(), 18);
     let temp = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(temp.path().join("one.key"), None).unwrap(),
         KeyIdentity::load_or_create(temp.path().join("two.key"), None).unwrap(),
     ];
-    for case in cases {
-        let entry = entry(&case_entry_value(&case.entry), &identities).await;
+    for case in
+        gents_lean_vocab::families::goal_request_assignment_contracts_signed_binding::cases()
+    {
+        let input = &case.input;
+        let entry = entry(&serde_json::to_value(&input.entry).unwrap(), &identities).await;
         let assignment = goal(
-            &json!({
-                "owner": case.assignment.owner,
-                "session": case.assignment.session,
-                "goal": case.assignment.goal,
-                "root": case.assignment.root,
-            }),
+            &serde_json::to_value(&input.assignment).unwrap(),
             &identities,
         );
-        assert_eq!(
-            request_belongs_to_goal(&assignment, &entry),
-            case.expected_member,
-            "{}: membership",
-            case.name
-        );
+        let member = request_belongs_to_goal(&assignment, &entry);
         if assignment.assignment_root_request_doc_id.is_some() {
             assert_eq!(
                 super::super::request_head::latest_goal_request(
@@ -127,118 +146,46 @@ async fn generated_goal_request_assignments_drive_signed_binding() {
                     std::slice::from_ref(&entry)
                 )
                 .map(|row| row.doc_id.as_ref()),
-                case.expected_member.then_some(entry.doc_id.as_ref()),
+                member.then_some(entry.doc_id.as_ref()),
                 "{}: signed assignment head",
-                case.name,
+                input.name,
             );
         }
-        let goals = case
+        let goals = input
             .observed
             .iter()
-            .map(|value| {
-                goal(
-                    &json!({
-                        "owner": value.owner,
-                        "session": value.session,
-                        "goal": value.goal,
-                        "root": value.root,
-                    }),
-                    &identities,
-                )
-            })
+            .map(|value| goal(&serde_json::to_value(value).unwrap(), &identities))
             .collect::<Vec<_>>();
         let observation = observe_request_assignment(&goals, &entry);
-        let scope = request_assignment_scope(&entry, &observation)
+        let queue_scope = request_assignment_scope(&entry, &observation)
             .ok()
-            .map(|scope| match scope {
-                RequestAssignmentScope::Unassigned => {
-                    LeanGoalRequestAssignmentCaseExpectedQueueScope {
-                        entry: None,
-                        goal: None,
-                        kind: "unassigned".into(),
-                        root: None,
-                    }
-                }
-                RequestAssignmentScope::Unresolved { entry_doc_id } => {
-                    LeanGoalRequestAssignmentCaseExpectedQueueScope {
-                        entry: Some(
-                            entry_doc_id
-                                .strip_prefix("physical-")
-                                .unwrap()
-                                .parse::<u64>()
-                                .unwrap(),
-                        ),
-                        goal: None,
-                        kind: "unresolved".into(),
-                        root: None,
-                    }
-                }
-                RequestAssignmentScope::Referenced(reference) => {
-                    LeanGoalRequestAssignmentCaseExpectedQueueScope {
-                        entry: None,
-                        goal: Some(
-                            reference
-                                .goal_id
-                                .strip_prefix("goal-")
-                                .unwrap()
-                                .parse::<u64>()
-                                .unwrap(),
-                        ),
-                        kind: "referenced".into(),
-                        root: Some(
-                            reference
-                                .root_request_doc_id
-                                .unwrap()
-                                .strip_prefix("physical-")
-                                .unwrap()
-                                .parse::<u64>()
-                                .unwrap(),
-                        ),
-                    }
-                }
-            });
-        assert_eq!(scope, case.expected_queue_scope, "{}: queue scope", case.name);
-        let actual = match observation {
-            RequestAssignmentObservation::None => {
-                LeanGoalRequestAssignmentCaseExpectedObservation {
-                    goal: None,
-                    kind: "unassigned".into(),
-                    root: None,
-                }
-            }
-            RequestAssignmentObservation::Unknown => {
-                LeanGoalRequestAssignmentCaseExpectedObservation {
-                    goal: None,
-                    kind: "unknown".into(),
-                    root: None,
-                }
-            }
+            .map(queue_scope_wire);
+        let observation = match observation {
+            RequestAssignmentObservation::None => signed_binding::AssignmentObservationWire {
+                kind: "unassigned".into(),
+                goal: None,
+                root: None,
+            },
+            RequestAssignmentObservation::Unknown => signed_binding::AssignmentObservationWire {
+                kind: "unknown".into(),
+                goal: None,
+                root: None,
+            },
             RequestAssignmentObservation::Assigned(goal) => {
-                LeanGoalRequestAssignmentCaseExpectedObservation {
-                    goal: Some(
-                        goal.goal_id
-                            .strip_prefix("goal-")
-                            .unwrap()
-                            .parse::<u64>()
-                            .unwrap(),
-                    ),
+                signed_binding::AssignmentObservationWire {
                     kind: "assigned".into(),
-                    root: Some(
-                        goal.assignment_root_request_doc_id
-                            .as_deref()
-                            .unwrap()
-                            .strip_prefix("physical-")
-                            .unwrap()
-                            .parse::<u64>()
-                            .unwrap(),
-                    ),
+                    goal: Some(label(&goal.goal_id, "goal-")),
+                    root: Some(label(
+                        goal.assignment_root_request_doc_id.as_deref().unwrap(),
+                        "physical-",
+                    )),
                 }
             }
         };
-        assert_eq!(
-            actual, case.expected_observation,
-            "{}: assignment",
-            case.name
-        );
+        case.check(signed_binding::SignedBindingOutput {
+            member,
+            observation,
+            queue_scope,
+        });
     }
 }

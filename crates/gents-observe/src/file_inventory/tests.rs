@@ -351,19 +351,14 @@ fn assert_stored_versions(stored: &Value) {
 
 #[tokio::test]
 async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order() {
-    let contracts: serde_json::Value = tokio::task::spawn_blocking(
-        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let modeled = contracts["file_inventory_order_window_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "accepted_effect_without_own_publication")
-        .unwrap();
-    assert!(modeled["expected"].is_null());
+    for case in
+        gents_lean_vocab::families::file_inventory_contracts_order_window_plugin_effect::cases()
+    {
+        case.check(plugin_file_effect_entries_are_ordered().await);
+    }
+}
+
+async fn plugin_file_effect_entries_are_ordered() -> bool {
     let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "inventory-plugin-effects".into(),
         real_identity: true,
@@ -499,12 +494,13 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
         assert_eq!(entry.scope.node_did, parent.node_did());
         assert_eq!(entry.scope.session_id, parent.session_id());
         assert_eq!(entry.scope.requester_did, parent.requester_did().unwrap());
-        assert_eq!(
-            serde_json::to_value(&entry.order).unwrap(),
-            modeled["expected"],
-            "continuous images and effect ordinals do not supply a canonical publication pair"
-        );
     }
+    let ordered = snapshot
+        .entries()
+        .iter()
+        .map(|entry| entry.order.is_some())
+        .collect::<Vec<_>>();
+    assert!(ordered.iter().all(|value| *value == ordered[0]));
     let page = snapshot.page(None).unwrap();
     assert_eq!(page.entries, snapshot.entries());
     assert!(page.next.is_none());
@@ -516,6 +512,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
     assert_eq!(tokio::fs::read(&path).await.unwrap(), b"second effect\n");
     fixture.node.shutdown().await.expect("shut down test node");
     tokio::fs::remove_dir_all(fixture.path).await.unwrap();
+    ordered[0]
 }
 
 #[tokio::test]

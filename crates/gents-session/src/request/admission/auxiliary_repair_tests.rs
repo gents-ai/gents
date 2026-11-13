@@ -37,20 +37,8 @@ async fn visible(access: &ConfigAccess, doc: &str) -> bool {
 
 #[tokio::test]
 async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().auxiliary_session_child_binding_cases;
-    let selected = [
-        "paired_title_segment",
-        "missing_parent",
-        "invalid_parent_signature",
-        "foreign_native_owner",
-        "completed_then_revoked",
-    ];
-    let mut exercised = std::collections::BTreeSet::new();
-    for case in cases {
-        if !selected.contains(&case.name.as_str()) {
-            continue;
-        }
-        exercised.insert(case.name.clone());
+    for case in gents_lean_vocab::families::session_child_child_scope_repair::cases() {
+        let name = case.input.name.as_str();
         let temp = tempfile::tempdir().unwrap();
         let node_db = gents_inference::test_support::test_db(
             "auxiliary-repair-node",
@@ -141,10 +129,10 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         crate::request::admission::sign_agent_request_create(&root, &mut parent)
             .await
             .unwrap();
-        if case.name == "invalid_parent_signature" {
+        if name == "invalid_parent_signature" {
             parent.content.push_str(" tampered");
         }
-        let parent_doc = if case.name == "missing_parent" {
+        let parent_doc = if name == "missing_parent" {
             missing_parent_doc
         } else {
             let created = root_access
@@ -208,7 +196,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
             "ordinal":0, "writer":OutputWriter::RequestExecution { execution_generation:"fixture".into() },
             "payload":"audit", "created_at":"2026-10-21T00:00:00Z",
         });
-        let creator = if case.name == "foreign_native_owner" {
+        let creator = if name == "foreign_native_owner" {
             &foreign_access
         } else {
             &agent_access
@@ -228,7 +216,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
             .unwrap();
         let child_doc =
             gents_store::graphql::created_doc_id(&result, "AgentOutputSegment").unwrap();
-        if case.name == "foreign_native_owner" {
+        if name == "foreign_native_owner" {
             gents_store::test_support::relationships::actor_in_txn(
                 &foreign_access,
                 "AgentOutputSegment",
@@ -248,19 +236,19 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
             })
             .await
             .unwrap();
-        let expected_owner = if case.name == "foreign_native_owner" {
+        let expected_owner = if name == "foreign_native_owner" {
             foreign.did()
         } else {
             agent.did()
         };
-        assert_eq!(owners.len(), 1, "{}", case.name);
+        assert_eq!(owners.len(), 1, "{}", name);
         assert_eq!(
             owners[0].owner.as_ref().map(|did| did.as_str()),
             Some(expected_owner),
             "{}",
-            case.name
+            name
         );
-        if case.name == "completed_then_revoked" {
+        if name == "completed_then_revoked" {
             gents_store::test_support::relationships::resource_in_txn(
                 &agent_access,
                 "AgentOutputSegment",
@@ -285,7 +273,7 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
             .await
             .unwrap();
         }
-        assert!(!visible(&reader_access, &child_doc).await, "{}", case.name);
+        assert!(!visible(&reader_access, &child_doc).await, "{}", name);
         recover_agent_session_child_relationships_with_access(
             &agent_access,
             root.did(),
@@ -293,24 +281,16 @@ async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_
         )
         .await
         .unwrap();
-        assert_eq!(
-            visible(&reader_access, &child_doc).await,
-            case.parent_granted,
-            "{}",
-            case.name
-        );
+        let parent_granted = visible(&reader_access, &child_doc).await;
         let state = creator.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ parent_linked }} }}"#, escape_graphql_string(&child_doc))).await.unwrap();
-        assert_eq!(
-            state["data"]["AgentOutputSegment"][0]["parent_linked"].as_bool(),
-            Some(case.parent_linked),
-            "{}",
-            case.name
+        case.check(
+            gents_lean_vocab::families::session_child_child_scope_repair::RepairOutput {
+                parent_granted,
+                parent_linked: state["data"]["AgentOutputSegment"][0]["parent_linked"]
+                    .as_bool()
+                    .unwrap(),
+            },
         );
         node.shutdown().await.unwrap();
     }
-    assert_eq!(
-        exercised.len(),
-        selected.len(),
-        "each selected Lean case must be exercised"
-    );
 }

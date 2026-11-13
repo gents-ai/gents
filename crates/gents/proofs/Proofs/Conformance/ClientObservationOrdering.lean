@@ -49,7 +49,11 @@ def main : IO Unit := do
                   ",\"authoritative\":" ++ toString authoritative ++ ",\"localRuntimeAllowed\":" ++ toString localRuntimeAllowed ++
                   ",\"remoteConfigured\":" ++ toString remoteConfigured ++ ",\"localHomeLost\":" ++ toString localHomeLost ++
                   ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
+  let family := Conformance.ClientLiveDeltaContracts.cursor
+  let liveDeltas := Lean.Json.arr (family.inputs.map fun i => Lean.Json.mkObj
+    [("base", Lean.toJson i.base), ("current", Lean.toJson i.current),
+     ("terminal", Lean.toJson i.terminal), ("accepted", Lean.toJson (family.model i).accepted)]).toArray
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
     "],\"startup\":[" ++ String.intercalate "," startupRows ++
     "],\"firstRun\":[" ++ String.intercalate "," firstRunRows ++
-    "],\"liveDeltas\":" ++ Conformance.ClientLiveDeltaContracts.casesJson ++ "}")
+    "],\"liveDeltas\":" ++ liveDeltas.compress ++ "}")

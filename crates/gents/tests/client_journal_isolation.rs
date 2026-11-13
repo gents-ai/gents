@@ -98,21 +98,13 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         owner.did()
     );
 
-    let snapshot = tokio::task::spawn_blocking(
-        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
-    )
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::client_agent_journal_private_access::cases()
+    })
     .await
-    .unwrap()
     .unwrap();
-    assert_eq!(
-        snapshot["identity_private_journal_policy"]["policy_yaml"].as_str(),
-        Some(gents_protocol::schemas::CLIENT_JOURNAL_POLICY),
-    );
-    let checks = snapshot["identity_private_journal_policy"]["checks"]
-        .as_array()
-        .unwrap();
-    for case in checks {
-        let identity = match case["role"].as_str().unwrap() {
+    for case in cases {
+        let identity = match case.input.role.as_str() {
             "owner" => Some(owner.as_ref()),
             "other" => Some(other.as_ref()),
             "runtime" => Some(&runtime),
@@ -120,7 +112,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
             "anonymous" => None,
             role => panic!("unknown modeled journal actor: {role}"),
         };
-        let permission = match case["action"].as_str().unwrap() {
+        let permission = match case.input.action.as_str() {
             "read" => defra_node::DocumentPermission::Read,
             "update" => defra_node::DocumentPermission::Update,
             "delete" => defra_node::DocumentPermission::Delete,
@@ -141,8 +133,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
             )
             .await
             .unwrap();
-        assert_eq!(allowed, case["expected"].as_bool().unwrap(), "{case}");
-        if case["action"] == "read" {
+        if case.input.action == "read" {
             let http = match identity {
                 Some(key) => client_http(&endpoint, key),
                 None => ConfigAccess::graphql(&endpoint),
@@ -156,7 +147,10 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
                 Ok(response) => response["data"]["PendingChatSubmission"]
                     .as_array()
                     .unwrap_or_else(|| {
-                        panic!("journal read returned no rows for {case}: {response}")
+                        panic!(
+                            "journal read returned no rows for {:?}: {response}",
+                            case.input.role
+                        )
                     })
                     .iter()
                     .any(|row| row["_docID"] == doc_id && row["payload"] == "client secret"),
@@ -166,8 +160,18 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
                 }
                 Err(error) => panic!("authenticated journal read failed: {error:#}"),
             };
-            assert_eq!(visible, case["expected"].as_bool().unwrap(), "HTTP: {case}");
+            assert_eq!(
+                visible, allowed,
+                "HTTP and native ACP disagree: {:?}",
+                case.input
+            );
         }
+        case.check(
+            gents_lean_vocab::families::client_agent_journal_private_access::PrivateAccess {
+                allowed,
+                policy_yaml: gents_protocol::schemas::CLIENT_JOURNAL_POLICY.to_string(),
+            },
+        );
     }
     let outsider = client_http(&endpoint, &other);
     let denied = outsider.write("test.private_journal.deny_update", &format!(r#"mutation {{ update_PendingChatSubmission(docID: "{doc_id_escaped}", input: {{payload: "stolen"}}) {{ _docID }} }}"#)).await.unwrap();

@@ -1,0 +1,21 @@
+{
+ "ok": true,
+ "problems": [],
+ "notes": [
+  "contracts_retry_frontier_admission: consumer crates/gents/src/session_tests/sessions_tests.rs",
+  "contracts_retry_entry_frontier: consumer crates/gents/src/runtime/agent/daemon/inference.rs",
+  "contracts_retry_entry_publish: consumer crates/gents/src/runtime/agent/loop_stream/tests/streaming.rs",
+  "contracts_retry_entry_capture: consumer crates/gents/tests/e2e_runtime/rendered_request_capture.rs",
+  "contracts_prompt_assembly_responses_storage: consumer crates/gents/src/turn/completion_factory/tests.rs",
+  "contracts_prompt_assembly_responses_effort: consumer crates/gents/src/turn/completion_factory/tests.rs",
+  "contracts_prompt_assembly_assistant_order: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_prompt_assembly_sanitize: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_prompt_assembly_sanitize_split: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_prompt_assembly_mode_sanitize: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_prompt_assembly_replay_prefix: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_wake_input_projection: consumer crates/gents/src/runtime/agent/daemon/wake_input.rs",
+  "contracts_wake_input_provider_order: consumer crates/gents/src/runtime/agent/daemon/inference.rs",
+  "contracts_wake_input_claimed_keys: consumer crates/gents-automation/src/session_claim_tests.rs",
+  "contracts_prompt_assembly_compaction_trigger: consumer crates/gents/src/runtime/agent/loop_stream/tests/budgeting.rs"
+ ]
+}

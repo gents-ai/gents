@@ -10,7 +10,7 @@ use super::templates::{
 use super::{PairingApplied, PairingDesired};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum PairingDirection {
     ClientToRuntime,
     RuntimeToClient,

@@ -157,18 +157,19 @@ fn openrouter_additional_params_require_parameters() {
 
 #[test]
 fn generated_responses_storage_cases_drive_loop_config() {
-    use gents_lean_vocab::lean_prompt_assembly_responses_storage_cases;
-
-    let cases = lean_prompt_assembly_responses_storage_cases();
-    assert!(!cases.is_empty());
-    let mut mismatches = Vec::new();
-    for case in cases {
+    gents_lean_vocab::families::prompt_assembly_responses_storage_family_vocabulary::replay(&[
+        BackendProviderKind::OpenAiCompatible,
+        BackendProviderKind::XaiGrokOAuth,
+        BackendProviderKind::ChatGptCodex,
+        BackendProviderKind::OpenRouter,
+    ]);
+    gents_lean_vocab::families::contracts_prompt_assembly_responses_storage::replay::<
+        BackendProviderKind,
+        gents_loop::openai_wire::OpenAiWireApi,
+    >(|case| {
         let mut agent = agent_with_retry(Default::default());
-        agent.backend_provider_kind =
-            BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
-        agent.openai_wire_api =
-            serde_json::from_value(serde_json::Value::String(case.wire.clone()))
-                .expect("Lean wire");
+        agent.backend_provider_kind = case.family;
+        agent.openai_wire_api = case.wire;
         agent.backend_endpoint = case.endpoint.clone();
         let config = loop_config(
             &agent,
@@ -201,26 +202,19 @@ fn generated_responses_storage_cases_drive_loop_config() {
                     item.as_str() == Some(gents_loop::provider_patches::ENCRYPTED_REASONING_INCLUDE)
                 })
             });
-        if (store, encrypted_include) != (case.store, case.encrypted_include) {
-            mismatches.push(format!(
-                "{}: store {store:?} include {encrypted_include}",
-                case.name
-            ));
+        gents_lean_vocab::families::contracts_prompt_assembly_responses_storage::ResponsesStorageOutput {
+            store,
+            encrypted_include,
         }
-    }
-    assert!(mismatches.is_empty(), "{mismatches:#?}");
+    });
 }
 
 #[test]
 fn generated_responses_effort_cases_drive_loop_config() {
     use gents_documents::inference_defaults::ReasoningEffort;
-    use gents_lean_vocab::lean_prompt_assembly_responses_effort_cases;
 
     let parse = |value: &String| ReasoningEffort::parse(value).expect("Lean effort");
-    let cases = lean_prompt_assembly_responses_effort_cases();
-    assert!(!cases.is_empty());
-    let mut mismatches = Vec::new();
-    for case in cases {
+    gents_lean_vocab::families::contracts_prompt_assembly_responses_effort::replay(|case| {
         let mut agent = agent_with_retry(Default::default());
         agent.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
         agent.openai_wire_api = gents_loop::openai_wire::OpenAiWireApi::Responses;
@@ -252,14 +246,10 @@ fn generated_responses_effort_cases_drive_loop_config() {
             .provider_input_counter
             .project_body(&request)
             .expect("project body");
-        let sent = body
-            .pointer("/reasoning/effort")
-            .and_then(serde_json::Value::as_str);
-        if sent != case.expected.as_deref() {
-            mismatches.push(format!("{}: effort {sent:?}", case.name));
-        }
-    }
-    assert!(mismatches.is_empty(), "{mismatches:#?}");
+        body.pointer("/reasoning/effort")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    });
 }
 
 #[test]
@@ -396,13 +386,7 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
 
 #[tokio::test]
 async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
-    let cases = gents_lean_vocab::lean_budget_rehydration_cases();
-    assert_eq!(
-        cases.len(),
-        5,
-        "all nullable restart witnesses must be exercised"
-    );
-    for case in cases {
+    for case in gents_lean_vocab::families::budget_rehydration_ledger::cases::<String>() {
         let (db, user, owner, binding) =
             crate::test_support::root::signed_test_node("completion-budget-rehydration").await;
         let node = db.node.clone();
@@ -476,13 +460,14 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             .bind_managed_agent(agent.agent_identity.as_ref())
             .unwrap();
         lifecycle.set_client_claim_admission(admission);
-        lifecycle.set_configured_max_total_tokens(case.pinned_limit.filter(|limit| *limit != 0));
+        lifecycle
+            .set_configured_max_total_tokens(case.input.pinned_limit.filter(|limit| *limit != 0));
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
             gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
         let mut request = lifecycle.request().clone();
-        if case.pinned_limit == Some(0) {
+        if case.input.pinned_limit == Some(0) {
             let doc_id = escape_graphql_string(&request.doc_id);
             access
                 .write(
@@ -503,12 +488,13 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             request = row.try_into().unwrap();
         }
         let did = escape_graphql_string(agent.node_did());
-        for (index, row) in case.rows.iter().enumerate() {
-            let doc_id = escape_graphql_string(if row.request_doc_id == case.request_doc_id {
-                &request.doc_id
-            } else {
-                &row.request_doc_id
-            });
+        for (index, row) in case.input.rows.iter().enumerate() {
+            let doc_id =
+                escape_graphql_string(if row.request_doc_id == case.input.request_doc_id {
+                    &request.doc_id
+                } else {
+                    &row.request_doc_id
+                });
             let call_id = escape_graphql_string(&format!("rehydrate-{index}"));
             let call_kind = escape_graphql_string(&row.kind);
             let prompt = row.prompt_tokens;
@@ -557,26 +543,20 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     })
                 })
                 .await
-                .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                .unwrap_or_else(|error| panic!("{}: {error}", case.input.name));
         }
         let budget = aggregate_token_budget_for_request(&access, &request)
             .await
-            .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));
-        match (&case.ledger, budget) {
-            (None, None) => {}
-            (Some(expected), Some(budget)) => {
-                let ledger = budget.snapshot().expect("ledger");
-                assert_eq!(ledger.used, expected.used, "{}", case.name);
-                assert_eq!(ledger.limit, expected.limit, "{}", case.name);
+            .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.input.name));
+        let observed = budget.map(|budget| {
+            let ledger = budget.snapshot().expect("ledger");
+            gents_lean_vocab::families::budget_rehydration_ledger::Ledger {
+                limit: ledger.limit,
+                used: ledger.used,
             }
-            (expected, actual) => panic!(
-                "{}: ledger presence expected {}, got {}",
-                case.name,
-                expected.is_some(),
-                actual.is_some()
-            ),
-        }
+        });
         node.shutdown().await.expect("node shutdown");
+        case.check(observed);
     }
 }
 
@@ -656,61 +636,45 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
 }
 
 #[test]
-fn generated_service_tier_cases_drive_loop_config() {
-    let cases = gents_lean_vocab::lean_prompt_assembly_service_tier_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let family = BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
+fn service_tier_loop_config_follows_the_lean_model() {
+    gents_lean_vocab::families::contracts_service_tier_loop_config::replay(|input| {
+        let family = BackendProviderKind::parse_optional(Some(&input.family)).expect("Lean family");
         let tier: Option<gents_inference::resolved::ServiceTier> =
-            serde_json::from_value(serde_json::to_value(&case.requested).unwrap())
+            serde_json::from_value(serde_json::to_value(&input.requested).unwrap())
                 .expect("Lean tier");
-        assert_eq!(
-            gents_inference::resolved::validate_service_tier(family, tier).is_ok(),
-            case.allowed,
-            "{case:?}"
-        );
-        if !case.allowed {
-            continue;
+        let wire = match input.openai_wire_api.as_str() {
+            "responses" => gents_loop::openai_wire::OpenAiWireApi::Responses,
+            "chat_completions" => gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+            other => panic!("unknown modeled OpenAI wire {other}"),
+        };
+        let mut agent = agent_with_retry(Default::default());
+        agent.backend_provider_kind = family;
+        agent.openai_wire_api = wire;
+        agent.service_tier = tier;
+        let config = loop_config(&agent, "preamble".into(), 0, CaptureScopeKind::Inference);
+        let request = rig::completion::CompletionRequest {
+            model: None,
+            preamble: config.preamble.clone(),
+            chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user("hi")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: config.additional_params.clone(),
+            output_schema: None,
+        };
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .expect("provider body");
+        gents_lean_vocab::families::contracts_service_tier_loop_config::ServiceTierWire {
+            wire: body
+                .get("service_tier")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
         }
-        for wire in [
-            gents_loop::openai_wire::OpenAiWireApi::Responses,
-            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        ] {
-            if family == BackendProviderKind::ChatGptCodex
-                && wire != gents_loop::openai_wire::OpenAiWireApi::Responses
-            {
-                continue;
-            }
-            let mut agent = agent_with_retry(Default::default());
-            agent.backend_provider_kind = family;
-            agent.openai_wire_api = wire;
-            agent.service_tier = tier;
-            let config = loop_config(&agent, "preamble".into(), 0, CaptureScopeKind::Inference);
-            let request = rig::completion::CompletionRequest {
-                model: None,
-                preamble: config.preamble.clone(),
-                chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user(
-                    "hi",
-                )),
-                documents: Vec::new(),
-                tools: Vec::new(),
-                temperature: None,
-                max_tokens: None,
-                tool_choice: None,
-                additional_params: config.additional_params.clone(),
-                output_schema: None,
-            };
-            let body = config
-                .provider_input_counter
-                .project_body(&request)
-                .expect("provider body");
-            assert_eq!(
-                body.get("service_tier").and_then(serde_json::Value::as_str),
-                case.wire.as_deref(),
-                "{case:?}, {wire:?}"
-            );
-        }
-    }
+    });
 }
 
 fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>) -> String {

@@ -345,220 +345,213 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     use crate::request::streaming::DefraStreamWriter;
     use std::time::Duration;
 
-    let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .mailbox_handoff_cases
-        .iter()
-        .find(|case| case.variant == "fresh-linked")
-        .expect("modeled linked handoff case");
-    assert_eq!(modeled.request_id, modeled.producer_request_id);
-    assert_eq!(modeled.request_id, modeled.tool_request_id);
-    assert_eq!(modeled.session_id, modeled.reply_session_id);
-    assert_eq!(
-        modeled.reply_bound_session_id.as_deref(),
-        Some(modeled.session_id.as_str())
-    );
-    assert_eq!(modeled.producer_node_did, modeled.question_node_did);
-    assert_eq!(
-        modeled.producer_requester_did,
-        modeled.question_requester_did
-    );
-    let node = tests::test_node().await;
-    let temp = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(temp.path().join("handoff.key"), None).unwrap();
-    let producer = persisted_request(
-        &node,
-        &identity,
-        None,
-        "producer-request",
-        false,
-        "Approved",
-        None,
-    )
-    .await;
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        producer.clone(),
-        60,
-        ExecutionOrigin::Interactive,
-        "handoff-test",
-    );
-    lifecycle
-        .bind_managed_agent(tests::agent_identity().as_ref())
-        .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    let writer =
-        DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::ZERO).unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-
-    let context = tests::context(identity.did());
-    let notification_identity = NotificationIdentity::Event;
-    let source_id = notification_identity
-        .source_id(
-            &context.node_did,
-            &context.requester_did,
-            &context.agent_did,
-            &producer.request_id,
+    for case in gents_lean_vocab::families::mailbox_handoff_contracts_linked::cases() {
+        let modeled = &case.input;
+        assert_eq!(modeled.request_id, modeled.producer_request_id);
+        assert_eq!(modeled.request_id, modeled.tool_request_id);
+        assert_eq!(modeled.session_id, modeled.reply_session_id);
+        assert_eq!(
+            modeled.reply_bound_session_id.as_deref(),
+            Some(modeled.session_id.as_str())
+        );
+        assert_eq!(modeled.producer_node_did, modeled.question_node_did);
+        assert_eq!(
+            modeled.producer_requester_did,
+            modeled.question_requester_did
+        );
+        let node = tests::test_node().await;
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("handoff.key"), None).unwrap();
+        let producer = persisted_request(
+            &node,
+            &identity,
+            None,
+            "producer-request",
+            false,
+            "Approved",
+            None,
         )
-        .unwrap();
-    let receipt = stamp_notification(
-        &node,
-        &tests::agent_access(&node),
-        &context,
-        FileMailboxItemArgs {
-            kind: serde_json::from_value(json!(modeled.kind)).unwrap(),
-            action: serde_json::from_value(json!(modeled.action)).unwrap(),
-            title: modeled.content.clone(),
-            summary: None,
-            payload: None,
-            source_kind: MailboxSourceKind::Agent,
-            source_id,
-            session_id: None,
-            request_id: Some(producer.request_id.clone()),
-            cause_doc_id: None,
-            expected_collection: None,
-            parent_item_id: None,
-            deadline_at: None,
-        },
-        &notification_identity,
-        MAILBOX_CLOSE_COLLECTIONS,
-    )
-    .await
-    .unwrap();
-    let receipt = serde_json::to_value(receipt).unwrap();
-    assert_eq!(receipt["outcome"], "created");
-    let mailbox_doc_id = receipt["item"]["_docID"].as_str().unwrap();
-    let filed = tests::load_as_creator(&node, mailbox_doc_id)
-        .await
-        .unwrap()
-        .unwrap();
-    let returned: MailboxItem = serde_json::from_value(receipt["item"].clone()).unwrap();
-    assert_eq!(
-        super::notification_tests::stored_value(&filed),
-        super::notification_tests::stored_value(&returned)
-    );
-    assert_eq!(filed.status == "open", modeled.stored_open_receipt);
-    assert_eq!(
-        filed.request_id.as_deref(),
-        Some(producer.request_id.as_str())
-    );
-    assert_eq!(
-        filed.session_id.as_deref(),
-        Some(producer.session_id.as_str())
-    );
-
-    assert!(modeled.handoff_accepted);
-    assert_eq!(
+        .await;
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            producer.clone(),
+            60,
+            ExecutionOrigin::Interactive,
+            "handoff-test",
+        );
         lifecycle
-            .terminalize_owned(
-                RequestTerminalOutcome::Completed,
-                gents_protocol::output::TerminalOutput::NoMessage,
-                None,
-            )
-            .await
-            .unwrap(),
-        TerminalizeResult::Won,
-    );
-    assert_eq!(
-        tests::load_as_creator(&node, mailbox_doc_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        "open"
-    );
+            .bind_managed_agent(tests::agent_identity().as_ref())
+            .unwrap();
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+        let writer =
+            DefraStreamWriter::new_for_lifecycle(node.clone(), &lifecycle, Duration::ZERO).unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
 
-    let reply = signed_reply(&node, &identity, &filed, "reply-request").await;
-    assert_ne!(reply.doc_id, producer.doc_id);
-    assert_eq!(reply.session_id, producer.session_id);
-    assert_eq!(
-        reply.caused_by_source_doc_id.as_deref(),
-        Some(mailbox_doc_id)
-    );
-    let mut reply_lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        reply.clone(),
-        60,
-        ExecutionOrigin::Interactive,
-        "handoff-test",
-    );
-    reply_lifecycle
-        .bind_managed_agent(tests::agent_identity().as_ref())
-        .unwrap();
-    assert_eq!(
-        reply_lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    let consumed = tests::load_as_creator(&node, mailbox_doc_id)
+        let context = tests::context(identity.did());
+        let notification_identity = NotificationIdentity::Event;
+        let source_id = notification_identity
+            .source_id(
+                &context.node_did,
+                &context.requester_did,
+                &context.agent_did,
+                &producer.request_id,
+            )
+            .unwrap();
+        let receipt = stamp_notification(
+            &node,
+            &tests::agent_access(&node),
+            &context,
+            FileMailboxItemArgs {
+                kind: serde_json::from_value(json!(modeled.kind)).unwrap(),
+                action: serde_json::from_value(json!(modeled.action)).unwrap(),
+                title: modeled.content.clone(),
+                summary: None,
+                payload: None,
+                source_kind: MailboxSourceKind::Agent,
+                source_id,
+                session_id: None,
+                request_id: Some(producer.request_id.clone()),
+                cause_doc_id: None,
+                expected_collection: None,
+                parent_item_id: None,
+                deadline_at: None,
+            },
+            &notification_identity,
+            MAILBOX_CLOSE_COLLECTIONS,
+        )
         .await
-        .unwrap()
         .unwrap();
-    assert_eq!(consumed.status, "acted");
-    assert_eq!(
-        consumed.resolved_doc_id.as_deref(),
-        Some(reply.doc_id.as_str())
-    );
-    assert!(modeled.linked_reply_accepted);
-    node.shutdown().await.expect("shut down test node");
+        let receipt = serde_json::to_value(receipt).unwrap();
+        let created = receipt["outcome"] == "created";
+        let mailbox_doc_id = receipt["item"]["_docID"].as_str().unwrap();
+        let filed = tests::load_as_creator(&node, mailbox_doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let returned: MailboxItem = serde_json::from_value(receipt["item"].clone()).unwrap();
+        assert_eq!(
+            super::notification_tests::stored_value(&filed),
+            super::notification_tests::stored_value(&returned)
+        );
+        let stored_open_receipt = filed.status == "open";
+        assert_eq!(
+            filed.request_id.as_deref(),
+            Some(producer.request_id.as_str())
+        );
+        assert_eq!(
+            filed.session_id.as_deref(),
+            Some(producer.session_id.as_str())
+        );
+
+        let handoff_accepted = created
+            && lifecycle
+                .terminalize_owned(
+                    RequestTerminalOutcome::Completed,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    None,
+                )
+                .await
+                .unwrap()
+                == TerminalizeResult::Won;
+        assert_eq!(
+            tests::load_as_creator(&node, mailbox_doc_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "open"
+        );
+
+        let reply = signed_reply(&node, &identity, &filed, "reply-request").await;
+        assert_ne!(reply.doc_id, producer.doc_id);
+        assert_eq!(reply.session_id, producer.session_id);
+        assert_eq!(
+            reply.caused_by_source_doc_id.as_deref(),
+            Some(mailbox_doc_id)
+        );
+        let mut reply_lifecycle = RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            reply.clone(),
+            60,
+            ExecutionOrigin::Interactive,
+            "handoff-test",
+        );
+        reply_lifecycle
+            .bind_managed_agent(tests::agent_identity().as_ref())
+            .unwrap();
+        let claimed = reply_lifecycle.claim_with_identity().await.unwrap() == ClaimOutcome::Claimed;
+        let consumed = tests::load_as_creator(&node, mailbox_doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let linked_reply_accepted = claimed
+            && consumed.status == "acted"
+            && consumed.resolved_doc_id.as_deref() == Some(reply.doc_id.as_str());
+        node.shutdown().await.expect("shut down test node");
+        case.check(
+            gents_lean_vocab::families::mailbox_handoff_contracts_linked::HandoffOutput {
+                handoff_accepted,
+                stored_open_receipt,
+                linked_reply_accepted,
+            },
+        );
+    }
 }
 
 #[test]
 fn generated_reply_cases_drive_claim_validation() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_reply_cases;
-    assert!(!cases.is_empty());
-    assert!(cases.iter().any(|case| case.variant == "expired-deadline"
-        && case.status == "acted"
-        && case.resolved_doc_id == "request-doc"
-        && case.accepted));
-    for case in cases {
-        let item: MailboxItem = serde_json::from_value(json!({
-            "_docID": case.mailbox_doc_id, "item_key": "notice",
-            "requester_did": "owner", "node_did": "agent", "status": case.status,
-            "kind": "gate", "action": case.handling, "title": "Repair",
-            "source_kind": "session", "source_id": "source",
-            "target_node_did": case.target_node_did,
-            "target_agent_did": case.target_agent_did,
-            "session_id": case.bound_session_id,
-            "resolved_doc_id": case.resolved_doc_id, "created_at": "2026-01-01T00:00:00Z"
-        }))
-        .unwrap();
-        let mut request = AgentRequest::try_from(
-            serde_json::from_value::<gents_protocol::row::AgentRequestRow>(json!({
-                "_docID": case.request_doc_id, "request_id": "request",
-                "purpose": "normal",
-                "node_did": case.node_did, "requester_did": case.requester_did,
-                "agent_did": case.agent_did, "session_id": case.session_id,
-                "caused_by_source_doc_id": case.source_doc_id,
-                "execution_origin": if case.interactive { "interactive" } else { "event" },
-                "content": "Approved", "created_at": "2026-01-01T00:00:00Z"
-            })).unwrap()
-        ).unwrap();
-        request.requester_did = Some(case.requester_did.clone());
-        if !case.question_current {
-            request.input.question_reply =
-                Some(gents_protocol::mailbox_question::MailboxQuestionReply {
-                    question_version: None,
-                    source_doc_id: "other-question".into(),
-                    question_hash: "invalid".into(),
-                    answer: Default::default(),
-                });
-        }
-        let result = reply::validate_reply_claim(
-            &item,
-            &request,
-            case.authenticated,
-            case.recipient_authorized,
-            case.deadline_valid,
-        );
-        assert_eq!(result.is_ok(), case.accepted, "{case:?}");
-        if result.is_ok() {
-            assert_eq!(case.post_status.as_deref(), Some("acted"));
-            assert_eq!(
-                case.post_resolved_doc_id.as_deref(),
-                Some(request.doc_id.as_str())
-            );
-        }
-    }
+    gents_lean_vocab::families::mailbox_reply_contracts_claim::replay::<String, MailboxStatus>(
+        |case| {
+            let item: MailboxItem = serde_json::from_value(json!({
+                "_docID": case.mailbox_doc_id, "item_key": "notice",
+                "requester_did": "owner", "node_did": "agent", "status": case.status,
+                "kind": "gate", "action": case.handling, "title": "Repair",
+                "source_kind": "session", "source_id": "source",
+                "target_node_did": case.target_node_did,
+                "target_agent_did": case.target_agent_did,
+                "session_id": case.bound_session_id,
+                "resolved_doc_id": case.resolved_doc_id, "created_at": "2026-01-01T00:00:00Z"
+            }))
+            .unwrap();
+            let mut request = AgentRequest::try_from(
+                serde_json::from_value::<gents_protocol::row::AgentRequestRow>(json!({
+                    "_docID": case.request_doc_id, "request_id": "request",
+                    "purpose": "normal",
+                    "node_did": case.node_did, "requester_did": case.requester_did,
+                    "agent_did": case.agent_did, "session_id": case.session_id,
+                    "caused_by_source_doc_id": case.source_doc_id,
+                    "execution_origin": if case.interactive { "interactive" } else { "event" },
+                    "content": "Approved", "created_at": "2026-01-01T00:00:00Z"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            request.requester_did = Some(case.requester_did.clone());
+            if !case.question_current {
+                request.input.question_reply =
+                    Some(gents_protocol::mailbox_question::MailboxQuestionReply {
+                        question_version: None,
+                        source_doc_id: "other-question".into(),
+                        question_hash: "invalid".into(),
+                        answer: Default::default(),
+                    });
+            }
+            let post = reply::validate_reply_claim(
+                &item,
+                &request,
+                case.authenticated,
+                case.recipient_authorized,
+                case.deadline_valid,
+            )
+            .ok();
+            gents_lean_vocab::families::mailbox_reply_contracts_claim::ClaimOutput {
+                accepted: post.is_some(),
+                post_status: post.as_ref().map(|post| post.status),
+                post_resolved_doc_id: post.map(|post| post.resolved_doc_id),
+            }
+        },
+    );
 }

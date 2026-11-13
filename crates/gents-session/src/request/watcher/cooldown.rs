@@ -64,15 +64,9 @@ where
 #[cfg(test)]
 #[test]
 fn generation_marks_match_the_generated_model() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().backend_generation_mark_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(
-            generation_mark_applies(&case.marked, &case.observed),
-            case.applies,
-            "{case:?}"
-        );
-    }
+    gents_lean_vocab::families::backend_wake_generation_mark::replay(|i| {
+        generation_mark_applies(&i.marked, &i.observed)
+    });
 }
 
 /// Lean `EventDelivery.Watcher.releasedBy`: delivering a session's queue head

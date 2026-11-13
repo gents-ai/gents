@@ -5,12 +5,11 @@ use crate::surface::ToolPolicySurface;
 use crate::surface::{EndpointScope, ToolPolicyBash};
 use gents_documents::{BashMode, FileToolMode};
 
-use gents_lean_vocab::{
-    lean_tool_policy_cases, LeanToolPolicySurfaceView as View,
-    LeanToolPolicyWriteGrant as WriteGrant,
+use gents_lean_vocab::families::contracts_tool_policy_composition::{
+    PolicyView as View, WriteGrantView as WriteGrant,
 };
 
-fn file_from_rank(rank: u8) -> FileToolMode {
+fn file_from_rank(rank: u64) -> FileToolMode {
     match rank {
         0 => FileToolMode::Off,
         1 => FileToolMode::ReadOnly,
@@ -19,7 +18,7 @@ fn file_from_rank(rank: u8) -> FileToolMode {
     }
 }
 
-fn file_rank(mode: FileToolMode) -> u8 {
+fn file_rank(mode: FileToolMode) -> u64 {
     match mode {
         FileToolMode::Off => 0,
         FileToolMode::ReadOnly => 1,
@@ -27,7 +26,7 @@ fn file_rank(mode: FileToolMode) -> u8 {
     }
 }
 
-fn bash_tool_from_exec_rank(rank: u8) -> BashMode {
+fn bash_tool_from_exec_rank(rank: u64) -> BashMode {
     match rank {
         0 => BashMode::Off,
         1 => BashMode::ReadOnly,
@@ -36,7 +35,7 @@ fn bash_tool_from_exec_rank(rank: u8) -> BashMode {
     }
 }
 
-fn exec_from_rank(rank: u8) -> CommandExecutionMode {
+fn exec_from_rank(rank: u64) -> CommandExecutionMode {
     match rank {
         0 => CommandExecutionMode::ReadOnly,
         1 => CommandExecutionMode::WorkspaceWrite,
@@ -46,7 +45,7 @@ fn exec_from_rank(rank: u8) -> CommandExecutionMode {
     }
 }
 
-fn exec_rank(mode: CommandExecutionMode) -> u8 {
+fn exec_rank(mode: CommandExecutionMode) -> u64 {
     match mode {
         CommandExecutionMode::ReadOnly => 0,
         CommandExecutionMode::WorkspaceWrite => 1,
@@ -55,7 +54,7 @@ fn exec_rank(mode: CommandExecutionMode) -> u8 {
     }
 }
 
-fn net_from_rank(rank: u8) -> CommandNetworkMode {
+fn net_from_rank(rank: u64) -> CommandNetworkMode {
     match rank {
         0 => CommandNetworkMode::Disabled,
         1 => CommandNetworkMode::Inherit,
@@ -64,7 +63,7 @@ fn net_from_rank(rank: u8) -> CommandNetworkMode {
     }
 }
 
-fn net_rank(mode: CommandNetworkMode) -> u8 {
+fn net_rank(mode: CommandNetworkMode) -> u64 {
     match mode {
         CommandNetworkMode::Disabled => 0,
         CommandNetworkMode::Inherit => 1,
@@ -306,19 +305,8 @@ pub(super) fn compose(agent: &View, ceiling: &View, runtime: &View) -> View {
 }
 
 #[test]
-fn generated_tool_policy_cases_match_lean_composition() {
-    let cases = lean_tool_policy_cases();
-    assert_eq!(
-        cases.len(),
-        30,
-        "Lean tool-policy composition matrix drifted"
-    );
-    for case in cases {
-        let actual = compose(&case.agent, &case.ceiling, &case.runtime);
-        assert_eq!(
-            actual, case.expected,
-            "{}: production permission composition",
-            case.name
-        );
-    }
+fn tool_policy_composition_matches_the_lean_model() {
+    gents_lean_vocab::families::contracts_tool_policy_composition::replay(|case| {
+        compose(&case.agent, &case.ceiling, &case.runtime)
+    });
 }

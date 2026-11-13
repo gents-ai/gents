@@ -111,43 +111,45 @@ pub fn generation_input(prose: &str, contexts: &[CapturedContext]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn decode<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> T {
-        serde_json::from_value(value).unwrap()
-    }
+    use gents_protocol::request_input::{
+        CapturedContextKind, CapturedContextSource, CapturedPosition, CapturedRange,
+    };
 
     #[test]
     fn generated_title_text_cases_bind_native_presentation() {
-        let contract = &gents_lean_vocab::lean_contract_snapshot().title_text_cases;
-        assert_eq!(GENERATION_PREAMBLE, contract.preamble.as_str());
-        for case in &contract.cases {
-            let raw = case.raw.as_str();
-            let fallback = case.fallback.as_str();
+        gents_lean_vocab::families::title_text_generation::replay::<
+            CapturedContextKind,
+            CapturedContextSource,
+        >(|case| {
             let captures: Vec<CapturedContext> = case
                 .captures
                 .iter()
                 .map(|capture| CapturedContext {
-                    kind: decode(serde_json::Value::String(capture.kind.clone())),
-                    source: decode(serde_json::Value::String(capture.source.clone())),
+                    kind: capture.kind,
+                    source: capture.source,
                     captured_at: capture.captured_at.clone(),
-                    uri: capture.uri.clone().map(decode),
-                    terminal_name: capture.terminal_name.clone().map(decode),
-                    workspace_uri: capture.workspace_uri.clone().map(decode),
-                    version: capture.version.clone().map(decode),
+                    uri: capture.uri.clone(),
+                    terminal_name: capture.terminal_name.clone(),
+                    workspace_uri: capture.workspace_uri.clone(),
+                    version: capture
+                        .version
+                        .map(|version| u32::try_from(version).unwrap()),
                     unsaved: capture.unsaved,
-                    range: capture.range.clone().map(decode),
+                    range: capture.range.as_ref().map(|range| CapturedRange {
+                        start: CapturedPosition {
+                            line: u32::try_from(range.start.line).unwrap(),
+                            character: u32::try_from(range.start.character).unwrap(),
+                        },
+                        end: CapturedPosition {
+                            line: u32::try_from(range.end.line).unwrap(),
+                            character: u32::try_from(range.end.character).unwrap(),
+                        },
+                    }),
                     content: capture.content.clone(),
                 })
                 .collect();
-            let input = generation_input(fallback, &captures);
-            assert_eq!(input, case.expected_input.as_str(), "{}", case.name);
-            let generated = generated_title(raw, &input);
-            assert_eq!(
-                generated,
-                case.expected_generated.as_str(),
-                "{}",
-                case.name
-            );
+            let input = generation_input(&case.fallback, &captures);
+            let generated = generated_title(&case.raw, &input);
             assert!(generated.chars().count() <= MAX_CHARACTERS);
             assert!(generated.split_whitespace().count() <= MAX_WORDS);
             let source = if case.generated_source {
@@ -155,22 +157,17 @@ mod tests {
             } else {
                 SessionTitleSource::User
             };
-            assert_eq!(
-                display_session_title(&SessionTitle {
-                    text: raw.to_owned(),
-                    source
-                }),
-                case.expected_display.as_str(),
-                "{}",
-                case.name
-            );
-            let recent = case.recent.clone();
-            assert_eq!(
-                generation_prompt(&input, &recent),
-                case.expected_prompt.as_str(),
-                "{}",
-                case.name
-            );
-        }
+            let display = display_session_title(&SessionTitle {
+                text: case.raw.clone(),
+                source,
+            });
+            gents_lean_vocab::families::title_text_generation::GenerationOutput {
+                preamble: GENERATION_PREAMBLE.to_owned(),
+                prompt: generation_prompt(&input, &case.recent),
+                input,
+                generated,
+                display,
+            }
+        });
     }
 }

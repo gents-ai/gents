@@ -11,7 +11,7 @@
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.cases" }
       ],
       "constructors": [],
-      "generated_groups": ["canonical_dispatch_observation_cases", "canonical_spawned_target_rejection_cases"],
+      "generated_groups": ["canonical_dispatch_observation_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": ["crates/gents-toolcalls/src/call/hook/persistence/prompt_hook.rs", "crates/gents-toolcalls/src/call/hook.rs", "crates/gents-toolcalls/src/call/lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents-tools/src/native/bash_tools.rs", "crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", "crates/gents-toolcalls/src/call/lifecycle/recovery.rs"],
       "consumer_paths": ["crates/gents-lean-vocab/src/canonical_execution.rs", "crates/gents-toolcalls/src/call/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/toolcalls_tests/hook/background_admission.rs"],
@@ -58,15 +58,15 @@
         "RequestExecutionLease.Action.reparkExpiredResume",
         "RequestExecutionLease.Action.finalizeParked"
       ],
-      "generated_groups": ["request_execution_lease_cases", "request_execution_lease_trace_cases"],
-      "fixture_status": "concrete_inputs",
+      "generated_groups": [],
+      "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents-session/src/request/lifecycle/execution_lease.rs",
         "crates/gents-session/src/request/lifecycle/backend_wait.rs",
         "crates/gents-session/src/request/admission.rs"
       ],
       "consumer_paths": [
-        "crates/gents-lean-vocab/src/request_execution_lease.rs",
+        "crates/gents-loop/src/execution_policy.rs",
         "crates/gents-session/src/request/lifecycle/execution_lease/tests/generated_policy.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs"
       ],

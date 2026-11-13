@@ -40,14 +40,12 @@ impl NodeReadinessWriter for ControlledWriter {
 
 #[tokio::test(start_paused = true)]
 async fn generated_readiness_publication_traces_write_only_semantic_changes() {
-    let cases = gents_lean_vocab::lean_readiness_publication_cases();
-    assert_eq!(cases.len(), 2);
-    for case in cases {
+    for case in gents_lean_vocab::families::contracts_readiness_publication::cases() {
         let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
         let writer = Arc::new(ControlledWriter {
             plans: std::sync::Mutex::new(VecDeque::from(vec![
                 WritePlan::Success;
-                case.states.len()
+                case.input.states.len()
             ])),
             attempts: attempts_tx,
             persisted: tokio::sync::Mutex::new(Vec::new()),
@@ -57,9 +55,9 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
             "did:test:semantic-readiness-writer",
             Duration::from_millis(1),
         );
-        assert_eq!(case.states.len(), case.publishes.len());
-        for (index, (&state, &publishes)) in case.states.iter().zip(&case.publishes).enumerate() {
-            let (process, expected) = match state {
+        let mut publishes = Vec::with_capacity(case.input.states.len());
+        for (index, &state) in case.input.states.iter().enumerate() {
+            let (process, written) = match state {
                 0 => (
                     ProcessLifecycleState::Recovering,
                     NodeReadinessProcessState::Recovering,
@@ -80,7 +78,11 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
             } else {
                 publisher.set_process_state(process).await.unwrap();
             }
-            assert_eq!(attempts_rx.try_recv().ok(), publishes.then_some(expected));
+            let attempt = attempts_rx.try_recv().ok();
+            if let Some(attempt) = attempt {
+                assert_eq!(attempt, written);
+            }
+            publishes.push(attempt.is_some());
             tokio::time::advance(Duration::from_secs(3600)).await;
             tokio::task::yield_now().await;
             assert!(
@@ -88,6 +90,11 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
                 "idle time must not publish readiness"
             );
         }
+        case.check(
+            gents_lean_vocab::families::contracts_readiness_publication::ReadinessPublicationOutput {
+                publishes,
+            },
+        );
         owner.close().await.unwrap();
     }
 }
@@ -333,17 +340,15 @@ async fn semantic_noop_and_stale_commands_do_not_emit_watch_revisions() {
 
 #[test]
 fn generated_storage_failure_cases_bind_readiness_classification() {
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    for case in contract["storage_failure_cases"].as_array().unwrap() {
+    gents_lean_vocab::families::storage_failure_contracts_readiness::replay(|i| {
         let error = anyhow::Error::new(gents_protocol::database_error::GraphqlFailure::new(
             "test",
-            serde_json::json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+            serde_json::json!([{"message": i.message, "extensions": {"code": i.code}}]),
         ));
-        assert_eq!(
-            is_fatal_node_readiness_write(&error),
-            case["fatal_readiness"].as_bool().unwrap()
-        );
-    }
+        gents_lean_vocab::families::storage_failure_contracts_readiness::ReadinessOutput {
+            fatal_readiness: is_fatal_node_readiness_write(&error),
+        }
+    });
 }
 
 #[tokio::test]

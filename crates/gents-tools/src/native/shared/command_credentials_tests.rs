@@ -41,8 +41,7 @@ async fn run(
 }
 
 #[tokio::test]
-async fn generated_bounded_sandboxes_deny_credentials_and_default_network() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().command_isolation_cases;
+async fn command_isolation_seatbelt_matches_lean() {
     let folder = tempfile::tempdir().unwrap();
     let root = folder.path().canonicalize().unwrap();
     let home = root.join("user");
@@ -85,31 +84,28 @@ async fn generated_bounded_sandboxes_deny_credentials_and_default_network() {
     ]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    for case in cases {
-        if !case.protects_credentials {
-            continue;
-        }
-        let mode: CommandExecutionMode =
-            serde_json::from_value(serde_json::Value::String(case.mode.clone())).unwrap();
-        let network: CommandNetworkMode =
-            serde_json::from_value(serde_json::Value::String(case.network.clone())).unwrap();
+    for case in gents_lean_vocab::families::command_isolation_seatbelt::cases::<
+        CommandExecutionMode,
+        CommandNetworkMode,
+    >() {
         let policy = CommandExecutionPolicy::write_capable()
-            .with_mode(mode)
-            .with_network_mode(network);
+            .with_mode(case.input.mode)
+            .with_network_mode(case.input.network);
         let mut profile = macos_workspace_write_policy(policy.effective_network_mode());
         let mut parameters = vec![format!("-DWRITABLE_ROOT={}", root.display())];
         protection.apply(&mut profile, &mut parameters).unwrap();
         let script = r#"import errno, os, pathlib, socket, sys
-for name in sys.argv[3:]:
+protected = True
+for name in sys.argv[2:]:
     try:
         pathlib.Path(name).read_bytes()
     except PermissionError:
         pass
     else:
-        raise AssertionError('credential read permitted: ' + name)
+        protected = False
 for operation in [
-    lambda: os.link(sys.argv[3], 'credential-alias'),
-    lambda: pathlib.Path(sys.argv[3]).write_text('changed'),
+    lambda: os.link(sys.argv[2], 'credential-alias'),
+    lambda: pathlib.Path(sys.argv[2]).write_text('changed'),
     lambda: pathlib.Path(sys.argv[-1]).write_text('changed'),
     lambda: os.rename('user', 'moved-user'),
 ]:
@@ -118,32 +114,40 @@ for operation in [
     except PermissionError:
         pass
     else:
-        raise AssertionError('credential namespace modification permitted')
+        protected = False
 pathlib.Path('ordinary').write_text('workspace write')
 assert pathlib.Path('ordinary').read_text() == 'workspace write'
+network = 'enabled'
 with socket.socket() as connection:
     connection.settimeout(2)
     try:
         connection.connect(('127.0.0.1', int(sys.argv[1])))
     except PermissionError as error:
-        assert sys.argv[2] == 'disabled', error
         assert error.errno in (errno.EPERM, errno.EACCES), error
-    else:
-        assert sys.argv[2] == 'enabled'
-print('verified credential, workspace and network boundaries')
+        network = 'disabled'
+print('credentials_protected=%s network=%s' % (protected, network))
 "#;
-        let args = [
-            vec![port.to_string(), case.effective_network.clone()],
-            targets.clone(),
-        ]
-        .concat();
+        let args = [vec![port.to_string()], targets.clone()].concat();
         let output = run(profile, parameters, &root, script, &args).await;
         assert!(
             output.status.success(),
-            "{case:?}: {}",
+            "{:?}: {}",
+            case.input,
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("verified credential"));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let observed = stdout.trim().split(' ').collect::<Vec<_>>();
+        let network = match observed[1] {
+            "network=disabled" => CommandNetworkMode::Disabled,
+            "network=enabled" => CommandNetworkMode::Enabled,
+            other => panic!("{:?}: unexpected network observation {other}", case.input),
+        };
+        case.check(
+            gents_lean_vocab::families::command_isolation_seatbelt::SeatbeltOutput {
+                credentials_protected: observed[0] == "credentials_protected=True",
+                network,
+            },
+        );
     }
 }
 

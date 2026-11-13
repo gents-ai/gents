@@ -735,24 +735,6 @@ theorem toolOutputPagingCases_head_and_continuation_tile :
         head.nextOffset = next.offset ∧ head.nextOffset = next.start := by
   native_decide
 
-def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
-  [ { theoremName := "Background.admitted_background_count_bounded"
-    , witnessKind := "admission_bound"
-    , scenario := "background_tool_admission_respects_max_backgrounded_per_parent"
-    , numericBound := Background.maxBackgroundedPerParent
-    , kindFields :=
-        [ ("await_mode", "background")
-        , ("error_code_on_violation", "background_tool_budget_exceeded")
-        ]
-    }
-  , { theoremName := "Background.admission_cohort_receipt_commits"
-    , witnessKind := "receipt_contention"
-    , scenario := "spawn_receipt_commits_after_bounded_transaction_conflicts"
-    , numericBound := Background.receiptContentionAttempts - 1
-    , kindFields := [("tool_name", "spawn_process")]
-    }
-  ]
-
 structure WakeRowsCase where
   name : String
   session : AgentSession.Document := wakeSession

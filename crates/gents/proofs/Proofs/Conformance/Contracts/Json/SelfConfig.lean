@@ -1,4 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 import Proofs.Tools.SelfConfig.Cases
 import Proofs.Tools.SelfConfig.Auth
 import Proofs.Tools.SelfConfig.Scope
@@ -11,52 +12,69 @@ open SelfConfig SelfConfig.ContractCases
 private def scBool (b : Bool) : String :=
   if b then "true" else "false"
 
-def selfConfigFieldTableJson (t : Target) : String :=
-  "{"
-    ++ "\"collection\":" ++ jsonString t.collectionName ++ ","
-    ++ "\"unique_field\":" ++ jsonString t.uniqueField ++ ","
-    ++ "\"category\":" ++ jsonString t.category ++ ","
-    ++ "\"all_fields\":" ++ jsonStringArray (allFields t) ++ ","
-    ++ "\"writable_fields\":" ++ jsonStringArray (writableFields t) ++ ","
-    ++ "\"protected_fields\":" ++ jsonStringArray (protectedFields t)
-  ++ "}"
+structure FieldTableInput where
+  collection : String
+  deriving Lean.ToJson
 
-def selfConfigFieldTablesJson : String :=
-  jsonArray (allTargets.map selfConfigFieldTableJson)
+structure FieldTable where
+  uniqueField : String
+  category : String
+  allFields : List String
+  writableFields : List String
+  protectedFields : List String
+  deriving Lean.ToJson
 
-def selfConfigResourceReadExposureCasesJson : String :=
-  let cases : List (String × Target × List String) :=
-    [("backend", .inferenceBackend, ["backend"]),
-     ("backend", .inferenceBackend, ["backend", "node"]),
-     ("backend", .inferenceBackend, ["backend", "agent"]),
-     ("backend", .inferenceBackend, ["node"]),
-     ("backend", .inferenceBackend, ["agent"]),
-     ("tools", .tools, ["tools"]),
-     ("profile", .inferenceProfile, ["profile"]),
-     ("automation", .task, ["automation"]),
-     ("automation", .task, ["backend"]),
-     ("effective", .agent, ["backend"]),
-     ("effective", .agent, ["automation"]),
-     ("effective", .agent, ["tools"])]
-  jsonArray (cases.map fun (resource, target, enabled) =>
-    "{\"resource\":" ++ jsonString resource ++
-    ",\"categories\":" ++ jsonStringArray enabled ++
-    ",\"exposed\":" ++ scBool (if resource == "effective" then effectiveReadExposed enabled
-      else resourceReadExposed enabled target) ++ "}")
+def fieldTable (t : Target) : FieldTable :=
+  { uniqueField := t.uniqueField, category := t.category, allFields := allFields t
+    writableFields := writableFields t, protectedFields := protectedFields t }
 
-def policyResourceExposureCasesJson : String :=
-  let cases : List (List String) :=
-    [[], ["policy"], ["agent", "tools", "profile"], ["node", "policy"],
-     ["backend", "mcp_service", "automation", "policy"]]
-  jsonArray (cases.map fun categories =>
-    "{\"categories\":" ++ jsonStringArray categories ++
-    ",\"exposed\":" ++ scBool (policyResourceExposed categories) ++ "}")
+@[conformance_family]
+def selfConfigFieldTable : Family FieldTableInput (Option FieldTable) where
+  inputs := allTargets.map fun t => { collection := t.collectionName }
+  model := fun i => (allTargets.find? (·.collectionName == i.collection)).map fieldTable
 
-def fieldValuePairJson (entry : FieldKey × FieldValue) : String :=
-  "{"
-    ++ "\"field\":" ++ jsonString entry.1 ++ ","
-    ++ "\"value\":" ++ jsonString entry.2
-  ++ "}"
+structure ResourceReadExposureInput where
+  resource : String
+  categories : List String
+  deriving Lean.ToJson
+
+structure ResourceReadExposureOutput where
+  exposed : Bool
+  deriving Lean.ToJson
+
+/-- The configuration document each config-tool read resource lists; the
+`effective` read has none and is exposed by `effectiveReadExposed`. -/
+def readResourceTarget : String → Option Target
+  | "backend" => some .inferenceBackend
+  | "tools" => some .tools
+  | "profile" => some .inferenceProfile
+  | "automation" => some .task
+  | _ => none
+
+@[conformance_family]
+def selfConfigResourceReadExposure :
+    Conformance.Family ResourceReadExposureInput ResourceReadExposureOutput where
+  inputs :=
+    [("backend", ["backend"]), ("backend", ["backend", "node"]), ("backend", ["backend", "agent"]),
+     ("backend", ["node"]), ("backend", ["agent"]), ("tools", ["tools"]),
+     ("profile", ["profile"]), ("automation", ["automation"]), ("automation", ["backend"]),
+     ("effective", ["backend"]), ("effective", ["automation"]), ("effective", ["tools"])].map
+      fun (resource, categories) => { resource, categories }
+  model := fun i =>
+    { exposed := match readResourceTarget i.resource with
+        | some target => resourceReadExposed i.categories target
+        | none => effectiveReadExposed i.categories }
+
+structure PolicyResourceExposureInput where
+  categories : List String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def policyResourceExposure : Family PolicyResourceExposureInput Bool where
+  inputs := ([[], ["policy"], ["agent", "tools", "profile"], ["node", "policy"],
+    ["backend", "mcp_service", "automation", "policy"]] : List (List String)).map
+      fun categories => { categories }
+  model := fun i => policyResourceExposed i.categories
 
 def selfConfigPatchEntryJson (entry : FieldKey × Option FieldValue) : String :=
   "{"
@@ -71,146 +89,265 @@ def selfConfigPatchEntryJson (entry : FieldKey × Option FieldValue) : String :=
           | none => "null")
   ++ "}"
 
-def selfConfigBackendJson (entry : String × String × String) : String :=
-  "{"
-    ++ "\"backend_id\":" ++ jsonString entry.1 ++ ","
-    ++ "\"provider_kind\":" ++ jsonString entry.2.1 ++ ","
-    ++ "\"auth\":" ++ jsonString entry.2.2
-  ++ "}"
-
-def selfConfigGrantsJson (g : Grants) : String :=
-  "{\"pack_install\":" ++ scBool g.packInstall ++ ",\"policy\":" ++ scBool g.policy
-    ++ ",\"pack_authority\":" ++ scBool g.packAuthority ++ "}"
+structure PolicyGrantBoundInput where
+  candidatePolicy : Bool
+  storedPolicy : Bool
+  heldPolicy : Bool
+  deriving Lean.ToJson
 
 /-- Every combination of the policy grant bit on the candidate, the stored Tools and
-the invoker, with pack installation off. Rust `OperatorGrants::bounded_by` must
-match `Grants.boundedBy` on each row. -/
-def policyGrantBoundCasesJson : String :=
-  let bools := [false, true]
-  jsonArray <| bools.flatMap fun candidate => bools.flatMap fun stored =>
-    bools.map fun held =>
-      let c : Grants := { Grants.bot with policy := candidate }
-      let s : Grants := { Grants.bot with policy := stored }
-      let h : Grants := { Grants.bot with policy := held }
-      "{\"candidate_policy\":" ++ scBool candidate
-        ++ ",\"stored_policy\":" ++ scBool stored
-        ++ ",\"held_policy\":" ++ scBool held
-        ++ ",\"accepted\":" ++ scBool (c.boundedBy s h) ++ "}"
+the invoker, with pack installation off. -/
+@[conformance_family]
+def policyGrantBound : Family PolicyGrantBoundInput Bool where
+  inputs := [false, true].flatMap fun candidatePolicy => [false, true].flatMap fun storedPolicy =>
+    [false, true].map fun heldPolicy => { candidatePolicy, storedPolicy, heldPolicy }
+  model := fun i =>
+    ({ Grants.bot with policy := i.candidatePolicy } : Grants).boundedBy
+      { Grants.bot with policy := i.storedPolicy } { Grants.bot with policy := i.heldPolicy }
 
-/-- The node permissions a no-lockout Agent keeps against its own revoke, and for
-each permission and change, whether the lockout guard keeps it. Rust
-`policy::keeps_lockout` must agree on every row. -/
-def policyLockoutCasesJson : String :=
-  let permissions := (Identity.GrantSets.lockoutProtected ++ ["patch-collection"]).eraseDups
-  let rows := permissions.flatMap fun p =>
-    [false, true].flatMap fun delete =>
-      [false, true].flatMap fun noLockout =>
-        [false, true].map fun isSelf =>
-          let change : Identity.GrantSets.Change :=
-            ⟨.permission p, delete, true, false⟩
-          "{\"permission\":" ++ jsonString p
-            ++ ",\"delete\":" ++ scBool delete
-            ++ ",\"no_lockout\":" ++ scBool noLockout
-            ++ ",\"is_self\":" ++ scBool isSelf
-            ++ ",\"kept\":"
-            ++ scBool (Identity.GrantSets.selfChangeKeepsLockout noLockout isSelf change) ++ "}"
-  "{\"protected\":" ++ jsonStringArray Identity.GrantSets.lockoutProtected
-    ++ ",\"rows\":" ++ jsonArray rows ++ "}"
+structure LockoutRow where
+  permission : String
+  delete : Bool
+  noLockout : Bool
+  isSelf : Bool
+  deriving Lean.ToJson
 
-def selfConfigSelectionJson : Option (List (FieldKey × FieldValue)) → String
-  | none => "null"
-  | some doc => jsonArray (doc.map fieldValuePairJson)
+structure LockoutInput where
+  rows : List LockoutRow
+  deriving Lean.ToJson
 
-def selfConfigCaseJson (w : CaseWitness) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString w.row.name ++ ","
-    ++ "\"collection\":" ++ jsonString w.row.target.collectionName ++ ","
-    ++ "\"category\":" ++ jsonString w.row.target.category ++ ","
-    ++ "\"guarded\":" ++ scBool w.row.guarded ++ ","
-    ++ "\"validates\":" ++ scBool w.row.validates ++ ","
-    ++ "\"held_grants\":" ++ selfConfigGrantsJson w.row.held ++ ","
-    ++ "\"selected_before\":" ++ selfConfigSelectionJson w.selectedBefore ++ ","
-    ++ "\"selected_after\":" ++ selfConfigSelectionJson w.selectedAfter ++ ","
-    ++ "\"doc\":" ++ jsonArray (w.row.doc.map fieldValuePairJson) ++ ","
-    ++ "\"patch\":"
-      ++ jsonArray (w.row.patch.map selfConfigPatchEntryJson) ++ ","
-    ++ "\"admissible\":" ++ scBool w.admissiblePatch ++ ","
-    ++ "\"accepted\":" ++ scBool w.accepted ++ ","
-    ++ "\"result\":" ++ jsonArray (w.result.map fieldValuePairJson) ++ ","
-    ++ "\"protected_preserved\":" ++ scBool w.protectedPreserved ++ ","
-    ++ "\"containment_holds\":" ++ scBool w.containmentHolds ++ ","
-    ++ "\"unchanged_on_reject\":" ++ scBool w.unchangedOnReject ++ ","
-    ++ "\"control_kept_after_accept\":" ++ scBool w.controlKeptAfterAccept ++ ","
-    ++ "\"backends\":" ++ jsonArray (w.row.backends.map selfConfigBackendJson)
-  ++ "}"
+structure LockoutOutput where
+  «protected» : List String
+  kept : List Bool
+  deriving Lean.ToJson
 
-def selfConfigCasesJson : String :=
-  jsonArray (selfConfigCases.map selfConfigCaseJson)
+/-- The node permissions a no-lockout Agent keeps against its own revoke (as a
+sorted set), and for each permission and change whether the lockout guard
+keeps it. -/
+@[conformance_family]
+def policyLockout : Family LockoutInput LockoutOutput where
+  inputs :=
+    let permissions := (Identity.GrantSets.lockoutProtected ++ ["patch-collection"]).eraseDups
+    [{ rows := permissions.flatMap fun permission =>
+        [false, true].flatMap fun delete =>
+          [false, true].flatMap fun noLockout =>
+            [false, true].map fun isSelf => { permission, delete, noLockout, isSelf } }]
+  model := fun i =>
+    { «protected» := Identity.GrantSets.lockoutProtected.eraseDups.mergeSort fun a b => a ≤ b
+      kept := i.rows.map fun row =>
+        Identity.GrantSets.selfChangeKeepsLockout row.noLockout row.isSelf
+          ⟨.permission row.permission, row.delete, true, false⟩ }
 
-def schemaPublicationCasesJson : String := Id.run do
-  let mut rows : List String := []
-  for grant in [false, true] do
-    for artifact in [false, true] do
-      for compatible in [false, true] do
-        for nativeAllowed in [false, true] do
-          rows := rows ++ ["{\"grant\":" ++ scBool grant
-            ++ ",\"artifact\":" ++ scBool artifact
-            ++ ",\"compatible\":" ++ scBool compatible
-            ++ ",\"native_allowed\":" ++ scBool nativeAllowed
-            ++ ",\"accepted\":" ++ scBool (SelfConfig.schemaPublicationAllowed grant artifact compatible nativeAllowed) ++ "}"]
-  return jsonArray rows
+structure FieldValueWire where
+  field : String
+  value : String
+  deriving Lean.ToJson
 
-/-- Edit authority by category, scope and held self-config categories. -/
-def selfConfigScopeEditCasesJson : String := Id.run do
-  let categorySets : List (String × List String) :=
-    [("none", []), ("agent-only", ["agent"]), ("tools-only", ["tools"]),
-     ("catalog-only", ["node"]), ("catalog-and-agent", ["node", "agent"]),
-     ("catalog-and-tools", ["node", "tools"]), ("agent-and-tools", ["agent", "tools"]),
-     ("engineer", SelfConfig.effectiveCategories SelfConfig.engineerGroup)]
-  let documents := ["agent", "tools", "profile", "backend", "automation", "policy"]
-  let scopes : List (String × SelfConfig.Scope) := [("own", .own), ("foreign", .foreign)]
-  let mut rows : List String := []
-  for (setName, categories) in categorySets do
-    for document in documents do
-      for (scopeName, scope) in scopes do
-        rows := rows ++ ["{\"name\":" ++ jsonString (setName ++ "/" ++ document ++ "/" ++ scopeName)
-          ++ ",\"categories\":" ++ jsonStringArray categories
-          ++ ",\"category\":" ++ jsonString document
-          ++ ",\"scope\":" ++ jsonString scopeName
-          ++ ",\"allowed\":" ++ scBool (SelfConfig.mayEdit categories document scope) ++ "}"]
-  return jsonArray rows
+structure PatchEntryWire where
+  field : String
+  action : String
+  value : Option String
+  deriving Lean.ToJson
 
-def selfConfigScopeGroupCasesJson : String := Id.run do
-  let groups : List (String × SelfConfig.SelfConfigGroup) :=
-    [("created", SelfConfig.createdGroup), ("clone-of-engineer", SelfConfig.cloneGroup SelfConfig.engineerGroup),
-     ("engineer", SelfConfig.engineerGroup), ("yolo", SelfConfig.yoloGroup),
-     ("enabled-default", ⟨true, none⟩),
-     ("disabled-with-list", ⟨false, some ["node", "tools"]⟩),
-     ("enabled-catalog", ⟨true, some ["node"]⟩)]
-  let rows := groups.map fun (name, g) =>
-    "{\"name\":" ++ jsonString name
-      ++ ",\"enabled\":" ++ scBool g.enabled
-      ++ ",\"categories\":" ++ jsonOptionalStringArray g.categories
-      ++ ",\"effective\":" ++ jsonStringArray (SelfConfig.effectiveCategories g)
-      ++ ",\"may_create_agent\":" ++ scBool (SelfConfig.mayCreateAgent (SelfConfig.effectiveCategories g)) ++ "}"
-  return jsonArray rows
+structure BackendWire where
+  backendId : String
+  providerKind : String
+  auth : String
+  deriving Lean.ToJson
 
-def selfConfigScopeOfCasesJson : String := Id.run do
-  let rows : List (String × String × String × Bool) :=
-    [("self-exclusive", "agent-a", "agent-a", false), ("self-shared", "agent-a", "agent-a", true),
-     ("other-exclusive", "agent-a", "agent-b", false), ("other-shared", "agent-a", "agent-b", true)]
-  return jsonArray (rows.map fun (name, invoking, target, shared) =>
-    "{\"name\":" ++ jsonString name
-      ++ ",\"invoking_agent\":" ++ jsonString invoking
-      ++ ",\"target_agent\":" ++ jsonString target
-      ++ ",\"shared\":" ++ scBool shared
-      ++ ",\"scope\":" ++ jsonString (if SelfConfig.scopeOf invoking target shared == .own then "own" else "foreign") ++ "}")
+structure GrantsWire where
+  packInstall : Bool
+  policy : Bool
+  packAuthority : Bool
+  deriving Lean.ToJson
 
-def selfConfigScopeCasesJson : String :=
-  "{\"categories\":" ++ jsonStringArray SelfConfig.selfConfigCategories
-    ++ ",\"default_categories\":" ++ jsonStringArray SelfConfig.defaultCategories
-    ++ ",\"edit\":" ++ selfConfigScopeEditCasesJson
-    ++ ",\"groups\":" ++ selfConfigScopeGroupCasesJson
-    ++ ",\"scope_of\":" ++ selfConfigScopeOfCasesJson ++ "}"
+structure SelfConfigCaseInput where
+  name : String
+  collection : String
+  guarded : Bool
+  validates : Bool
+  heldGrants : GrantsWire
+  selectedBefore : Option (List FieldValueWire)
+  selectedAfter : Option (List FieldValueWire)
+  doc : List FieldValueWire
+  patch : List PatchEntryWire
+  backends : List BackendWire
+  deriving Lean.ToJson
+
+structure SelfConfigCaseOutput where
+  admissible : Bool
+  accepted : Bool
+  result : List FieldValueWire
+  deriving Lean.ToJson
+
+private def fieldValues (doc : List (FieldKey × FieldValue)) : List FieldValueWire :=
+  doc.map fun (field, value) => { field, value }
+
+def selfConfigCaseInput (w : CaseWitness) : SelfConfigCaseInput :=
+  { name := w.row.name, collection := w.row.target.collectionName
+    guarded := w.row.guarded, validates := w.row.validates
+    heldGrants := ⟨w.row.held.packInstall, w.row.held.policy, w.row.held.packAuthority⟩
+    selectedBefore := w.selectedBefore.map fieldValues
+    selectedAfter := w.selectedAfter.map fieldValues
+    doc := fieldValues w.row.doc
+    patch := w.row.patch.map fun (field, value) =>
+      { field, action := if value.isSome then "set" else "clear", value }
+    backends := w.row.backends.map fun (backendId, providerKind, auth) =>
+      { backendId, providerKind, auth } }
+
+/-- The witness of the named scenario row: the row's target, documents, guard
+fixtures and held grants are all fixed by the row, and the input carries their
+native projection. -/
+def selfConfigCaseOutcome (i : SelfConfigCaseInput) : Option SelfConfigCaseOutput :=
+  (selfConfigCases.find? (·.row.name == i.name)).map fun w =>
+    { admissible := w.admissiblePatch, accepted := w.accepted, result := fieldValues w.result }
+
+@[conformance_family]
+def selfConfigCase : Family SelfConfigCaseInput (Option SelfConfigCaseOutput) where
+  inputs := selfConfigCases.map selfConfigCaseInput
+  model := selfConfigCaseOutcome
+
+/-- The served-node scenario stores a Backend whose auth is a credential
+reference with its credential document and then attempts the raw-key patch;
+the self-config fixture provisions only that credential, so only this row can
+be built there. -/
+@[conformance_family]
+def selfConfigCaseRawKeyScenario : Family SelfConfigCaseInput (Option Bool) where
+  inputs := (selfConfigCases.filter (·.row.name == "backend_credential_to_raw_key_rejected")).map
+    selfConfigCaseInput
+  model := fun i => (selfConfigCaseOutcome i).map (·.accepted)
+
+structure SchemaPublicationInput where
+  grant : Bool
+  artifact : Bool
+  compatible : Bool
+  nativeAllowed : Bool
+  deriving Lean.ToJson
+
+structure SchemaPublicationOutput where
+  accepted : Bool
+  installed : Bool
+  deriving Lean.ToJson
+
+def schemaPublicationInputs : List SchemaPublicationInput :=
+  [false, true].flatMap fun grant => [false, true].flatMap fun artifact =>
+    [false, true].flatMap fun compatible => [false, true].map fun nativeAllowed =>
+      { grant, artifact, compatible, nativeAllowed }
+
+def schemaPublicationOutcome (i : SchemaPublicationInput) : SchemaPublicationOutput :=
+  let accepted := SelfConfig.schemaPublicationAllowed i.grant i.artifact i.compatible i.nativeAllowed
+  { accepted, installed := accepted }
+
+@[conformance_family]
+def schemaPublication : Family SchemaPublicationInput SchemaPublicationOutput where
+  inputs := schemaPublicationInputs
+  model := schemaPublicationOutcome
+
+/-- The runtime-owned schema tool acts with the node's own authority, which
+natively holds every collection permission, so only natively allowed
+publications can be built for it. -/
+@[conformance_family]
+def runtimeSchemaPublication : Family SchemaPublicationInput SchemaPublicationOutput where
+  inputs := schemaPublicationInputs.filter (·.nativeAllowed)
+  model := schemaPublicationOutcome
+
+structure EditInput where
+  name : String
+  categories : List String
+  category : String
+  scope : String
+  deriving Lean.ToJson
+
+structure GroupInput where
+  name : String
+  enabled : Bool
+  categories : Option (List String)
+  deriving Lean.ToJson
+
+structure ScopeOfInput where
+  name : String
+  invokingAgent : String
+  targetAgent : String
+  shared : Bool
+  deriving Lean.ToJson
+
+structure ScopeInput where
+  edit : List EditInput
+  groups : List GroupInput
+  scopeOf : List ScopeOfInput
+  deriving Lean.ToJson
+
+structure GroupOutput where
+  effective : List String
+  mayCreateAgent : Bool
+  deriving Lean.ToJson
+
+structure PresetOutput where
+  enabled : Bool
+  effective : List String
+  editsOwnTools : Bool
+  createsAgents : Bool
+  deriving Lean.ToJson
+
+structure ScopeOutput where
+  categories : List String
+  defaultCategories : List String
+  allowed : List Bool
+  groups : List GroupOutput
+  scope : List String
+  engineer : PresetOutput
+  yolo : PresetOutput
+  deriving Lean.ToJson
+
+private def sortedNames (names : List String) : List String :=
+  names.eraseDups.mergeSort fun a b => a ≤ b
+
+private def scopeName (scope : SelfConfig.Scope) : String :=
+  if scope == .own then "own" else "foreign"
+
+def presetOutput (group : SelfConfig.SelfConfigGroup) : PresetOutput :=
+  let effective := SelfConfig.effectiveCategories group
+  { enabled := group.enabled, effective := sortedNames effective
+    editsOwnTools := SelfConfig.mayEdit effective "tools" .own
+    createsAgents := SelfConfig.mayCreateAgent effective }
+
+/-- Self-config edit authority by category and scope, the effective categories
+of a group, whose configuration an edit touches, the category vocabulary and the
+bundled Engineer and yolo presets, replayed as one table. -/
+@[conformance_family]
+def selfConfigScope : Family ScopeInput ScopeOutput where
+  inputs :=
+    let categorySets : List (String × List String) :=
+      [("none", []), ("agent-only", ["agent"]), ("tools-only", ["tools"]),
+       ("catalog-only", ["node"]), ("catalog-and-agent", ["node", "agent"]),
+       ("catalog-and-tools", ["node", "tools"]), ("agent-and-tools", ["agent", "tools"]),
+       ("engineer", SelfConfig.effectiveCategories SelfConfig.engineerGroup)]
+    let documents := ["agent", "tools", "profile", "backend", "automation", "policy"]
+    let groups : List (String × SelfConfig.SelfConfigGroup) :=
+      [("created", SelfConfig.createdGroup), ("clone-of-engineer", SelfConfig.cloneGroup SelfConfig.engineerGroup),
+       ("engineer", SelfConfig.engineerGroup), ("yolo", SelfConfig.yoloGroup),
+       ("enabled-default", ⟨true, none⟩),
+       ("disabled-with-list", ⟨false, some ["node", "tools"]⟩),
+       ("enabled-catalog", ⟨true, some ["node"]⟩)]
+    [{ edit := categorySets.flatMap fun (setName, categories) =>
+          documents.flatMap fun document =>
+            ["own", "foreign"].map fun scope =>
+              { name := setName ++ "/" ++ document ++ "/" ++ scope, categories, category := document, scope }
+       groups := groups.map fun (name, g) => { name, enabled := g.enabled, categories := g.categories }
+       scopeOf :=
+         [("self-exclusive", "agent-a", "agent-a", false), ("self-shared", "agent-a", "agent-a", true),
+          ("other-exclusive", "agent-a", "agent-b", false), ("other-shared", "agent-a", "agent-b", true)].map
+           fun (name, invokingAgent, targetAgent, shared) => { name, invokingAgent, targetAgent, shared } }]
+  model := fun i =>
+    { categories := sortedNames SelfConfig.selfConfigCategories
+      defaultCategories := sortedNames SelfConfig.defaultCategories
+      allowed := i.edit.map fun e =>
+        SelfConfig.mayEdit e.categories e.category (if e.scope == "own" then .own else .foreign)
+      groups := i.groups.map fun g =>
+        let effective := SelfConfig.effectiveCategories ⟨g.enabled, g.categories⟩
+        { effective := sortedNames effective, mayCreateAgent := SelfConfig.mayCreateAgent effective }
+      scope := i.scopeOf.map fun c => scopeName (SelfConfig.scopeOf c.invokingAgent c.targetAgent c.shared)
+      engineer := presetOutput SelfConfig.engineerGroup
+      yolo := presetOutput SelfConfig.yoloGroup }
 
 end Conformance.Contracts

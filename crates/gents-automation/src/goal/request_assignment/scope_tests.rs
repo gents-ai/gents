@@ -1,5 +1,4 @@
 use super::*;
-use gents_lean_vocab::LeanGoalRequestAssignmentCaseExpectedQueueScope;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,16 +43,17 @@ impl gents_store::config_client::ConfigRead for ReadScope {
 
 #[tokio::test]
 async fn signed_scope_reads_use_the_executed_assignment_contract_without_history() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_request_assignment_cases;
-    assert!(!cases.is_empty());
     let home = tempfile::tempdir().unwrap();
     let identities = [
         KeyIdentity::load_or_create(home.path().join("one.key"), None).unwrap(),
         KeyIdentity::load_or_create(home.path().join("two.key"), None).unwrap(),
     ];
-    for case in cases {
+    for case in
+        gents_lean_vocab::families::goal_request_assignment_contracts_unread_history_scope::cases()
+    {
+        let name = &case.input.name;
         let row = super::contract_tests::entry(
-            &super::contract_tests::case_entry_value(&case.entry),
+            &serde_json::to_value(&case.input.entry).unwrap(),
             &identities,
         )
         .await;
@@ -74,54 +74,28 @@ async fn signed_scope_reads_use_the_executed_assignment_contract_without_history
             row.session_id.as_deref().unwrap(),
         )
         .await;
-        if explicit && valid {
+        let scope = if explicit && valid {
             let mut scopes = result.unwrap();
-            let scope = scopes
-                .scope_for_request(&doc, &row.request_id)
-                .await
-                .unwrap();
-            let RequestAssignmentScope::Referenced(reference) = scope else {
-                panic!("{}", case.name)
-            };
-            let actual = LeanGoalRequestAssignmentCaseExpectedQueueScope {
-                entry: None,
-                goal: Some(
-                    reference
-                        .goal_id
-                        .strip_prefix("goal-")
-                        .unwrap()
-                        .parse::<u64>()
-                        .unwrap(),
-                ),
-                kind: "referenced".into(),
-                root: Some(
-                    reference
-                        .root_request_doc_id
-                        .unwrap()
-                        .strip_prefix("physical-")
-                        .unwrap()
-                        .parse::<u64>()
-                        .unwrap(),
-                ),
-            };
-            assert_eq!(Some(actual), case.expected_queue_scope, "{}", case.name);
+            let scope = scopes.scope_for_request(&doc, &row.request_id).await;
             assert!(scopes
                 .scope_for_request(&doc, "another-logical-request")
                 .await
                 .is_err());
             assert!(scopes.scope("unobserved-physical-request").await.is_err());
-            assert_eq!(reader.history_reads.load(Ordering::Relaxed), 0);
+            assert_eq!(reader.history_reads.load(Ordering::Relaxed), 0, "{name}");
+            scope
         } else {
-            assert!(
-                result.unwrap().scope(&doc).await.is_err(),
-                "{}",
-                case.name
-            );
+            let scope = result.unwrap().scope(&doc).await;
             assert_eq!(
                 reader.history_reads.load(Ordering::Relaxed),
-                usize::from(valid)
+                usize::from(valid),
+                "{name}"
             );
-        }
+            scope
+        };
+        case.check(scope.ok().map(|scope| {
+            gents_lean_vocab::family::recode(&super::contract_tests::queue_scope_wire(scope))
+        }));
     }
 }
 
@@ -277,32 +251,27 @@ async fn continuation_row(
 
 #[tokio::test]
 async fn generated_ancestry_scope_cases_use_the_lean_composition() {
-    let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contracts["goal_request_scope_cases"].as_array().unwrap();
-    assert!(!cases.is_empty());
     let home = tempfile::tempdir().unwrap();
     let identities = [KeyIdentity::load_or_create(home.path().join("one.key"), None).unwrap()];
-    for case in cases {
-        let reference = case["root_tagged"]
-            .as_bool()
-            .unwrap()
-            .then(|| json!({"goal":1,"root":null}));
+    for case in gents_lean_vocab::families::goal_request_ancestry_contracts_scope::cases() {
+        let input = &case.input;
+        let reference = input.root_tagged.then(|| json!({"goal":1,"root":null}));
         let root = super::contract_tests::entry(
             &json!({"owner":1,"session":1,"doc":10,"reference":reference,"signature_valid":true}),
             &identities,
         )
         .await;
         let mut child = continuation_row(&root, &identities[0], "physical-20").await;
-        if case["child_valid"] == false {
+        if !input.child_valid {
             child.content = Some("changed after signing".into());
         }
         let mut rows = vec![child];
-        if case["missing_parent"] == false {
+        if !input.missing_parent {
             rows.push(root);
         }
         let mut goals = Vec::new();
-        for (field, root) in [("root_openings", 10), ("child_openings", 20)] {
-            for goal in case[field].as_array().unwrap() {
+        for (openings, root) in [(&input.root_openings, 10), (&input.child_openings, 20)] {
+            for goal in openings {
                 goals.push(super::contract_tests::goal(
                     &json!({"owner":1,"session":1,"goal":goal,"root":root}),
                     &identities,
@@ -320,19 +289,8 @@ async fn generated_ancestry_scope_cases_use_the_lean_composition() {
             history_loaded: true,
             scopes: Default::default(),
         };
-        let actual = match scopes.scope("physical-20").await {
-            Ok(RequestAssignmentScope::Referenced(reference)) => json!({
-                "kind":"referenced", "goal": reference.goal_id.strip_prefix("goal-").unwrap().parse::<u64>().unwrap(),
-                "root": reference.root_request_doc_id.unwrap().strip_prefix("physical-").unwrap().parse::<u64>().unwrap(),
-            }),
-            Ok(RequestAssignmentScope::Unassigned) => json!({"kind":"unassigned"}),
-            Ok(RequestAssignmentScope::Unresolved {
-                entry_doc_id: entry,
-            }) => {
-                json!({"kind":"unresolved","entry":entry.strip_prefix("physical-").unwrap().parse::<u64>().unwrap()})
-            }
-            Err(_) => Value::Null,
-        };
-        assert_eq!(actual, case["expected"], "{}", case["name"]);
+        case.check(scopes.scope("physical-20").await.ok().map(|scope| {
+            gents_lean_vocab::family::recode(&super::contract_tests::queue_scope_wire(scope))
+        }));
     }
 }

@@ -186,7 +186,7 @@ mod tests {
     use super::*;
     use crate::client::core::{ClientPeerStatus, EnrollmentActivationError, P2PHealth};
 
-    fn status(name: &str) -> RuntimeConnectionStatus {
+    pub(super) fn status(name: &str) -> RuntimeConnectionStatus {
         match name {
             "connecting" => RuntimeConnectionStatus::Connecting,
             "connected" => RuntimeConnectionStatus::Connected,
@@ -209,7 +209,9 @@ mod tests {
         }
     }
 
-    fn snapshot(case: &gents_lean_vocab::LeanClientSyncHealthCase) -> ClientSyncStateSnapshot {
+    pub(super) fn snapshot(
+        case: &gents_lean_vocab::families::client_sync_health_cases_projection::FactsInput,
+    ) -> ClientSyncStateSnapshot {
         let status = match case.transport.as_str() {
             "healthy" => P2PHealthStatus::Healthy,
             "degraded" => P2PHealthStatus::Degraded,
@@ -248,56 +250,37 @@ mod tests {
                 .collect(),
         }
     }
-
-    #[test]
-    fn generated_sync_health_cases_match_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().client_sync_health_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let sync = snapshot(case);
-            let health = project_sync_health(
-                &sync,
-                case.runtimes
-                    .iter()
-                    .map(|runtime| runtime.as_deref().map(status)),
-            );
-            let label = format!(
-                "runtimes={:?} enrollment={:?} transport={} configured={} dialed={}",
-                case.runtimes,
-                case.enrollment,
-                case.transport,
-                case.configured_peers,
-                case.dialed_peers
-            );
-            assert_eq!(health.state.as_str(), case.state.as_str(), "{label}");
-            assert_eq!(
-                health.cause.map(SyncHealthCause::as_str),
-                case.cause.as_deref(),
-                "{label}"
-            );
-            assert_eq!(
-                health.next_action.map(SyncNextAction::as_str),
-                case.next_action.as_deref(),
-                "{label}"
-            );
-            assert_eq!(
-                health.last_error.is_some(),
-                health.cause.is_some_and(SyncHealthCause::is_discovery),
-                "{label}"
-            );
-            assert_eq!(health.activation_error_count, case.enrollment.len());
-            assert_eq!(health.runtime_count, case.runtime_count as usize);
-            assert_eq!(
-                health.connected_runtime_count,
-                case.connected_runtime_count as usize
-            );
-        }
-    }
 }
 
 #[cfg(test)]
 mod conformance {
     use super::*;
+
+    #[test]
+    fn generated_sync_health_cases_match_lean() {
+        gents_lean_vocab::families::client_sync_health_cases_projection::replay(|case| {
+            let sync = tests::snapshot(case);
+            let health = project_sync_health(
+                &sync,
+                case.runtimes
+                    .iter()
+                    .map(|runtime| runtime.as_deref().map(tests::status)),
+            );
+            assert_eq!(
+                health.last_error.is_some(),
+                health.cause.is_some_and(SyncHealthCause::is_discovery),
+                "{case:?}"
+            );
+            assert_eq!(health.activation_error_count, case.enrollment.len());
+            gents_lean_vocab::families::client_sync_health_cases_projection::ViewOutput {
+                state: health.state.as_str().to_owned(),
+                cause: health.cause.map(|cause| cause.as_str().to_owned()),
+                next_action: health.next_action.map(|action| action.as_str().to_owned()),
+                runtime_count: health.runtime_count as u64,
+                connected_runtime_count: health.connected_runtime_count as u64,
+            }
+        });
+    }
 
     #[test]
     fn sync_health_cause_next_action_matches_lean() {

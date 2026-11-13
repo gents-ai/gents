@@ -14,7 +14,7 @@ use super::{
     RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
 
-const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct EmbeddedRemoteP2pAdmin {

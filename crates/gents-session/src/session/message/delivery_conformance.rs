@@ -2,44 +2,27 @@ use super::*;
 
 #[test]
 fn agent_delivery_matches_lean() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().agent_delivery_cases;
-    assert_eq!(cases.len(), 12);
-    for case in cases {
+    gents_lean_vocab::families::contracts_agent_delivery::replay::<String>(|case| {
         let mut input = serde_json::json!({
-            "session_id": "target", "message": "hello",
-            "delivery": case.delivery, "interrupt": case.interrupt
+            "session_id": "target", "message": "hello", "delivery": case.delivery
         });
-        if case.interrupt.is_none() {
-            input.as_object_mut().unwrap().remove("interrupt");
+        if let Some(interrupt) = case.interrupt {
+            input["interrupt"] = interrupt.into();
         }
         let args: AgentMessageArgs = serde_json::from_value(input).unwrap();
-        let actual = args.delivery().ok().map(|mode| match mode {
-            AgentMessageDelivery::Queue => "queue",
-            AgentMessageDelivery::Steer => "steer",
-            AgentMessageDelivery::Interrupt => "interrupt",
-        });
-        assert_eq!(actual, case.expected.as_deref(), "{case:?}");
-    }
+        args.delivery().ok().map(|mode| {
+            match mode {
+                AgentMessageDelivery::Queue => "queue",
+                AgentMessageDelivery::Steer => "steer",
+                AgentMessageDelivery::Interrupt => "interrupt",
+            }
+            .to_owned()
+        })
+    });
 }
 
 #[tokio::test]
 async fn remote_delivery_waits_for_authenticated_http_transport() {
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let claim = snapshot
-        .remote_agent_delivery_claim_cases
-        .iter()
-        .find(|case| case.name == "native-read-no-atomic-authority")
-        .unwrap();
-    assert_eq!(claim.document_visible, true);
-    assert_eq!(claim.atomic_requester_authorization, false);
-    assert_eq!(claim.claim, false);
-    let case = snapshot
-        .remote_agent_delivery_cases
-        .iter()
-        .find(|case| case.name == "committed-response-observed")
-        .unwrap();
-    assert_eq!(case.result, "committed");
-    let intent = &case.intent;
     use gents_store::identity::NodeIdentity;
     let node_db = gents_inference::test_support::test_db(
         "remote-delivery-waits-for-authenticated-",
@@ -65,7 +48,7 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
     };
     let target = gents_protocol::request_lifecycle::SessionMessageTarget {
         node_did: "target-runtime".into(),
-        agent_did: intent.target.as_str().into(),
+        agent_did: "target".into(),
         session_id: "target-session".into(),
     };
     let result = super::plan::plan_with_delivery(

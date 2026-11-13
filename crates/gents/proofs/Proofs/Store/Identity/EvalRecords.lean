@@ -51,18 +51,6 @@ def cases : List Case :=
   , ⟨"relationship-failed", "user", "operations", true, false, true⟩
   , ⟨"commit-failed", "user", "operations", true, true, false⟩ ]
 
-def caseJson (c : Case) : Json :=
-  let s := publish initial c.creator c.name "home" c.resource c.nodeVisible true c.related c.committed
-  Json.mkObj [("name", toJson c.name), ("creator", toJson c.creator),
-    ("resource", toJson c.resource), ("node_visible", toJson c.nodeVisible),
-    ("relationship_succeeded", toJson c.related), ("commit_succeeded", toJson c.committed),
-    ("expected_created", toJson (s.objects.any (fun x => x.resource == c.resource && x.id == c.name))),
-    ("expected_creator_update", toJson (allowed 5 s c.creator c.resource c.name "update")),
-    ("expected_user_read", toJson (allowed 5 s "user" c.resource c.name "read")),
-    ("expected_stranger_read", toJson (allowed 5 s "stranger" c.resource c.name "read"))]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
-
 /-- A reader can prove registration from a visible native registration bit,
 without learning the owner. An older caller-relative endpoint proves it only
 when the authenticated caller is the owner; malformed claims fail closed. -/

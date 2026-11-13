@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 import Proofs.Runtime.RuntimeReconcile.StartupReadiness
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -12,10 +13,18 @@ def readinessPublicationTrace (previous : Option Nat) : List Nat → List Bool
       RuntimeReconcile.StartupReadiness.shouldPublish previous next ::
         readinessPublicationTrace (some next) rest
 
-def readinessPublicationCasesJson : String :=
-  jsonArray ([ [0, 0, 0, 1, 1, 2], [0, 1, 0, 0, 2] ].map fun states =>
-    "{\"states\":" ++ jsonArray (states.map toString) ++
-    ",\"publishes\":" ++ jsonArray ((readinessPublicationTrace none states).map boolString) ++ "}")
+structure ReadinessPublicationInput where
+  states : List Nat
+  deriving Lean.ToJson
+
+structure ReadinessPublicationOutput where
+  publishes : List Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def readinessPublication : Family ReadinessPublicationInput ReadinessPublicationOutput where
+  inputs := [ { states := [0, 0, 0, 1, 1, 2] }, { states := [0, 1, 0, 0, 2] } ]
+  model := fun i => { publishes := readinessPublicationTrace none i.states }
 
 def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
   "{"
@@ -44,123 +53,6 @@ def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
     ++ "\"tracked_request_session\":" ++ toString witness.trackedRequestSession ++ ","
     ++ "\"tracked_request_agent\":" ++ toString witness.trackedRequestAgent ++ ","
     ++ "\"tracked_session_agent\":" ++ toString witness.trackedSessionAgent
-    ++ "}"
-
-def clientAgentReadinessCaseJson (witness : ClientAgentReadinessCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"observation_present\":" ++ boolString witness.observationPresent ++ ","
-    ++ "\"observation_kind\":" ++ jsonString witness.observationKind ++ ","
-    ++ "\"process_state\":" ++ jsonString witness.processState ++ ","
-    ++ "\"active_generation\":" ++ toString witness.activeGeneration ++ ","
-    ++ "\"router_generation\":" ++ toString witness.routerGeneration ++ ","
-    ++ "\"runnable\":" ++ boolString witness.runnable ++ ","
-    ++ "\"unavailable\":" ++ boolString witness.unavailable ++ ","
-    ++ "\"startup_demoted\":" ++ boolString witness.startupDemoted ++ ","
-    ++ "\"runtime_unavailable_reason\":" ++ jsonString witness.runtimeUnavailableReason ++ ","
-    ++ "\"storage_unavailable\":" ++ boolString witness.storageUnavailable ++ ","
-    ++ "\"expected_state\":" ++ jsonString witness.expectedState ++ ","
-    ++ "\"expected_reason\":" ++ jsonOptionalString witness.expectedReason ++ ","
-    ++ "\"expected_runtime_admissible\":" ++ boolString witness.expectedRuntimeAdmissible
-    ++ "}"
-
-def pairingReconcileShutdownBoundaryCaseJson
-    (witness : PairingReconcileShutdownBoundaryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"supervisor\":" ++ jsonString witness.supervisor ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"per_admin_call_timeout_ms\":"
-      ++ toString witness.perAdminCallTimeoutMs ++ ","
-    ++ "\"cancellation_observed_inside_sweep\":"
-      ++ boolString witness.cancellationObservedInsideSweep ++ ","
-    ++ "\"current_admin_future_dropped\":"
-      ++ boolString witness.currentAdminFutureDropped ++ ","
-    ++ "\"remaining_peers_skipped\":"
-      ++ boolString witness.remainingPeersSkipped ++ ","
-    ++ "\"shutdown_join_bounded\":"
-      ++ boolString witness.shutdownJoinBounded
-    ++ "}"
-
-def pairingReconcileSweepRetryBoundaryCaseJson
-    (witness : PairingReconcileSweepRetryBoundaryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"supervisor\":" ++ jsonString witness.supervisor ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"failure_scope\":" ++ jsonString witness.failureScope ++ ","
-    ++ "\"failure_terminal\":"
-      ++ boolString witness.failureTerminal ++ ","
-    ++ "\"retry_trigger\":" ++ jsonString witness.retryTrigger ++ ","
-    ++ "\"cancellation_prioritized\":"
-      ++ boolString witness.cancellationPrioritized ++ ","
-    ++ "\"convergence_retried\":"
-      ++ boolString witness.convergenceRetried
-    ++ "}"
-
-def pairingReconcileSweepSchedulingCaseJson
-    (witness : PairingReconcileSweepSchedulingCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"supervisor\":" ++ jsonString witness.supervisor ++ ","
-    ++ "\"work_class\":" ++ jsonString witness.workClass ++ ","
-    ++ "\"boundary\":" ++ jsonString witness.boundary ++ ","
-    ++ "\"max_concurrent_peer_preparations\":"
-      ++ toString witness.maxConcurrentPeerPreparations ++ ","
-    ++ "\"peer_preparation_bounded\":"
-      ++ boolString witness.peerPreparationBounded ++ ","
-    ++ "\"topology_mutation_serialized\":"
-      ++ boolString witness.topologyMutationSerialized ++ ","
-    ++ "\"stale_peer_blocks_ready_peer\":"
-      ++ boolString witness.stalePeerBlocksReadyPeer ++ ","
-    ++ "\"every_peer_result_accounted\":"
-      ++ boolString witness.everyPeerResultAccounted
-    ++ "}"
-
-def sessionRecoveryCaseJson (witness : SessionRecoveryCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal ++ ","
-    ++ "\"pre_latest_state\":" ++ jsonString witness.preLatestState ++ ","
-    ++ "\"pre_failed_state\":" ++ jsonString witness.preFailedState ++ ","
-    ++ "\"post_latest_state\":" ++ jsonString witness.postLatestState ++ ","
-    ++ "\"post_failed_state\":" ++ jsonString witness.postFailedState ++ ","
-    ++ "\"post_new_state\":" ++ jsonString witness.postNewState ++ ","
-    ++ "\"pre_latest_admission\":" ++ jsonString witness.preLatestAdmission ++ ","
-    ++ "\"post_latest_admission\":" ++ jsonString witness.postLatestAdmission ++ ","
-    ++ "\"pre_failed_admission\":" ++ jsonString witness.preFailedAdmission ++ ","
-    ++ "\"post_failed_admission\":" ++ jsonString witness.postFailedAdmission ++ ","
-    ++ "\"post_new_admission\":" ++ jsonString witness.postNewAdmission ++ ","
-    ++ "\"pre_origin\":" ++ jsonString witness.preOrigin ++ ","
-    ++ "\"post_new_origin\":" ++ jsonString witness.postNewOrigin ++ ","
-    ++ "\"failed_id\":" ++ toString witness.failedId ++ ","
-    ++ "\"new_id\":" ++ toString witness.newId ++ ","
-    ++ "\"pre_latest_id\":" ++ toString witness.preLatestId ++ ","
-    ++ "\"post_latest_id\":" ++ toString witness.postLatestId ++ ","
-    ++ "\"pre_session_id\":" ++ toString witness.preSessionId ++ ","
-    ++ "\"post_session_id\":" ++ toString witness.postSessionId ++ ","
-    ++ "\"pre_agent_did\":" ++ toString witness.preAgentDid ++ ","
-    ++ "\"post_agent_did\":" ++ toString witness.postAgentDid ++ ","
-    ++ "\"pre_request_count\":" ++ toString witness.preRequestCount ++ ","
-    ++ "\"post_request_count\":" ++ toString witness.postRequestCount ++ ","
-    ++ "\"pre_retry_count\":" ++ toString witness.preRetryCount ++ ","
-    ++ "\"post_retry_count\":" ++ toString witness.postRetryCount ++ ","
-    ++ "\"max_retries\":" ++ toString witness.maxRetries ++ ","
-    ++ "\"pre_deadline_exceeded\":" ++ boolString witness.preDeadlineExceeded ++ ","
-    ++ "\"post_deadline_exceeded\":" ++ boolString witness.postDeadlineExceeded ++ ","
-    ++ "\"pre_failed_is_latest\":" ++ boolString witness.preFailedIsLatest ++ ","
-    ++ "\"post_failed_is_latest\":" ++ boolString witness.postFailedIsLatest ++ ","
-    ++ "\"post_new_is_latest\":" ++ boolString witness.postNewIsLatest ++ ","
-    ++ "\"pre_request_ids\":" ++ jsonArray (witness.preRequestIds.map toString) ++ ","
-    ++ "\"pre_failed_exists\":" ++ boolString witness.preFailedExists ++ ","
-    ++ "\"pre_latest_exists\":" ++ boolString witness.preLatestExists ++ ","
-    ++ "\"pre_new_request_exists\":" ++ boolString witness.preNewRequestExists ++ ","
-    ++ "\"old_request_retained\":" ++ boolString witness.oldRequestRetained ++ ","
-    ++ "\"new_request_inserted\":" ++ boolString witness.newRequestInserted ++ ","
-    ++ "\"origin_preserved\":" ++ boolString witness.originPreserved
     ++ "}"
 
 def queueDeadlineConformanceCaseJson
@@ -206,130 +98,87 @@ def queueDeadlineConformanceCaseJson
       ++ boolString witness.explicitDeadlinePreserved
     ++ "}"
 
-structure StartupReadinessCase where
+deriving instance Lean.ToJson for RuntimeReconcile.StartupReadiness.BuildOutcome
+
+structure StartupReadinessInput where
   witness : String
-  leanTheorems : List String
   budget : Nat
-  outcomes : List String
+  outcomes : List RuntimeReconcile.StartupReadiness.BuildOutcome
   retiredAfter : Bool
+  deriving Lean.ToJson
+
+structure StartupReadinessOutput where
   postStanding : String
   blocksReady : Bool
-  requiresRestart : Bool
+  deriving Lean.ToJson
 
-def startupReadinessCaseJson (witness : StartupReadinessCase) : String :=
-  "{"
-    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
-    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
-    ++ "\"budget\":" ++ toString witness.budget ++ ","
-    ++ "\"outcomes\":" ++ jsonStringArray witness.outcomes ++ ","
-    ++ "\"retired_after\":" ++ boolString witness.retiredAfter ++ ","
-    ++ "\"post_standing\":" ++ jsonString witness.postStanding ++ ","
-    ++ "\"blocks_ready\":" ++ boolString witness.blocksReady ++ ","
-    ++ "\"requires_restart\":" ++ boolString witness.requiresRestart
-    ++ "}"
+def startupStandingName : RuntimeReconcile.StartupReadiness.AgentStanding → String
+  | .pending _ => "pending"
+  | .ready => "ready"
+  | .demoted => "demoted"
+  | .superseded => "superseded"
 
-def startupReadinessCases : List StartupReadinessCase :=
-  [
-    { witness := "startup_readiness.persistent_build_failure_demotes"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.budgeted_attempts_release"
-        , "RuntimeReconcile.StartupReadiness.seeded_release"
-        , "RuntimeReconcile.StartupReadiness.demoted_consumed_the_budget"
-        ]
-    , budget := 3
-    , outcomes := ["failed", "failed", "failed"]
-    , retiredAfter := false
-    , postStanding := "demoted"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.transient_failure_then_start_is_ready"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.start_within_budget_is_ready"
-        , "RuntimeReconcile.StartupReadiness.ready_requires_a_start"
-        ]
-    , budget := 3
-    , outcomes := ["failed", "started"]
-    , retiredAfter := false
-    , postStanding := "ready"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.demotion_is_not_readiness"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.ready_requires_a_start"
-        ]
-    , budget := 1
-    , outcomes := ["failed"]
-    , retiredAfter := false
-    , postStanding := "demoted"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.within_budget_still_pending"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.budgeted_attempts_release"
-        ]
-    , budget := 3
-    , outcomes := ["failed"]
-    , retiredAfter := false
-    , postStanding := "pending"
-    , blocksReady := true
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.ready_is_absorbing"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.released_absorbing"
-        ]
-    , budget := 3
-    , outcomes := ["started", "failed", "failed", "failed", "failed"]
-    , retiredAfter := false
-    , postStanding := "ready"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.retirement_releases_a_pending_agent"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.retire_releases"
-        , "RuntimeReconcile.StartupReadiness.retire_never_claims_ready"
-        ]
-    , budget := 3
-    , outcomes := ["failed"]
-    , retiredAfter := true
-    , postStanding := "superseded"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  ]
+/-- Each case releases from its build outcomes and retirement alone: no case
+restarts the runtime to leave `pending`. -/
+@[conformance_family]
+def startupReadiness : Family StartupReadinessInput StartupReadinessOutput where
+  inputs :=
+    [ { witness := "startup_readiness.persistent_build_failure_demotes"
+        budget := 3, outcomes := [.failed, .failed, .failed], retiredAfter := false }
+    , { witness := "startup_readiness.transient_failure_then_start_is_ready"
+        budget := 3, outcomes := [.failed, .started], retiredAfter := false }
+    , { witness := "startup_readiness.demotion_is_not_readiness"
+        budget := 1, outcomes := [.failed], retiredAfter := false }
+    , { witness := "startup_readiness.within_budget_still_pending"
+        budget := 3, outcomes := [.failed], retiredAfter := false }
+    , { witness := "startup_readiness.ready_is_absorbing"
+        budget := 3, outcomes := [.started, .failed, .failed, .failed, .failed]
+        retiredAfter := false }
+    , { witness := "startup_readiness.retirement_releases_a_pending_agent"
+        budget := 3, outcomes := [.failed], retiredAfter := true } ]
+  model := fun i =>
+    let built := RuntimeReconcile.StartupReadiness.run i.budget
+      RuntimeReconcile.StartupReadiness.seeded i.outcomes
+    let standing := if i.retiredAfter then RuntimeReconcile.StartupReadiness.retire built else built
+    { postStanding := startupStandingName standing
+      blocksReady := !standing.released }
 
-def startupReadinessCasesJson : String :=
-  jsonArray (startupReadinessCases.map startupReadinessCaseJson)
+structure SnapshotDemotionInput where
+  name : String
+  defaultAgent : Nat
+  runnable : List Nat
+  unavailable : List Nat
+  demotions : List Nat
+  deriving Lean.ToJson
 
-def snapshotDemotionCaseJson (name : String) (unavailable : Finset AgentDid)
-    (demotions : List AgentDid) : String :=
-  let pre : ResolvedSnapshot :=
-    { defaultAgent := 1, runnable := {1, 2}, unavailable := unavailable,
-      dependenciesSatisfied := {1, 2} }
-  let post := demotions.foldl ResolvedSnapshot.demote pre
-  let ids := fun (values : Finset AgentDid) => jsonArray ((values.sort (· ≤ ·)).map toString)
-  "{\"witness\":" ++ jsonString name ++
-    ",\"default_agent\":" ++ toString pre.defaultAgent ++
-    ",\"runnable\":" ++ ids pre.runnable ++
-    ",\"unavailable\":" ++ ids pre.unavailable ++
-    ",\"demotions\":" ++ jsonArray (demotions.map toString) ++
-    ",\"post_runnable\":" ++ ids post.runnable ++
-    ",\"post_unavailable\":" ++ ids post.unavailable ++
-    ",\"post_default_agent\":" ++ toString post.defaultAgent ++
-    ",\"well_formed\":" ++ boolString (decide post.wellFormed) ++ "}"
+structure SnapshotDemotionOutput where
+  postRunnable : List Nat
+  postUnavailable : List Nat
+  postDefaultAgent : Nat
+  wellFormed : Bool
+  deriving Lean.ToJson
 
-def snapshotDemotionCasesJson : String :=
-  jsonArray [
-    snapshotDemotionCaseJson "snapshot_demotion.no_failures" {} [],
-    snapshotDemotionCaseJson "snapshot_demotion.other_agent" {} [2],
-    snapshotDemotionCaseJson "snapshot_demotion.default_agent" {} [1],
-    snapshotDemotionCaseJson "snapshot_demotion.all_agents" {} [1, 2],
-    snapshotDemotionCaseJson "snapshot_demotion.repeated_failure" {} [2, 2],
-    snapshotDemotionCaseJson "snapshot_demotion.retains_prior_unavailability" {3} [2]
-  ]
+def snapshotDemotionInput (name : String) (unavailable : List Nat) (demotions : List Nat) :
+    SnapshotDemotionInput :=
+  { name, defaultAgent := 1, runnable := [1, 2], unavailable, demotions }
+
+@[conformance_family]
+def snapshotDemotion : Family SnapshotDemotionInput SnapshotDemotionOutput where
+  inputs :=
+    [ snapshotDemotionInput "snapshot_demotion.no_failures" [] []
+    , snapshotDemotionInput "snapshot_demotion.other_agent" [] [2]
+    , snapshotDemotionInput "snapshot_demotion.default_agent" [] [1]
+    , snapshotDemotionInput "snapshot_demotion.all_agents" [] [1, 2]
+    , snapshotDemotionInput "snapshot_demotion.repeated_failure" [] [2, 2]
+    , snapshotDemotionInput "snapshot_demotion.retains_prior_unavailability" [3] [2] ]
+  model := fun i =>
+    let pre : ResolvedSnapshot :=
+      { defaultAgent := i.defaultAgent, runnable := i.runnable.toFinset,
+        unavailable := i.unavailable.toFinset, dependenciesSatisfied := i.runnable.toFinset }
+    let post := i.demotions.foldl ResolvedSnapshot.demote pre
+    { postRunnable := post.runnable.sort (· ≤ ·)
+      postUnavailable := post.unavailable.sort (· ≤ ·)
+      postDefaultAgent := post.defaultAgent
+      wellFormed := decide post.wellFormed }
 
 end Conformance.Contracts

@@ -717,71 +717,59 @@ fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
     assert!(crate::pack::tool_instructions("lint", &oversized).is_err());
 }
 
-#[test]
-fn generated_plugin_resource_cases_bind_budget_and_consent() {
-    let cases = gents_lean_vocab::lean_contract_snapshot();
-    for case in cases.plugin_resource_consent_cases.as_array().unwrap() {
-        let requested = case["requested"].as_u64().unwrap() as u32;
-        let previous = case["previous"].as_u64().unwrap() as u32;
-        let consent = case["consent"].as_bool().unwrap();
-        for axis in 0..3 {
-            let mut requested_limits = crate::pack::PluginLimits::default();
-            let mut previous_limits = crate::pack::PluginLimits::default();
-            match axis {
-                0 => {
-                    requested_limits.memory_mib = Some(requested);
-                    previous_limits.memory_mib = Some(previous);
-                }
-                1 => {
-                    requested_limits.wall_clock_secs = Some(requested);
-                    previous_limits.wall_clock_secs = Some(previous);
-                }
-                _ => {
-                    requested_limits.max_output_mib = Some(requested);
-                    previous_limits.max_output_mib = Some(previous);
-                }
-            }
-            assert_eq!(
-                authority::limits_consented(
-                    Some(&requested_limits),
-                    Some(&previous_limits),
-                    consent
-                ),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+fn limit_axis(limits: &mut crate::pack::PluginLimits, axis: usize) -> &mut Option<u32> {
+    match axis {
+        0 => &mut limits.memory_mib,
+        1 => &mut limits.wall_clock_secs,
+        _ => &mut limits.max_output_mib,
     }
-    for case in cases.plugin_resource_budget_cases.as_array().unwrap() {
-        let baseline = case["baseline"].as_u64().unwrap();
-        let requested = case["requested"].as_u64().unwrap() as u32;
-        let ceiling = case["ceiling"].as_u64().unwrap();
-        let expected = case["expected"].as_u64().unwrap();
+}
+
+#[test]
+fn limit_consent_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_resources_limit_consent::replay(|i| {
+        let axes: Vec<bool> = (0..3)
+            .map(|axis| {
+                let mut requested = crate::pack::PluginLimits::default();
+                let mut previous = crate::pack::PluginLimits::default();
+                *limit_axis(&mut requested, axis) = Some(i.requested as u32);
+                *limit_axis(&mut previous, axis) = Some(i.previous as u32);
+                authority::limits_consented(Some(&requested), Some(&previous), i.consent)
+            })
+            .collect();
+        assert!(axes.iter().all(|consented| *consented == axes[0]), "{i:?}");
+        axes[0]
+    });
+}
+
+#[test]
+fn limit_budget_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_resources_limit_budget::replay(|i| {
+        let requested = i.requested as u32;
         let mut budget = PluginBudget::default();
         let mut limits = crate::pack::PluginLimits::default();
-        match ceiling {
+        match i.ceiling {
             4096 => {
-                budget.memory_bytes = baseline * 1024 * 1024;
+                budget.memory_bytes = i.baseline * 1024 * 1024;
                 limits.memory_mib = Some(requested);
             }
             900 => {
-                budget.wall_clock = std::time::Duration::from_secs(baseline);
+                budget.wall_clock = std::time::Duration::from_secs(i.baseline);
                 limits.wall_clock_secs = Some(requested);
             }
             4 => {
-                budget.max_output_bytes = baseline as usize * 1024 * 1024;
+                budget.max_output_bytes = i.baseline as usize * 1024 * 1024;
                 limits.max_output_mib = Some(requested);
             }
-            _ => panic!("unknown resource case: {case}"),
+            _ => panic!("unknown resource case: {i:?}"),
         }
         let effective = budget.with_declared_limits(&limits);
-        let actual = match ceiling {
+        match i.ceiling {
             4096 => effective.memory_bytes / (1024 * 1024),
             900 => effective.wall_clock.as_secs(),
             _ => effective.max_output_bytes as u64 / (1024 * 1024),
-        };
-        assert_eq!(actual, expected, "{case}");
-    }
+        }
+    });
 }
 
 fn path_open_probe(path: &str, create: bool) -> String {

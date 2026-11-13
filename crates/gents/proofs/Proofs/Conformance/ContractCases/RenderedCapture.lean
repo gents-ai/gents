@@ -399,6 +399,15 @@ def CaptureScopeKind.rank : CaptureScopeKind → Nat
 def allCaptureScopeKinds : List CaptureScopeKind :=
   [.inference, .compaction, .compactionFallback, .title, .oneshot, .accessReview]
 
+/-- A string names a scope exactly when it is that scope's `kind.seq` label;
+every other string, a non-canonical number included, is malformed and must be
+refused rather than defaulted into another loop's ordering. -/
+def scopeOfLabel? (label : String) : Option (CaptureScopeKind × Nat) :=
+  allCaptureScopeKinds.findSome? fun kind =>
+    (label.dropPrefix? (kind.label ++ ".")).bind fun rest =>
+      rest.toString.toNat?.bind fun seq =>
+        if kind.label ++ "." ++ toString seq == label then some (kind, seq) else none
+
 structure CaptureScopeCase where
   label : String
   kind : String
@@ -447,11 +456,11 @@ structure CaptureOrderCase where
   leftBeforeRight : Bool
   deriving Repr
 
-private def orderTuple
+def orderTuple
     (kind : CaptureScopeKind) (seq turn attempt : Nat) : Nat × Nat × Nat × Nat :=
   (kind.rank, seq, turn, attempt)
 
-private def tupleLt : Nat × Nat × Nat × Nat → Nat × Nat × Nat × Nat → Bool
+def tupleLt : Nat × Nat × Nat × Nat → Nat × Nat × Nat × Nat → Bool
   | (a1, a2, a3, a4), (b1, b2, b3, b4) =>
     if a1 ≠ b1 then a1 < b1
     else if a2 ≠ b2 then a2 < b2

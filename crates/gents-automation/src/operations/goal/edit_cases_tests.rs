@@ -10,11 +10,6 @@ use gents_store::identity::NodeIdentity;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Deserialize)]
-struct Contracts {
-    goal_objective_whitespace_codepoints: Vec<u32>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Origin {
@@ -204,11 +199,23 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
 
 #[test]
 fn generated_goal_objective_whitespace_matches_native_character_classification() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    let native: Vec<u32> = (0..=0x10ffff)
-        .filter_map(char::from_u32)
-        .filter(|character| character.is_whitespace())
-        .map(u32::from)
-        .collect();
-    assert_eq!(native, contracts.goal_objective_whitespace_codepoints);
+    gents_lean_vocab::families::goal_edit_contracts_objective_whitespace_runs::replay(|run| {
+        let refused: Vec<bool> = (run.first..=run.last)
+            .filter_map(|codepoint| char::from_u32(u32::try_from(codepoint).unwrap()))
+            .map(|character| {
+                matches!(
+                    super::validate_objective_and_budget(Some(&character.to_string()), None),
+                    Err(GoalOperationError::InvalidObjective)
+                )
+            })
+            .collect();
+        let first = refused[0];
+        assert!(
+            refused.iter().all(|each| *each == first),
+            "objective validation splits the run {}..={}",
+            run.first,
+            run.last
+        );
+        first
+    });
 }

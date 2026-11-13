@@ -82,184 +82,94 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
         .await
         .unwrap();
     let head_doc = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    let foreign_create = create
-        .replace(
-            &format!("request_id: \"{}\"", head_id),
-            "request_id: \"foreign-head\"",
-        )
-        .replace(
-            &format!(
-                "requester_did: \"{}\"",
-                escape_graphql_string(&caused_requester)
-            ),
-            "requester_did: \"did:test:foreign\"",
-        );
-    let foreign = owner
-        .write("test.foreign_head", &foreign_create)
-        .await
-        .unwrap();
-    let foreign_doc = gents_store::graphql::created_doc_id(&foreign, "AgentRequest").unwrap();
-    let foreign_fold = format!(
-        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
-        lifecycle_state: "superseded", superseded_by_request: "foreign-head", superseded_by_request_doc_id: "{}",
-        failure_reason: "{}"
-    }}) {{ _docID }} }}"#,
-        escape_graphql_string(&caused_request_doc_id),
-        escape_graphql_string(&foreign_doc),
-        escape_graphql_string(gents_session::request::lifecycle::FOLDED_REASON)
-    );
-    owner
-        .write("test.foreign_fold", &foreign_fold)
-        .await
-        .unwrap();
-    let binding_cases = &gents_lean_vocab::lean_contract_snapshot().agent_folded_binding_cases;
-    let foreign_model = binding_cases
-        .iter()
-        .find(|case| {
-            case.caused_requester != case.head_requester && case.named_head == case.actual_head
-        })
-        .unwrap();
-    let foreign_accepted =
-        crate::background::status::load_session_message_terminal(&owner, &caused_request_doc_id)
-            .await
-            .is_ok();
-    assert_eq!(foreign_accepted, foreign_model.expected);
-    assert_eq!(
-        settle_running_session_message_rows_with_access(
-            node,
-            &admission.tool.access().unwrap(),
-            &gents_session::session::message::NoSessionMessageGoals,
-            did
-        )
-        .await
-        .unwrap(),
-        0
-    );
-    assert!(session_message_notifications(
-        &admission.tool.access().unwrap(),
-        did,
-        admission.tool.session_id()
-    )
-    .await
-    .is_empty());
-    let foreign_agent_create = create
-        .replace(
-            &format!("request_id: \"{}\"", head_id),
-            "request_id: \"foreign-agent-head\"",
-        )
-        .replace(
-            &format!("agent_did: \"{}\"", escape_graphql_string(&caused_agent)),
-            "agent_did: \"foreign-agent\"",
-        );
-    let foreign_agent = owner
-        .write("test.foreign_agent_head", &foreign_agent_create)
-        .await
-        .unwrap();
-    let foreign_agent_doc =
-        gents_store::graphql::created_doc_id(&foreign_agent, "AgentRequest").unwrap();
-    let foreign_agent_fold = format!(
-        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
-        lifecycle_state: "superseded", superseded_by_request: "foreign-agent-head", superseded_by_request_doc_id: "{}",
-        failure_reason: "{}"
-    }}) {{ _docID }} }}"#,
-        escape_graphql_string(&caused_request_doc_id),
-        escape_graphql_string(&foreign_agent_doc),
-        escape_graphql_string(gents_session::request::lifecycle::FOLDED_REASON)
-    );
-    owner
-        .write("test.foreign_agent_fold", &foreign_agent_fold)
-        .await
-        .unwrap();
-    let foreign_agent_model = binding_cases
-        .iter()
-        .find(|case| {
-            case.caused_requester == case.head_requester
-                && case.caused_agent != case.head_agent
-                && case.named_head == case.actual_head
-        })
-        .unwrap();
-    let foreign_agent_accepted =
-        crate::background::status::load_session_message_terminal(&owner, &caused_request_doc_id)
-            .await
-            .is_ok();
-    assert_eq!(foreign_agent_accepted, foreign_agent_model.expected);
-    assert_eq!(
-        settle_running_session_message_rows_with_access(
-            node,
-            &admission.tool.access().unwrap(),
-            &gents_session::session::message::NoSessionMessageGoals,
-            did
-        )
-        .await
-        .unwrap(),
-        0
-    );
-    let mismatched_fold = format!(
-        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
-        lifecycle_state: "superseded", superseded_by_request: "wrong-head", superseded_by_request_doc_id: "{}",
-        failure_reason: "{}"
-    }}) {{ _docID }} }}"#,
-        escape_graphql_string(&caused_request_doc_id),
-        escape_graphql_string(&head_doc),
-        escape_graphql_string(gents_session::request::lifecycle::FOLDED_REASON)
-    );
-    owner
-        .write("test.mismatched_fold", &mismatched_fold)
-        .await
-        .unwrap();
-    let mismatch_model = binding_cases
-        .iter()
-        .find(|case| {
-            case.caused_requester == case.head_requester && case.named_head != case.actual_head
-        })
-        .unwrap();
-    let mismatch_accepted =
-        crate::background::status::load_session_message_terminal(&owner, &caused_request_doc_id)
-            .await
-            .is_ok();
-    assert_eq!(mismatch_accepted, mismatch_model.expected);
-    let fold = format!(
-        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
+    let fold_to = |named: &str, doc: &str| {
+        format!(
+            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
         lifecycle_state: "superseded", superseded_by_request: "{}", superseded_by_request_doc_id: "{}",
         failure_reason: "{}"
     }}) {{ _docID }} }}"#,
-        escape_graphql_string(&caused_request_doc_id),
-        escape_graphql_string(&head_id),
-        escape_graphql_string(&head_doc),
-        escape_graphql_string(gents_session::request::lifecycle::FOLDED_REASON)
-    );
-    owner.write("test.folded_cause", &fold).await.unwrap();
-    let matching_model = binding_cases
-        .iter()
-        .find(|case| {
-            case.caused_requester == case.head_requester
-                && case.caused_agent == case.head_agent
-                && case.named_head == case.actual_head
-        })
-        .unwrap();
-    let matching_accepted =
-        crate::background::status::load_session_message_terminal(&owner, &caused_request_doc_id)
+            escape_graphql_string(&caused_request_doc_id),
+            escape_graphql_string(named),
+            escape_graphql_string(doc),
+            escape_graphql_string(gents_session::request::lifecycle::FOLDED_REASON)
+        )
+    };
+    for (index, case) in gents_lean_vocab::families::contracts_agent_folded_binding::cases()
+        .into_iter()
+        .enumerate()
+    {
+        let binding = &case.input;
+        let foreign_requester = binding.caused_requester != binding.head_requester;
+        let foreign_agent = binding.caused_agent != binding.head_agent;
+        let (actual_id, actual_doc) = if foreign_requester || foreign_agent {
+            let foreign_id = format!("foreign-head-{index}");
+            let mut foreign_create = create.replace(
+                &format!("request_id: \"{}\"", head_id),
+                &format!("request_id: \"{foreign_id}\""),
+            );
+            if foreign_requester {
+                foreign_create = foreign_create.replace(
+                    &format!(
+                        "requester_did: \"{}\"",
+                        escape_graphql_string(&caused_requester)
+                    ),
+                    "requester_did: \"did:test:foreign\"",
+                );
+            }
+            if foreign_agent {
+                foreign_create = foreign_create.replace(
+                    &format!("agent_did: \"{}\"", escape_graphql_string(&caused_agent)),
+                    "agent_did: \"foreign-agent\"",
+                );
+            }
+            let foreign = owner
+                .write("test.foreign_head", &foreign_create)
+                .await
+                .unwrap();
+            (
+                foreign_id,
+                gents_store::graphql::created_doc_id(&foreign, "AgentRequest").unwrap(),
+            )
+        } else {
+            (head_id.clone(), head_doc.clone())
+        };
+        let named = if binding.named_head == binding.actual_head {
+            actual_id.as_str()
+        } else {
+            "wrong-head"
+        };
+        owner
+            .write("test.fold", &fold_to(named, &actual_doc))
             .await
-            .is_ok();
-    assert_eq!(matching_accepted, matching_model.expected);
-    assert_eq!(
-        settle_running_session_message_rows_with_access(
-            node,
+            .unwrap();
+        let accepted =
+            crate::background::status::load_session_message_terminal(&owner, &caused_request_doc_id)
+                .await
+                .is_ok();
+        assert_eq!(
+            settle_running_session_message_rows_with_access(
+                node,
+                &admission.tool.access().unwrap(),
+                &gents_session::session::message::NoSessionMessageGoals,
+                did
+            )
+            .await
+            .unwrap(),
+            0
+        );
+        assert!(session_message_notifications(
             &admission.tool.access().unwrap(),
-            &gents_session::session::message::NoSessionMessageGoals,
-            did
+            did,
+            admission.tool.session_id()
         )
         .await
-        .unwrap(),
-        0
-    );
-    assert!(session_message_notifications(
-        &admission.tool.access().unwrap(),
-        did,
-        admission.tool.session_id()
-    )
-    .await
-    .is_empty());
+        .is_empty());
+        case.check(accepted);
+    }
+    owner
+        .write("test.folded_cause", &fold_to(&head_id, &head_doc))
+        .await
+        .unwrap();
     crate::call::lifecycle::admission_fixture::complete_child_managed_verified(
         node,
         &head_id,

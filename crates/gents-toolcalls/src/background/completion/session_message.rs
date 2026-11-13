@@ -405,17 +405,25 @@ mod conformance {
         }
     }
 
+    fn outcome(terminal: Option<Terminal>) -> String {
+        match terminal {
+            None => "pending",
+            Some(Terminal::Completed { .. }) => "completed",
+            Some(Terminal::Failed { .. }) => "failed",
+            Some(Terminal::Superseded) => "superseded",
+            Some(other) => panic!("outcome outside the modeled vocabulary: {other:?}"),
+        }
+        .to_owned()
+    }
+
     #[test]
     fn folded_outcome_matches_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().agent_message_outcome_cases;
-        assert_eq!(cases.len(), 5);
-        for case in cases {
-            let actual = crate::background::status::select_folded_outcome(
+        gents_lean_vocab::families::queued_steering_agent_message_outcome::replay::<String>(|case| {
+            outcome(crate::background::status::select_folded_outcome(
                 case.folded,
                 terminal(&case.caused),
                 terminal(&case.head),
-            );
-            assert_eq!(actual, terminal(&case.expected), "{case:?}");
-        }
+            ))
+        });
     }
 }

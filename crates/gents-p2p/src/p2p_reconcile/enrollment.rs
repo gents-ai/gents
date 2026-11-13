@@ -788,4 +788,6 @@ impl EnrollmentState {
 }
 
 #[cfg(test)]
+mod pending_conformance;
+#[cfg(test)]
 mod pushdown_tests;

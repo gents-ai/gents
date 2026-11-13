@@ -14,12 +14,6 @@ def agentCreatorCases : List (String × AgentCreatorObservation) :=
    ("native-create-denied", { valid with nativeCreate := false }),
    ("native-relation-denied", { valid with nativeRelation := false })]
 
-def agentCreatorCasesJson : String := (toJson (agentCreatorCases.map fun (name, o) =>
-  Json.mkObj [("name", toJson name), ("runtime_matches", toJson o.runtimeMatches),
-    ("signer_held", toJson o.signerHeld), ("signer_matches", toJson o.signerMatches),
-    ("native_create", toJson o.nativeCreate), ("native_relation", toJson o.nativeRelation),
-    ("allowed", toJson (agentCreatorMayPublish o))])).compress
-
 def freshBootstrap : BootstrapObservation := ⟨true, true, true, true, true, true, true, true, false⟩
 
 def bootstrapCases : List (String × BootstrapObservation) :=
@@ -33,29 +27,5 @@ def bootstrapCases : List (String × BootstrapObservation) :=
    ("nac-disabled", { freshBootstrap with nacEnabled := false }),
    ("already-published", { freshBootstrap with configurationPublished := true }),
    ("crash-after-reservation", bootstrapAfterCrash freshBootstrap)]
-
-def bootstrapCaseJson (name : String) (o : BootstrapObservation) : Json := Json.mkObj
-  [("name", toJson name), ("exclusive", toJson o.exclusive),
-   ("matching_runtime", toJson o.matchingRuntime), ("authenticated_client", toJson o.authenticatedClient),
-   ("node_absent_observed", toJson o.nodeAbsentObserved), ("store_empty_observed", toJson o.storeEmptyObserved),
-   ("reservation_durable", toJson o.reservationDurable), ("nac_enabled", toJson o.nacEnabled),
-   ("fresh_evidence", toJson o.freshEvidence), ("configuration_published", toJson o.configurationPublished),
-   ("expected_may_grant", toJson (bootstrapMayGrant o))]
-
-def bootstrapCasesJson : String := (toJson (bootstrapCases.map fun (name, observation) =>
-  bootstrapCaseJson name observation)).compress
-
-def reservationCasesJson : String := (toJson ([
-  ("confirmed", true, true, true), ("exists-or-create-failed", false, false, false),
-  ("file-sync-failed", true, false, false), ("directory-sync-failed", true, true, false)].map
-  fun (name, created, fileSynced, directorySynced) =>
-    Json.mkObj [("name", toJson name), ("created", toJson created), ("file_synced", toJson fileSynced),
-      ("directory_synced", toJson directorySynced),
-      ("expected", toJson (reservationConfirmed created fileSynced directorySynced))])).compress
-
-def runtimeNacCasesJson : String := (toJson ([NacStatus.notConfigured, .enabled,
-  .disabledTemporarily].map fun status =>
-    Json.mkObj [("status", toJson status.name),
-      ("may_start", toJson (runtimeMayStart status))])).compress
 
 end Identity.NodeProvisioningConformance

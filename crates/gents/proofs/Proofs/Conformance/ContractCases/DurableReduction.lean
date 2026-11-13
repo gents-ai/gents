@@ -1,5 +1,6 @@
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Session.Compaction.DurableReduction
+import Proofs.Conformance.Family
 
 namespace Conformance.ContractCases
 
@@ -101,5 +102,40 @@ theorem durableReductionCases_consumption_is_inference_only :
       , ("unsupported_inference_is_not_consumption_evidence", false)
       ] := by
   rfl
+
+structure DurableReductionInput where
+  name : String
+  requestDocId : Nat
+  turnIndex : Nat
+  ordinal : Nat
+  checkpoint : Nat
+  claimCommit : Nat
+  priorCheckpoint : Option Nat
+  priorClaimCommit : Option Nat
+  pairClosed : Bool
+  inferenceCites : Bool
+  inferenceSupported : Bool
+  titleCites : Bool
+  deriving Lean.ToJson
+
+structure DurableReductionOutput where
+  outcome : String
+  durableAfter : Bool
+  consumed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def durableReduction : Family DurableReductionInput DurableReductionOutput where
+  inputs := durableReductionCases.map fun row =>
+    { name := row.name, requestDocId := row.requestDocId, turnIndex := row.turnIndex
+      ordinal := row.ordinal, checkpoint := row.checkpoint, claimCommit := row.claimCommit
+      priorCheckpoint := row.priorCheckpoint, priorClaimCommit := row.priorClaimCommit
+      pairClosed := row.pairClosed, inferenceCites := row.inferenceCites
+      inferenceSupported := row.inferenceSupported, titleCites := row.titleCites }
+  model := fun i =>
+    let row := reductionCase i.name i.requestDocId i.turnIndex i.ordinal i.checkpoint i.claimCommit
+      i.priorCheckpoint i.priorClaimCommit i.pairClosed i.inferenceCites i.inferenceSupported
+      i.titleCites
+    { outcome := row.outcome, durableAfter := row.durableAfter, consumed := row.consumed }
 
 end Conformance.ContractCases

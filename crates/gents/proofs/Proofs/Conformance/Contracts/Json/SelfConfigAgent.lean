@@ -1,167 +1,248 @@
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 import Proofs.Tools.SelfConfig.Cases
 import Proofs.Tools.SelfConfig.Selection
 import Proofs.Conformance.Contracts.Json.SelfConfig
+import Proofs.Conformance.Contracts.Json.CommandPolicy
 
 namespace Conformance.Contracts
 
-open SelfConfig SelfConfig.ContractCases
+open Lean SelfConfig SelfConfig.ContractCases
 
-private def agentBool (b : Bool) : String :=
-  if b then "true" else "false"
+deriving instance ToJson for SelfConfig.ActorKind, SelfConfig.FrontEnd, SelfConfig.AgentRefusal,
+  Configuration.ReasoningEffort
 
-private def agentOpName : AgentOperation → String
-  | .create _ => "create"
-  | .edit _ => "edit"
-  | .disable => "disable"
+structure AgentEntryWire where
+  agentDid : String
+  enabled : Bool
+  tags : List String
+  deriving ToJson
 
-private def agentCreateInputJson (i : AgentCreateInput) : String :=
-  "{"
-    ++ "\"display_name\":" ++ jsonString i.name ++ ","
-    ++ "\"system_prompt\":" ++ jsonString i.systemPrompt ++ ","
-    ++ "\"inference_profile_id\":" ++ jsonString i.profile ++ ","
-    ++ "\"clone_from\":" ++ jsonString i.cloneFrom
-  ++ "}"
+/-- The acting actor and the grants native ACP gives it
+(`SelfConfig.actorGrantsOf`): `catalog` is `nodes manage_agents` on the Node and
+`configures` the Agents whose document it may update. -/
+structure ActorWire where
+  did : String
+  kind : SelfConfig.ActorKind
+  catalog : Bool
+  configures : List String
+  deriving ToJson
 
-/-- The edit as patch entries in `agentEditKeys` order. `enabled` is the JSON
-text `true` or `false`, and `tags` a JSON array text, as in `self_config_cases`. -/
-private def agentEditPatchJson (f : AgentEditFields) : String :=
+structure CreateInputWire where
+  displayName : String
+  systemPrompt : String
+  inferenceProfileId : String
+  cloneFrom : String
+  deriving ToJson
+
+/-- `frontEnds` lists every front end: admission never reads it
+(`SelfConfig.admission_ignores_front_end`). The edit is its patch entries in
+`agentEditKeys` order; `enabled` is the text `true` or `false`. -/
+structure AgentDecisionInput where
+  name : String
+  agents : List AgentEntryWire
+  defaultId : Option String
+  publishedProfiles : List String
+  actor : ActorWire
+  frontEnds : List SelfConfig.FrontEnd
+  operation : String
+  target : String
+  makeDefault : Bool
+  createInput : Option CreateInputWire
+  editPatch : Option (List PatchEntryWire)
+  deriving ToJson
+
+def editPatchOf (f : AgentEditFields) : List PatchEntryWire :=
   let entries : List (FieldKey × Option PatchOp) :=
     [("display_name", f.name), ("description", f.description),
      ("system_prompt", f.systemPrompt), ("inference_profile_id", f.profile),
      ("context_id", f.contextId),
      ("enabled", f.enabled.map fun b => .set (if b then "true" else "false")),
      ("tags", f.tags)]
-  jsonArray (entries.filterMap fun (k, op) => op.map fun op =>
-    selfConfigPatchEntryJson (k, op.value))
+  entries.filterMap fun (field, op) => op.map fun op =>
+    { field, action := match op with | .set _ => "set" | .clear => "clear", value := op.value }
 
-private def actorKindName : ActorKind → String
-  | .person => "person"
-  | .agent => "agent"
+def AgentDecisionInput.ofRow (r : AgentDecisionRow) : AgentDecisionInput :=
+  { name := r.name
+  , agents := r.catalog.agents.map fun a => { agentDid := a.id, enabled := a.enabled, tags := a.tags }
+  , defaultId := r.catalog.defaultId
+  , publishedProfiles := r.profiles
+  , actor :=
+      { did := r.actor.did, kind := r.actor.kind, catalog := r.actor.grants.catalog
+        configures := r.actor.grants.configures }
+  , frontEnds := [.tool, .cli, .desktop]
+  , operation := match r.request.operation with
+      | .create _ => "create" | .edit _ => "edit" | .disable => "disable"
+  , target := r.request.target
+  , makeDefault := r.request.makeDefault
+  , createInput := match r.request.operation with
+      | .create i =>
+          some { displayName := i.name, systemPrompt := i.systemPrompt
+                 inferenceProfileId := i.profile, cloneFrom := i.cloneFrom }
+      | _ => none
+  , editPatch := match r.request.operation with
+      | .edit f => some (editPatchOf f)
+      | _ => none }
 
-private def frontEndName : FrontEnd → String
-  | .tool => "tool"
-  | .cli => "cli"
-  | .desktop => "desktop"
+def AgentDecisionInput.catalog (i : AgentDecisionInput) : AgentCatalog :=
+  { agents := i.agents.map fun a => { id := a.agentDid, enabled := a.enabled, tags := a.tags }
+  , defaultId := i.defaultId }
 
-def agentRefusalName : AgentRefusal → String
-  | .catalogNotHeld => "catalog_not_held"
-  | .agentNotHeld => "agent_not_held"
-  | .targetExists => "target_exists"
-  | .targetMissing => "target_missing"
-  | .invalidInput => "invalid_input"
-  | .defaultDisabled => "default_disabled"
-  | .selfLockout => "self_lockout"
+def AgentDecisionInput.actorOf (i : AgentDecisionInput) : Actor :=
+  { did := i.actor.did, kind := i.actor.kind
+  , grants := { catalog := i.actor.catalog, configures := i.actor.configures } }
 
-/-- The acting actor and the grants native ACP gives it
-(`SelfConfig.actorGrantsOf`): `catalog` is `nodes manage_agents` on the Node and
-`configures` the Agents whose document it may update. -/
-private def actorJson (a : Actor) : String :=
-  "{"
-    ++ "\"did\":" ++ jsonString a.did ++ ","
-    ++ "\"kind\":" ++ jsonString (actorKindName a.kind) ++ ","
-    ++ "\"catalog\":" ++ agentBool a.grants.catalog ++ ","
-    ++ "\"configures\":" ++ jsonStringArray a.grants.configures
-  ++ "}"
+def patchOpOf (entries : List PatchEntryWire) (field : String) : Option PatchOp :=
+  (entries.find? (·.field == field)).map fun e =>
+    if e.action == "set" then .set (e.value.getD "") else .clear
 
-private def agentDecisionRowFields (r : AgentDecisionRow) : String :=
-    "\"name\":" ++ jsonString r.name ++ ","
-    ++ "\"agents\":" ++ jsonArray (r.catalog.agents.map fun a =>
-        "{\"agent_did\":" ++ jsonString a.id ++ ",\"enabled\":" ++ agentBool a.enabled
-          ++ ",\"tags\":" ++ jsonStringArray a.tags ++ "}") ++ ","
-    ++ "\"default_id\":" ++ (match r.catalog.defaultId with
-        | some id => jsonString id
-        | none => "null") ++ ","
-    ++ "\"published_profiles\":" ++ jsonStringArray r.profiles ++ ","
-    ++ "\"actor\":" ++ actorJson r.actor ++ ","
-    ++ "\"front_ends\":" ++ jsonStringArray ([FrontEnd.tool, .cli, .desktop].map frontEndName) ++ ","
-    ++ "\"operation\":" ++ jsonString (agentOpName r.request.operation) ++ ","
-    ++ "\"target\":" ++ jsonString r.request.target ++ ","
-    ++ "\"make_default\":" ++ agentBool r.request.makeDefault ++ ","
-    ++ "\"create_input\":" ++ (match r.request.operation with
-        | .create i => agentCreateInputJson i
-        | _ => "null") ++ ","
-    ++ "\"edit_patch\":" ++ (match r.request.operation with
-        | .edit f => agentEditPatchJson f
-        | _ => "null")
+def editFieldsOf (entries : List PatchEntryWire) : AgentEditFields :=
+  { name := patchOpOf entries "display_name"
+  , description := patchOpOf entries "description"
+  , systemPrompt := patchOpOf entries "system_prompt"
+  , profile := patchOpOf entries "inference_profile_id"
+  , contextId := patchOpOf entries "context_id"
+  , enabled := (patchOpOf entries "enabled").map (· == .set "true")
+  , tags := patchOpOf entries "tags" }
 
-/-- `accepted` and `refusal` hold for every front end in `front_ends`
-(`SelfConfig.admission_ignores_front_end`); a refused preview reports the same
-`refusal` as a successful answer (`SelfConfig.preview_refusal_matches_commit`). -/
-private def agentDecisionCaseJson (w : AgentDecisionWitness) : String :=
-  "{" ++ agentDecisionRowFields w.row ++ ","
-    ++ "\"accepted\":" ++ agentBool w.accepted ++ ","
-    ++ "\"refusal\":" ++ (match w.admission with
-        | .error e => jsonString (agentRefusalName e)
-        | .ok _ => "null")
-  ++ "}"
+def AgentDecisionInput.request (i : AgentDecisionInput) : SelfConfig.AgentRequest :=
+  { operation := match i.operation, i.createInput, i.editPatch with
+      | "create", some c, _ =>
+          .create { name := c.displayName, systemPrompt := c.systemPrompt
+                    profile := c.inferenceProfileId, cloneFrom := c.cloneFrom }
+      | "edit", _, some entries => .edit (editFieldsOf entries)
+      | _, _, _ => .disable
+  , target := i.target
+  , makeDefault := i.makeDefault }
 
-def agentDecisionCasesJson : String :=
-  jsonArray (agentDecisionCases.map agentDecisionCaseJson)
+/-- A refused preview reports the same `refusal` as a successful answer
+(`SelfConfig.preview_refusal_matches_commit`). -/
+structure AgentDecisionOutput where
+  accepted : Bool
+  refusal : Option SelfConfig.AgentRefusal
+  deriving ToJson
 
-private def effortName : Configuration.ReasoningEffort → String
-  | .none => "none"
-  | .minimal => "minimal"
-  | .low => "low"
-  | .medium => "medium"
-  | .high => "high"
-  | .xhigh => "xhigh"
-  | .max => "max"
-  | .ultra => "ultra"
+example : (agentDecisionCases.map (·.row.name)).eraseDups.length = agentDecisionCases.length := by
+  native_decide
 
-private def resolvedSessionJson : Option Configuration.ResolvedSessionConfig → String
-  | none => "null"
-  | some r =>
-    "{"
-      ++ "\"instructions\":" ++ jsonString r.context.instructions ++ ","
-      ++ "\"skill_ids\":" ++ jsonStringArray r.context.skillIds ++ ","
-      ++ "\"tool_names\":" ++ jsonStringArray r.context.toolNames ++ ","
-      ++ "\"backend_id\":" ++ jsonString r.inference.backendId ++ ","
-      ++ "\"model\":" ++ jsonString r.inference.model ++ ","
-      ++ "\"effort\":" ++ jsonOptionalString (r.inference.effort.map effortName)
-    ++ "}"
+@[conformance_family]
+def selfConfigAgentDecision : Family AgentDecisionInput AgentDecisionOutput where
+  inputs := agentDecisionCases.map fun w => .ofRow w.row
+  model := fun i =>
+    let admission := agentAdmission i.publishedProfiles i.catalog i.actorOf i.request
+    { accepted := admission.isOk
+    , refusal := match admission with
+        | .error e => some e
+        | .ok _ => none }
 
-private def candidateFixtureJson (f : CandidateFixture) : String :=
-  "{"
-    ++ "\"node_did\":" ++ jsonString f.nodeDid ++ ","
-    ++ "\"agents\":" ++ jsonArray (f.agents.map fun (id, a) =>
-        "{\"agent_did\":" ++ jsonString id ++ ","
-          ++ "\"creation_nonce\":" ++ jsonString id ++ ","
-          ++ "\"context_id\":" ++ jsonOptionalString a.contextId ++ ","
-          ++ "\"inference_profile_id\":" ++ jsonString a.profileId ++ ","
-          ++ "\"enabled\":" ++ agentBool a.enabled ++ "}") ++ ","
-    ++ "\"contexts\":" ++ jsonArray (f.contexts.map fun (id, c) =>
-        "{\"context_id\":" ++ jsonString id ++ ","
-          ++ "\"system_prompt\":" ++ jsonString c.instructions ++ ","
-          ++ "\"skill_ids\":" ++ jsonStringArray c.skillIds ++ ","
-          ++ "\"tool_names\":" ++ jsonStringArray c.toolNames ++ "}") ++ ","
-    ++ "\"inference_profiles\":" ++ jsonArray (f.profiles.map fun (id, m) =>
-        "{\"profile_id\":" ++ jsonString id ++ ","
-          ++ "\"backend_id\":" ++ jsonString m.backendId ++ ","
-          ++ "\"model_name\":" ++ jsonString m.model ++ ","
-          ++ "\"reasoning_effort\":" ++ jsonOptionalString (m.effort.map effortName) ++ "}") ++ ","
-    ++ "\"inference_backends\":" ++ jsonArray (f.backends.map fun (id, b) =>
-        "{\"backend_id\":" ++ jsonString id ++ ","
-          ++ "\"enabled\":" ++ agentBool b.enabled ++ "}")
-  ++ "}"
+structure CandidateAgentWire where
+  agentDid : String
+  creationNonce : String
+  contextId : Option String
+  inferenceProfileId : String
+  enabled : Bool
+  deriving ToJson
 
-def agentMaterializationCasesJson : String :=
-  jsonArray (agentMaterializationScenarios.map fun r =>
-    "{" ++ agentDecisionRowFields { r.decision with name := r.name } ++ ","
-      ++ "\"candidate\":" ++ candidateFixtureJson workerFixture ++ ","
-      ++ "\"session\":" ++ resolvedSessionJson
-        (materializedAgent r.decision.profiles r.decision.catalog r.decision.actor
-          r.decision.request workerFixture.registry workerFixture.nodeDid)
-    ++ "}")
+structure CandidateContextWire where
+  contextId : String
+  systemPrompt : String
+  skillIds : List String
+  toolNames : List String
+  deriving ToJson
 
-private def networkName : CommandPolicy.NetworkMode → String
-  | .inherit => "inherit"
-  | .disabled => "disabled"
-  | .enabled => "enabled"
+structure CandidateProfileWire where
+  profileId : String
+  backendId : String
+  modelName : String
+  reasoningEffort : Option Configuration.ReasoningEffort
+  deriving ToJson
 
-private def optionalNetworkJson : Option CommandPolicy.NetworkMode → String
-  | none => "null"
-  | some mode => jsonString (networkName mode)
+structure CandidateBackendWire where
+  backendId : String
+  enabled : Bool
+  deriving ToJson
+
+structure CandidateWire where
+  nodeDid : String
+  agents : List CandidateAgentWire
+  contexts : List CandidateContextWire
+  inferenceProfiles : List CandidateProfileWire
+  inferenceBackends : List CandidateBackendWire
+  deriving ToJson
+
+def CandidateWire.ofFixture (f : CandidateFixture) : CandidateWire :=
+  { nodeDid := f.nodeDid
+  , agents := f.agents.map fun (id, a) =>
+      { agentDid := id, creationNonce := id, contextId := a.contextId
+        inferenceProfileId := a.profileId, enabled := a.enabled }
+  , contexts := f.contexts.map fun (id, c) =>
+      { contextId := id, systemPrompt := c.instructions, skillIds := c.skillIds
+        toolNames := c.toolNames }
+  , inferenceProfiles := f.profiles.map fun (id, m) =>
+      { profileId := id, backendId := m.backendId, modelName := m.model
+        reasoningEffort := m.effort }
+  , inferenceBackends := f.backends.map fun (id, b) => { backendId := id, enabled := b.enabled } }
+
+def CandidateWire.fixture (c : CandidateWire) : CandidateFixture :=
+  { nodeDid := c.nodeDid
+  , agents := c.agents.map fun a =>
+      (a.agentDid, { contextId := a.contextId, profileId := a.inferenceProfileId
+                     enabled := a.enabled })
+  , contexts := c.contexts.map fun x =>
+      (x.contextId, { instructions := x.systemPrompt, skillIds := x.skillIds
+                      toolNames := x.toolNames })
+  , profiles := c.inferenceProfiles.map fun p =>
+      (p.profileId, { backendId := p.backendId, model := p.modelName, effort := p.reasoningEffort })
+  , backends := c.inferenceBackends.map fun b => (b.backendId, { enabled := b.enabled }) }
+
+structure AgentMaterializationInput where
+  name : String
+  agents : List AgentEntryWire
+  defaultId : Option String
+  publishedProfiles : List String
+  actor : ActorWire
+  frontEnds : List SelfConfig.FrontEnd
+  operation : String
+  target : String
+  makeDefault : Bool
+  createInput : Option CreateInputWire
+  editPatch : Option (List PatchEntryWire)
+  candidate : CandidateWire
+  deriving ToJson
+
+def AgentMaterializationInput.decision (i : AgentMaterializationInput) : AgentDecisionInput :=
+  { name := i.name, agents := i.agents, defaultId := i.defaultId
+  , publishedProfiles := i.publishedProfiles, actor := i.actor, frontEnds := i.frontEnds
+  , operation := i.operation, target := i.target, makeDefault := i.makeDefault
+  , createInput := i.createInput, editPatch := i.editPatch }
+
+structure SessionWire where
+  instructions : String
+  skillIds : List String
+  toolNames : List String
+  backendId : String
+  model : String
+  effort : Option Configuration.ReasoningEffort
+  deriving ToJson
+
+@[conformance_family]
+def selfConfigAgentMaterialization :
+    Family AgentMaterializationInput (Option SessionWire) where
+  inputs := agentMaterializationScenarios.map fun r =>
+    let d := AgentDecisionInput.ofRow { r.decision with name := r.name }
+    { name := d.name, agents := d.agents, defaultId := d.defaultId
+    , publishedProfiles := d.publishedProfiles, actor := d.actor, frontEnds := d.frontEnds
+    , operation := d.operation, target := d.target, makeDefault := d.makeDefault
+    , createInput := d.createInput, editPatch := d.editPatch
+    , candidate := .ofFixture workerFixture }
+  model := fun i =>
+    let d := i.decision
+    let fixture := i.candidate.fixture
+    (materializedAgent d.publishedProfiles d.catalog d.actorOf d.request fixture.registry
+      fixture.nodeDid).map fun r =>
+        { instructions := r.context.instructions, skillIds := r.context.skillIds
+          toolNames := r.context.toolNames, backendId := r.inference.backendId
+          model := r.inference.model, effort := r.inference.effort }
 
 def siblingToolsOperations : List SiblingToolsOperation := Id.run do
   let mut rows : List SiblingToolsOperation := []
@@ -176,48 +257,133 @@ def siblingToolsOperations : List SiblingToolsOperation := Id.run do
                              , existingNetwork := existing }]
   return rows
 
-private def siblingToolsCaseJson (op : SiblingToolsOperation) : String :=
-  "{"
-    ++ "\"owner_matches\":" ++ agentBool op.ownerMatches ++ ","
-    ++ "\"shared_context\":" ++ agentBool op.sharedContext ++ ","
-    ++ "\"shared_tools\":" ++ agentBool op.sharedTools ++ ","
-    ++ "\"requested_network\":" ++ optionalNetworkJson op.requestedNetwork ++ ","
-    ++ "\"existing_network\":" ++ jsonString (networkName op.existingNetwork) ++ ","
-    ++ "\"admitted\":" ++ agentBool op.admitted ++ ","
-    ++ "\"result_network\":" ++ jsonString (networkName op.resultNetwork)
-  ++ "}"
+structure SiblingToolsInput where
+  ownerMatches : Bool
+  sharedContext : Bool
+  sharedTools : Bool
+  requestedNetwork : Option CommandPolicy.NetworkMode
+  existingNetwork : CommandPolicy.NetworkMode
+  deriving ToJson
 
-def siblingToolsCasesJson : String :=
-  jsonArray (siblingToolsOperations.map siblingToolsCaseJson)
+structure SiblingToolsOutput where
+  admitted : Bool
+  resultNetwork : CommandPolicy.NetworkMode
+  deriving ToJson
 
-private def optionalBoolJson : Option Bool → String
-  | none => "null"
-  | some b => agentBool b
+@[conformance_family]
+def selfConfigSiblingTools : Family SiblingToolsInput SiblingToolsOutput where
+  inputs := siblingToolsOperations.map fun op =>
+    { ownerMatches := op.ownerMatches, sharedContext := op.sharedContext
+      sharedTools := op.sharedTools, requestedNetwork := op.requestedNetwork
+      existingNetwork := op.existingNetwork }
+  model := fun i =>
+    let op : SiblingToolsOperation :=
+      { ownerMatches := i.ownerMatches, sharedContext := i.sharedContext
+        sharedTools := i.sharedTools, requestedNetwork := i.requestedNetwork
+        existingNetwork := i.existingNetwork }
+    { admitted := op.admitted, resultNetwork := op.resultNetwork }
 
-private def jobGuardCaseJson (r : JobGuardRow) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString r.name ++ ","
-    ++ "\"writer\":" ++ jsonString (if r.operator then "operator" else "model") ++ ","
-    ++ "\"selected_before\":" ++ agentBool r.selectedBefore ++ ","
-    ++ "\"native_authorized\":" ++ agentBool r.nativeAuthorized ++ ","
-    ++ "\"native_source_authorized\":" ++ agentBool r.nativeSourceAuthorized ++ ","
-    ++ "\"add_schema_tool\":" ++ agentBool r.addSchemaTool ++ ","
-    ++ "\"stored_integrations\":" ++ r.stored.getD "null" ++ ","
-    ++ "\"candidate_integrations\":" ++ r.candidate ++ ","
-    ++ "\"accepted\":" ++ agentBool r.accepted
-  ++ "}"
+structure ToolFlagInput where
+  existing : Bool
+  requested : Option Bool
+  deriving ToJson
 
-def selfConfigSelectionCasesJson : String :=
-  let bools := [false, true]
-  let toolFlags := Id.run do
-    let mut rows : List String := []
-    for existing in bools do
-      for requested in [none, some false, some true] do
-        rows := rows ++ ["{\"existing\":" ++ agentBool existing ++ ","
-          ++ "\"requested\":" ++ optionalBoolJson requested ++ ","
-          ++ "\"selected\":" ++ agentBool (selectedToolFlag requested existing) ++ "}"]
-    return rows
-  "{\"tool_flag_cases\":" ++ jsonArray toolFlags
-    ++ ",\"job_guard_cases\":" ++ jsonArray (jobGuardRows.map jobGuardCaseJson) ++ "}"
+@[conformance_family]
+def selfConfigToolFlag : Family ToolFlagInput Bool where
+  inputs := [false, true].flatMap fun existing =>
+    [none, some false, some true].map fun requested => { existing, requested }
+  model := fun i => selectedToolFlag i.requested i.existing
+
+structure JobPolicyText where
+  dynamic : String
+  dynamic_targets : List String
+  trusted_packs : List String
+  deriving ToJson, FromJson
+
+structure JobText where
+  agent_targets : List String
+  max_live : Nat
+  max_spawns : Nat
+  max_messages_per_slot : Nat
+  result_bytes : Nat
+  max_wall_secs : Nat
+  policy : JobPolicyText
+  deriving ToJson, FromJson
+
+structure PluginText where
+  plugin : String
+  job : JobText
+  deriving ToJson, FromJson
+
+/-- A Tools `integrations` text as its JSON structure, so the wire carries it
+as a value. -/
+structure IntegrationsText where
+  plugins : List PluginText
+  deriving ToJson, FromJson
+
+def IntegrationsText.parse (text : FieldValue) : IntegrationsText :=
+  ((Json.parse text).bind fromJson?).toOption.getD { plugins := [] }
+
+def IntegrationsText.text (i : IntegrationsText) : FieldValue :=
+  (toJson i).compress
+
+structure JobGuardInput where
+  name : String
+  writer : String
+  selectedBefore : Bool
+  nativeAuthorized : Bool
+  nativeSourceAuthorized : Bool
+  addSchemaTool : Bool
+  storedIntegrations : Option IntegrationsText
+  candidateIntegrations : IntegrationsText
+  deriving ToJson
+
+def JobGuardInput.ofRow (r : JobGuardRow) : JobGuardInput :=
+  { name := r.name, writer := if r.operator then "operator" else "model"
+  , selectedBefore := r.selectedBefore, nativeAuthorized := r.nativeAuthorized
+  , nativeSourceAuthorized := r.nativeSourceAuthorized, addSchemaTool := r.addSchemaTool
+  , storedIntegrations := r.stored.map IntegrationsText.parse
+  , candidateIntegrations := .parse r.candidate }
+
+def JobGuardInput.accepted (i : JobGuardInput) : Bool :=
+  JobGuardRow.accepted
+    { name := i.name, operator := i.writer == "operator", selectedBefore := i.selectedBefore
+    , nativeAuthorized := i.nativeAuthorized, nativeSourceAuthorized := i.nativeSourceAuthorized
+    , addSchemaTool := i.addSchemaTool, stored := i.storedIntegrations.map (·.text)
+    , candidate := i.candidateIntegrations.text }
+
+/-- The model writes native document authorization grants and both pass: the
+guard alone decides these rows. -/
+@[conformance_family]
+def selfConfigJobGuard : Family JobGuardInput Bool where
+  inputs := (jobGuardRows.filter fun r =>
+    !r.operator && r.nativeAuthorized && r.nativeSourceAuthorized).map .ofRow
+  model := JobGuardInput.accepted
+
+/-- Native ACP decides these rows: a signed node grants or withholds the
+Agent's Tools update and the schema-tool source, so only a served node can
+build them. -/
+@[conformance_family]
+def selfConfigJobGuardNative : Family JobGuardInput Bool where
+  inputs := (jobGuardRows.filter fun r => r.name.startsWith "native_agent_update_").map .ofRow
+  model := JobGuardInput.accepted
+
+/-- model-production-gap: an operator Tools write bypasses the grant guard, and
+no production scenario drives an operator write of a job block. -/
+@[conformance_family]
+def selfConfigJobGuardUnreached : Family JobGuardInput Bool where
+  inputs := (jobGuardRows.filter (·.operator)).map .ofRow
+  model := JobGuardInput.accepted
+
+example : (jobGuardRows.filter (·.operator)).all (·.accepted) = true := by native_decide
+
+example :
+    ((jobGuardRows.filter fun r => r.name.startsWith "native_agent_update_").any fun r =>
+      r.nativeAuthorized && r.nativeSourceAuthorized) = true ∧
+    ((jobGuardRows.filter fun r => r.name.startsWith "native_agent_update_").any fun r =>
+      !r.nativeAuthorized) = true ∧
+    ((jobGuardRows.filter fun r => r.name.startsWith "native_agent_update_").any fun r =>
+      r.nativeAuthorized && !r.nativeSourceAuthorized && r.addSchemaTool) = true := by
+  native_decide
 
 end Conformance.Contracts

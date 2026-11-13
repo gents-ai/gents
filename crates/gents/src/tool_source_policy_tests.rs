@@ -38,14 +38,10 @@ async fn write_fixture_tools(
 async fn enrolled_user_authors_held_tools_and_only_the_household_owner_adds_schema(
 ) -> anyhow::Result<()> {
     use gents_store::identity::GrantSet;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_delegation_cases;
-    let modeled = |name: &str| {
-        cases
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap_or_else(|| panic!("modeled delegation {name:?}"))
-            .expected
-    };
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::identity_delegation_tools_authoring::cases()
+    })
+    .await?;
     let (db, _user, user_access, binding) =
         crate::test_support::root::signed_test_node("enrolled-tools-authoring").await;
     let node_did = db.node_identity.did().to_owned();
@@ -59,7 +55,6 @@ async fn enrolled_user_authors_held_tools_and_only_the_household_owner_adds_sche
         serde_json::json!({"self_config": self_config}),
     )
     .await;
-    assert_eq!(held.is_ok(), modeled("enrolled-grants-held"), "{held:?}");
     assert!(
         db.node
             .nac_manager()
@@ -72,11 +67,6 @@ async fn enrolled_user_authors_held_tools_and_only_the_household_owner_adds_sche
     });
     let refused =
         write_fixture_tools(&user_access, &node_did, &binding.agent_did, schema.clone()).await;
-    assert_eq!(
-        refused.is_ok(),
-        modeled("enrolled-refused-schema"),
-        "{refused:?}"
-    );
     assert!(
         !db.node
             .nac_manager()
@@ -110,17 +100,20 @@ async fn enrolled_user_authors_held_tools_and_only_the_household_owner_adds_sche
         schema,
     )
     .await;
-    assert_eq!(
-        owner_write.is_ok(),
-        modeled("owner-grants-schema"),
-        "{owner_write:?}"
-    );
     assert!(
         db.node
             .nac_manager()
             .check_permission(&agent, NodePermission::CollectionPatch)
             .await?
     );
+    for case in cases {
+        case.check(match case.input.name.as_str() {
+            "enrolled-grants-held" => held.is_ok(),
+            "enrolled-refused-schema" => refused.is_ok(),
+            "owner-grants-schema" => owner_write.is_ok(),
+            other => panic!("the tools-authoring scenario has no step for {other}"),
+        });
+    }
     db.node.shutdown().await?;
     Ok(())
 }

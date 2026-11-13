@@ -450,15 +450,15 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         .unwrap();
     assert_eq!(session["data"]["AgentSession"].as_array().unwrap().len(), 1);
     let session = &session["data"]["AgentSession"][0];
-    let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_projection_cases
-        .iter()
-        .find(|case| {
-            case["operation"] == "atomic_admission" && case["name"] == "agent_unattended_creation"
-        })
-        .expect("modeled unattended admission");
     assert_eq!(session["session_id"], session_id);
-    assert_eq!(session["title"], modeled["after"]["session"]["title"]);
+    for case in gents_lean_vocab::families::contracts_atomic_admission_unattended::cases::<String>()
+    {
+        case.check(
+            gents_lean_vocab::families::contracts_atomic_admission_unattended::AdmissionTitle {
+                title: serde_json::from_value(session["title"].clone()).unwrap(),
+            },
+        );
+    }
     assert_eq!(session["provenance"]["task_id"], "task");
     assert_eq!(
         session["provenance"]["opening_request_doc_id"],

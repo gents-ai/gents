@@ -243,12 +243,12 @@ impl GoalSource {
             }
             .await;
             match resumed {
-                Ok(Some(receipt)) => tracing::info!(
+                Ok(crate::goal::ResetResume::Resumed(receipt)) => tracing::info!(
                     request_id = %receipt.request_id,
                     goal_id = %goal.goal_id,
                     "durable goal continuation fired at the reported reset"
                 ),
-                Ok(None) => {}
+                Ok(crate::goal::ResetResume::NotUsageLimited | crate::goal::ResetResume::Deferred) => {}
                 Err(error) => {
                     tracing::warn!(%error, goal_id = %goal.goal_id, "goal reset resume failed")
                 }

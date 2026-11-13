@@ -73,27 +73,4 @@ def cases : List (String × List Action) :=
   , ("no-proof-of-abort", [.begin, .loseAck, .otherFailureCas, .abortEvidence false])
   , ("failure-proof-cannot-undo-child", [.begin, .childCas, .loseAck, .abortEvidence true]) ]
 
-def actionJson : Action → Json
-  | .begin => Json.mkObj [("kind", toJson ("begin" : String))]
-  | .loseAck => Json.mkObj [("kind", toJson ("lose_ack" : String))]
-  | .pendingRead => Json.mkObj [("kind", toJson ("pending_read" : String))]
-  | .childCas => Json.mkObj [("kind", toJson ("child_cas" : String))]
-  | .otherFailureCas => Json.mkObj [("kind", toJson ("other_failure_cas" : String))]
-  | .exactReceipt receiptMatches => Json.mkObj [("kind", toJson ("exact_receipt" : String)), ("valid", toJson receiptMatches)]
-  | .abortEvidence valid => Json.mkObj [("kind", toJson ("abort_evidence" : String)), ("valid", toJson valid)]
-
-def nativeName : Native → String
-  | .pending => "pending" | .childCommitted => "child_committed" | .failureCommitted => "failure_committed"
-
-def knowledgeName : Knowledge → String
-  | .idle => "idle" | .inFlight => "in_flight" | .unconfirmed => "unconfirmed"
-  | .confirmed => "confirmed" | .aborted => "aborted"
-
-def casesJson : String := (toJson (cases.map fun (name, actions) =>
-  let s := run actions
-  Json.mkObj [("name", toJson name), ("actions", toJson (actions.map actionJson)),
-    ("expected_native", toJson (nativeName s.native)), ("expected_knowledge", toJson (knowledgeName s.knowledge)),
-    ("expected_attempts", toJson s.started), ("may_report_failure", toJson (mayReportFailure s)),
-    ("may_retry", toJson (mayRetry s))])).compress
-
 end Identity.DelegatedFinality

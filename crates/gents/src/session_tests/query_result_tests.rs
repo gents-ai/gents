@@ -3,11 +3,7 @@ use gents_session::tool_call::query::result::*;
 #[tokio::test]
 async fn generated_plugin_child_terminal_presentation_matches_execution_owner() {
     use gents_protocol::output::{PayloadPresentation, PresentationPart};
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let cases = snapshot
-        .plugin_resource_tool_effect_terminal_cases
-        .as_array()
-        .expect("generated plugin terminal cases");
+    let cases = gents_lean_vocab::families::plugin_effects_terminal_presentation::cases();
     for (index, case) in cases.iter().enumerate() {
         let (fixture, request_owner) =
             gents_toolcalls::call::lifecycle::admission_fixture::published_admission_with_owner(
@@ -57,8 +53,8 @@ async fn generated_plugin_child_terminal_presentation_matches_execution_owner() 
             .complete_raw_with_presentation("abc", "error: bc", presentation.clone())
             .await
             .unwrap();
-        let accepted = if case["replay"].as_bool().unwrap() {
-            let conflict = case["conflict"].as_bool().unwrap();
+        let accepted = if case.input.replay {
+            let conflict = case.input.conflict;
             replay
                 .complete_raw_with_presentation(
                     "abc",
@@ -85,11 +81,7 @@ async fn generated_plugin_child_terminal_presentation_matches_execution_owner() 
             .as_deref()
                 == Some("error: bc")
         };
-        assert_eq!(
-            accepted,
-            case["expected"].as_bool().unwrap(),
-            "case {index}"
-        );
+        case.check(accepted);
         drop(request_owner);
         node.shutdown().await.expect("shut down test node");
         let _ = std::fs::remove_dir_all(path);

@@ -740,3 +740,16 @@ pub fn estimate_json(value: &Value) -> Result<usize> {
 
 #[cfg(test)]
 mod pushdown_tests;
+
+#[cfg(test)]
+mod service_tier_vocabulary {
+    use super::ServiceTier;
+
+    #[test]
+    fn service_tiers_are_the_lean_tiers() {
+        gents_lean_vocab::families::prompt_assembly_service_tier_tier_vocabulary::replay(&[
+            ServiceTier::Default,
+            ServiceTier::Fast,
+        ]);
+    }
+}

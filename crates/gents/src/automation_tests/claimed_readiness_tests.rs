@@ -46,29 +46,16 @@ fn recovery_projection(goal: &GoalDocument) -> Value {
     })
 }
 
-fn case_before(before: &gents_lean_vocab::LeanGoalClaimedReadinessCaseBefore) -> Value {
+fn active_claim() -> Value {
     json!({
-        "status": before.status,
-        "blocked_audits": before.blocked_audits,
-        "wrapup_requested": before.wrapup_requested,
-        "wrapup_completed": before.wrapup_completed,
-        "infrastructure_retries": before.infrastructure_retries,
-        "last_failure": before.last_failure,
-        "continuation_sequence": before.continuation_sequence,
-        "parent": before.parent,
-    })
-}
-
-fn case_expected(expected: &gents_lean_vocab::LeanGoalClaimedReadinessCaseExpected) -> Value {
-    json!({
-        "status": expected.status,
-        "blocked_audits": expected.blocked_audits,
-        "wrapup_requested": expected.wrapup_requested,
-        "wrapup_completed": expected.wrapup_completed,
-        "infrastructure_retries": expected.infrastructure_retries,
-        "last_failure": expected.last_failure,
-        "continuation_sequence": expected.continuation_sequence,
-        "parent": expected.parent,
+        "status": "active",
+        "blocked_audits": 0,
+        "wrapup_requested": false,
+        "wrapup_completed": false,
+        "infrastructure_retries": 1,
+        "last_failure": "failed",
+        "continuation_sequence": 1,
+        "parent": "claimed-parent",
     })
 }
 
@@ -355,12 +342,7 @@ async fn publish_readiness(
 
 #[tokio::test]
 async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .goal_claimed_readiness_cases
-        .iter()
-        .find(|case| case.name == "claimed_ready_materializes_retry")
-        .unwrap();
-    let mut before = case_before(&case.before);
+    let mut before = active_claim();
     before["infrastructure_retries"] = json!(0);
     before["last_failure"] = Value::Null;
     let db = test_db("required-question-continuation").await;
@@ -434,20 +416,20 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
 
 #[tokio::test]
 async fn generated_claimed_readiness_cases_drive_goal_source() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_claimed_readiness_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case.name.as_str();
+    for case in
+        gents_lean_vocab::families::goal_claimed_readiness_claimed::cases::<String, String>()
+    {
+        let name = case.input.name.as_str();
         let db = test_db(name).await;
-        let before = install_claim(&db, &case_before(&case.before)).await;
+        let before = install_claim(&db, &serde_json::to_value(&case.input.before).unwrap()).await;
         let parent = before.last_continued_from_request_id.as_deref().unwrap();
         let (controller, status, _status_owner) = source(&db).await;
-        let observation = case.observation.as_str();
-        let settled = case.settled;
-        let child_exists = case.child_exists;
+        let observation = case.input.observation.as_str();
+        let settled = case.input.settled;
+        let child_exists = case.input.child_exists;
         let native_observation = match observation {
             "ready" => GoalAgentObservation::Ready {
-                newer_than_terminal: case.newer_than_terminal,
+                newer_than_terminal: case.input.newer_than_terminal,
             },
             "backend_recovering" => GoalAgentObservation::BackendRecovering,
             "unavailable" => GoalAgentObservation::Unavailable,
@@ -467,7 +449,6 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             GoalClaimedDecision::Stop => "stop",
             GoalClaimedDecision::Inactive => "inactive",
         };
-        assert_eq!(decision_name, case.decision.as_str(), "{name}");
         if child_exists {
             publish_readiness(&db, "ready", &status, true, true).await;
             assert!(controller
@@ -479,7 +460,14 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 .unwrap()
                 .is_some());
         }
-        publish_readiness(&db, observation, &status, settled, case.newer_than_terminal).await;
+        publish_readiness(
+            &db,
+            observation,
+            &status,
+            settled,
+            case.input.newer_than_terminal,
+        )
+        .await;
         let observed = load_goal(&db).await;
         let intent = controller
             .build_intent(
@@ -494,11 +482,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             "{name}"
         );
         let after = load_goal(&db).await;
-        assert_eq!(
-            recovery_projection(&after),
-            case_expected(&case.expected),
-            "{name}"
-        );
+        let settled_state = recovery_projection(&after);
         assert_eq!(
             controller
                 .continuation_child_exists(
@@ -526,7 +510,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 .await
                 .unwrap()
                 .expect("ready claim recovers");
-            let retries = case.before.infrastructure_retries;
+            let retries = case.input.before.infrastructure_retries;
             let retry_prompt =
                 format!("recovery attempt {retries} of {MAX_INFRASTRUCTURE_RETRIES}");
             assert!(
@@ -536,7 +520,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             );
             assert_eq!(
                 recovery_projection(&load_goal(&db).await),
-                case_expected(&case.expected),
+                settled_state,
                 "{name}: recovery preserves retry charge and prompt"
             );
         } else if decision == GoalClaimedDecision::Stop {
@@ -599,18 +583,19 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
             );
         }
         db.node.shutdown().await.expect("node shutdown");
+        case.check(
+            gents_lean_vocab::families::goal_claimed_readiness_claimed::ClaimedOutput {
+                decision: decision_name.to_string(),
+                expected: Some(serde_json::from_value(settled_state).unwrap()),
+            },
+        );
     }
 }
 
 #[tokio::test]
 async fn readiness_stop_rejects_a_replaced_claim_epoch() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .goal_claimed_readiness_cases
-        .iter()
-        .find(|case| case.name == "claimed_settled_invalid_pauses")
-        .unwrap();
     let db = test_db("claimed-readiness-stale-epoch").await;
-    let stale = install_claim(&db, &case_before(&case.before)).await;
+    let stale = install_claim(&db, &active_claim()).await;
     let parent = stale.last_continued_from_request_id.as_deref().unwrap();
     assert!(
         claim_continuation_from_access(&agent_access(&db).await, &stale, parent)
@@ -760,41 +745,41 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
     let (_tx, rx) = watch::channel(snapshot);
     let controller = GoalSource::new(rx, db.node.clone(), CancellationToken::new())
         .with_runtime_status(status.clone());
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_readiness_gate_cases;
-    for (name, process, reason, phase) in [
-        (
-            "missing_readiness_defers_continuation",
-            NodeReadinessProcessState::Recovering,
-            None,
-            ReconcilePhase::Idle,
-        ),
-        (
-            "backend_recovery_defers_even_when_settled",
-            NodeReadinessProcessState::Ready,
-            Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable),
-            ReconcilePhase::Idle,
-        ),
-        (
-            "unsettled_invalid_agent_defers",
-            NodeReadinessProcessState::Ready,
-            Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid),
-            ReconcilePhase::Applying,
-        ),
-        (
-            "settled_invalid_agent_stops_active_goal",
-            NodeReadinessProcessState::Ready,
-            Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid),
-            ReconcilePhase::Idle,
-        ),
-    ] {
-        let modeled = cases
-            .iter()
-            .find(|case| case.name == name)
-            .expect("modeled readiness case");
+    for case in gents_lean_vocab::families::contracts_goal_readiness_gate_served::cases::<
+        gents_automation::goal::GoalFailureCause,
+        String,
+        String,
+        gents_automation::goal::GoalRequestTerminal,
+        GoalStatus,
+    >() {
+        let name = case.input.name.as_str();
+        let (process, reason, phase) = match name {
+            "missing_readiness_defers_continuation" => (
+                NodeReadinessProcessState::Recovering,
+                None,
+                ReconcilePhase::Idle,
+            ),
+            "backend_recovery_defers_even_when_settled" => (
+                NodeReadinessProcessState::Ready,
+                Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable),
+                ReconcilePhase::Idle,
+            ),
+            "unsettled_invalid_agent_defers" => (
+                NodeReadinessProcessState::Ready,
+                Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid),
+                ReconcilePhase::Applying,
+            ),
+            "settled_invalid_agent_stops_active_goal" => (
+                NodeReadinessProcessState::Ready,
+                Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid),
+                ReconcilePhase::Idle,
+            ),
+            other => panic!("the goal source scenario has no fixture for {other}"),
+        };
         status.set_reconcile_phase(phase).await;
         assert_eq!(
             status.goal_reconcile_settled().await,
-            modeled.settled,
+            case.input.settled,
             "{name}"
         );
         let readiness = NodeReadinessSnapshot {
@@ -852,64 +837,65 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(
-            current.infrastructure_retry_count.unwrap_or_default(),
-            modeled.expected_retries,
-            "{name}"
+        let gate = match current.parsed_status() {
+            Some(GoalStatus::Active)
+                if current.last_failure.as_deref().is_some_and(|v| {
+                    v.starts_with(gents_automation::goal::GOAL_READINESS_WAIT_PREFIX)
+                }) =>
+            {
+                "await_readiness"
+            }
+            Some(GoalStatus::Paused) => "agent_unavailable",
+            other => panic!("{name}: the goal source left the goal {other:?}"),
+        };
+        case.check(
+            gents_lean_vocab::families::contracts_goal_readiness_gate_served::ReadinessGateGoalWrite {
+                gate: gate.to_owned(),
+                retries: u64::try_from(current.infrastructure_retry_count.unwrap_or_default())
+                    .expect("retries are never negative"),
+            },
         );
-        match modeled.expected_gate.as_str() {
-            "await_readiness" => {
-                assert_eq!(current.parsed_status(), Some(GoalStatus::Active), "{name}");
-                assert!(
-                    current.last_failure.as_deref().is_some_and(
-                        |v| v.starts_with(gents_automation::goal::GOAL_READINESS_WAIT_PREFIX)
-                    ),
-                    "{name}"
-                );
-                assert_eq!(
-                    current.continuation_sequence(),
-                    goal.continuation_sequence(),
-                    "{name}"
-                );
-                assert!(controller
-                    .build_intent(&actor, current.clone())
-                    .await
-                    .unwrap()
-                    .is_none());
-                let repeated = agent_access
-                    .transact_readonly("test.goal_readiness.repeated", |txn| {
-                        Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
-                            txn,
-                            db.node_identity.did(),
-                            SESSION,
-                        ))
-                    })
-                    .await
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(
-                    serde_json::to_value(repeated).unwrap(),
-                    serde_json::to_value(current).unwrap(),
-                    "{name}: unchanged readiness must not rewrite the Goal"
-                );
-            }
-            "agent_unavailable" => {
-                assert_eq!(current.parsed_status(), Some(GoalStatus::Paused), "{name}");
-                assert_eq!(
-                    current.last_failure.as_deref(),
-                    Some(
-                        format!(
-                            "agent {} is unavailable: {}",
-                            agent.did(),
-                            AgentReadinessUnavailableReason::RuntimeConfigurationInvalid
-                                .public_message()
-                        )
-                        .as_str()
-                    ),
-                    "{name}"
-                );
-            }
-            other => panic!("unexpected modeled readiness decision {other}"),
+        if gate == "await_readiness" {
+            assert_eq!(
+                current.continuation_sequence(),
+                goal.continuation_sequence(),
+                "{name}"
+            );
+            assert!(controller
+                .build_intent(&actor, current.clone())
+                .await
+                .unwrap()
+                .is_none());
+            let repeated = agent_access
+                .transact_readonly("test.goal_readiness.repeated", |txn| {
+                    Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
+                        txn,
+                        db.node_identity.did(),
+                        SESSION,
+                    ))
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(repeated).unwrap(),
+                serde_json::to_value(current).unwrap(),
+                "{name}: unchanged readiness must not rewrite the Goal"
+            );
+        } else {
+            assert_eq!(
+                current.last_failure.as_deref(),
+                Some(
+                    format!(
+                        "agent {} is unavailable: {}",
+                        agent.did(),
+                        AgentReadinessUnavailableReason::RuntimeConfigurationInvalid
+                            .public_message()
+                    )
+                    .as_str()
+                ),
+                "{name}"
+            );
         }
     }
     owner.close().await.unwrap();

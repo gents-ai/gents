@@ -588,37 +588,34 @@ mod tests {
 
     #[test]
     fn fallback_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_wake_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let now = Utc.timestamp_millis_opt(case.now_ms).single().unwrap();
-            let deadline = Utc.timestamp_millis_opt(case.deadline_ms).single().unwrap();
-            assert_eq!(
-                fallback_wake(now, deadline, case.attempts).map(|wake| wake.timestamp_millis()),
-                case.wake_ms,
-                "{case:?}"
-            );
-        }
+        let at = |millis: u64| {
+            Utc.timestamp_millis_opt(i64::try_from(millis).unwrap())
+                .single()
+                .unwrap()
+        };
+        gents_lean_vocab::families::backend_wake_fallback_wake::replay(|i| {
+            fallback_wake(
+                at(i.now_ms),
+                at(i.deadline_ms),
+                u32::try_from(i.attempts).unwrap(),
+            )
+            .map(|wake| u64::try_from(wake.timestamp_millis()).unwrap())
+        });
     }
 
     #[test]
     fn expired_resume_reparking_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_repark_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            assert_eq!(
-                can_repark_expired(
-                    case.resuming,
-                    &case.observed_generation,
-                    &case.expected_generation,
-                    case.observed_expiry,
-                    case.expected_expiry,
-                    case.now
-                ),
-                case.allowed,
-                "{case:?}"
-            );
-        }
+        let millis = |value: u64| i64::try_from(value).unwrap();
+        gents_lean_vocab::families::backend_wake_repark::replay(|i| {
+            can_repark_expired(
+                i.resuming,
+                &i.observed_generation,
+                &i.expected_generation,
+                millis(i.observed_expiry),
+                millis(i.expected_expiry),
+                millis(i.now),
+            )
+        });
     }
 
     #[test]
@@ -637,72 +634,24 @@ mod tests {
 
     #[test]
     fn resumed_turn_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_resumed_turn_cases;
-        assert!(cases.iter().any(|case| case.next > 1));
-        for case in cases {
-            assert_eq!(
-                super::resumed_turn_index(case.completed.iter().copied()),
-                case.next,
-                "{case:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn parked_terminal_outcomes_match_the_generated_model() {
-        use gents_protocol::request_lifecycle::RequestLifecycleState as State;
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_parked_finalize_cases;
-        assert!(cases
-            .iter()
-            .any(|case| case.allowed && case.outcome == State::Superseded));
-        assert!(cases.iter().any(|case| !case.allowed));
-        for case in cases {
-            assert_eq!(
-                crate::request::lifecycle::execution_policy::can_finalize_parked(
-                    case.request,
-                    case.outcome
-                ),
-                case.allowed,
-                "{case:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn restored_capture_scope_allocation_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_capture_scope_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            assert_eq!(
-                gents_loop::rendered_request::scope::next_scope_sequence(
-                    case.persisted.iter().copied()
-                ),
-                Some(case.next),
-                "{case:?}"
-            );
-        }
-        assert_eq!(
-            gents_loop::rendered_request::scope::next_scope_sequence([u64::MAX]),
-            None
-        );
+        gents_lean_vocab::families::backend_wake_resumed_turn_index::replay(|i| {
+            u64::try_from(super::resumed_turn_index(
+                i.completed.iter().map(|turn| u32::try_from(*turn).unwrap()),
+            ))
+            .unwrap()
+        });
     }
 
     #[test]
     fn healthy_wakeup_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_health_wake_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let at = |millis| Utc.timestamp_millis_opt(millis).single().unwrap();
-            assert_eq!(
-                fresh_healthy(
-                    at(case.started_ms),
-                    at(case.now_ms),
-                    case.observed_ms.map(at)
-                ),
-                case.fresh,
-                "{case:?}"
-            );
-        }
+        let at = |millis: u64| {
+            Utc.timestamp_millis_opt(i64::try_from(millis).unwrap())
+                .single()
+                .unwrap()
+        };
+        gents_lean_vocab::families::backend_wake_healthy_wake::replay(|i| {
+            fresh_healthy(at(i.started_ms), at(i.now_ms), i.observed_ms.map(at))
+        });
     }
 }
 

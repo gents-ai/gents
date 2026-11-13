@@ -332,8 +332,8 @@ enforces these parts:
 | Terminal follow-up allowance | Follow-up uses the selected session/request observation, with no separate conversation summary. | Generated terminal cases exercise the single session observation path. |
 
 `Proofs.Conformance.Contracts` now includes `frontend_client_shell_case_count`,
-`frontend_client_shell_cases`, `desktop_client_shell_case_count`, and
-`desktop_client_shell_cases`. Those cases are evaluated from `step`,
+`frontend_client_shell_cases` and the generated family
+`client_shell_contracts_desktop`. Those cases are evaluated from `step`,
 `canSubmit`, `projectChat`, and the Lean turn derivation helpers. The frontend
 list keeps all generated rows for TypeScript projection coverage; the desktop
 list contains selected-session rows that the Rust session-snapshot bridge can

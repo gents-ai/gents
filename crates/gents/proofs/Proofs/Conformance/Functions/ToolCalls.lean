@@ -13,6 +13,7 @@ end Background.ProcessControl
 
 namespace Background.ProcessControl
 deriving instance Lean.ToJson for TerminalIntent
+deriving instance Lean.ToJson for StopAction
 end Background.ProcessControl
 
 namespace PluginJob

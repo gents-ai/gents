@@ -82,28 +82,6 @@ theorem admitted_delegate_is_recipient :
 theorem uncommitted_claim_has_no_recipient :
     claimedRecipient (some ⟨"delegate", "request", "session", "agent"⟩) false = none := by rfl
 
-def claimedRecipientCasesJson : String :=
-  (Lean.toJson ([false, true].flatMap fun present => [false, true].map fun committed =>
-    let record : Option AdmittedRequest := if present then
-      some ⟨"delegate", "request", "session", "agent"⟩ else none
-    let result := claimedRecipient record committed
-    Lean.Json.mkObj [("present", Lean.toJson present),
-      ("committed", Lean.toJson committed),
-      ("signer", Lean.toJson (result.map (·.signer))),
-      ("request_doc", Lean.toJson (result.map (·.requestDoc))),
-      ("session_doc", Lean.toJson (result.map (·.sessionDoc))),
-      ("agent_doc", Lean.toJson (result.map (·.agentDoc)))] )).compress
-
-def nativeCasesJson : String :=
-  (Lean.Json.mkObj [
-    ("policy_yaml", Lean.toJson (Household.policyYamlOf candidatePolicy)),
-    ("aborted_document", Lean.toJson (publish true true false).document),
-    ("checks", Lean.toJson (["agent", "user", "other", "runtime"].flatMap fun actor =>
-      ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
-        [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
-         ("expected", Lean.toJson (permitted fixture actor permission)),
-         ("revoked_expected", Lean.toJson (permitted revoked actor permission))]))]).compress
-
 /-- A restart notice names its request only by a logical label in a durable
 source receipt. The label locates the request's signed record as its held
 target Agent sees it; the recipient is that record's claimed recipient, so a
@@ -125,16 +103,5 @@ theorem claimed_runtime_notice_reaches_admitted_signer :
 
 theorem missing_request_runtime_notice_has_no_publication :
     runtimeNotice none true true = ⟨false, false⟩ := by rfl
-
-private def runtimeNoticeJson (p : Publication) : Lean.Json :=
-  Lean.Json.mkObj [("document", Lean.toJson p.document),
-    ("recipient", Lean.toJson p.recipient), ("deferred", Lean.toJson (!p.document))]
-
-def runtimeNoticeCasesJson : String :=
-  (Lean.Json.mkObj [("document", Lean.toJson runtimeNoticeWithoutClaim.document),
-    ("recipient", Lean.toJson runtimeNoticeWithoutClaim.recipient),
-    ("deferred", Lean.toJson (!runtimeNoticeWithoutClaim.document)),
-    ("claimed", runtimeNoticeJson
-      (runtimeNotice (some ⟨"delegate", "request", "session", "agent"⟩) true true))]).compress
 
 end Identity.MailboxAccess

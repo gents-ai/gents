@@ -1055,10 +1055,19 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 #[tokio::test]
 async fn generated_snapshot_demotions_preserve_healthy_agents() {
     use gents_automation::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
-    use rapidhash::{RapidHashMap, RapidHashSet};
+    use rapidhash::RapidHashMap;
 
     fn ids(value: &[u64]) -> Vec<String> {
         value.iter().map(|id| id.to_string()).collect()
+    }
+
+    fn sorted_ids<'a, K>(keys: K) -> Vec<u64>
+    where
+        K: Iterator<Item = &'a String>,
+    {
+        let mut ids = keys.map(|id| id.parse().unwrap()).collect::<Vec<u64>>();
+        ids.sort();
+        ids
     }
 
     let endpoint = MockModelEndpoint::start("default").unwrap();
@@ -1089,12 +1098,11 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
     let template = baseline.agents.values().next().unwrap();
     let template_tools = baseline.tool_configs.values().next().unwrap();
     let surface = baseline.tool_surfaces.values().next().unwrap();
-    let cases = &gents_lean_vocab::lean_contract_snapshot().snapshot_demotion_cases;
-    assert_eq!(cases.len(), 6);
-    for case in cases {
-        let runnable = ids(&case.runnable);
+    for case in gents_lean_vocab::families::contracts_snapshot_demotion::cases() {
+        let input = &case.input;
+        let runnable = ids(&input.runnable);
         let mut snapshot = ResolvedRuntimeSnapshot::from_parts(
-            case.default_agent.to_string(),
+            input.default_agent.to_string(),
             runnable
                 .iter()
                 .map(|id| {
@@ -1110,7 +1118,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 .iter()
                 .map(|id| (id.clone(), surface.clone()))
                 .collect(),
-            ids(&case.unavailable)
+            ids(&input.unavailable)
                 .into_iter()
                 .map(|id| {
                     (
@@ -1124,7 +1132,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 .collect::<RapidHashMap<_, _>>(),
         );
         snapshot.validate_node_readiness_source().unwrap();
-        for id in ids(&case.demotions) {
+        for id in ids(&input.demotions) {
             snapshot.demote_agent(
                 &id,
                 UnavailableAgent::new(
@@ -1133,38 +1141,19 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 ),
             );
         }
+        let post_runnable = sorted_ids(snapshot.agents.keys());
         assert_eq!(
-            snapshot.agents.keys().cloned().collect::<RapidHashSet<_>>(),
-            ids(&case.post_runnable).into_iter().collect(),
-            "{case:?}"
+            sorted_ids(snapshot.tool_surfaces.keys()),
+            post_runnable,
+            "{input:?}"
         );
-        assert_eq!(
-            snapshot
-                .tool_surfaces
-                .keys()
-                .cloned()
-                .collect::<RapidHashSet<_>>(),
-            ids(&case.post_runnable).into_iter().collect(),
-            "{case:?}"
-        );
-        assert_eq!(
-            snapshot
-                .unavailable_agents
-                .keys()
-                .cloned()
-                .collect::<RapidHashSet<_>>(),
-            ids(&case.post_unavailable).into_iter().collect(),
-            "{case:?}"
-        );
-        assert_eq!(
-            snapshot.default_agent_did,
-            case.post_default_agent.to_string(),
-            "{case:?}"
-        );
-        assert_eq!(
-            snapshot.validate_node_readiness_source().is_ok(),
-            case.well_formed,
-            "{case:?}"
+        case.check(
+            gents_lean_vocab::families::contracts_snapshot_demotion::SnapshotDemotionOutput {
+                post_runnable,
+                post_unavailable: sorted_ids(snapshot.unavailable_agents.keys()),
+                post_default_agent: snapshot.default_agent_did.parse().unwrap(),
+                well_formed: snapshot.validate_node_readiness_source().is_ok(),
+            },
         );
     }
     node.shutdown().await.expect("node shutdown");

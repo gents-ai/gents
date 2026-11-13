@@ -628,6 +628,14 @@ mod tests {
         Arc::new(|_| Box::pin(async { Ok(()) }))
     }
 
+    #[test]
+    fn restored_capture_scope_allocation_matches_the_generated_model() {
+        gents_lean_vocab::families::backend_wake_capture_scope::replay(|i| {
+            next_scope_sequence(i.persisted.iter().copied()).unwrap()
+        });
+        assert_eq!(next_scope_sequence([u64::MAX]), None);
+    }
+
     #[tokio::test]
     async fn pending_generator_receive_does_not_hold_the_cancellation_drain_lock() {
         let scope = test_scope(context(), noop_sink());

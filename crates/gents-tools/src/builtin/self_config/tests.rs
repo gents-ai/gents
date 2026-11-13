@@ -14,199 +14,170 @@ use crate::native::CommandNetworkMode;
 use gents_documents::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
 };
-use gents_lean_vocab::{
-    lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
-    lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
-    LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
+use gents_lean_vocab::families::contracts_self_config_case::{
+    BackendWire, FieldValueWire, SelfConfigCaseInput, SelfConfigCaseOutput,
 };
 use gents_protocol::operations::inference::InferenceActor;
 use gents_protocol::tool_names::{CONFIG_TOOL_NAME, SELF_CONFIG_TOOL_NAMES};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-fn doc_map(entries: &[gents_lean_vocab::LeanSelfConfigFieldValue]) -> Map<String, Value> {
+fn doc_map(entries: &[FieldValueWire]) -> Map<String, Value> {
     entries
         .iter()
         .map(|entry| (entry.field.clone(), Value::String(entry.value.clone())))
         .collect()
 }
 
-fn entries_patch(entries: &[LeanSelfConfigPatchEntry]) -> SelfConfigPatch {
-    entries
+fn entry_value(action: &str, value: Option<&String>) -> Option<Value> {
+    match action {
+        "set" => Some(Value::String(
+            value.expect("set patch entry must carry a value").clone(),
+        )),
+        "clear" => None,
+        other => panic!("unknown patch action {other}"),
+    }
+}
+
+fn case_patch(case: &SelfConfigCaseInput) -> SelfConfigPatch {
+    case.patch
         .iter()
         .map(|entry| {
-            let value = match entry.action.as_str() {
-                "set" => Some(Value::String(
-                    entry
-                        .value
-                        .clone()
-                        .expect("set patch entry must carry a value"),
-                )),
-                "clear" => None,
-                other => panic!("unknown patch action {other}"),
-            };
-            (entry.field.clone(), value)
+            (
+                entry.field.clone(),
+                entry_value(&entry.action, entry.value.as_ref()),
+            )
         })
         .collect()
 }
 
-#[test]
-fn self_config_field_tables_match_lean_contract() {
-    let tables = lean_self_config_field_tables();
-    let actual: BTreeSet<_> = ALL_SELF_CONFIG_TARGETS
-        .iter()
-        .map(|t| t.collection_name())
-        .collect();
-    let expected: BTreeSet<_> = tables.iter().map(|t| t.collection.as_str()).collect();
-    assert_eq!(actual, expected, "runtime self-config target inventory");
-    for table in tables {
-        let target =
-            SelfConfigTarget::from_collection_name(&table.collection).expect("runtime target");
-        assert_eq!(
-            table.unique_field,
-            target.unique_field(),
-            "{}",
-            table.collection
-        );
-        assert_eq!(table.category, target.category(), "{}", table.collection);
-        assert_eq!(
-            table.all_fields,
-            target.all_fields(),
-            "{}",
-            table.collection
-        );
-        assert_eq!(
-            table.writable_fields,
-            target.writable_fields(),
-            "{}",
-            table.collection
-        );
-        assert_eq!(
-            table.protected_fields,
-            target.protected_fields(),
-            "{}",
-            table.collection
-        );
-    }
-}
-
-#[test]
-fn generated_self_config_cases_fence_patch_merge() {
-    let cases = lean_self_config_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let target =
-            SelfConfigTarget::from_collection_name(&case.collection).expect("runtime target");
-        let stored = doc_map(&case.doc);
-        let patch = entries_patch(&case.patch);
-        assert_eq!(
-            ensure_admissible(target, &patch).is_ok(),
-            case.admissible,
-            "{}: runtime patch admissibility",
-            case.name
-        );
-        if case.accepted {
-            assert_eq!(
-                apply_patch(target, &stored, &patch),
-                doc_map(&case.result),
-                "{}: runtime patch merge",
-                case.name
-            );
+fn case_guards(
+    target: SelfConfigTarget,
+    case: &SelfConfigCaseInput,
+    patch: &SelfConfigPatch,
+) -> anyhow::Result<()> {
+    let held = OperatorGrants {
+        pack_install: case.held_grants.pack_install,
+        policy: case.held_grants.policy,
+        pack_authority: case.held_grants.pack_authority,
+    };
+    let typed = || typed_merge(target, case, patch);
+    let grants = match target {
+        SelfConfigTarget::Tools => {
+            let (stored, candidate) = typed();
+            guard_tools_keep_grants(&held, Some(&stored), &candidate)
         }
-        let grant_guarded = matches!(
-            target,
-            SelfConfigTarget::Tools | SelfConfigTarget::AgentContext | SelfConfigTarget::Agent
-        );
-        if (case.guarded || grant_guarded) && case.admissible && case.validates {
-            let held = OperatorGrants {
-                pack_install: case.held_grants.pack_install,
-                policy: case.held_grants.policy,
-                pack_authority: case.held_grants.pack_authority,
+        SelfConfigTarget::AgentContext | SelfConfigTarget::Agent => {
+            let selected = |doc: &Option<Vec<FieldValueWire>>| {
+                doc.as_deref()
+                    .map(|doc| typed_doc(SelfConfigTarget::Tools, doc))
             };
-            let typed = || typed_merge(target, case, &patch);
-            let grants = match target {
-                SelfConfigTarget::Tools => {
-                    let (stored, candidate) = typed();
-                    guard_tools_keep_grants(&held, Some(&stored), &candidate)
-                }
-                SelfConfigTarget::AgentContext | SelfConfigTarget::Agent => {
-                    let selected =
-                        |doc: &Option<Vec<gents_lean_vocab::LeanSelfConfigFieldValue>>| {
-                            doc.as_deref()
-                                .map(|doc| typed_doc(SelfConfigTarget::Tools, doc))
-                        };
-                    reselection_keeps_grants(
-                        &held,
-                        selected(&case.selected_before).as_ref(),
-                        selected(&case.selected_after).as_ref(),
+            reselection_keeps_grants(
+                &held,
+                selected(&case.selected_before).as_ref(),
+                selected(&case.selected_after).as_ref(),
+            )
+        }
+        _ => Ok(()),
+    };
+    let guard = if case.guarded {
+        let (stored, candidate) = typed();
+        match target {
+            SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
+            SelfConfigTarget::Agent => guard_agent_keeps_reach(&stored, &candidate),
+            SelfConfigTarget::InferenceBackend => {
+                let auth = |doc: &Map<String, Value>| {
+                    serde_json::from_value::<gents_documents::BackendAuth>(
+                        doc.get("auth").cloned().unwrap_or(Value::Null),
                     )
-                }
-                _ => Ok(()),
-            };
-            let guard = if case.guarded {
-                let (stored, candidate) = typed();
-                match target {
-                    SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
-                    SelfConfigTarget::Agent => guard_agent_keeps_reach(&stored, &candidate),
-                    SelfConfigTarget::InferenceBackend => {
-                        let auth = |doc: &Map<String, Value>| {
-                            serde_json::from_value::<gents_documents::BackendAuth>(
-                                doc.get("auth").cloned().unwrap_or(Value::Null),
-                            )
-                        };
-                        match (auth(&stored), auth(&candidate)) {
-                            (Ok(stored), Ok(candidate)) => {
-                                gents_inference::operations::backend_update_decision(
-                                    InferenceActor::Agent,
-                                    &stored,
-                                    &candidate,
-                                )
-                                .admit()
-                                .map_err(anyhow::Error::from)
-                            }
-                            _ => Err(anyhow::anyhow!("{}: backend auth is not valid", case.name)),
-                        }
+                };
+                match (auth(&stored), auth(&candidate)) {
+                    (Ok(stored), Ok(candidate)) => {
+                        gents_inference::operations::backend_update_decision(
+                            InferenceActor::Agent,
+                            &stored,
+                            &candidate,
+                        )
+                        .admit()
+                        .map_err(anyhow::Error::from)
                     }
-                    SelfConfigTarget::InferenceProfile => {
-                        let backend = |doc: &Map<String, Value>| {
-                            let id = doc.get("backend_id")?;
-                            case.backends
-                                .iter()
-                                .find(|backend| {
-                                    &parse_nested(backend.backend_id.clone().into()) == id
-                                })
-                                .map(typed_backend)
-                        };
-                        match backend(&candidate) {
-                            Some(next) => gents_inference::operations::profile_choice_decision(
-                                InferenceActor::Agent,
-                                backend(&stored).as_ref(),
-                                &next,
-                                None,
-                            )
-                            .admit(&next.backend_id, &next.provider_kind.to_string())
-                            .map_err(anyhow::Error::from),
-                            None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
-                        }
-                    }
-                    other => panic!("{}: no runtime guard for {other:?}", case.name),
+                    _ => Err(anyhow::anyhow!("{}: backend auth is not valid", case.name)),
                 }
-            } else {
-                Ok(())
-            };
-            assert_eq!(
-                grants.and(guard).is_ok(),
-                case.accepted,
-                "{}: runtime guard",
-                case.name
-            );
+            }
+            SelfConfigTarget::InferenceProfile => {
+                let backend = |doc: &Map<String, Value>| {
+                    let id = doc.get("backend_id")?;
+                    case.backends
+                        .iter()
+                        .find(|backend| &parse_nested(backend.backend_id.clone().into()) == id)
+                        .map(typed_backend)
+                };
+                match backend(&candidate) {
+                    Some(next) => gents_inference::operations::profile_choice_decision(
+                        InferenceActor::Agent,
+                        backend(&stored).as_ref(),
+                        &next,
+                        None,
+                    )
+                    .admit(&next.backend_id, &next.provider_kind.to_string())
+                    .map_err(anyhow::Error::from),
+                    None => Err(anyhow::anyhow!("{}: unknown next backend", case.name)),
+                }
+            }
+            other => panic!("{}: no runtime guard for {other:?}", case.name),
         }
+    } else {
+        Ok(())
+    };
+    grants.and(guard)
+}
+
+fn projected(target: SelfConfigTarget, doc: &Map<String, Value>) -> Vec<FieldValueWire> {
+    let value = |field: &str, value: &Value| FieldValueWire {
+        field: field.to_owned(),
+        value: value
+            .as_str()
+            .unwrap_or_else(|| panic!("{field}: merged value is not text: {value}"))
+            .to_owned(),
+    };
+    target
+        .all_fields()
+        .iter()
+        .filter_map(|field| doc.get(*field).map(|v| value(field, v)))
+        .chain(
+            doc.iter()
+                .filter(|(field, _)| !target.all_fields().contains(&field.as_str()))
+                .map(|(field, v)| value(field, v)),
+        )
+        .collect()
+}
+
+#[test]
+fn contracts_self_config_case_matches_lean() {
+    for case in gents_lean_vocab::families::contracts_self_config_case::cases() {
+        let input = &case.input;
+        let observed = SelfConfigTarget::from_collection_name(&input.collection).map(|target| {
+            let stored = doc_map(&input.doc);
+            let patch = case_patch(input);
+            let admissible = ensure_admissible(target, &patch).is_ok();
+            let accepted =
+                admissible && input.validates && case_guards(target, input, &patch).is_ok();
+            let result = if accepted {
+                apply_patch(target, &stored, &patch)
+            } else {
+                stored
+            };
+            SelfConfigCaseOutput {
+                admissible,
+                accepted,
+                result: projected(target, &result),
+            }
+        });
+        case.check(observed);
     }
 }
 
-fn typed_backend(
-    backend: &gents_lean_vocab::LeanSelfConfigBackend,
-) -> gents_documents::InferenceBackend {
+fn typed_backend(backend: &BackendWire) -> gents_documents::InferenceBackend {
     let id = parse_nested(backend.backend_id.clone().into());
     serde_json::from_value(serde_json::json!({
         "node_did": "did:key:node-a",
@@ -226,7 +197,7 @@ fn parse_nested(value: Value) -> Value {
 
 fn typed_merge(
     target: SelfConfigTarget,
-    case: &LeanSelfConfigCase,
+    case: &SelfConfigCaseInput,
     patch: &SelfConfigPatch,
 ) -> (Map<String, Value>, Map<String, Value>) {
     let stored = typed_doc(target, &case.doc);
@@ -238,10 +209,7 @@ fn typed_merge(
     (stored, candidate)
 }
 
-fn typed_doc(
-    target: SelfConfigTarget,
-    entries: &[gents_lean_vocab::LeanSelfConfigFieldValue],
-) -> Map<String, Value> {
+fn typed_doc(target: SelfConfigTarget, entries: &[FieldValueWire]) -> Map<String, Value> {
     let mut doc: Map<String, Value> = entries
         .iter()
         .map(|entry| {
@@ -260,7 +228,13 @@ fn typed_doc(
     doc
 }
 
-fn agent_catalog(inputs: &LeanAgentDecisionInputs) -> AgentCatalogView {
+type AgentDecisionInputs =
+    gents_lean_vocab::families::contracts_self_config_agent_decision::AgentDecisionInput<
+        String,
+        String,
+    >;
+
+fn agent_catalog(inputs: &AgentDecisionInputs) -> AgentCatalogView {
     AgentCatalogView {
         agents: inputs
             .agents
@@ -272,7 +246,7 @@ fn agent_catalog(inputs: &LeanAgentDecisionInputs) -> AgentCatalogView {
     }
 }
 
-fn agent_actor(inputs: &LeanAgentDecisionInputs) -> AgentActor {
+fn agent_actor(inputs: &AgentDecisionInputs) -> AgentActor {
     AgentActor {
         did: inputs.actor.did.clone(),
         catalog: inputs.actor.catalog,
@@ -280,7 +254,7 @@ fn agent_actor(inputs: &LeanAgentDecisionInputs) -> AgentActor {
     }
 }
 
-fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
+fn agent_operation(inputs: &AgentDecisionInputs) -> AgentOperation {
     match inputs.operation.as_str() {
         "create" => {
             let input = inputs
@@ -295,21 +269,25 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
             })
         }
         "edit" => AgentOperation::Edit(
-            entries_patch(
-                inputs
-                    .edit_patch
-                    .as_ref()
-                    .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name)),
-            )
-            .into_iter()
-            .map(|(field, value)| match field.as_str() {
-                "enabled" | "tags" => {
-                    let value = value.map(parse_nested);
-                    (field, value)
-                }
-                _ => (field, value),
-            })
-            .collect(),
+            inputs
+                .edit_patch
+                .as_ref()
+                .unwrap_or_else(|| panic!("{}: edit without edit_patch", inputs.name))
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.field.clone(),
+                        entry_value(&entry.action, entry.value.as_ref()),
+                    )
+                })
+                .map(|(field, value)| match field.as_str() {
+                    "enabled" | "tags" => {
+                        let value = value.map(parse_nested);
+                        (field, value)
+                    }
+                    _ => (field, value),
+                })
+                .collect(),
         ),
         "disable" => AgentOperation::Disable,
         other => panic!("{}: unknown agent operation {other}", inputs.name),
@@ -318,40 +296,34 @@ fn agent_operation(inputs: &LeanAgentDecisionInputs) -> AgentOperation {
 
 #[test]
 fn generated_agent_decision_cases_drive_production_agent_admission() {
-    let cases = lean_agent_decision_cases();
-    assert!(!cases.is_empty());
-    let mut names = BTreeSet::new();
-    for case in cases {
-        let inputs = &case.inputs;
-        assert!(
-            names.insert(inputs.name.as_str()),
-            "duplicate {}",
-            inputs.name
-        );
-        let decision = decide_agent_operation(
-            &agent_catalog(inputs),
-            &agent_actor(inputs),
-            &agent_operation(inputs),
-            &inputs.target,
-            inputs.make_default,
-        );
-        assert_eq!(
-            decision
-                .as_ref()
-                .err()
-                .map(|error| error.refusal().map(|refusal| refusal.as_str())),
-            case.refusal.as_deref().map(Some),
-            "{}: production agent admission (actor {:?}, front ends {:?}, accepted {}): {decision:?}",
-            inputs.name,
-            inputs.actor,
-            inputs.front_ends,
-            case.accepted
-        );
-        assert_eq!(decision.is_ok(), case.accepted, "{}", inputs.name);
-    }
+    gents_lean_vocab::families::contracts_self_config_agent_decision::replay::<String, String, String>(
+        |inputs| {
+            let decision = decide_agent_operation(
+                &agent_catalog(inputs),
+                &agent_actor(inputs),
+                &agent_operation(inputs),
+                &inputs.target,
+                inputs.make_default,
+            );
+            gents_lean_vocab::families::contracts_self_config_agent_decision::AgentDecisionOutput {
+                accepted: decision.is_ok(),
+                refusal: decision.as_ref().err().map(|error| {
+                    error
+                        .refusal()
+                        .unwrap_or_else(|| {
+                            panic!("{}: refused without an agent refusal: {error:?}", inputs.name)
+                        })
+                        .as_str()
+                        .to_string()
+                }),
+            }
+        },
+    );
 }
 
-fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
+fn decode_candidate(
+    candidate: &gents_lean_vocab::families::contracts_self_config_agent_materialization::CandidateWire<String>,
+) -> AgentCandidate {
     let node_did = &candidate.node_did;
     AgentCandidate {
         agents: candidate
@@ -422,155 +394,125 @@ fn decode_candidate(candidate: &LeanAgentCandidate) -> AgentCandidate {
 
 #[test]
 fn generated_agent_materialization_cases_drive_production_agent_materialization() {
-    let cases = lean_agent_materialization_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let inputs = &case.inputs;
-        let node_did = case.candidate.node_did.as_str();
+    use gents_lean_vocab::families::contracts_self_config_agent_materialization as materialization;
+    gents_lean_vocab::families::contracts_self_config_agent_materialization::replay::<String, String, String>(|case| {
+        let mut decision = serde_json::to_value(case).expect("case encodes");
+        decision
+            .as_object_mut()
+            .expect("case is an object")
+            .remove("candidate");
+        let inputs: AgentDecisionInputs =
+            serde_json::from_value(decision).expect("decision inputs decode");
         let candidate = decode_candidate(&case.candidate);
-        let actual = materialize_agent(
-            &agent_catalog(inputs),
-            &agent_actor(inputs),
-            &agent_operation(inputs),
+        materialize_agent(
+            &agent_catalog(&inputs),
+            &agent_actor(&inputs),
+            &agent_operation(&inputs),
             &inputs.target,
             inputs.make_default,
             &candidate,
-            node_did,
-        );
-        match (&case.session, actual) {
-            (None, None) => {}
-            (Some(expected), Some(actual)) => {
-                assert_eq!(
-                    actual.instructions, expected.instructions,
-                    "{}",
-                    inputs.name
-                );
-                assert_eq!(actual.skill_ids, expected.skill_ids, "{}", inputs.name);
-                assert_eq!(actual.tool_names, expected.tool_names, "{}", inputs.name);
-                assert_eq!(actual.backend_id, expected.backend_id, "{}", inputs.name);
-                assert_eq!(actual.model, expected.model, "{}", inputs.name);
-                assert_eq!(
-                    actual
-                        .effort
-                        .map(|effort| serde_json::to_value(effort).expect("effort serializes")),
-                    expected.effort.clone().map(Value::String),
-                    "{}",
-                    inputs.name
-                );
-            }
-            (expected, actual) => panic!(
-                "{}: production materialization disagrees with Lean (expected session {}, got {})",
-                inputs.name,
-                expected.is_some(),
-                actual.is_some()
-            ),
-        }
-    }
-}
-
-fn network_mode(name: &str) -> CommandNetworkMode {
-    serde_json::from_value(Value::String(name.to_string()))
-        .unwrap_or_else(|error| panic!("network mode {name}: {error}"))
+            &case.candidate.node_did,
+        )
+        .map(|actual| materialization::SessionWire {
+            instructions: actual.instructions,
+            skill_ids: actual.skill_ids,
+            tool_names: actual.tool_names,
+            backend_id: actual.backend_id,
+            model: actual.model,
+            effort: actual.effort.map(|effort| {
+                serde_json::to_value(effort)
+                    .expect("effort serializes")
+                    .as_str()
+                    .expect("effort is a string")
+                    .to_string()
+            }),
+        })
+    });
 }
 
 #[test]
 fn generated_sibling_tools_cases_drive_production_tools_selection() {
-    let cases = lean_sibling_tools_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let requested = case.requested_network.as_deref().map(network_mode);
-        let existing = network_mode(&case.existing_network);
-        let admitted = admit_sibling_tools_target(&SiblingToolsTarget {
-            owner_matches: case.owner_matches,
-            shared_context: case.shared_context,
-            shared_tools: case.shared_tools,
-        })
-        .is_ok()
-            && validate_tool_network_selection(requested).is_ok();
-        assert_eq!(admitted, case.admitted, "{case:?}: production admission");
-        if !admitted {
-            continue;
-        }
-
-        let mut tools = gents_documents::Tools::default();
-        apply_tool_grant_selection(&mut tools, None, Some(existing));
-        apply_tool_grant_selection(&mut tools, None, requested);
-        let selected = tools
-            .host
-            .as_ref()
-            .and_then(|host| host.bash.as_ref())
-            .and_then(|bash| bash.network_mode)
-            .expect("existing network mode is materialized");
-        assert_eq!(selected, network_mode(&case.result_network), "{case:?}");
-        assert!(
-            selected.meet(existing) == selected,
-            "{case:?}: selection widened"
-        );
-    }
+    gents_lean_vocab::families::contracts_self_config_sibling_tools::replay::<CommandNetworkMode>(
+        |case| {
+            let admitted = admit_sibling_tools_target(&SiblingToolsTarget {
+                owner_matches: case.owner_matches,
+                shared_context: case.shared_context,
+                shared_tools: case.shared_tools,
+            })
+            .is_ok()
+                && validate_tool_network_selection(case.requested_network).is_ok();
+            let mut tools = gents_documents::Tools::default();
+            apply_tool_grant_selection(&mut tools, None, Some(case.existing_network));
+            apply_tool_grant_selection(&mut tools, None, case.requested_network);
+            let selected = tools
+                .host
+                .as_ref()
+                .and_then(|host| host.bash.as_ref())
+                .and_then(|bash| bash.network_mode)
+                .expect("existing network mode is materialized");
+            if admitted {
+                assert!(
+                    selected.meet(case.existing_network) == selected,
+                    "{case:?}: selection widened"
+                );
+            }
+            gents_lean_vocab::families::contracts_self_config_sibling_tools::SiblingToolsOutput {
+                admitted,
+                result_network: selected,
+            }
+        },
+    );
 }
 
 #[test]
 fn generated_self_config_selection_cases_drive_production_tools_selection() {
-    let cases = lean_self_config_selection_cases();
-    assert!(!cases.tool_flag_cases.is_empty());
-    for case in &cases.tool_flag_cases {
+    gents_lean_vocab::families::contracts_self_config_tool_flag::replay(|case| {
         let mut tools = gents_documents::Tools::default();
         apply_tool_grant_selection(&mut tools, Some(case.existing), None);
         apply_tool_grant_selection(&mut tools, case.requested, None);
-        assert_eq!(
-            tools
-                .integrations
-                .as_ref()
-                .and_then(|v| v.lsp.as_ref())
-                .is_some(),
-            case.selected,
-            "{case:?}: lsp"
-        );
         assert!(tools.self_config.is_none());
+        tools
+            .integrations
+            .as_ref()
+            .and_then(|v| v.lsp.as_ref())
+            .is_some()
+    });
+}
+
+fn job_guard_tools(integrations: Option<&Value>) -> Map<String, Value> {
+    let mut tools = Map::new();
+    tools.insert(
+        "self_config".into(),
+        serde_json::json!({"enable_self_config": true}),
+    );
+    if let Some(integrations) = integrations {
+        tools.insert("integrations".into(), integrations.clone());
     }
+    tools
 }
 
 /// Check the self-config grant slice for native-authorized model rows. The
 /// native authorization outcome is exercised by the signed database test.
 #[test]
 fn generated_self_config_job_guard_cases_drive_native_guard() {
-    let cases = lean_self_config_selection_cases();
-    assert!(!cases.job_guard_cases.is_empty());
-    let tools = |integrations: Option<&Value>| -> Map<String, Value> {
-        let mut tools = Map::new();
-        tools.insert(
-            "self_config".into(),
-            serde_json::json!({"enable_self_config": true}),
-        );
-        if let Some(integrations) = integrations {
-            tools.insert("integrations".into(), integrations.clone());
-        }
-        tools
-    };
-    for case in &cases.job_guard_cases {
-        if !case.native_authorized || !case.native_source_authorized {
-            continue;
-        }
+    gents_lean_vocab::families::contracts_self_config_job_guard::replay(|case| {
         let held = OperatorGrants::default();
-        let candidate = tools(Some(&case.candidate_integrations));
-        let accepted = match case.writer.as_str() {
+        let candidate = job_guard_tools(Some(
+            &serde_json::to_value(&case.candidate_integrations).expect("integrations encode"),
+        ));
+        match case.writer.as_str() {
             "model" if case.selected_before => {
-                let stored = tools(case.stored_integrations.as_ref());
-                guard_tools_keep_grants(&held, Some(&stored), &candidate).is_ok()
+                let stored = case
+                    .stored_integrations
+                    .as_ref()
+                    .map(|stored| serde_json::to_value(stored).expect("integrations encode"));
+                guard_tools_keep_grants(&held, Some(&job_guard_tools(stored.as_ref())), &candidate)
+                    .is_ok()
             }
             "model" => reselection_keeps_grants(&held, None, Some(&candidate)).is_ok(),
-            "operator" => {
-                assert!(
-                    case.accepted,
-                    "{}: operator writes bypass the guard",
-                    case.name
-                );
-                continue;
-            }
             other => panic!("{}: unknown writer {other:?}", case.name),
-        };
-        assert_eq!(accepted, case.accepted, "{}: {case:?}", case.name);
-    }
+        }
+    });
 }
 
 #[test]

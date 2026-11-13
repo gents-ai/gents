@@ -18,11 +18,12 @@ async fn retry_frontier_matches_lean_admission() {
     })
     .await
     .unwrap();
-    for (index, case) in gents_lean_vocab::lean_contract_snapshot()
-        .retry_frontier_cases
-        .iter()
-        .enumerate()
+    for (index, family_case) in
+        gents_lean_vocab::families::contracts_retry_frontier_admission::cases()
+            .iter()
+            .enumerate()
     {
+        let case = &family_case.input;
         let session_id = format!("retry-frontier-{index}");
         let parent_request_id = format!("retry-frontier-parent-{index}");
         let mut parent = signed_claimed_authored_request(
@@ -122,8 +123,9 @@ async fn retry_frontier_matches_lean_admission() {
                 .await
                 .unwrap_or_else(|error| panic!("{case:?}: {error:#}"));
         }
-        let actual = gents_session::session::retry_has_published_input(node, &request).await;
-        assert_eq!(actual.ok(), case.expected, "{case:?}");
+        let actual = gents_session::session::retry_has_published_input(node, &request)
+            .await
+            .ok();
         if case.name == "ready" {
             let retry = gents_session::request::lifecycle::RetryLink {
                 parent_request_id: Some(parent_request_id.clone()),
@@ -163,10 +165,11 @@ async fn retry_frontier_matches_lean_admission() {
                 gents_session::session::retry_has_published_input(node, &request)
                     .await
                     .ok(),
-                case.expected,
+                actual,
                 "retry chain must find the same authored input"
             );
         }
+        family_case.check(actual);
     }
     node.shutdown().await.expect("shut down test node");
 }

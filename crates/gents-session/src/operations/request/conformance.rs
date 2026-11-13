@@ -33,19 +33,10 @@ fn delivery_resolution_matches_lean() {
 
 #[tokio::test]
 async fn an_unknown_outcome_is_rechecked_under_its_own_identity() -> anyhow::Result<()> {
+    use gents_lean_vocab::families::storage_failure_contracts_unknown_outcome as family;
     use gents_protocol::operations::request::{MessageSendInput, RequestRef};
     use gents_store::identity::NodeIdentity;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().storage_failure_cases;
-    let unknown: Vec<_> = cases
-        .iter()
-        .filter(|case| case["outcome_unknown"] == true)
-        .collect();
-    assert!(!unknown.is_empty());
-    for case in unknown {
-        assert_eq!(case["same_request"], true);
-        assert_eq!(case["same_bytes"], true);
-        assert_eq!(case["stop_automatic_retry"], true);
-    }
+    let unknown = family::cases();
     let (db, user, access, agent) = gents_inference::test_support::signed_test_node(
         "unknown-send-outcome",
         crate::test_support::no_lifecycle_plugins(),
@@ -100,6 +91,18 @@ async fn an_unknown_outcome_is_rechecked_under_its_own_identity() -> anyhow::Res
         .render();
     let data = access.read(&query).await?;
     assert_eq!(rows(&data, "AgentRequest").len(), 1);
+    let same_request =
+        after.request_id == committed.request_id && after.retry_key == committed.retry_key;
+    let same_bytes = after.admission_signature == committed.admission_signature
+        && after.content == committed.content;
+    let stop_automatic_retry = request_rows.len() == 1 && rows(&data, "AgentRequest").len() == 1;
+    for case in &unknown {
+        case.check(family::RecheckOutput {
+            same_request,
+            same_bytes,
+            stop_automatic_retry,
+        });
+    }
     db.node.shutdown().await?;
     Ok(())
 }

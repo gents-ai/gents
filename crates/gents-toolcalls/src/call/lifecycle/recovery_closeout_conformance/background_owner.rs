@@ -11,6 +11,8 @@ use crate::call::lifecycle::admission_fixture::{completion_obligations, update_r
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_registered_background_owner_stop_cases_use_live_worker() {
+    let mut owned_blocked = None;
+    let mut owned_background = None;
     for session_stopped in [false, true] {
         let cases = gents_lean_vocab::lean_recovery_sweep_cases();
         let left = cases
@@ -122,10 +124,6 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
             },
         );
-        let modeled = gents_lean_vocab::lean_session_control_cases()
-            .iter()
-            .find(|case| case["name"] == "resume_waits_for_owned_background")
-            .expect("Lean session-control model includes owned-background settlement");
 
         let escaped_agent = gents_store::graphql::escape_graphql_string(&node_did);
         let selected_agent = gents_store::graphql::escape_graphql_string(&agent_did);
@@ -184,11 +182,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 }),
             )
             .await;
-            assert_eq!(
-                first_resume.is_err(),
-                modeled["blocked"],
-                "terminal parent request cannot make a registered live process quiescent"
-            );
+            owned_blocked = Some(first_resume.is_err());
             let stopped = tool
                 .access()
                 .unwrap()
@@ -254,9 +248,12 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 ))
                 .await
                 .unwrap();
-            assert_eq!(
-                resumed["data"]["AgentSession"][0]["stopped_at"].is_string(),
-                modeled["stopped_after_settlement"]
+            owned_background = Some(
+                gents_lean_vocab::families::session_control_contracts_resume_waits_for_live_worker::OwnedBackgroundOutput {
+                    blocked: owned_blocked.expect("the stopped session tried an early resume"),
+                    stopped_after_settlement: resumed["data"]["AgentSession"][0]["stopped_at"]
+                        .is_string(),
+                },
             );
         }
         let escaped = gents_store::graphql::escape_graphql_string(&tool_doc_id);
@@ -290,15 +287,20 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
         node.shutdown().await.expect("shut down test node");
     }
+    let observed = owned_background.expect("the stopped-session case resumed after settlement");
+    for case in
+        gents_lean_vocab::families::session_control_contracts_resume_waits_for_live_worker::cases()
+    {
+        case.check(gents_lean_vocab::families::session_control_contracts_resume_waits_for_live_worker::OwnedBackgroundOutput {
+            blocked: observed.blocked,
+            stopped_after_settlement: observed.stopped_after_settlement,
+        });
+    }
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() {
-    let modeled = gents_lean_vocab::lean_session_control_cases()
-        .iter()
-        .find(|case| case["name"] == "resume_waits_for_owned_background")
-        .expect("Lean session-control model includes owned-background settlement");
     let (admission, _request_owner) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "resume-live-terminal-tool".to_owned(),
         real_identity: true,
@@ -411,11 +413,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         }),
     )
     .await;
-    assert_eq!(
-        blocked.is_err(),
-        modeled["blocked"],
-        "terminal tool rows do not prove process quiescence"
-    );
+    let resume_blocked = blocked.is_err();
     assert!(
         format!("{blocked:#?}").contains("has not been observed exited"),
         "the retained physical process witness should block resume: {blocked:#?}"
@@ -503,10 +501,15 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         ))
         .await
         .unwrap();
-    assert_eq!(
-        resumed["data"]["AgentSession"][0]["stopped_at"].is_string(),
-        modeled["stopped_after_settlement"]
-    );
+    for case in
+        gents_lean_vocab::families::session_control_contracts_resume_waits_for_process_record::cases(
+        )
+    {
+        case.check(gents_lean_vocab::families::session_control_contracts_resume_waits_for_process_record::OwnedBackgroundOutput {
+            blocked: resume_blocked,
+            stopped_after_settlement: resumed["data"]["AgentSession"][0]["stopped_at"].is_string(),
+        });
+    }
     admission
         .node
         .shutdown()

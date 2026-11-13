@@ -94,9 +94,11 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
         .find(|case| case.name == "claimed_active_publishes_without_reclaim")
         .unwrap();
     let before = before_value(&located.before);
-    for case in &gents_lean_vocab::lean_contract_snapshot().goal_claimed_target_cases {
+    for case in
+        gents_lean_vocab::families::goal_claimed_publication_contracts_claimed_target::cases()
+    {
         let fixture = Fixture::new(&before).await;
-        let name = case.name.as_str();
+        let name = case.input.name.as_str();
         let duplicate = name == "duplicate-after-revocation";
         let forged = matches!(
             name,
@@ -119,7 +121,7 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
             .unwrap()
             .request_id;
         let filter = format!(
-            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+            "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID session_doc_id agent_doc_id}} }}",
             escape_graphql_string(&request_id)
         );
         if duplicate {
@@ -171,7 +173,6 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
                 result.is_err(),
                 "{name} must not recover a foreign signed target"
             );
-            assert!(!case.committed);
             txn.discard().await.unwrap();
         } else {
             let receipt = result.unwrap().expect("matching claimed publication");
@@ -203,20 +204,48 @@ async fn generated_claimed_targets_bind_signed_receipt_and_user_visibility() {
                 owners[0].owner.as_ref().map(identity::Did::as_str),
                 Some(fixture.agent.did())
             );
-            if case.commit {
+            if case.input.commit {
                 txn.commit().await.unwrap();
             } else {
                 txn.discard().await.unwrap();
             }
-            let user = fixture.user_access().execute(&filter).await.unwrap();
-            let visible = !user["data"]["AgentRequest"].as_array().unwrap().is_empty();
-            assert_eq!(
-                visible, case.grants,
-                "{name}: User visibility follows modeled grants"
-            );
         }
+        let bound = |rows: serde_json::Value| {
+            rows["data"]["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| {
+                    row["session_doc_id"] == fixture.session_doc_id.as_str()
+                        && row["agent_doc_id"] == fixture.agent_doc_id.as_str()
+                })
+        };
+        let owned = fixture.agent_access().execute(&filter).await.unwrap();
+        let user = fixture.user_access().execute(&filter).await.unwrap();
+        case.check(
+            gents_lean_vocab::families::goal_claimed_publication_contracts_claimed_target::TargetOutput {
+                committed: bound(owned),
+                grants: bound(user),
+            },
+        );
         fixture.node.shutdown().await.expect("node shutdown");
     }
+}
+
+#[test]
+fn generated_claimed_identity_candidates_follow_the_session_agent() {
+    gents_lean_vocab::families::goal_claimed_publication_contracts_identity_candidate::replay(
+        |case| {
+            let resolve = |name: &str| format!("did:key:z-{name}");
+            gents_lean_vocab::families::goal_claimed_publication_contracts_identity_candidate::CandidateOutput {
+                candidate_allowed: crate::triggers::engine::goal_source::goal_candidate_in_scope(
+                    &resolve(&case.actor),
+                    &resolve(&case.selected),
+                    &resolve(&case.parent),
+                ),
+            }
+        },
+    );
 }
 
 #[tokio::test]
@@ -227,7 +256,9 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
         .find(|case| case.name == "claimed_active_publishes_without_reclaim")
         .unwrap();
     let before = before_value(&located.before);
-    for case in &gents_lean_vocab::lean_contract_snapshot().goal_claimed_identity_cases {
+    for case in
+        gents_lean_vocab::families::goal_claimed_publication_contracts_identity_staged::cases()
+    {
         let fixture = Fixture::new(&before).await;
         let agent = fixture.parent.agent_did.as_str();
         let node = fixture.identity.did();
@@ -236,8 +267,8 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
             "node" => node,
             _ => panic!("unknown modeled identity"),
         };
-        assert_eq!(resolve(&case.selected), agent);
-        let signer: &dyn NodeIdentity = if case.signer == "agent" {
+        assert_eq!(resolve(&case.input.selected), agent);
+        let signer: &dyn NodeIdentity = if case.input.signer == "agent" {
             fixture.agent.as_ref()
         } else {
             fixture.identity.as_ref()
@@ -257,8 +288,8 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
         .await
         .unwrap()
         .unwrap();
-        let actor = identity::Did::new(resolve(&case.actor)).unwrap();
-        let txn = if case.actor == "agent" {
+        let actor = identity::Did::new(resolve(&case.input.actor)).unwrap();
+        let txn = if case.input.actor == "agent" {
             ConfigApplyTxn::begin_local_with_signer(
                 &fixture.node,
                 actor,
@@ -271,19 +302,7 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
                 .await
                 .unwrap()
         };
-        assert_eq!(
-            crate::triggers::engine::goal_source::goal_candidate_in_scope(
-                resolve(&case.actor),
-                resolve(&case.selected),
-                resolve(&case.parent)
-            ),
-            case.candidate_allowed
-        );
-        if resolve(&case.parent) != fixture.parent.agent_did {
-            txn.discard().await.unwrap();
-            fixture.node.shutdown().await.expect("node shutdown");
-            continue;
-        }
+        assert_eq!(resolve(&case.input.parent), fixture.parent.agent_did);
         let result = stage_claimed_continuation(
             &txn,
             signer,
@@ -294,13 +313,10 @@ async fn generated_claimed_identity_cases_drive_real_transactions() {
             &std::sync::Mutex::new(None),
         )
         .await;
-        assert_eq!(
-            result.is_ok(),
-            case.allowed,
-            "modeled identity case: signer={} actor={} parent={}",
-            case.signer,
-            case.actor,
-            case.parent
+        case.check(
+            gents_lean_vocab::families::goal_claimed_publication_contracts_identity_staged::StagedOutput {
+                allowed: result.is_ok(),
+            },
         );
         txn.discard().await.unwrap();
         fixture.node.shutdown().await.expect("node shutdown");
@@ -802,11 +818,7 @@ async fn run_generated_wait_observations() {
             }
             turn += 1;
         }
-        let unstarted_wait = case
-            .observation
-            .waits
-            .iter()
-            .any(|wait| !wait.replied);
+        let unstarted_wait = case.observation.waits.iter().any(|wait| !wait.replied);
         let (outcome, failure) = if unstarted_wait {
             (
                 RequestTerminalOutcome::Failed,
@@ -1038,11 +1050,10 @@ async fn run_historical_publication_cases() {
         let mut observed = fixture.current_goal().await;
         observed.status = case.request.expected_status.clone();
         observed.continuation_sequence = i64::try_from(case.request.expected_sequence).ok();
-        observed.last_continued_from_request_id =
-            match case.request.expected_last_continued_from {
-                10 => Some(PARENT.into()),
-                value => panic!("unmapped observed watermark {value:?}"),
-            };
+        observed.last_continued_from_request_id = match case.request.expected_last_continued_from {
+            10 => Some(PARENT.into()),
+            value => panic!("unmapped observed watermark {value:?}"),
+        };
         let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
         let txn = ConfigApplyTxn::begin_local_with_signer(
             &fixture.node,

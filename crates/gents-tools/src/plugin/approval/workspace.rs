@@ -634,49 +634,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_workspace_permission_writes_preserve_selected_policy_versions() -> Result<()> {
-        fn wire_mode(value: &str) -> Mode {
-            serde_json::from_value(serde_json::Value::String(value.to_owned())).unwrap()
-        }
-        fn case_preference(mode: &str, revision: u64, review_task: Option<u64>) -> Preference<u64> {
-            Preference {
-                revision,
-                mode: wire_mode(mode),
-                review_task,
+    fn persisted_workspace_mode_selection_follows_the_lean_model() -> Result<()> {
+        use gents_lean_vocab::families::workspace_permissions_persisted_selection::{
+            Preference as Wire, SelectionInput, WriteResult,
+        };
+        fn mode(value: &str) -> Mode {
+            match value {
+                "ask" => Mode::Ask,
+                "autoReview" => Mode::AutoReview,
+                "fullAccess" => Mode::FullAccess,
+                other => panic!("unknown mode {other}"),
             }
+        }
+        fn mode_name(value: Mode) -> String {
+            match value {
+                Mode::Ask => "ask",
+                Mode::AutoReview => "autoReview",
+                Mode::FullAccess => "fullAccess",
+            }
+            .into()
         }
         fn selection(id: u64) -> ReviewTaskSelection {
             let mut task = default_review_task("node", "agent");
             task.prompt_template = format!("Review policy {id}.");
             ReviewTaskSelection::for_task(&task)
         }
-        fn preference(value: Preference<u64>) -> Preference<ReviewTaskSelection> {
-            Preference {
-                mode: value.mode,
-                revision: value.revision,
-                review_task: value.review_task.map(selection),
-            }
-        }
         let directory = tempfile::tempdir()?;
         let home = directory.path().join("home");
         std::fs::create_dir(&home)?;
         let key = WorkspaceKey::canonical("node", "requester", "agent", directory.path())?;
-        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_permission_write_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let previous = case.previous.as_ref().map(|value| {
-                preference(case_preference(
-                    &value.mode,
-                    value.revision,
-                    value.review_task,
-                ))
-            });
-            let next = case.next.as_ref().map(|value| {
-                preference(case_preference(
-                    &value.mode,
-                    value.revision,
-                    value.review_task,
-                ))
+        let cases = gents_lean_vocab::families::workspace_permissions_persisted_selection::cases::<
+            String,
+        >();
+        for case in &cases {
+            let input: &SelectionInput<String> = &case.input;
+            let previous = input.previous.as_ref().map(|value| Preference {
+                mode: mode(&value.mode),
+                revision: value.revision,
+                review_task: value.review_task.map(selection),
             });
             let stored = Stored {
                 entries: previous
@@ -691,18 +686,33 @@ mod tests {
                     .collect(),
             };
             save(&home, &stored)?;
-            let task = case.requested_task.map(selection);
-            let result = save_mode(
+            let task = input.requested_task.map(selection);
+            let accepted = save_mode(
                 &home,
                 &key,
-                case.expected,
-                wire_mode(&case.mode),
+                input.expected,
+                mode(&input.mode),
                 task.as_ref(),
-            );
-            assert_eq!(result.is_ok(), case.accepted, "{case:?}");
+            )
+            .is_ok();
             let observed = resolve(&home, &key, None)?.map(|settings| settings.selection);
-            assert_eq!(observed, next, "{case:?}");
-            assert_eq!(observed != previous, case.changed, "{case:?}");
+            let task_id = |stored: &ReviewTaskSelection| {
+                input
+                    .requested_task
+                    .into_iter()
+                    .chain(input.previous.as_ref().and_then(|value| value.review_task))
+                    .find(|id| &selection(*id) == stored)
+                    .unwrap_or_else(|| panic!("{input:?}: an unknown review task was stored"))
+            };
+            case.check(WriteResult {
+                accepted,
+                changed: observed != previous,
+                next: observed.as_ref().map(|value| Wire {
+                    revision: value.revision,
+                    mode: mode_name(value.mode),
+                    review_task: value.review_task.as_ref().map(task_id),
+                }),
+            });
         }
         Ok(())
     }

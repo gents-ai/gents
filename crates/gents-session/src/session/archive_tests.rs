@@ -1,39 +1,35 @@
 use super::*;
-use crate::session::model_test_support::{model_session, model_time};
+use crate::session::model_test_support::{model_session, model_time, wire_session};
 use gents_protocol::session::SessionArchiveVisibility;
 
 #[test]
 fn authorized_archive_transitions_match_executed_model() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_archive_cases;
-    assert!(!cases.is_empty());
-    let mut checked = 0;
-    let mut checked_restored_generation = false;
-    for case in cases.iter().filter(|case| case["authorized"] == true) {
-        let before = model_session(&case["before"]);
-        let expected = model_session(&case["after"]);
-        let now = model_time(&case["now"]);
-        assert_eq!(case["limit"].as_u64(), Some(ARCHIVE_REVISION_LIMIT));
+    use gents_lean_vocab::family::recode;
+    gents_lean_vocab::families::contracts_archive_transition::replay::<String>(|i| {
+        assert_eq!(i.limit, ARCHIVE_REVISION_LIMIT);
+        let before = model_session(&serde_json::to_value(&i.before).unwrap());
+        let now = model_time(&serde_json::json!(i.now));
         let (decision, actual) = apply_transition(
             before,
-            case["expected_revision"].as_u64().unwrap(),
-            case["archived"].as_bool().unwrap(),
+            i.expected_revision,
+            i.archived,
             now.as_str().unwrap(),
         );
-        assert_eq!(serde_json::to_value(decision).unwrap(), case["decision"]);
-        assert_eq!(actual, expected);
-        for (visibility, key) in [
-            (SessionArchiveVisibility::Active, "active_visible"),
-            (SessionArchiveVisibility::Archived, "archived_visible"),
-            (SessionArchiveVisibility::All, "all_visible"),
-        ] {
-            assert_eq!(visibility.includes(actual.archived_at.is_some()), case[key]);
+        let visible = |visibility: SessionArchiveVisibility| {
+            visibility.includes(actual.archived_at.is_some())
+        };
+        gents_lean_vocab::families::contracts_archive_transition::ArchiveOutput {
+            decision: serde_json::to_value(decision)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            after: recode(&wire_session(&actual)),
+            active_visible: visible(SessionArchiveVisibility::Active),
+            archived_visible: visible(SessionArchiveVisibility::Archived),
+            all_visible: visible(SessionArchiveVisibility::All),
         }
-        checked_restored_generation |= case["before"]["archive_revision"] == 2
-            && case["expected_revision"] == 0
-            && case["archived"] == true;
-        checked += 1;
-    }
-    assert!(checked > 0 && checked_restored_generation);
+    });
 }
 
 async fn key(home: &std::path::Path, name: &str) -> gents_store::identity::KeyIdentity {

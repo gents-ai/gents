@@ -586,34 +586,38 @@ mod tests {
         published_admission_with_owner, PublishedAdmission, PublishedAdmissionOptions,
     };
 
-    fn payload(segment: &serde_json::Value) -> String {
-        let bytes = segment["flush"]["payload"]
-            .as_array()
+    fn payload(
+        segment: &gents_lean_vocab::families::plugin_effects_admissions::SegmentWire,
+    ) -> String {
+        let bytes = segment
+            .flush
+            .as_ref()
             .unwrap()
+            .payload
             .iter()
-            .map(|byte| u8::try_from(byte.as_u64().unwrap()).unwrap())
+            .map(|byte| u8::try_from(*byte).unwrap())
             .collect();
         String::from_utf8(bytes).unwrap()
     }
 
     #[test]
     fn spawned_dispatchers_conform_to_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases
-            ["spawned_dispatcher"];
-        for case in cases.as_array().unwrap() {
-            assert_eq!(
-                spawned_may_compose(case["spawner"] == "plugin_child"),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+        gents_lean_vocab::families::plugin_resources_spawned_dispatchers::replay(|i| {
+            gents_lean_vocab::families::plugin_resources_spawned_dispatchers::SpawnedOutput {
+                spawned_dispatcher: spawned_may_compose(match i.spawner.as_str() {
+                    "plugin_child" => true,
+                    "accepted" => false,
+                    spawner => panic!("unknown spawner {spawner}"),
+                }),
+            }
+        });
     }
 
     #[tokio::test]
     async fn generated_plugin_effect_admission_matches_execution_owner() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_effect_cases;
-        for case in cases.as_array().expect("generated plugin effect scenarios") {
-            let name = case["name"].as_str().unwrap();
+        for case in gents_lean_vocab::families::plugin_effects_admissions::cases() {
+            let input = &case.input;
+            let name = input.name.as_str();
             let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
                 name: format!("effect-{name}"),
                 ..Default::default()
@@ -626,73 +630,72 @@ mod tests {
                 tool: mut parent,
                 ..
             } = fixture;
-            let ordinal = u32::try_from(case["ordinal"].as_u64().unwrap()).unwrap();
-            let tool = case["arguments"]["flush"]["runs"][0]["declaration"]["tool"]["name"]
-                .as_str()
-                .unwrap();
-            let previous = if case["prior"].is_null() {
-                None
-            } else {
-                Some(
+            let ordinal = u32::try_from(input.ordinal).unwrap();
+            let flush = input.arguments.flush.as_ref().unwrap();
+            let tool = flush.runs[0]
+                .declaration
+                .as_ref()
+                .unwrap()
+                .tool
+                .as_ref()
+                .unwrap()
+                .name
+                .clone();
+            let previous = match &input.prior {
+                None => None,
+                Some(prior) => Some(
                     parent
-                        .admit_plugin_effect(ordinal, tool, &payload(&case["prior"]))
+                        .admit_plugin_effect(ordinal, &tool, &payload(prior))
                         .await
                         .unwrap(),
-                )
+                ),
             };
-            if !case["parent"]["present"].as_bool().unwrap() {
+            if !input.parent.present {
                 parent.doc_id = Some("missing-physical-parent".into());
             } else {
-                if case["parent"]["request"].as_u64() != Some(10) {
+                if input.parent.request != Some(10) {
                     parent.request_doc_id = Some("foreign-physical-request".into());
                 }
-                if case["parent"]["session"].as_u64() != Some(1) {
+                if input.parent.session != Some(1) {
                     parent.session_id = "foreign-session".into();
                 }
-                if case["parent"]["provenance"].as_str() == Some("plugin_effect") {
+                if input.parent.provenance.as_deref() == Some("plugin_effect") {
                     parent.plugin_effect = Some(PluginEffectBinding {
                         parent_tool_call_doc_id: "ancestor".into(),
                         ordinal: 1,
                     });
                 }
-                if case["parent"]["await_mode"].as_str() == Some("background") {
+                if input.parent.await_mode.as_deref() == Some("background") {
                     parent.background().await.unwrap();
                 }
-                if case["parent"]["state"]
-                    .as_str()
-                    .unwrap()
-                    .contains("completed")
+                if input
+                    .parent
+                    .state
+                    .as_deref()
+                    .is_some_and(|state| state.contains("completed"))
                 {
                     parent.complete("finished").await.unwrap();
                 }
-                let extra = case["child"]["deadline"].as_i64().unwrap()
-                    - case["parent"]["deadline"].as_i64().unwrap();
+                let extra = i64::try_from(input.child.deadline).unwrap()
+                    - i64::try_from(input.parent.deadline.unwrap()).unwrap();
                 parent.deadline_at += chrono::Duration::seconds(extra);
             }
-            if case["generation"].as_u64() != Some(7) {
+            if input.generation != 7 {
                 parent.execution_generation = Some("stale-generation".into());
             }
             let result = parent
                 .admit_plugin_effect_with_mode(
                     ordinal,
-                    tool,
-                    &payload(&case["arguments"]),
-                    gents_protocol::tool_call::AwaitMode::from_persisted(
-                        case["child"]["await_mode"].as_str().unwrap_or("foreground"),
-                    )
-                    .unwrap(),
+                    &tool,
+                    &payload(&input.arguments),
+                    gents_protocol::tool_call::AwaitMode::from_persisted(&input.child.await_mode)
+                        .unwrap(),
                 )
                 .await;
-            assert_eq!(
-                result.is_ok(),
-                case["expected"].as_bool().unwrap(),
-                "{name}: {:?}",
-                result.as_ref().err()
-            );
-            if let Ok(child) = result {
+            if let Ok(child) = &result {
                 assert_eq!(child.state(), ToolCallState::Pending, "{name}");
                 assert!(child.arguments.is_some(), "{name}");
-                if let Some(previous) = previous {
+                if let Some(previous) = &previous {
                     assert_eq!(
                         child.doc_id(),
                         previous.doc_id(),
@@ -703,13 +706,15 @@ mod tests {
             drop(owner);
             node.shutdown().await.expect("shut down test node");
             let _ = std::fs::remove_dir_all(path);
+            case.check(result.is_ok());
         }
     }
     #[tokio::test]
     async fn asynchronous_receipts_conform_to_the_execution_owner() {
-        let cases =
-            &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_effect_receipt_cases;
-        for (index, case) in cases.as_array().unwrap().iter().enumerate() {
+        for (index, case) in gents_lean_vocab::families::plugin_effects_receipts::cases()
+            .into_iter()
+            .enumerate()
+        {
             let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
                 name: format!("effect-receipt-{index}"),
                 ..Default::default()
@@ -733,10 +738,10 @@ mod tests {
                 .unwrap();
             child.start_running().await.unwrap();
             let binding = child.background_receipt_binding().unwrap();
-            if case["terminal"] == true {
+            if case.input.terminal {
                 child.complete("done").await.unwrap();
             }
-            if case["replay"] == true {
+            if case.input.replay {
                 child
                     .access()
                     .unwrap()
@@ -753,11 +758,7 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let text = if case["changed"] == true {
-                "null"
-            } else {
-                "{}"
-            };
+            let text = if case.input.changed { "null" } else { "{}" };
             let result = child
                 .access()
                 .unwrap()
@@ -770,14 +771,10 @@ mod tests {
                     },
                 )
                 .await;
-            assert_eq!(
-                result.is_ok(),
-                case["expected"].as_bool().unwrap(),
-                "{case}: {result:?}"
-            );
             drop(owner);
             node.shutdown().await.unwrap();
             let _ = std::fs::remove_dir_all(path);
+            case.check(result.is_ok());
         }
     }
 }

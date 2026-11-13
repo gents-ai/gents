@@ -804,3 +804,62 @@ mod calibrated_components_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod capture_order_tests {
+    use super::*;
+
+    #[test]
+    fn capture_order_follows_the_lean_model() {
+        gents_lean_vocab::families::contracts_capture_order::replay(|pair| {
+            let left = CaptureOrderKey {
+                scope: pair.left_label.parse::<CaptureScope>().expect("left label"),
+                turn_index: i64::try_from(pair.left_turn).unwrap(),
+                attempt: i64::try_from(pair.left_attempt).unwrap(),
+            };
+            let right = CaptureOrderKey {
+                scope: pair
+                    .right_label
+                    .parse::<CaptureScope>()
+                    .expect("right label"),
+                turn_index: i64::try_from(pair.right_turn).unwrap(),
+                attempt: i64::try_from(pair.right_attempt).unwrap(),
+            };
+            let before = left < right;
+            assert_eq!(left.padded() < right.padded(), before);
+            before
+        });
+    }
+}
+
+#[cfg(test)]
+mod capture_scope_tests {
+    use super::*;
+
+    #[test]
+    fn capture_scope_labels_parse_as_modeled() {
+        use gents_lean_vocab::families::capture_scope_parse as wire;
+
+        gents_lean_vocab::families::capture_scope_parse::replay(
+            |input: &wire::LabelInput| match input.label.parse::<CaptureScope>() {
+                Ok(scope) => {
+                    assert_eq!(
+                        scope.to_string(),
+                        input.label,
+                        "label round trip must be exact"
+                    );
+                    wire::ScopeObservation {
+                        valid: true,
+                        kind: scope.kind.as_str().to_owned(),
+                        seq: scope.seq,
+                    }
+                }
+                Err(_) => wire::ScopeObservation {
+                    valid: false,
+                    kind: String::new(),
+                    seq: 0,
+                },
+            },
+        );
+    }
+}

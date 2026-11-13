@@ -26,6 +26,7 @@ impl Module {
                 "nat" => "u64".into(),
                 "int" => "i64".into(),
                 "string" => "String".into(),
+                "json" => "crate::family::Json".into(),
                 other => panic!("unknown family scalar {other}"),
             };
         }

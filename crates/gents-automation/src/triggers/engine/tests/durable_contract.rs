@@ -103,15 +103,15 @@ fn request_mutation_as(receipt: &TriggerFire, agent_did: &str) -> String {
 
 #[test]
 fn durable_delivery_predicates_match_executable_lean_owners() {
-    let cases = contract();
-    for case in cases["trigger_delivery_identity_cases"].as_array().unwrap() {
-        let id: FireIdentity = decode(&case["identity"]);
-        let key = durable::fire_key(&id);
-        assert_eq!(key, case["key"].as_str().unwrap());
-        assert_eq!(id.request_id(), case["request_id"]);
-        assert_eq!(id.session_id(), case["session_id"]);
-        assert_eq!(id.outcome_id(), case["outcome_id"]);
-    }
+    gents_lean_vocab::families::trigger_delivery_fire_identity::replay(|input| {
+        let id: FireIdentity = gents_lean_vocab::family::recode(&input.identity);
+        gents_lean_vocab::families::trigger_delivery_fire_identity::FireIdentityKeys {
+            key: durable::fire_key(&id),
+            request_id: id.request_id(),
+            session_id: id.session_id(),
+            outcome_id: id.outcome_id(),
+        }
+    });
     gents_lean_vocab::families::trigger_delivery_session_resolution::replay(|i| {
         durable::resolve_session_id(
             &FireIdentity {
@@ -125,8 +125,8 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             i.create_missing,
         )
     });
-    for case in cases["trigger_delivery_outcome_cases"].as_array().unwrap() {
-        let state: State = decode(&case["pre"]);
+    gents_lean_vocab::families::trigger_delivery_outcome_reasons::replay(|input| {
+        let state: State = gents_lean_vocab::family::recode(&input.pre);
         let request = &state.requests[0];
         let mut fire = receipt(&request.fire, 0);
         fire.goal_assignment_applied = request.goal_assignment_applied;
@@ -137,20 +137,12 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             request.assignment_replaced,
             binding.as_ref(),
         );
-        assert_eq!(
+        gents_lean_vocab::families::trigger_delivery_outcome_reasons::OutcomeReasonOutput {
+            due: reason.is_some(),
             reason,
-            decode::<Option<String>>(&case["reason"]),
-            "{}",
-            case["name"]
-        );
-        assert_eq!(
-            reason.is_some(),
-            case["due"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
-    gents_lean_vocab::families::trigger_delivery_retained_outcome_classification::replay::<String>(
+        }
+    });
+    gents_lean_vocab::families::trigger_delivery_retained_outcome_classification::replay(
         |input| {
             let request: Request = gents_lean_vocab::family::recode(&input.request);
             let mut fire = receipt(&request.fire, 0);
@@ -177,23 +169,20 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             }
         },
     );
-    for case in cases["trigger_delivery_queue_cases"].as_array().unwrap() {
-        let identity: FireIdentity = decode(&case["identity"]);
+    gents_lean_vocab::families::trigger_delivery_queue_claims::replay(|input| {
+        let identity: FireIdentity = gents_lean_vocab::family::recode(&input.identity);
         let rows: Vec<gents_session::request::lifecycle::arrival_order::ClaimObservation> =
-            decode(&case["observations"]);
+            gents_lean_vocab::family::recode(&input.observations);
         let candidate = rows
             .iter()
             .find(|row| row.document == identity.fire_key())
             .unwrap();
-        assert_eq!(
-            gents_session::request::lifecycle::arrival_order::observed_claim_allowed(
-                candidate, &rows
+        gents_lean_vocab::families::trigger_delivery_queue_claims::QueueClaimOutput {
+            can_claim: gents_session::request::lifecycle::arrival_order::observed_claim_allowed(
+                candidate, &rows,
             ),
-            case["can_claim"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
+        }
+    });
 }
 
 #[tokio::test]
@@ -345,20 +334,27 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
 }
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
-    for case in contract()["trigger_delivery_admission_cases"]
-        .as_array()
-        .unwrap()
-    {
+    for case in gents_lean_vocab::families::trigger_delivery_fire_admission::cases() {
         let node_db = gents_inference::test_support::test_db(
             "generated-fire-transactions-are-atomic-a",
             crate::lifecycle_hooks::composition(),
         )
         .await;
         let node = node_db.node.clone();
-        let pre: State = decode(&case["pre"]);
+        let pre: State = gents_lean_vocab::family::recode(&case.input.pre);
         for (index, request) in pre.requests.iter().enumerate() {
             let fire = receipt(&request.fire, index);
-            let mutation = request_mutation(&fire);
+            let lifecycle = if request.terminal {
+                "completed"
+            } else if request.running {
+                "claimed"
+            } else {
+                "pending"
+            };
+            let mutation = request_mutation(&fire).replace(
+                "lifecycle_state: \"pending\"",
+                &format!("lifecycle_state: \"{lifecycle}\""),
+            );
             gents_store::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
@@ -368,10 +364,10 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
             .await
             .unwrap();
         }
-        let f: Fire = decode(&case["fire"]);
+        let f: Fire = gents_lean_vocab::family::recode(&case.input.fire);
         let fire = receipt(&f, pre.requests.len());
         let mutation = request_mutation(&fire);
-        let commit = case["commit"].as_bool().unwrap();
+        let commit = case.input.commit;
         let result = gents_store::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
@@ -385,33 +381,299 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
             },
         )
         .await;
-        if case["source_allowed"].as_bool().unwrap() {
-            assert_eq!(result.is_ok(), commit, "{}", case["name"]);
-        } else {
-            assert!(result.is_err(), "outcome chaining must reject admission");
-        }
-        let response = gents_store::graphql::graphql_with_transaction_retry(
-            &node,
-            "{ TriggerFire { fire_key } AgentRequest { request_id } }",
-            "test.fire_receipts",
+        let post = observed_delivery_state(
+            &gents_store::config_client::ConfigAccess::local(node.clone()),
+            FireIdentity::clone,
+        )
+        .await;
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_fire_admission::AdmissionOutput {
+                source_allowed: gents_documents::event_trigger::outcome_source_allowed(
+                    &fire.identity.source_collection,
+                    fire.emit_outcome,
+                ),
+                committed: result.is_ok(),
+                post: gents_lean_vocab::family::recode(&post),
+            },
+        );
+    }
+}
+
+/// The trigger-delivery state production holds: receipts in admission order,
+/// the admitted request of each receipt, published outcomes in receipt order and
+/// Goal bindings whose assignment is an admitted fire. `modeled` maps a stored
+/// identity back to the modeled one.
+async fn observed_delivery_state<F>(
+    access: &gents_store::config_client::ConfigAccess,
+    modeled: F,
+) -> serde_json::Value
+where
+    F: Fn(&FireIdentity) -> FireIdentity,
+{
+    let response = access
+        .execute(&format!(
+            "{{ TriggerFire {{ {} }} AgentRequest {{ _docID request_id lifecycle_state }} FireOutcome {{ handoff_id }} Goal {{ node_did session_id assignment_root_request_doc_id status }} }}",
+            durable::FIRE_FIELDS
+        ))
+        .await
+        .unwrap();
+    let data = &response["data"];
+    let mut fires: Vec<TriggerFire> = decode(&data["TriggerFire"]);
+    fires.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+    let requests: Vec<gents_protocol::row::AgentRequestRow> = decode(&data["AgentRequest"]);
+    let published: Vec<String> = data["FireOutcome"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["handoff_id"].as_str().unwrap().to_owned())
+        .collect();
+    let bindings: Vec<durable::GoalOutcomeBinding> = data["Goal"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|goal| {
+            let root = goal["assignment_root_request_doc_id"].as_str()?;
+            let assignment = requests
+                .iter()
+                .find(|row| row.doc_id.as_deref() == Some(root))?;
+            Some(durable::GoalOutcomeBinding {
+                owner_did: goal["node_did"].as_str().unwrap().to_owned(),
+                session_id: goal["session_id"].as_str().unwrap().to_owned(),
+                assignment_request_id: assignment.request_id.clone(),
+                status: goal["status"].as_str().unwrap().to_owned(),
+            })
+        })
+        .collect();
+    let identity = |fire: &TriggerFire| serde_json::to_value(modeled(&fire.identity)).unwrap();
+    let binding = |fire: &TriggerFire| {
+        bindings
+            .iter()
+            .find(|goal| {
+                goal.owner_did == fire.identity.owner_did && goal.session_id == fire.session_id
+            })
+            .cloned()
+    };
+    serde_json::json!({
+        "receipts": fires.iter().map(identity).collect::<Vec<_>>(),
+        "requests": fires.iter().filter_map(|fire| {
+            let state = requests.iter().find(|row| row.request_id == fire.request_id)?.lifecycle_state;
+            Some(serde_json::json!({
+                "fire": {
+                    "identity": identity(fire), "session": fire.session_id,
+                    "serial": fire.queued_serial, "emit_outcome": fire.emit_outcome,
+                    "goal_backed": fire.goal_id.is_some(),
+                },
+                "running": state.is_some_and(|state| matches!(
+                    state,
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Claimed
+                        | gents_protocol::request_lifecycle::RequestLifecycleState::Processing
+                )),
+                "terminal": state.is_some_and(|state| state.is_terminal()),
+                "assignment_replaced": durable::assignment_replaced(fire, binding(fire).as_ref()),
+                "goal_assignment_applied": fire.goal_assignment_applied,
+            }))
+        }).collect::<Vec<_>>(),
+        "outcomes": fires.iter()
+            .filter(|fire| published.contains(&fire.identity.outcome_id()))
+            .map(identity)
+            .collect::<Vec<_>>(),
+        "goals": bindings.iter().filter_map(|goal| {
+            let fire = fires.iter().find(|fire| fire.request_id == goal.assignment_request_id)?;
+            let assignment = modeled(&fire.identity);
+            Some(serde_json::json!({
+                "owner": if goal.owner_did == fire.identity.owner_did {
+                    assignment.owner_did.clone()
+                } else {
+                    goal.owner_did.clone()
+                },
+                "session": goal.session_id, "assignment": assignment, "status": goal.status,
+            }))
+        }).collect::<Vec<_>>(),
+    })
+}
+
+#[tokio::test]
+async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
+    for case in gents_lean_vocab::families::trigger_delivery_outcome_recovery::cases() {
+        let pre: State = gents_lean_vocab::family::recode(&case.input.pre);
+        let request = &pre.requests[0];
+        let identity = request.fire.identity.clone();
+        let session = request.fire.session.clone();
+        let fire = TriggerFire {
+            fire_key: identity.fire_key(),
+            identity: identity.clone(),
+            task_id: "recovery-task".into(),
+            request_id: identity.request_id(),
+            session_id: session.clone(),
+            goal_id: request.fire.goal_backed.then(|| "recovery-goal".into()),
+            goal_objective: request
+                .fire
+                .goal_backed
+                .then(|| "finish assignment".into()),
+            goal_token_budget: None,
+            goal_assignment_applied: request.goal_assignment_applied,
+            emit_outcome: request.fire.emit_outcome,
+            queued_serial: request.fire.serial,
+            source_handoff_id: Some("source-assignment".into()),
+            reply_session_id: None,
+            shard_id: None,
+            attempt: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let (root, key) = (
+            gents_store::identity::NodeIdentity::did(
+                &crate::triggers::callback::test_root_identity(),
+            )
+            .to_owned(),
+            directory.path().join("node.key"),
+        );
+        tokio::task::spawn_blocking(move || {
+            gents_store::test_support::write_held_identity_key(&root, &key)
+        })
+        .await
+        .unwrap();
+        let mut db = gents_inference::test_support::test_db_at(
+            directory.path(),
+            None,
+            crate::lifecycle_hooks::composition(),
         )
         .await
         .unwrap();
-        let post: State = decode(&case["post"]);
-        let data = response.data.unwrap();
-        assert_eq!(
-            data["TriggerFire"].as_array().unwrap().len(),
-            post.receipts.len(),
-            "{}",
-            case["name"]
+        let node = db.node.clone();
+        crate::triggers::callback::seed_test_agent(&node, db.node_identity.did()).await;
+        let agent = crate::triggers::callback::test_agent_identity();
+        let terminal = request.terminal;
+        let state = if terminal { "completed" } else { "pending" };
+        let agent_did = crate::triggers::callback::test_agent_did();
+        let create_request = |request_id: &str, created_at: &str| {
+            format!(
+                r#"mutation {{create_AgentRequest(input: {{
+                request_id: "{}", node_did: "{}", session_id: "{}", agent_did: "{}",
+                purpose: "normal", lifecycle_state: "{state}", created_at: "{}"
+            }}) {{_docID}} }}"#,
+                escape_graphql_string(request_id),
+                escape_graphql_string(&fire.identity.owner_did),
+                escape_graphql_string(&session),
+                escape_graphql_string(&agent_did),
+                escape_graphql_string(created_at),
+            )
+        };
+        let request_mutation = create_request(&fire.request_id, "2026-01-01T00:00:00Z");
+        let replacement_mutation = create_request("recovery-replacement", "2026-01-01T00:00:01Z");
+        let goal_status = pre.goals.first().map(|goal| goal.status.clone());
+        let replaced = request.assignment_replaced;
+        let published = !pre.outcomes.is_empty();
+        let access = crate::triggers::callback::test_agent_access(&node);
+        access
+            .transact_write("test.seed_terminal_outcome_boundary", |txn| {
+                let (fire, request_mutation, agent_did, goal_status) =
+                    (&fire, &request_mutation, &agent_did, &goal_status);
+                Box::pin(async move {
+                    gents_session::session::ensure_session_in_txn(
+                        txn,
+                        &fire.session_id,
+                        &fire.identity.owner_did,
+                        agent_did,
+                        None,
+                        None,
+                        None,
+                        "2026-01-01T00:00:00Z",
+                    )
+                    .await?;
+                    durable::stage_fire_request(txn, fire, request_mutation).await?;
+                    if goal_status.is_some() || replaced {
+                        let response = txn
+                            .execute(&format!(
+                                "{{AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}}}}",
+                                escape_graphql_string(&fire.request_id)
+                            ))
+                            .await?;
+                        let root = response["data"]["AgentRequest"][0]["_docID"]
+                            .as_str()
+                            .unwrap();
+                        let session = txn
+                            .execute(&format!(
+                                "{{AgentSession(filter: {{session_id: {{_eq: \"{}\"}}}}) {{_docID}}}}",
+                                escape_graphql_string(&fire.session_id)
+                            ))
+                            .await?;
+                        txn.execute_with_variables(
+                            "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
+                            &serde_json::json!({"input": {
+                                "goal_id": fire.goal_id, "node_did": fire.identity.owner_did,
+                                "session_id": fire.session_id, "objective": "finish assignment",
+                                "session_doc_id": session["data"]["AgentSession"][0]["_docID"],
+                                "status": goal_status.as_deref().unwrap_or("active"),
+                                "assignment_root_request_doc_id": root,
+                            }}),
+                        )
+                        .await?;
+                    }
+                    if published {
+                        durable::stage_outcome(
+                            txn,
+                            fire,
+                            durable::OutcomeStage {
+                                goal: None,
+                                assignment_replaced: false,
+                                request_terminal: terminal,
+                                terminal_state: state,
+                                reason: state,
+                            },
+                            "2026-01-01T00:00:01Z",
+                        )
+                        .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+            .unwrap();
+        if replaced {
+            access
+                .transact_write("test.seed_replaced_assignment", |txn| {
+                    let (fire, replacement_mutation) = (&fire, &replacement_mutation);
+                    Box::pin(async move {
+                        let created = txn.execute(replacement_mutation).await?;
+                        let replacement =
+                            gents_store::graphql::created_doc_id(&created, "AgentRequest")?;
+                        txn.execute(&format!(
+                            "mutation {{update_Goal(filter: {{session_id: {{_eq: \"{}\"}}}}, input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
+                            escape_graphql_string(&fire.session_id),
+                            escape_graphql_string(&replacement),
+                        ))
+                        .await?;
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
+        }
+        drop(access);
+        drop(node);
+        db.simulate_process_crash().await.unwrap();
+        let node = db.node.clone();
+        let recovered = durable::recover_outcomes(&node, &fire.identity.owner_did, agent.as_ref())
+            .await
+            .unwrap();
+        let recovered_again =
+            durable::recover_outcomes(&node, &fire.identity.owner_did, agent.as_ref())
+                .await
+                .unwrap();
+        let post = observed_delivery_state(
+            &crate::triggers::callback::test_agent_access(&node),
+            FireIdentity::clone,
+        )
+        .await;
+        case.check(
+            gents_lean_vocab::families::trigger_delivery_outcome_recovery::OutcomeRecoveryOutput {
+            post: gents_lean_vocab::family::recode(&post),
+            recovered: recovered as u64,
+            recovered_again: recovered_again as u64,
+            },
         );
-        assert_eq!(
-            data["AgentRequest"].as_array().unwrap().len(),
-            post.requests.len(),
-            "{}",
-            case["name"]
-        );
-        assert!(post.outcomes.is_empty());
+        node.shutdown().await.expect("node shutdown");
     }
 }
 
@@ -453,13 +715,9 @@ async fn persisted_outcome_requests(
 
 #[tokio::test]
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
-    for trace in contract()["trigger_delivery_outcome_trace_cases"]
-        .as_array()
-        .unwrap()
-    {
-        // The Task's Agent admits, claims, terminalizes and recovers its fires.
-        let (db, _user, _access, binding) =
-            crate::test_support::signed_test_node(trace["name"].as_str().unwrap()).await;
+    for case in gents_lean_vocab::families::trigger_delivery_outcome_trace::cases() {
+        let name = &case.input.name;
+        let (db, _user, _access, binding) = crate::test_support::signed_test_node(name).await;
         let node = db.node.clone();
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
@@ -470,16 +728,16 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
             agent.as_ref(),
         )
         .unwrap();
-        let mut published = std::collections::BTreeMap::new();
         let mut terminal_states = std::collections::BTreeMap::new();
-        for (index, step) in trace["steps"].as_array().unwrap().iter().enumerate() {
-            let action: OutcomeAction = decode(&step["action"]);
-            let expected: State = decode(&step["post"]);
+        let mut steps = Vec::new();
+        let mut pre = observed_delivery_state(&access, FireIdentity::clone).await;
+        for (index, wire) in case.input.actions.iter().enumerate() {
+            let action: OutcomeAction = gents_lean_vocab::family::recode(wire);
             match action {
                 OutcomeAction::Admit { fire } => {
                     let receipt = receipt(&fire, index);
                     let mutation = request_mutation_as(&receipt, agent.did());
-                    let result = access
+                    access
                         .transact_write("test.outcome_trace_admit", |txn| {
                             let receipt = &receipt;
                             let mutation = &mutation;
@@ -499,13 +757,8 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                                 durable::stage_fire_request(txn, receipt, mutation).await
                             })
                         })
-                        .await;
-                    assert_eq!(
-                        result.is_ok(),
-                        expected.receipts.contains(&fire.identity),
-                        "{}",
-                        trace["name"]
-                    );
+                        .await
+                        .ok();
                 }
                 OutcomeAction::Claim { identity } => {
                     let rows = persisted_outcome_requests(&access).await;
@@ -532,8 +785,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                             .await
                             .unwrap()
                             .was_claimed(),
-                        "{}",
-                        trace["name"]
+                        "{name}"
                     );
                 }
                 OutcomeAction::RequestTerminal {
@@ -552,7 +804,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                             anyhow::ensure!(commit, "injected terminal transaction crash"); Ok(())
                         })
                     }).await;
-                    assert_eq!(result.is_ok(), commit);
+                    assert_eq!(result.is_ok(), commit, "{name}");
                 }
                 OutcomeAction::GoalStatus { identity, status } => {
                     let rows = persisted_outcome_requests(&access).await;
@@ -577,107 +829,62 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                                 })
                             })
                             .await;
-                        assert!(result.is_err());
+                        assert!(result.is_err(), "{name}");
                     }
                 }
             }
-            for publication in step["published"].as_array().unwrap() {
-                let identity: FireIdentity = decode(&publication["identity"]);
-                published.insert(
-                    identity.outcome_id(),
-                    publication["reason"].as_str().unwrap().to_owned(),
-                );
-            }
-            let response = access.execute("{FireOutcome {handoff_id terminal_state} TriggerFire {fire_key goal_assignment_applied} Goal {node_did session_id assignment_root_request_doc_id status}}").await.unwrap();
-            let outcomes = response["data"]["FireOutcome"].as_array().unwrap();
+            let post = observed_delivery_state(&access, FireIdentity::clone).await;
+            let response = access
+                .execute("{ FireOutcome { handoff_id terminal_state } AgentRequest { _docID } Goal { _docID } }")
+                .await
+                .unwrap();
             assert_eq!(
-                outcomes.len(),
-                expected.outcomes.len(),
-                "{} step {index}",
-                trace["name"]
+                response["data"]["Goal"].as_array().unwrap().len(),
+                post["goals"].as_array().unwrap().len(),
+                "{name} step {index}: every Goal is bound to an admitted fire"
             );
-            for id in &expected.outcomes {
-                let outcome = outcomes
-                    .iter()
-                    .find(|row| row["handoff_id"] == id.outcome_id())
-                    .unwrap();
-                let reason = &published[&id.outcome_id()];
-                assert_eq!(
-                    outcome["terminal_state"],
-                    if reason == "request_terminal" {
-                        terminal_states[&id.request_id()].as_str()
+            assert_eq!(
+                response["data"]["FireOutcome"].as_array().unwrap().len(),
+                post["outcomes"].as_array().unwrap().len(),
+                "{name} step {index}: every FireOutcome belongs to a receipt"
+            );
+            assert_eq!(
+                response["data"]["AgentRequest"].as_array().unwrap().len(),
+                post["requests"].as_array().unwrap().len(),
+                "{name} step {index}: every AgentRequest belongs to a receipt"
+            );
+            let published = post["outcomes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|identity| !pre["outcomes"].as_array().unwrap().contains(identity))
+                .map(|identity| {
+                    let identity: FireIdentity = serde_json::from_value(identity.clone()).unwrap();
+                    let stored = response["data"]["FireOutcome"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|row| row["handoff_id"] == identity.outcome_id())
+                        .unwrap()["terminal_state"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned();
+                    let reason = if terminal_states.get(&identity.request_id()) == Some(&stored) {
+                        "request_terminal".to_owned()
                     } else {
-                        reason.as_str()
-                    },
-                    "{} step {index}",
-                    trace["name"]
-                );
-            }
-            let requests = persisted_outcome_requests(&access).await;
-            assert_eq!(
-                requests.len(),
-                expected.requests.len(),
-                "{} step {index}",
-                trace["name"]
-            );
-            for expected_request in &expected.requests {
-                let row = requests
-                    .iter()
-                    .find(|row| row.request_id == expected_request.fire.identity.request_id())
-                    .unwrap();
-                assert_eq!(
-                    row.lifecycle_state.is_some_and(|state| state.is_terminal()),
-                    expected_request.terminal,
-                    "{} step {index}: request {} terminal state",
-                    trace["name"],
-                    row.request_id
-                );
-                assert_eq!(
-                    row.lifecycle_state.is_some_and(|state| matches!(
-                        state,
-                        gents_protocol::request_lifecycle::RequestLifecycleState::Claimed
-                            | gents_protocol::request_lifecycle::RequestLifecycleState::Processing
-                    )),
-                    expected_request.running,
-                    "{} step {index}: request {} running state",
-                    trace["name"],
-                    row.request_id
-                );
-                let receipts = response["data"]["TriggerFire"].as_array().unwrap();
-                let receipt = receipts
-                    .iter()
-                    .find(|row| row["fire_key"] == expected_request.fire.identity.fire_key())
-                    .unwrap();
-                assert_eq!(
-                    receipt["goal_assignment_applied"]
-                        .as_bool()
-                        .unwrap_or(false),
-                    expected_request.goal_assignment_applied,
-                    "{} step {index}: request {} Goal assignment",
-                    trace["name"],
-                    row.request_id
-                );
-            }
-            let goals = response["data"]["Goal"].as_array().unwrap();
-            assert_eq!(goals.len(), expected.goals.len());
-            for binding in &expected.goals {
-                let goal = goals
-                    .iter()
-                    .find(|row| {
-                        row["node_did"] == binding.owner && row["session_id"] == binding.session
-                    })
-                    .unwrap();
-                let assignment = requests
-                    .iter()
-                    .find(|row| row.request_id == binding.assignment.request_id())
-                    .unwrap();
-                assert_eq!(
-                    goal["assignment_root_request_doc_id"].as_str(),
-                    assignment.doc_id.as_deref()
-                );
-                assert_eq!(goal["status"], binding.status);
-            }
+                        stored
+                    };
+                    serde_json::json!({"identity": identity, "reason": reason})
+                })
+                .collect::<Vec<_>>();
+            steps.push(serde_json::json!({
+                "action": wire, "pre": pre, "post": post, "published": published,
+            }));
+            pre = post;
         }
+        case.check(gents_lean_vocab::family::recode(
+            &serde_json::json!({ "steps": steps }),
+        ));
     }
 }
 
@@ -711,6 +918,29 @@ fn handoff_consumer() -> gents_protocol::event_delivery::EventConsumer {
     }
 }
 
+/// Whether the consumer's arrival cursor exists, read before `load_or_seed`
+/// could create it.
+async fn arrival_cursor_seeded(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    consumer: &gents_protocol::event_delivery::EventConsumer,
+) -> bool {
+    access
+        .transact_write("test.read_arrival_cursor_seeded", |txn| {
+            Box::pin(async move {
+                Ok::<_, anyhow::Error>(
+                    gents_documents::event_source_cursor::load_for_source(
+                        txn, owner, consumer, "Work",
+                    )
+                    .await?
+                    .is_some(),
+                )
+            })
+        })
+        .await
+        .unwrap()
+}
+
 async fn saved_arrival_cursor(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
@@ -736,10 +966,9 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity as _;
-    for case in contract()["trigger_delivery_cursor_cases"]
-        .as_array()
-        .unwrap()
-    {
+    for case in gents_lean_vocab::families::trigger_delivery_arrival_cursor::cases() {
+        let input = &case.input;
+        let name = &input.name;
         let db = gents_inference::test_support::test_db(
             "arrival-checkpoints",
             crate::lifecycle_hooks::composition(),
@@ -779,12 +1008,8 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             .add_collection("type Work { label: String eligible: Boolean }")
             .await
             .unwrap();
-        let source: Vec<Arrival> = decode(&case["source"]);
-        let seed_head = case["seed_head"]
-            .as_str()
-            .unwrap()
-            .parse::<usize>()
-            .unwrap();
+        let source: Vec<Arrival> = gents_lean_vocab::family::recode(&input.source);
+        let seed_head = input.seed_head.parse::<usize>().unwrap();
         let mut documents = std::collections::BTreeMap::new();
         for entry in source.iter().take(seed_head) {
             documents.insert(
@@ -792,9 +1017,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 create_arrival_source(
                     &access,
                     &entry.identity.source_doc_id,
-                    case["source_eligible"][entry.position.parse::<usize>().unwrap() - 1]
-                        .as_bool()
-                        .unwrap(),
+                    input.source_eligible[entry.position.parse::<usize>().unwrap() - 1],
                 )
                 .await,
             );
@@ -806,7 +1029,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 "source_collection":"Work","event_kind":"created","filter":"{eligible: {_eq: true}}"})),
             (gents_store::collection::Collection::Trigger, serde_json::json!({"node_did":owner,"trigger_id":"handoff",
                 "task_id":"contract-task","source":{"kind":"event","event_source_id":"source"},
-                "enabled":case["enabled"],"concurrency":case["mode"]})),
+                "enabled":input.enabled,"concurrency":input.mode})),
         ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {collection, add: value.clone(), update: value}).collect()).unwrap();
         access
             .transact_write("test.arrival_config", |txn| {
@@ -825,9 +1048,8 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             .unwrap();
         assert_eq!(
             saved_arrival_cursor(&agent, owner).await,
-            seed_head.to_string(),
-            "{}",
-            case["name"]
+            input.seed_head,
+            "{name}"
         );
         for entry in source.iter().skip(seed_head) {
             documents.insert(
@@ -835,43 +1057,36 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 create_arrival_source(
                     &access,
                     &entry.identity.source_doc_id,
-                    case["source_eligible"][entry.position.parse::<usize>().unwrap() - 1]
-                        .as_bool()
-                        .unwrap(),
+                    input.source_eligible[entry.position.parse::<usize>().unwrap() - 1],
                 )
                 .await,
             );
         }
-        let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
-        agent
-            .transact_write("test.prior_checkpoint", |txn| {
-                Box::pin(async move {
-                    gents_documents::event_consumer::advance(
-                        txn,
-                        owner,
-                        &handoff_consumer(),
-                        "Work",
-                        pre_after,
-                    )
-                    .await
+        if let Some(prior_after) = &input.prior_after {
+            agent
+                .transact_write("test.prior_checkpoint", |txn| {
+                    Box::pin(async move {
+                        gents_documents::event_consumer::advance(
+                            txn,
+                            owner,
+                            &handoff_consumer(),
+                            "Work",
+                            prior_after,
+                        )
+                        .await
+                    })
                 })
-            })
-            .await
-            .unwrap();
-        if case["restart"].as_bool().unwrap() {
-            assert_eq!(
-                saved_arrival_cursor(&agent, owner).await,
-                pre_after,
-                "{}",
-                case["name"]
-            );
+                .await
+                .unwrap();
         }
+        let pre_seeded = arrival_cursor_seeded(&agent, owner, &handoff_consumer()).await;
+        let pre_after = saved_arrival_cursor(&agent, owner).await;
         let adapt_fire = |mut fire: Fire| {
             fire.identity.owner_did = owner.to_owned();
             fire.identity.source_doc_id = documents[&fire.identity.source_doc_id].clone();
             fire
         };
-        let pre: State = decode(&case["pre"]);
+        let pre: State = gents_lean_vocab::family::recode(&input.pre);
         for (index, request) in pre.requests.iter().enumerate() {
             let receipt = receipt(&adapt_fire(request.fire.clone()), index);
             let mutation = request_mutation_as(&receipt, &binding.agent_did);
@@ -887,8 +1102,11 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 .await
                 .unwrap();
         }
-        if let Some(commit) = case["admission_commit"].as_bool() {
-            let receipt = receipt(&adapt_fire(decode(&case["fire"])), pre.requests.len());
+        if let Some(commit) = input.admission_commit {
+            let receipt = receipt(
+                &adapt_fire(gents_lean_vocab::family::recode(&input.fire)),
+                pre.requests.len(),
+            );
             let mutation = request_mutation_as(&receipt, &binding.agent_did);
             let admitted: anyhow::Result<()> = agent
                 .transact_write("test.arrival_admission_crash", |txn| {
@@ -901,11 +1119,32 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     })
                 })
                 .await;
-            assert_eq!(admitted.is_ok(), commit, "{}: {admitted:?}", case["name"]);
+            assert_eq!(admitted.is_ok(), commit, "{name}: {admitted:?}");
         }
-        if let Some(commit) = case["checkpoint_commit"].as_bool() {
-            let entry: Arrival = decode(&case["entry"]);
-            let busy = case["busy"].as_bool().unwrap();
+        let entry: Arrival = gents_lean_vocab::family::recode(&input.entry);
+        let busy = input.busy;
+        let probed = std::sync::Mutex::new(None);
+        let probe: anyhow::Result<()> = agent
+            .transact_write("test.arrival_checkpoint_probe", |txn| {
+                let (entry, probed) = (&entry, &probed);
+                Box::pin(async move {
+                    let accepted = gents_documents::event_consumer::checkpoint_prefix(
+                        txn,
+                        owner,
+                        &handoff_consumer(),
+                        "Work",
+                        &entry.position,
+                        busy,
+                    )
+                    .await?;
+                    *probed.lock().unwrap() = Some(accepted);
+                    anyhow::bail!("checkpoint probe rolls back")
+                })
+            })
+            .await;
+        assert!(probe.is_err());
+        let acknowledgment_allowed = probed.into_inner().unwrap().unwrap();
+        let checkpoint_succeeds = if let Some(commit) = input.checkpoint_commit {
             let checkpointed: anyhow::Result<bool> = agent
                 .transact_write("test.arrival_checkpoint_crash", |txn| {
                     let entry = &entry;
@@ -924,75 +1163,68 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     })
                 })
                 .await;
-            let accepted = if commit {
+            Some(if commit {
                 checkpointed.unwrap_or_else(|error| {
-                    panic!("{}: unexpected checkpoint error: {error:#}", case["name"])
+                    panic!("{name}: unexpected checkpoint error: {error:#}")
                 })
             } else {
                 let error = checkpointed.expect_err("injected checkpoint must roll back");
                 assert!(
                     format!("{error:#}").contains("injected crash before checkpoint commit"),
-                    "{}: unexpected rollback error: {error:#}",
-                    case["name"]
+                    "{name}: unexpected rollback error: {error:#}"
                 );
                 false
-            };
-            assert_eq!(
-                accepted,
-                case["checkpoint_succeeds"].as_bool().unwrap(),
-                "{}",
-                case["name"]
-            );
-        }
+            })
+        } else {
+            None
+        };
+        let post_seeded = arrival_cursor_seeded(&agent, owner, &handoff_consumer()).await;
         let after = saved_arrival_cursor(&agent, owner).await;
-        assert_eq!(
-            after,
-            case["post_cursor"]["after"].as_str().unwrap(),
-            "{}",
-            case["name"]
-        );
         let page = access.execute(&format!(
             "{{ _documentArrivals(collection: \"Work\", after: \"{}\", limit: 128) {{ entries {{ cursor docID }} }} }}",
             escape_graphql_string(&after),
         )).await.unwrap();
-        let actual = page["data"]["_documentArrivals"]["entries"]
+        let modeled_identity = |doc_id: &str| {
+            source
+                .iter()
+                .find(|entry| documents[&entry.identity.source_doc_id] == doc_id)
+                .unwrap()
+                .identity
+                .clone()
+        };
+        let journal_after = page["data"]["_documentArrivals"]["entries"]
             .as_array()
             .unwrap()
             .iter()
             .map(|entry| {
-                (
-                    entry["cursor"].as_str().unwrap().to_owned(),
-                    entry["docID"].as_str().unwrap().to_owned(),
-                )
+                serde_json::json!({
+                    "position": entry["cursor"],
+                    "identity": modeled_identity(entry["docID"].as_str().unwrap()),
+                })
             })
             .collect::<Vec<_>>();
-        let expected = decode::<Vec<Arrival>>(&case["journal_after"])
-            .iter()
-            .map(|entry| {
-                (
-                    entry.position.clone(),
-                    documents[&entry.identity.source_doc_id].clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected, "{}", case["name"]);
-        let rows = agent
-            .execute("{ TriggerFire { source_doc_id } AgentRequest { request_id } }")
-            .await
-            .unwrap();
-        let post: State = decode(&case["post"]);
-        assert_eq!(
-            rows["data"]["TriggerFire"].as_array().unwrap().len(),
-            post.receipts.len(),
-            "{}",
-            case["name"]
-        );
-        assert_eq!(
-            rows["data"]["AgentRequest"].as_array().unwrap().len(),
-            post.requests.len(),
-            "{}",
-            case["name"]
-        );
+        let post = observed_delivery_state(&agent, |id| {
+            let mut id = id.clone();
+            if id.owner_did == owner {
+                id.owner_did = source[0].identity.owner_did.clone();
+            }
+            if let Some(entry) = source
+                .iter()
+                .find(|entry| documents.get(&entry.identity.source_doc_id) == Some(&id.source_doc_id))
+            {
+                id.source_doc_id = entry.identity.source_doc_id.clone();
+            }
+            id
+        })
+        .await;
+        case.check(gents_lean_vocab::family::recode(&serde_json::json!({
+            "pre_cursor": {"seeded": pre_seeded, "after": pre_after},
+            "post_cursor": {"seeded": post_seeded, "after": after},
+            "post": post,
+            "checkpoint_succeeds": checkpoint_succeeds,
+            "acknowledgment_allowed": acknowledgment_allowed,
+            "journal_after": journal_after,
+        })));
         node.shutdown().await.expect("node shutdown");
     }
 }
@@ -1068,11 +1300,9 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::config_client::{ConfigAccess, NodePermission};
-    for case in contract()["trigger_delivery_callback_cursor_cases"]
-        .as_array()
-        .unwrap()
-    {
-        let name = &case["name"];
+    for case in gents_lean_vocab::families::trigger_delivery_callback_cursor::cases() {
+        let input = &case.input;
+        let name = &input.name;
         use gents_store::identity::NodeIdentity as _;
         let db = gents_inference::test_support::test_db(
             "callback-checkpoints",
@@ -1113,9 +1343,9 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             .add_collection("type Work { label: String eligible: Boolean }")
             .await
             .unwrap();
-        let source: Vec<Arrival> = decode(&case["source"]);
-        let seed_head: usize = case["seed_head"].as_str().unwrap().parse().unwrap();
-        let eligible = case["matches_filter"].as_bool().unwrap();
+        let source: Vec<Arrival> = gents_lean_vocab::family::recode(&input.source);
+        let seed_head: usize = input.seed_head.parse().unwrap();
+        let eligible = input.matches_filter;
         let mut documents = std::collections::BTreeMap::new();
         for entry in source.iter().take(seed_head) {
             let label = &entry.identity.source_doc_id;
@@ -1124,8 +1354,8 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 create_arrival_source(&access, label, eligible).await,
             );
         }
-        let binding_enabled = case["binding_enabled"].as_bool().unwrap();
-        let callback_enabled = case["callback_enabled"].as_bool().unwrap();
+        let binding_enabled = input.binding_enabled;
+        let callback_enabled = input.callback_enabled;
         let plan = DesiredStateApplyPlan::new([
             (gents_store::collection::Collection::Callback, serde_json::json!({"node_did":owner,"callback_id":"callback",
                 "enabled":callback_enabled,"handler":{"kind":"built_in","emitter":"create_workspace"}})),
@@ -1173,7 +1403,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     .unwrap()
             }
         };
-        assert_eq!(saved().await, seed_head.to_string(), "{name}");
+        assert_eq!(saved().await, input.seed_head, "{name}");
         for entry in source.iter().skip(seed_head) {
             let label = &entry.identity.source_doc_id;
             documents.insert(
@@ -1181,26 +1411,26 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 create_arrival_source(&access, label, eligible).await,
             );
         }
-        let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
-        agent_access
-            .transact_write("test.prior_callback_checkpoint", |txn| {
-                Box::pin(async move {
-                    gents_documents::event_consumer::advance(
-                        txn,
-                        owner,
-                        &handoff_binding(),
-                        "Work",
-                        pre_after,
-                    )
-                    .await
+        if let Some(prior_after) = &input.prior_after {
+            agent_access
+                .transact_write("test.prior_callback_checkpoint", |txn| {
+                    Box::pin(async move {
+                        gents_documents::event_consumer::advance(
+                            txn,
+                            owner,
+                            &handoff_binding(),
+                            "Work",
+                            prior_after,
+                        )
+                        .await
+                    })
                 })
-            })
-            .await
-            .unwrap();
-        if case["restart"].as_bool().unwrap() {
-            assert_eq!(saved().await, pre_after, "{name}");
+                .await
+                .unwrap();
         }
-        for receipt in decode::<Vec<FireIdentity>>(&case["pre_receipts"]) {
+        let pre_seeded = arrival_cursor_seeded(&agent_access, owner, &handoff_binding()).await;
+        let pre_after = saved().await;
+        for receipt in gents_lean_vocab::family::recode::<_, Vec<FireIdentity>>(&input.pre_receipts) {
             admit_callback_arrival(
                 &node,
                 &agent_access,
@@ -1211,9 +1441,9 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             )
             .await;
         }
-        let entry: Arrival = decode(&case["entry"]);
+        let entry: Arrival = gents_lean_vocab::family::recode(&input.entry);
         let doc_id = documents[&entry.identity.source_doc_id].clone();
-        if case["admission_commit"].as_bool() == Some(true) {
+        if input.admission_commit == Some(true) {
             admit_callback_arrival(
                 &node,
                 &agent_access,
@@ -1223,7 +1453,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 "v1",
             )
             .await;
-            if case["edit_after_admission"].as_bool().unwrap() {
+            if input.edit_after_admission {
                 access
                     .write(
                         "test.callback_arrival_edit",
@@ -1245,7 +1475,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 .await;
             }
         }
-        if let Some(commit) = case["checkpoint_commit"].as_bool() {
+        let checkpoint_succeeds = if let Some(commit) = input.checkpoint_commit {
             let checkpointed: anyhow::Result<bool> = agent_access
                 .transact_write("test.callback_checkpoint_crash", |txn| {
                     let entry = &entry;
@@ -1264,7 +1494,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     })
                 })
                 .await;
-            let accepted = if commit {
+            Some(if commit {
                 checkpointed.unwrap_or_else(|error| panic!("{name}: checkpoint error: {error:#}"))
             } else {
                 assert!(
@@ -1272,62 +1502,65 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     "{name}: injected checkpoint must roll back"
                 );
                 false
-            };
-            assert_eq!(
-                accepted,
-                case["checkpoint_succeeds"].as_bool().unwrap(),
-                "{name}"
-            );
-        }
+            })
+        } else {
+            None
+        };
+        let post_seeded = arrival_cursor_seeded(&agent_access, owner, &handoff_binding()).await;
         let after = saved().await;
-        assert_eq!(
-            after,
-            case["post_cursor"]["after"].as_str().unwrap(),
-            "{name}"
-        );
         let page = access.execute(&format!(
             "{{ _documentArrivals(collection: \"Work\", after: \"{}\", limit: 128) {{ entries {{ cursor docID }} }} }}",
             escape_graphql_string(&after),
         )).await.unwrap();
-        let actual = page["data"]["_documentArrivals"]["entries"]
+        let modeled_identity = |doc_id: &str| {
+            source
+                .iter()
+                .find(|entry| documents[&entry.identity.source_doc_id] == doc_id)
+                .unwrap()
+                .identity
+                .clone()
+        };
+        let journal_after = page["data"]["_documentArrivals"]["entries"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|entry| entry["docID"].as_str().unwrap().to_owned())
+            .map(|entry| {
+                serde_json::json!({
+                    "position": entry["cursor"],
+                    "identity": modeled_identity(entry["docID"].as_str().unwrap()),
+                })
+            })
             .collect::<Vec<_>>();
-        let expected = decode::<Vec<Arrival>>(&case["journal_after"])
-            .iter()
-            .map(|entry| documents[&entry.identity.source_doc_id].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected, "{name}");
         let invocations = agent_access
             .execute("{ CallbackInvocation { origin } }")
             .await
             .unwrap();
-        assert_eq!(
-            invocations["data"]["CallbackInvocation"]
-                .as_array()
+        let mut receipts = invocations["data"]["CallbackInvocation"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                let origin: serde_json::Value = match &row["origin"] {
+                    serde_json::Value::String(text) => serde_json::from_str(text).unwrap(),
+                    other => other.clone(),
+                };
+                modeled_identity(origin["source_doc_id"].as_str().unwrap())
+            })
+            .collect::<Vec<_>>();
+        receipts.sort_by_key(|identity| {
+            source
+                .iter()
+                .position(|entry| entry.identity == *identity)
                 .unwrap()
-                .len(),
-            case["post_receipts"].as_array().unwrap().len(),
-            "{name}"
-        );
+        });
+        case.check(gents_lean_vocab::family::recode(&serde_json::json!({
+            "pre_cursor": {"seeded": pre_seeded, "after": pre_after},
+            "post_cursor": {"seeded": post_seeded, "after": after},
+            "post_receipts": receipts,
+            "checkpoint_succeeds": checkpoint_succeeds,
+            "journal_after": journal_after,
+        })));
         node.shutdown().await.expect("node shutdown");
-    }
-}
-
-#[test]
-fn task_goal_assignment_root_matches_lean() {
-    let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    for case in contract["trigger_delivery_assignment_root_cases"]
-        .as_array()
-        .unwrap()
-    {
-        assert_eq!(
-            crate::goal::assignment_allows(case["assigned"].as_str(), case["observed"].as_str()),
-            case["allowed"].as_bool().unwrap(),
-            "{case}"
-        );
     }
 }
 

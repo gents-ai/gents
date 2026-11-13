@@ -1637,31 +1637,59 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
     );
     // Selection runs every Lean route under every route observation; none of
     // them may change which route a chat write selects.
-    let cases = crate::client::peer_directory::tests::chat_readiness_cases();
-    assert_eq!(cases.len(), 1 + 4 * 2 * 2 * 8, "{}", cases.len());
-    for (index, (record, refusal)) in cases.into_iter().enumerate() {
-        let node_did = format!("did:key:runtime-{index}");
-        if let Some(mut record) = record.clone() {
-            record.node_did = node_did.clone();
-            core.sync_state.upsert_for_test(record).await?;
-        }
-        let selected = core.peer_record_for_chat_write(&node_did);
-        let gated = selected.and_then(|peer| {
-            super::writes::ensure_peer_chat_ready(&node_did, peer.as_ref()).map(|()| peer)
-        });
-        match refusal {
-            None => assert!(gated?.is_some_and(|peer| peer.node_did == node_did)),
-            Some(token) => {
-                let error = gated.expect_err("refused route must not select a write target");
-                assert_eq!(
+    use crate::client::peer_directory::tests::{chat_case_record, with_route_observations};
+    let mut index = 0usize;
+    for case in gents_lean_vocab::families::chat_readiness_cases_write_selection::cases::<
+        crate::client::peer_directory::ChatRouteCause,
+    >() {
+        let records = match case.input.route.as_ref() {
+            None => vec![None],
+            Some(route) => with_route_observations(&chat_case_record(
+                route.source.as_deref(),
+                route.operator_endpoint,
+                route.managed,
+            ))
+            .into_iter()
+            .map(Some)
+            .collect(),
+        };
+        let mut refusals = Vec::new();
+        for record in records {
+            index += 1;
+            let node_did = format!("did:key:runtime-{index}");
+            if let Some(mut record) = record.clone() {
+                record.node_did = node_did.clone();
+                core.sync_state.upsert_for_test(record).await?;
+            }
+            let selected = core.peer_record_for_chat_write(&node_did);
+            let gated = selected.and_then(|peer| {
+                super::writes::ensure_peer_chat_ready(&node_did, peer.as_ref()).map(|()| peer)
+            });
+            refusals.push(match gated {
+                Ok(peer) => {
+                    assert!(
+                        peer.is_some_and(|peer| peer.node_did == node_did),
+                        "{record:?}"
+                    );
+                    None
+                }
+                Err(error) => Some(
                     error
                         .downcast_ref::<super::writes::ChatRouteRefusal>()
-                        .map(|refusal| refusal.cause().token()),
-                    Some(token.as_str()),
-                    "{record:?}: {error:#}"
-                );
-            }
+                        .map(|refusal| refusal.cause())
+                        .unwrap_or_else(|| panic!("{record:?}: {error:#}")),
+                ),
+            });
         }
+        assert!(
+            refusals.windows(2).all(|pair| pair[0] == pair[1]),
+            "{refusals:?}"
+        );
+        case.check(
+            gents_lean_vocab::families::chat_readiness_cases_write_selection::FenceOutput {
+                refusal: refusals[0],
+            },
+        );
     }
     core.shutdown().await?;
     Ok(())
@@ -1670,20 +1698,15 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
 #[test]
 fn route_leg_combination_matches_lean() {
     use super::route_manager::{combined_route_readiness, RouteReconcileState};
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let cases = &snapshot.client_route_pairing_legs;
-    assert_eq!(cases.len(), 9);
     let leg = |value: &str| match value {
         "ready" => RouteReconcileState::Ready,
         "drifted" => RouteReconcileState::Drifted,
         "unavailable" => RouteReconcileState::Unavailable,
         other => panic!("unknown leg {other}"),
     };
-    for case in cases {
-        assert_eq!(
-            combined_route_readiness(leg(&case.outbound), leg(&case.inbound)),
-            case.combined,
-            "{case:?}"
-        );
-    }
+    gents_lean_vocab::families::chat_readiness_cases_route_pairing_legs::replay::<String>(|i| {
+        gents_lean_vocab::families::chat_readiness_cases_route_pairing_legs::LegsOutput {
+            combined: combined_route_readiness(leg(&i.outbound), leg(&i.inbound)),
+        }
+    });
 }

@@ -1,42 +1,66 @@
 import Proofs.Clients.ClientShell.Telemetry
+import Proofs.Conformance.Family
 
 namespace Conformance.ClientTelemetry
-open _root_.ClientTelemetry
 
-private def boolJson (value : Bool) : String := if value then "true" else "false"
-private def stateJson (s : State) : String :=
-  "{\"configured\":" ++ boolJson s.configured ++ ",\"consent\":" ++ boolJson s.consent ++
-  ",\"persisted\":" ++ boolJson s.persisted ++ ",\"opened\":" ++ boolJson s.opened ++
-  ",\"in_flight\":" ++ boolJson s.inFlight ++ "}"
-private def actionJson : Action → String
-  | .open => "{\"kind\":\"open\"}"
-  | .enable ok disk => "{\"kind\":\"enable\",\"write_ok\":" ++ boolJson ok ++
-      ",\"disk_after\":" ++ boolJson disk ++ "}"
-  | .disable ok disk => "{\"kind\":\"disable\",\"write_ok\":" ++ boolJson ok ++
-      ",\"disk_after\":" ++ boolJson disk ++ "}"
-  | .restart => "{\"kind\":\"restart\"}"
-private def traceJson (initial : State) (actions : List Action) : String := Id.run do
-  let mut state := initial
-  let mut expected : List String := []
-  for action in actions do
-    let (next, send) := step state action
-    state := next
-    expected := expected ++ ["{\"state\":" ++ stateJson state ++ ",\"send\":" ++ boolJson send ++ "}"]
-  return "{\"initial\":" ++ stateJson initial ++ ",\"actions\":[" ++
-    String.intercalate "," (actions.map actionJson) ++ "],\"expected\":[" ++
-    String.intercalate "," expected ++ "]}"
+open Lean _root_.ClientTelemetry
 
-def casesJson : String :=
-  let actions : List (List Action) := [
-    [.open, .enable true true, .open, .restart, .open, .open, .disable true false, .restart, .open],
-    [.enable true true, .open, .disable true false, .restart, .open],
-    [.open, .disable true false, .restart, .enable true true, .open],
-    [.disable false false, .restart, .open],
-    [.enable false false, .open],
-    [.open, .enable true true]
-  ]
-  let cases := [false, true].flatMap fun configured =>
+deriving instance ToJson for State
+
+inductive ActionKind where
+  | «open» | enable | disable | restart
+  deriving ToJson
+
+structure ActionWire where
+  kind : ActionKind
+  writeOk : Option Bool
+  diskAfter : Option Bool
+  deriving ToJson
+
+structure TraceInput where
+  initial : State
+  actions : List ActionWire
+  deriving ToJson
+
+structure StepObservation where
+  state : State
+  send : Bool
+  deriving ToJson
+
+def ActionWire.ofModel : Action → ActionWire
+  | .open => ⟨.open, none, none⟩
+  | .enable writeOk diskAfter => ⟨.enable, some writeOk, some diskAfter⟩
+  | .disable writeOk diskAfter => ⟨.disable, some writeOk, some diskAfter⟩
+  | .restart => ⟨.restart, none, none⟩
+
+def ActionWire.toModel (a : ActionWire) : Action :=
+  match a.kind with
+  | .open => .open
+  | .enable => .enable (a.writeOk.getD true) (a.diskAfter.getD true)
+  | .disable => .disable (a.writeOk.getD true) (a.diskAfter.getD false)
+  | .restart => .restart
+
+def observeTrace (state : State) : List Action → List StepObservation
+  | [] => []
+  | action :: rest =>
+      let (next, send) := step state action
+      { state := next, send } :: observeTrace next rest
+
+def traceActions : List (List Action) :=
+  [ [.open, .enable true true, .open, .restart, .open, .open, .disable true false, .restart, .open]
+  , [.enable true true, .open, .disable true false, .restart, .open]
+  , [.open, .disable true false, .restart, .enable true true, .open]
+  , [.disable false false, .restart, .open]
+  , [.enable false false, .open]
+  , [.open, .enable true true] ]
+
+@[conformance_family]
+def trace : Family TraceInput (List StepObservation) where
+  inputs := [false, true].flatMap fun configured =>
     [false, true].flatMap fun saved =>
-      actions.map fun trace => traceJson ⟨configured, saved, saved, false, false⟩ trace
-  "[" ++ String.intercalate "," cases ++ "]"
+      traceActions.map fun actions =>
+        { initial := ⟨configured, saved, saved, false, false⟩
+          actions := actions.map ActionWire.ofModel }
+  model := fun i => observeTrace i.initial (i.actions.map ActionWire.toModel)
+
 end Conformance.ClientTelemetry

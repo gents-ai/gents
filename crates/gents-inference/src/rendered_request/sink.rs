@@ -32,6 +32,14 @@ use gents_store::config_client::session_children::{
 };
 use gents_store::graphql::escape_graphql_string;
 
+/// How a successful capture made its fact durable. A rebound key is an
+/// integrity error, never an outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureOutcome {
+    Fresh,
+    Idempotent,
+}
+
 #[derive(Clone)]
 pub struct DefraRenderedRequestSink {
     node: Arc<EmbeddedNode>,
@@ -342,7 +350,7 @@ impl DefraRenderedRequestSink {
             .await
     }
 
-    pub async fn capture(&self, rendered: RenderedCompletionRequest) -> Result<()> {
+    pub async fn capture(&self, rendered: RenderedCompletionRequest) -> Result<CaptureOutcome> {
         anyhow::ensure!(
             rendered.capture_version == gents_protocol::rendered_request::CAPTURE_VERSION,
             "cannot write rendered-request capture version {}; writer supports version {}",
@@ -416,14 +424,14 @@ impl DefraRenderedRequestSink {
                     outcome = "fresh",
                     "persisted rendered provider request"
                 );
-                Ok(())
+                Ok(CaptureOutcome::Fresh)
             }
             Err(create_error) => match self.stored_fact(&rendered).await {
                 Ok(Some(stored)) => {
                     self.reconcile_existing(&rendered, stored, "create_conflict")
                         .await?;
                     let Some((call_id, accounting_json)) = context_accounting.as_ref() else {
-                        return Ok(());
+                        return Ok(CaptureOutcome::Idempotent);
                     };
                     access
                         .transact_write("rendered_request.reconcile_context_accounting", |txn| {
@@ -434,6 +442,7 @@ impl DefraRenderedRequestSink {
                             ))
                         })
                         .await
+                        .map(|()| CaptureOutcome::Idempotent)
                 }
                 Ok(None) => Err(create_error.context(
                     "no RenderedRequest matches the capture key to reconcile with the failed create",
@@ -894,7 +903,7 @@ fn capture_factory(sink: DefraRenderedRequestSink) -> RenderedRequestCaptureFact
         let sink: RenderedRequestCaptureSink = Arc::new(move |rendered| {
             let sink = sink.clone();
             Box::pin(async move {
-                sink.capture(rendered).await.map_err(|error| {
+                sink.capture(rendered).await.map(|_| ()).map_err(|error| {
                     gents_loop::rendered_request::RenderedRequestError::Sink(error.into())
                 })
             })

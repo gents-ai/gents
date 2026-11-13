@@ -10,41 +10,86 @@ use gents_session::session::tool_call_state::ToolCallState;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
+type Family = gents_lean_vocab::families::contracts_tool_activity::ToolActivityInput<String>;
+type Observation = gents_lean_vocab::families::contracts_tool_activity::ObservationWire<String>;
+
 fn observation(
-    value: &Value,
-    event: &Value,
+    value: &Observation,
+    event_doc_id: u64,
     request_doc_id: &str,
     request_id: &str,
     epoch: DateTime<Utc>,
 ) -> SessionObservation {
-    let latest = &value["latest"];
+    let latest = value.latest.as_ref().unwrap();
     SessionObservation {
         reply_preview: None,
-        last_activity_at: (epoch + Duration::seconds(value["activity"].as_i64().unwrap()))
+        last_activity_at: (epoch + Duration::seconds(i64::try_from(value.activity).unwrap()))
             .to_rfc3339_opts(SecondsFormat::Nanos, true),
-        preview: value["preview"].as_str().map(str::to_owned),
+        preview: value.preview.clone(),
         latest_request: Some(gents_protocol::session::SessionRequestObservation {
-            request_doc_id: if latest["doc_id"] == event["doc_id"] {
+            request_doc_id: if latest.doc_id == event_doc_id {
                 request_doc_id.to_owned()
             } else {
-                format!("model-request-{}", latest["doc_id"])
+                format!("model-request-{}", latest.doc_id)
             },
             request_id: request_id.to_owned(),
-            lifecycle_state: serde_json::from_value(latest["state"].clone()).unwrap(),
+            lifecycle_state: serde_json::from_value(Value::String(latest.state.clone())).unwrap(),
         }),
     }
 }
 
+fn modeled_observation(
+    value: &SessionObservation,
+    case: &Family,
+    request_doc_id: &str,
+    request_id: &str,
+    epoch: DateTime<Utc>,
+) -> Observation {
+    let latest = value.latest_request.as_ref().unwrap();
+    let modeled = gents_lean_vocab::families::contracts_tool_activity::ObservationWire {
+        activity: u64::try_from(
+            (DateTime::parse_from_rfc3339(&value.last_activity_at)
+                .unwrap()
+                .with_timezone(&Utc)
+                - epoch)
+                .num_seconds(),
+        )
+        .unwrap(),
+        preview: value.preview.clone(),
+        latest: Some(
+            gents_lean_vocab::families::contracts_tool_activity::LatestWire {
+                doc_id: if latest.request_doc_id == request_doc_id {
+                    case.event.doc_id
+                } else {
+                    latest
+                        .request_doc_id
+                        .strip_prefix("model-request-")
+                        .unwrap()
+                        .parse()
+                        .unwrap()
+                },
+                request_id: case.event.request_id,
+                state: serde_json::to_value(latest.lifecycle_state)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            },
+        ),
+    };
+    assert_eq!(
+        observation(&modeled, case.event.doc_id, request_doc_id, request_id, epoch),
+        *value,
+        "the observation carries state its modeled wire form does not"
+    );
+    modeled
+}
+
 #[tokio::test]
 async fn tool_publications_follow_lean_session_activity() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_projection_cases;
-    let cases: Vec<_> = cases
-        .iter()
-        .filter(|case| case["operation"] == "tool_activity")
-        .collect();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
+    for case in gents_lean_vocab::families::contracts_tool_activity::cases::<String>() {
+        let input = &case.input;
+        let name = input.name.as_str();
         let (mut admission, mut owner) =
             published_admission_with_owner(PublishedAdmissionOptions {
                 name: format!("session-activity-{name}"),
@@ -58,13 +103,13 @@ async fn tool_publications_follow_lean_session_activity() {
         let request_id = request.request_id.clone();
         let session_id = admission.tool.session_id.clone();
         let epoch = Utc::now();
-        let published = case["published"].as_bool().unwrap();
+        let published = input.published;
         if !published {
             admission.tool.complete("ok").await.unwrap();
         }
         let before = observation(
-            &case["before"]["observation"],
-            &case["event"],
+            input.before.observation.as_ref().unwrap(),
+            input.event.doc_id,
             &request_doc_id,
             &request_id,
             epoch,
@@ -87,7 +132,8 @@ async fn tool_publications_follow_lean_session_activity() {
                     .await?.unwrap().session)
             })
         }).await.unwrap();
-        for (turn, step) in case["steps"].as_array().unwrap().iter().enumerate() {
+        let mut steps = Vec::new();
+        for turn in 0..2usize {
             if published && turn > 0 {
                 admission.tool = publish_accepted_on_claimed_request(
                     admission.node.clone(),
@@ -103,7 +149,8 @@ async fn tool_publications_follow_lean_session_activity() {
                 .await
                 .unwrap();
             }
-            let now = epoch + Duration::seconds(step["now"].as_i64().unwrap());
+            let step_now = input.now + turn as u64;
+            let now = epoch + Duration::seconds(i64::try_from(step_now).unwrap());
             let changed = admission
                 .tool
                 .terminalize_raw_with_presentation_at(
@@ -148,17 +195,27 @@ async fn tool_publications_follow_lean_session_activity() {
             )
             .await
             .unwrap();
-            let expected = observation(
-                &step["after"]["observation"],
-                &case["event"],
+            let mut unchanged = after.clone();
+            unchanged.observation = before_session.observation.clone();
+            assert_eq!(unchanged, before_session, "{name} turn {turn}");
+            let mut modeled = input.before.clone();
+            modeled.observation = Some(modeled_observation(
+                after.observation.as_ref().unwrap(),
+                input,
                 &request_doc_id,
                 &request_id,
                 epoch,
+            ));
+            steps.push(
+                gents_lean_vocab::families::contracts_tool_activity::ToolActivityStep {
+                    now: step_now,
+                    after: modeled,
+                },
             );
-            let mut expected_session = before_session.clone();
-            expected_session.observation = Some(expected);
-            assert_eq!(after, expected_session, "{name} turn {turn}");
         }
+        case.check(
+            gents_lean_vocab::families::contracts_tool_activity::ToolActivityOutput { steps },
+        );
         drop(owner);
         admission
             .node

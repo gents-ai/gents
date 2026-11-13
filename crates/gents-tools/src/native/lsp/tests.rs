@@ -3051,34 +3051,18 @@ async fn start_client_initializes_with_pool_key_workspace() {
 
 #[tokio::test]
 async fn generated_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["artifact_spawn_cases"].as_array().unwrap();
-    let cases: Vec<_> = cases
-        .iter()
-        .filter(|case| case["name"] == "persistent_lsp_denied_before_pool_lookup")
-        .collect();
-    assert_eq!(cases.len(), 1);
-    assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch(cases[0]).await;
+    for case in gents_lean_vocab::families::contracts_artifact_spawn_lsp::cases() {
+        assert_eq!(case.input.kind, "persistent_lsp");
+        assert_eq!(case.input.requested_mode, "artifact_write");
+        case.check(
+            gents_lean_vocab::families::contracts_artifact_spawn_lsp::ArtifactSpawnOutput {
+                mode: assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch().await,
+            },
+        );
+    }
 }
 
-pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch(
-    case: &serde_json::Value,
-) {
-    assert_eq!(case["name"], "persistent_lsp_denied_before_pool_lookup");
-    assert_eq!(case["kind"], "persistent_lsp");
-    assert_eq!(case["mode"], "artifact_write");
-    assert_eq!(case["binding"]["authority"], "readOnly");
-    assert_eq!(case["binding"]["state"], "sealed");
-    for key in [
-        "seal_matches",
-        "owner_matches",
-        "incarnation_matches",
-        "private_root_eligible",
-        "sandbox_enforced",
-    ] {
-        assert_eq!(case["binding"][key], true);
-    }
-    assert!(case["expected_mode"].is_null());
+async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Option<String> {
     let fixture = gents_session::workspace::artifact_test_fixture(&[]).await;
     let source = fixture.grant.source_root().to_path_buf();
     let mut server = rust_analyzer_server(1);
@@ -3103,7 +3087,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+    let spawned = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
@@ -3123,8 +3107,9 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
             artifact_config.constraints.execution_mode = CommandExecutionMode::ArtifactWrite;
             artifact_config.constraints.sandbox = CommandExecutionMode::ArtifactWrite;
             let artifact_tool = LspTool::new(artifact_config, pool.clone()).unwrap();
+            let mut spawned = None;
             for tested_tool in [&tool, &artifact_tool] {
-                let error = tested_tool
+                let result = tested_tool
                     .call(LspArgs {
                         action: "capabilities".into(),
                         file: Some("README.md".into()),
@@ -3137,15 +3122,17 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
                         timeout: None,
                         limit: None,
                     })
-                    .await
-                    .unwrap_err();
-                assert!(matches!(
-                    error,
-                    ToolError::ReportedFailure {
-                        class: FailureClass::PolicyDenied,
-                        ..
-                    }
-                ));
+                    .await;
+                match result {
+                    Ok(_) => spawned = Some(CommandExecutionMode::ArtifactWrite.as_str().to_string()),
+                    Err(error) => assert!(matches!(
+                        error,
+                        ToolError::ReportedFailure {
+                            class: FailureClass::PolicyDenied,
+                            ..
+                        }
+                    )),
+                }
             }
             let error = pool
                 .get_or_start(key.clone(), &server, &config)
@@ -3162,8 +3149,10 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
             )
             .await;
             assert_eq!(linter.as_deref(), Some(super::ARTIFACT_SCOPE_DENIAL));
+            spawned
         },
     )
     .await;
     assert_eq!(pool.live_count().await, 0);
+    spawned
 }
