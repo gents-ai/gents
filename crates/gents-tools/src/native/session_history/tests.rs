@@ -46,14 +46,15 @@ fn usage_duration_requires_valid_provider_intervals_and_excludes_queue_time() {
 }
 
 async fn seeded_node() -> gents_inference::test_support::TestDb {
-    let db = gents_inference::test_support::test_db(
+    let identities = tempfile::tempdir().unwrap();
+    let node_identity = pin_fixed_signing_identity(identities.path());
+    let db = gents_inference::test_support::test_db_as(
         "session-history",
+        node_identity.did(),
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
     let node = db.node.clone();
-    let identities = tempfile::tempdir().unwrap();
-    let node_identity = pin_fixed_signing_identity(identities.path());
     let other_identity =
         KeyIdentity::load_or_create(identities.path().join("other.key"), None).unwrap();
     assert_eq!(node_identity.did(), PIN_FIXED_DID);
