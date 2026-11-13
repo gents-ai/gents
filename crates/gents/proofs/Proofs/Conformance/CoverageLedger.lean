@@ -487,6 +487,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "family" "network_protocol_resource")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "identity_secret_publication_creation")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "eval_records_published")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "eval_records_published_unreached"
@@ -870,9 +871,18 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: wrong-head claim, incoherent supplied owner and interrupted publication are rejected by the native queue and owned-execution owners only on persisted rows no production scenario builds; the exact physical interrupt latch, like native interrupt_request_by_doc_id, permits terminal rows and preserves an existing stamp.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "aggregate_token_budget_cases"
-      "AggregateTokenBudgetCases"
+      "family"
+      "aggregate_budget_ledger"
       "Exercises charged-usage summation and the owned loop budget ledger. Database selection of restart rows and missing-usage rejection still need completion-owner observations.")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "family"
+      "aggregate_budget_ledger_unreached"
+      "model-production-gap: the owned loop ledger receives usage rows already scoped to the physical request; a history that mixes requests reaches only the served rehydration test.")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "aggregate_budget_shared")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -2450,8 +2460,8 @@ def caseCoverage : List CoverageEntry :=
       "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "reasoning_delta_cases"
-      "ReasoningDeltaCases"
+      "family"
+      "reasoning_deltas_coalesce"
       "Generated fragment cases drive the native accumulator across reasoning identities, signed boundaries, text boundaries and UTF-8 bytes.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2484,20 +2494,20 @@ def caseCoverage : List CoverageEntry :=
       "WorkspaceCommandGrantAnswers")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_command_grant_lookups"
-      "WorkspaceCommandGrantLookups")
+      "family"
+      "workspace_command_grants_lookup")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_command_grant_revocations"
       "WorkspaceCommandGrantRevocations")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_permission_write_cases"
-      "WorkspacePermissionWriteCases")
+      "family"
+      "workspace_permissions_selection")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_permission_write_cases"
-      "WorkspacePermissionWriteCases"
+      "family"
+      "workspace_permissions_persisted_selection"
       "Generated transitions drive persisted selections with policy fingerprints on one Task ID, stale revisions, missing reviewers, retained references, no-op writes and exhausted revisions. Concurrent locking and filesystem failure handling need adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2541,8 +2551,18 @@ def caseCoverage : List CoverageEntry :=
       "Generated decisions drive the shared path guard with real files, hard links, nested approval queues, missing targets and failed filesystem inspection. File-tool regressions verify that both reads and writes reject operator aliases before touching contents. Filesystem handle identity and concurrent external namespace changes remain native premises.")
       "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "workspace_permission_cases"
-      "WorkspacePermissionCases"
+      "family"
+      "workspace_permissions_routing"
+      "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "workspace_permissions_sandboxed_background"
+      "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "workspace_permissions_unsandboxed_background"
       "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2622,8 +2642,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_prompt_assembly_layer")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "prompt_assembly_repair_cases"
-      "PromptAssemblyRepairCases")
+      "family"
+      "prompt_assembly_repair_args")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2638,8 +2658,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_prompt_assembly_compaction_trigger")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "prompt_assembly_retention_cases"
-      "PromptAssemblyRetentionCases")
+      "family"
+      "prompt_assembly_budget_retention")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2715,7 +2735,11 @@ def caseCoverage : List CoverageEntry :=
       "family" "contracts_prompt_assembly_claude_checkpoint"
       "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "provider_tool_identity_cases" "ProviderToolIdentityCases")
+  , tagged (consumerCoverage "family" "provider_tool_identity_normalized")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "provider_tool_identity_projected")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "provider_tool_identity_assembled")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family" "contracts_prompt_assembly_assistant_order"

@@ -250,6 +250,11 @@ import Proofs.Conformance.ProviderUsage
 import Proofs.Conformance.TitleAdmission
 import Proofs.Conformance.TitleText
 import Proofs.Conformance.Contracts.Json.PromptAssembly
+import Proofs.Conformance.PromptAssemblyBudget
+import Proofs.Conformance.PromptAssemblyRepair
+import Proofs.Conformance.ProviderToolIdentity
+import Proofs.Conformance.ReasoningDeltas
+import Proofs.Conformance.AggregateBudget
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
@@ -328,8 +333,6 @@ open Conformance.ContractCases
 within Lean's interpreter recursion limit. -/
 def snapshotPromptTailJson : String :=
   ""
-    ++ "\"prompt_assembly_retention_cases\":"
-      ++ promptAssemblyRetentionCasesJson ++ ","
 
 def snapshotCaptureTailJson : String :=
   ""
@@ -347,8 +350,6 @@ def snapshotCaptureTailJson : String :=
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
     ++ "\"client_request_publication_cases\":"
       ++ Identity.SessionChild.clientRequestPublicationCasesJson ++ ","
-    ++ "\"aggregate_token_budget_cases\":"
-      ++ aggregateTokenBudgetCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
     ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
@@ -423,13 +424,10 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
-    ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
-    ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
     ++ "\"operator_path_cases\":" ++ Conformance.OperatorPaths.casesJson.compress ++ ","
     ++ "\"access_review_task_cases\":" ++ Conformance.AccessReview.taskCasesJson.compress ++ ","
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
     ++ "\"workspace_command_grant_answers\":" ++ Conformance.WorkspaceCommandGrants.answersJson.compress ++ ","
-    ++ "\"workspace_command_grant_lookups\":" ++ Conformance.WorkspaceCommandGrants.lookupsJson.compress ++ ","
     ++ "\"workspace_command_grant_revocations\":" ++ Conformance.WorkspaceCommandGrants.revocationsJson.compress ++ ","
     ++ "\"goal_claimed_publication_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
@@ -784,15 +782,10 @@ def snapshotFileCasesJson : String :=
       (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
     ++ "\"reasoning_signature_cases\":" ++ jsonArray
       (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
-    ++ "\"reasoning_delta_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningDeltas.cases.map reasoningDeltaCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
-    ++ "\"provider_tool_identity_cases\":" ++ providerToolIdentityCasesJson ++ ","
 
-    ++ "\"prompt_assembly_repair_cases\":"
-      ++ promptAssemblyRepairCasesJson ++ ","
 
 def snapshotJson : String :=
   "{"

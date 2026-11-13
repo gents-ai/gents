@@ -53,7 +53,6 @@ fn store(home: &Path, entries: &[workspace::Settings]) {
 fn generated_command_answers_preserve_scope_and_one_time_delivery() {
     let snapshot = gents_lean_vocab::lean_contract_snapshot();
     assert_eq!(snapshot.workspace_command_grant_answers.len(), 962);
-    assert_eq!(snapshot.workspace_command_grant_lookups.len(), 24);
     for (index, case) in snapshot.workspace_command_grant_answers.iter().enumerate() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();

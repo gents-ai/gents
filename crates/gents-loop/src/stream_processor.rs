@@ -1137,61 +1137,68 @@ mod tests {
     }
 
     #[test]
-    fn generated_reasoning_delta_cases_coalesce_native_parts() {
-        use gents_lean_vocab::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
+    fn reasoning_deltas_coalesce_as_the_lean_model_does() {
+        use gents_lean_vocab::families::reasoning_deltas_coalesce::{DeltaInput, PartWire};
         use gents_protocol::message::ReasoningContent;
-
-        for case in lean_reasoning_delta_cases() {
-            let mut accumulator = AssistantTurnAccumulator::default();
-            for part in &case.before {
-                match part {
-                    Part::Reasoning {
-                        id,
-                        signature,
-                        bytes,
-                    } => accumulator.push_reasoning(Reasoning {
-                        id: id.map(|id| id.to_string()),
-                        content: vec![ReasoningContent::Text {
-                            text: String::from_utf8(bytes.clone()).unwrap(),
-                            signature: signature.map(|signature| signature.to_string()),
-                        }],
-                    }),
-                    Part::Text { bytes } => {
-                        accumulator.push_text(std::str::from_utf8(bytes).unwrap())
+        gents_lean_vocab::families::reasoning_deltas_coalesce::replay::<String>(
+            |case: &DeltaInput<String>| {
+                let mut accumulator = AssistantTurnAccumulator::default();
+                for part in &case.before {
+                    match part.kind.as_str() {
+                        "reasoning" => accumulator.push_reasoning(Reasoning {
+                            id: part.id.map(|id| id.to_string()),
+                            content: vec![ReasoningContent::Text {
+                                text: String::from_utf8(
+                                    part.bytes.iter().map(|byte| *byte as u8).collect(),
+                                )
+                                .unwrap(),
+                                signature: part.signature.map(|signature| signature.to_string()),
+                            }],
+                        }),
+                        "text" => accumulator.push_text(
+                            &String::from_utf8(part.bytes.iter().map(|byte| *byte as u8).collect())
+                                .unwrap(),
+                        ),
+                        other => panic!("{case:?}: unknown part kind {other}"),
                     }
                 }
-            }
-            accumulator.push_reasoning_delta(
-                case.id.map(|id| id.to_string()),
-                std::str::from_utf8(&case.fragment).unwrap(),
-            );
-            let Some(Message::Assistant { content, .. }) = accumulator.take_message() else {
-                panic!("{}: missing assistant message", case.name);
-            };
-            let actual = content
-                .into_iter()
-                .flat_map(|part| match part {
-                    AssistantContent::Text(text) => vec![Part::Text {
-                        bytes: text.text.into_bytes(),
-                    }],
-                    AssistantContent::Reasoning(reasoning) => reasoning
-                        .content
-                        .into_iter()
-                        .map(|part| {
-                            let ReasoningContent::Text { text, signature } = part else {
-                                panic!("{}: unexpected reasoning type", case.name);
-                            };
-                            Part::Reasoning {
-                                id: reasoning.id.as_ref().map(|id| id.parse().unwrap()),
-                                signature: signature.map(|signature| signature.parse().unwrap()),
-                                bytes: text.into_bytes(),
-                            }
-                        })
-                        .collect(),
-                    _ => panic!("{}: unexpected content type", case.name),
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(actual, case.expected, "{}", case.name);
-        }
+                accumulator.push_reasoning_delta(
+                    case.id.map(|id| id.to_string()),
+                    &String::from_utf8(case.fragment.iter().map(|byte| *byte as u8).collect())
+                        .unwrap(),
+                );
+                let Some(Message::Assistant { content, .. }) = accumulator.take_message() else {
+                    panic!("{case:?}: missing assistant message");
+                };
+                content
+                    .into_iter()
+                    .flat_map(|part| match part {
+                        AssistantContent::Text(text) => vec![PartWire {
+                            kind: "text".into(),
+                            id: None,
+                            signature: None,
+                            bytes: text.text.into_bytes().into_iter().map(u64::from).collect(),
+                        }],
+                        AssistantContent::Reasoning(reasoning) => reasoning
+                            .content
+                            .into_iter()
+                            .map(|part| {
+                                let ReasoningContent::Text { text, signature } = part else {
+                                    panic!("{case:?}: unexpected reasoning type");
+                                };
+                                PartWire {
+                                    kind: "reasoning".into(),
+                                    id: reasoning.id.as_ref().map(|id| id.parse().unwrap()),
+                                    signature: signature
+                                        .map(|signature| signature.parse().unwrap()),
+                                    bytes: text.into_bytes().into_iter().map(u64::from).collect(),
+                                }
+                            })
+                            .collect(),
+                        _ => panic!("{case:?}: unexpected content type"),
+                    })
+                    .collect()
+            },
+        );
     }
 }

@@ -2,6 +2,8 @@ import Lean
 import Proofs.Tools.ToolPolicy.WorkspaceCommandGrants
 import Proofs.Conformance.PluginApproval
 import Proofs.Conformance.Contracts.Json.ToolPolicy
+import Proofs.Conformance.WorkspacePermissions
+import Proofs.Conformance.Family
 
 namespace Conformance.WorkspaceCommandGrants
 
@@ -76,21 +78,24 @@ def revokeCases : List Json :=
       ("grants", toJson (grants.map permissionGrantJson)), ("result", resultJson result),
       ("remaining", toJson (nextGrants.map permissionGrantJson))]
 
-def lookupCases : List Json :=
-  [[], [target], [{ target with action := 2 }], [{ target with scope := ⟨2, 2⟩ }],
-    [{ target with scope := ⟨1, 1⟩ }], [target, target]].flatMap fun grants =>
-    [target, { target with action := 2 }, { target with scope := ⟨2, 2⟩ },
-      { target with scope := ⟨1, 1⟩ }].map fun expected =>
-      Json.mkObj [("grants", toJson (grants.map permissionGrantJson)),
-        ("expected", permissionGrantJson expected),
-        ("allowed", toJson (WorkspaceCommandGrants.hasGrant grants expected))]
+structure LookupInput where
+  grants : List Grant
+  expected : Grant
+  deriving ToJson
+
+@[conformance_family]
+def lookup : Family LookupInput Bool where
+  inputs :=
+    [[], [target], [{ target with action := 2 }], [{ target with scope := ⟨2, 2⟩ }],
+      [{ target with scope := ⟨1, 1⟩ }], [target, target]].flatMap fun grants =>
+      [target, { target with action := 2 }, { target with scope := ⟨2, 2⟩ },
+        { target with scope := ⟨1, 1⟩ }].map fun expected => { grants, expected }
+  model := fun i => WorkspaceCommandGrants.hasGrant i.grants i.expected
 
 def answersJson : Json := toJson (answerCases ++ otherKindCases)
 def revocationsJson : Json := toJson revokeCases
-def lookupsJson : Json := toJson lookupCases
 
 example : answerCases.length = 960 := by native_decide
 example : revokeCases.length = 54 := by native_decide
-example : lookupCases.length = 24 := by native_decide
 
 end Conformance.WorkspaceCommandGrants

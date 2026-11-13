@@ -327,18 +327,6 @@ def promptAssemblyLayer : Family PromptAssemblyLayerInput (List String) where
   model := fun i =>
     (PromptAssembly.assemble i.skillCount i.summaryCount i.conversationLen).map slotName
 
-def promptAssemblyRepairCaseJson (witness : PromptAssemblyRepairCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"input\":" ++ jsonString witness.input ++ ","
-    ++ "\"expected\":" ++ jsonString witness.expected ++ ","
-    ++ "\"expected_twice\":" ++ jsonString witness.expectedTwice ++ ","
-    ++ "\"payload_only\":" ++ boolString witness.payloadOnly
-    ++ "}"
-
-def promptAssemblyRepairCasesJson : String :=
-  jsonArray (promptAssemblyRepairCases.map promptAssemblyRepairCaseJson)
-
 structure PromptAssemblyBudgetInput where
   contextWindow : Nat
   maxOutputTokens : Nat
@@ -476,25 +464,6 @@ def promptAssemblyCompactionTrigger : Family CompactionTriggerInput CompactionTr
         i.contextWindow i.thresholdBasisPoints i.maxOutputTokens
       admission := state.admission i.rawInputTokens i.contextWindow
         i.thresholdBasisPoints i.maxOutputTokens }
-
-def promptAssemblyRetentionCaseJson
-    (witness : PromptAssemblyRetentionCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"configured_keep_recent\":" ++ toString witness.configuredKeepRecent ++ ","
-    ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
-    ++ "\"fixed_input\":" ++ toString witness.fixedInput ++ ","
-    ++ "\"available_input\":" ++ toString witness.availableInput ++ ","
-    ++ "\"retention_target\":" ++ toString witness.retentionTarget ++ ","
-    ++ "\"summary_max_output\":" ++ toString witness.summaryMaxOutput ++ ","
-    ++ "\"effective_summary_output\":"
-      ++ toString witness.effectiveSummaryOutput ++ ","
-    ++ "\"rolling_summary_input_budget\":"
-      ++ toString witness.rollingSummaryInputBudget
-    ++ "}"
-
-def promptAssemblyRetentionCasesJson : String :=
-  jsonArray (promptAssemblyRetentionCases.map promptAssemblyRetentionCaseJson)
 
 structure ClaudeBlockWire where
   kind : String
@@ -1276,19 +1245,6 @@ def serviceTierTransport : Family ServiceTierInput ServiceTierWire where
   inputs := (PromptAssembly.ServiceTier.cases.filter fun c =>
       PromptAssembly.ServiceTier.supports c.family).map ServiceTierInput.ofCase
   model := fun i => { wire := i.decision.wire }
-
-def providerToolIdentityJson (identity : PromptAssembly.ToolCallIdentity.Identity) : String :=
-  "{\"id\":" ++ jsonString identity.nativeId ++
-    ",\"call_id\":" ++ jsonOptionalString identity.callId ++
-    ",\"openai_item_id\":" ++ jsonOptionalString
-      (PromptAssembly.ToolCallIdentity.openAiItemId identity.nativeId) ++ "}"
-
-def providerToolIdentityCasesJson : String :=
-  jsonArray (providerToolIdentityCases.map fun row =>
-    "{\"name\":" ++ jsonString row.name ++
-    ",\"responses\":" ++ toString row.responses ++
-    ",\"input\":" ++ jsonArray (row.input.map providerToolIdentityJson) ++
-    ",\"expected\":" ++ jsonArray (row.expected.map providerToolIdentityJson) ++ "}")
 
 deriving instance Lean.ToJson for DiscoveryGuidanceCase
 
