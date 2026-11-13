@@ -1025,7 +1025,10 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     .expect("native revocation did not finish while the claim was open")
     .unwrap();
     pause.resume.notify_one();
-    claims.push(((true, false, false), paused.await.unwrap().unwrap().is_some()));
+    claims.push((
+        (true, false, false),
+        paused.await.unwrap().unwrap().is_some(),
+    ));
     let retained = recover_claim(&agent_access, &agent, runtime.did(), &first_claim)
         .await
         .unwrap()

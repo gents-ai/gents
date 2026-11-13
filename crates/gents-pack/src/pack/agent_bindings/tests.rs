@@ -470,7 +470,8 @@ fn an_agent_binding_is_never_read_from_the_process_environment() {
         "GENTS_PACK_BIND_AGENT_AMBIENT_WORKER",
         "did:key:ambient",
     );
-    let _plain = gents_store::test_support::EnvVarGuard::set("GENTS_FIXTURE_INSTALL_PLAIN", "plain");
+    let _plain =
+        gents_store::test_support::EnvVarGuard::set("GENTS_FIXTURE_INSTALL_PLAIN", "plain");
     let value = |variables: &gents_protocol::operations::pack::PackVariables, name: &str| {
         crate::operations::pack::install_value(
             gents_protocol::operations::pack::PackActor::User,

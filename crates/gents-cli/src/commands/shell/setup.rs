@@ -309,7 +309,9 @@ pub(crate) async fn connect_first_sign_in(
     };
     let model = recommend(&connection, model).map_err(anyhow::Error::msg)?;
     let settings = model.settings.into_iter();
-    let settings: Vec<_> = settings.map(|setting| (setting.key, setting.value)).collect();
+    let settings: Vec<_> = settings
+        .map(|setting| (setting.key, setting.value))
+        .collect();
     let saved = save(access, node_did, &connection, &model.id, &settings).await;
     saved.map(Some).map_err(anyhow::Error::msg)
 }

@@ -452,8 +452,7 @@ fn base_freeze_recovery_matches_the_lean_model() {
                     .to_owned(),
                     workspace_state: workspace.lifecycle_state.clone(),
                     sealed_at_base: workspace.seal_hash.as_deref() == Some(base_tree.as_str()),
-                    placement_at_base: docs.inner.placements["freeze-recovery"]
-                        .observed_tree_hash
+                    placement_at_base: docs.inner.placements["freeze-recovery"].observed_tree_hash
                         == base_tree,
                     workspace_writes: docs.workspace_writes as u64,
                     placement_writes: docs.placement_writes as u64,

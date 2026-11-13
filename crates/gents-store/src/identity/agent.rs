@@ -278,7 +278,9 @@ pub async fn observe_document_permissions(
     permissions: &[String],
 ) -> std::result::Result<Option<ObservedDocumentPermissions>, AgentAdmissionObservationError> {
     use crate::config_client::{ConfigAccess, ConfigClientError, NodePermission};
-    use gents_protocol::document_query::{self as query, fields::node as fields, Filter, Query, Selection};
+    use gents_protocol::document_query::{
+        self as query, fields::node as fields, Filter, Query, Selection,
+    };
     if node.node_identity_did() != Some(node_did) {
         return Err(AgentAdmissionObservationError::NodeMismatch);
     }
@@ -374,7 +376,10 @@ pub async fn provision_agent_identity_for_agent(
                 .render();
                 let response = txn.run(&rendered).await?;
                 Ok::<_, crate::config_client::ConfigClientError>(
-                    response["data"]["Agent"].as_array().cloned().unwrap_or_default(),
+                    response["data"]["Agent"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
                 )
             })
         })

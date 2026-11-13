@@ -1743,7 +1743,11 @@ mod tests {
                 Ok(super::PendingRejectionOutcome::NotMatched) => "not_matched".to_owned(),
                 unexpected => panic!("unexpected pending rejection result: {unexpected:?}"),
             };
-            case.check(gents_lean_vocab::families::pending_rejection_selection::RejectionOutput { outcome });
+            case.check(
+                gents_lean_vocab::families::pending_rejection_selection::RejectionOutput {
+                    outcome,
+                },
+            );
         }
         node.shutdown().await.unwrap();
     }

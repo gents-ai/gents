@@ -132,7 +132,8 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
 /// foregrounded. Each row supplies its own kind and await mode.
 #[tokio::test]
 async fn generated_plugin_job_restart_and_foreground_rows_match_owners() {
-    for case in gents_lean_vocab::families::contracts_restart_plugin_job::cases::<String, String>() {
+    for case in gents_lean_vocab::families::contracts_restart_plugin_job::cases::<String, String>()
+    {
         let input = &case.input;
         let name = input.name.as_str();
         let await_mode = AwaitMode::from_persisted(&input.await_mode)

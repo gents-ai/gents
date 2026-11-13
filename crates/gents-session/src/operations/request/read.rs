@@ -33,17 +33,11 @@ pub(super) async fn read_rows(
         .map_err(RequestOperationError::passthrough)?;
     rows(&response, Doc::NAME)
         .iter()
-        .map(|row| {
-            serde_json::from_value(row.clone()).map_err(RequestOperationError::passthrough)
-        })
+        .map(|row| serde_json::from_value(row.clone()).map_err(RequestOperationError::passthrough))
         .collect()
 }
 
-pub(super) fn scoped(
-    node_did: &str,
-    requester_did: Option<&str>,
-    query: Query<Doc>,
-) -> Query<Doc> {
+pub(super) fn scoped(node_did: &str, requester_did: Option<&str>, query: Query<Doc>) -> Query<Doc> {
     let query = query.filter(Filter::eq(fields::NODE_DID, node_did));
     match requester_did {
         Some(requester) => query.filter(Filter::eq(fields::REQUESTER_DID, requester)),
@@ -100,7 +94,9 @@ pub(super) async fn receipt(
         || row.session_id.as_deref() != Some(session_id)
         || row.requester_did.as_deref() != Some(requester_did)
     {
-        return Err(mismatch("it is outside the send's node, session or requester"));
+        return Err(mismatch(
+            "it is outside the send's node, session or requester",
+        ));
     }
     gents_store::identity::request_receipt::verify_request_receipt_signature(&row)
         .map_err(RequestOperationError::passthrough)?;

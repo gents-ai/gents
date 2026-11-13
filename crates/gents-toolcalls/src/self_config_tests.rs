@@ -1485,8 +1485,7 @@ async fn structured_config_preview_and_apply_match_the_lean_model() {
             after["document"]["system_prompt"].as_str() == Some(prompt.as_str());
         request["set"] = json!({"node_did":"foreign"});
         let foreign_refused = tool.call(request.to_string()).await.is_err();
-        let after_refusal: Value =
-            serde_json::from_str(&tool.call(read).await.unwrap()).unwrap();
+        let after_refusal: Value = serde_json::from_str(&tool.call(read).await.unwrap()).unwrap();
         let unchanged_after_refusal = after_refusal == after;
         case.check(TraceOutput {
             preview_committed,

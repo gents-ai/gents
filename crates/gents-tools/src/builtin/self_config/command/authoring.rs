@@ -710,27 +710,25 @@ mod tests {
 
     #[test]
     fn authoring_file_mode_admission_matches_the_lean_model() {
-        gents_lean_vocab::families::authoring_file_mode_admission::replay(
-            |i| {
-                let mode = gents_documents::FileToolMode::parse(&i.mode)
-                    .expect("the family emits production file tool mode names");
-                let result = ensure_mode(mode, i.write, &i.operation);
-                let refusal = result.as_ref().err().map(|error| {
-                    let message = format!("{error:#}");
-                    if message.contains("file permission") {
-                        "file_permission".to_owned()
-                    } else if message.contains("readwrite") {
-                        "readwrite".to_owned()
-                    } else {
-                        format!("unnamed: {message}")
-                    }
-                });
-                gents_lean_vocab::families::authoring_file_mode_admission::AdmissionOutput {
-                    admitted: result.is_ok(),
-                    refusal,
+        gents_lean_vocab::families::authoring_file_mode_admission::replay(|i| {
+            let mode = gents_documents::FileToolMode::parse(&i.mode)
+                .expect("the family emits production file tool mode names");
+            let result = ensure_mode(mode, i.write, &i.operation);
+            let refusal = result.as_ref().err().map(|error| {
+                let message = format!("{error:#}");
+                if message.contains("file permission") {
+                    "file_permission".to_owned()
+                } else if message.contains("readwrite") {
+                    "readwrite".to_owned()
+                } else {
+                    format!("unnamed: {message}")
                 }
-            },
-        );
+            });
+            gents_lean_vocab::families::authoring_file_mode_admission::AdmissionOutput {
+                admitted: result.is_ok(),
+                refusal,
+            }
+        });
     }
 
     #[test]

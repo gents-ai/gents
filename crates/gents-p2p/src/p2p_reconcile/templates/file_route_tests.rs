@@ -16,8 +16,8 @@ fn generated_routes_follow_executable_scope_filters() {
             expected: actual
                 .get_key_value(&input.demand_collection)
                 .map(|(collection, filter)| {
-                    let (field, value) = single_string_eq(filter)
-                        .expect("a demand filter is one string equality");
+                    let (field, value) =
+                        single_string_eq(filter).expect("a demand filter is one string equality");
                     CollectionPredicate {
                         collection: collection.clone(),
                         clauses: vec![FilterClause {

@@ -413,9 +413,15 @@ mod tests {
         let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
             .unwrap_err()
             .to_string();
-        assert!(error.starts_with(&executable.display().to_string()), "{error}");
+        assert!(
+            error.starts_with(&executable.display().to_string()),
+            "{error}"
+        );
         assert!(error.contains("--desktop-executable"), "{error}");
-        assert!(error.ends_with("unexpected argument '--check' found"), "{error}");
+        assert!(
+            error.ends_with("unexpected argument '--check' found"),
+            "{error}"
+        );
     }
 
     fn initialized_reset(user: &std::path::Path) -> (std::path::PathBuf, HomeResetPlan) {

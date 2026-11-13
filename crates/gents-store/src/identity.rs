@@ -24,14 +24,13 @@ pub use agent::{
     AgentProvisionError, ObservedDocumentPermissions, RuntimeAgentProof,
 };
 pub use enrollment_approval::{
-    approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep, EnrollmentApproval,
-    EnrollmentApprovalError,
+    approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep,
+    EnrollmentApproval, EnrollmentApprovalError,
 };
 pub use enrollment_grant::{
     grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant,
-    plan_membership_withdrawal, plan_withdrawal,
-    EnrollmentGrantError, EnrollmentGrantOutcome, EnrollmentGrantReceipt, EnrollmentGrantTuple,
-    EnrollmentGrantWithdrawal,
+    plan_membership_withdrawal, plan_withdrawal, EnrollmentGrantError, EnrollmentGrantOutcome,
+    EnrollmentGrantReceipt, EnrollmentGrantTuple, EnrollmentGrantWithdrawal,
 };
 pub use error::{identity_key_unavailable, IdentityError, IdentityKeyUnavailable};
 pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};

@@ -9,12 +9,12 @@ fn origin_wire_modes_match_lean() {
         let mode = origin.wire_mode();
         family::OriginObservation {
             turn_origin: origin.turn_origin().map(str::to_owned),
-            turn_position: origin
-                .turn_position(i.prompts, i.position_lost)
-                .map(|(prompt_index, turn_index)| family::OriginPosition {
+            turn_position: origin.turn_position(i.prompts, i.position_lost).map(
+                |(prompt_index, turn_index)| family::OriginPosition {
                     prompt_index,
                     turn_index,
-                }),
+                },
+            ),
             identity: identity_for(false, mode.session).to_owned(),
             entrypoint: mode.entrypoint.to_owned(),
             background: mode.background,

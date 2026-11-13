@@ -71,9 +71,7 @@ fn staged_objects_refusal_matches_the_lean_model() {
                 observed = Some(
                     gents_lean_vocab::families::staged_permission_objects_refusal::RefusalOutput {
                         resolve_refused: resolved.is_err(),
-                        resolved_verbatim: resolved
-                            .as_ref()
-                            .is_ok_and(|path| path == &target),
+                        resolved_verbatim: resolved.as_ref().is_ok_and(|path| path == &target),
                         allow_create_refused: context.resolve_path_allow_create(text).is_err(),
                         mount_refused: gents_pack::plugin::allowed::ensure_mount_safe(&mount)
                             .is_err(),

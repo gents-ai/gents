@@ -33,10 +33,13 @@ async fn parent(
         "2026-10-21T00:00:00Z",
         AgentRequestAdmissionRecord::local_self(db.agent_did()),
     );
-    create.input.goal_assignment = model.reference.as_ref().map(|reference| GoalAssignmentInput {
-        goal_id: format!("goal-{}", reference.goal),
-        root_request_doc_id: reference.root.map(|root| documents[&root].doc_id.clone()),
-    });
+    create.input.goal_assignment = model
+        .reference
+        .as_ref()
+        .map(|reference| GoalAssignmentInput {
+            goal_id: format!("goal-{}", reference.goal),
+            root_request_doc_id: reference.root.map(|root| documents[&root].doc_id.clone()),
+        });
     gents_session::request::admission::sign_agent_request_create(
         db.agent_identity.as_ref(),
         &mut create,
@@ -137,7 +140,8 @@ fn scope_wire(
 
 #[tokio::test]
 async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
-    for case in gents_lean_vocab::families::goal_wake_coalescing_contracts_assignment_wakes::cases() {
+    for case in gents_lean_vocab::families::goal_wake_coalescing_contracts_assignment_wakes::cases()
+    {
         let name = case.input.name.as_str();
         let db = test_db_with(name, crate::lifecycle_hooks::composition()).await;
         let mut documents = RapidHashMap::new();
@@ -259,7 +263,10 @@ async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
         let first_wake = first_wake.request.unwrap();
         let second_wake = second_wake.request.unwrap();
         let coalesced = first_wake.doc_id == second_wake.doc_id;
-        for (wake, reference) in [(&first_wake, &referenced[0]), (&second_wake, &referenced[1])] {
+        for (wake, reference) in [
+            (&first_wake, &referenced[0]),
+            (&second_wake, &referenced[1]),
+        ] {
             let row = gents_session::request::binding::load_agent_request_with_access(
                 &db.agent_access,
                 &wake.request_id,
