@@ -5754,7 +5754,6 @@ dependencies = [
  "rustix",
  "rustls",
  "rustls-webpki",
- "schemars 0.8.22",
  "schemars 1.2.1",
  "sec1 0.7.3",
  "security-framework",

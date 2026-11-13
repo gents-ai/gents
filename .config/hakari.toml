@@ -1,7 +1,7 @@
 hakari-package = "gents-workspace-hack"
 dep-format-version = "4"
 resolver = "2"
-unify-target-host = "replicate-target-on-host"
+unify-target-host = "none"
 platforms = [
     "aarch64-apple-darwin",
     "x86_64-unknown-linux-gnu",
