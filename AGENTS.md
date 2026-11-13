@@ -173,7 +173,11 @@ another identity.
 
 **Rust**
 - Owner interfaces return module-owned `thiserror` enums, and callers match on
-  them. Do not decide behavior from error text. Print chains with
+  them. Only an owner asks an erased error for its own type, in a classifier
+  beside that type; error text is decided only in an adapter classifier whose
+  docstring states its `External premise:`. `write_owner_structure.rs`
+  registers both forms and counts every other downcast or text decision as
+  debt that only shrinks. Print chains with
   `gents_protocol::error_chain::ErrorChain`.
 - One Tokio runtime per process, built at its entry point. Never block a
   runtime thread: waits are `.await`, synchronous work goes to

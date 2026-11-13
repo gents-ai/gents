@@ -1990,6 +1990,130 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// or the caller asks the owner's classifier. This list only shrinks.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
+    // CreateGoalForSessionError in create_goal_for_session_inner
+    ("crates/gents-automation/src/goal/creation.rs", 2),
+    // MaterializeBudgetExhausted in fire_result_from_materialize; MaterializeDuplicate in fire_result_from_materialize
+    ("crates/gents-automation/src/triggers/engine/mod.rs", 2),
+    // Error in below
+    ("crates/gents-cli/src/commands/eval/manage.rs", 1),
+    // HistoryUnlockRequired in Provider::failed
+    ("crates/gents-client-host/src/editor_store.rs", 1),
+    // Error in Listener::bind
+    ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
+    // EnrollmentDecisionRejected in enrollment_request_is_not_visible_yet
+    ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
+    // TryLockError in reserve_client_listener
+    ("crates/gents-desktop-bridge/src/tauri_commands/lifecycle/single_flight.rs", 1),
+    // BackgroundApprovalPending in NativeLaunch::start; BridgeError in settle_launch_failure; RuntimeStillBooting in launch_managed_server; RuntimeStillBooting in settle_launch_failure
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
+    // UnsupportedNativeServicePlatform in native_error
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
+    // BridgeError in settle_adoption; RefusedStoreKind in refused_kind; RuntimeStillBooting in settle_adoption
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
+    // RemoteP2pAdminError in ClientRouteManager::reconcile_route
+    ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
+    // Error in classify_discovery_failure; ModelDiscoveryHttpError in classify_discovery_failure
+    ("crates/gents-desktop-core/src/inference.rs", 2),
+    // BaselineMismatch in freeze_job
+    ("crates/gents-eval/src/optimization/driver.rs", 1),
+    // ClosureDrift in drift_of
+    ("crates/gents-eval/src/optimization/promote.rs", 1),
+    // Error in unresolvable
+    ("crates/gents-eval/src/report/store.rs", 1),
+    // ActorBackendDiscoveryError in unavailable
+    ("crates/gents-host/src/http/inference_activity.rs", 1),
+    // EnrollmentDecisionRefusal in enrollment_decision_handler
+    ("crates/gents-host/src/http/router/accounts.rs", 1),
+    // ControlFailure in refusal_reason
+    ("crates/gents-host/src/prepare_runtime.rs", 1),
+    // CaptureStoreReadError in preload_isolate_verification_failures
+    ("crates/gents-inference/src/rendered_request/mod.rs", 2),
+    // RegistryError in offline_pack_error
+    ("crates/gents-pack/src/pack/resolve.rs", 1),
+    // NotLinkable in bind
+    ("crates/gents-pack/src/plugin/allowed.rs", 2),
+    // InternalAddress in send_error
+    ("crates/gents-pack/src/plugin/http_calls.rs", 1),
+    // Error in is_not_found
+    ("crates/gents-pack/src/plugin/install.rs", 1),
+    // E in any_error
+    ("crates/gents-pack/src/plugin/store.rs", 1),
+    // Error in graphql_transport_error_in_chain
+    ("crates/gents-protocol/src/graphql/transport.rs", 1),
+    // InvalidQueuePosition in verify_request_input
+    ("crates/gents-session/src/request/admission.rs", 1),
+    // ReconstructionError in recover_expired_generation_with_access_and_facts; ReconstructionError in validate_selection
+    ("crates/gents-session/src/request/lifecycle/canonical_recovery.rs", 2),
+    // PendingQueueChanged in RequestLifecycle::finish_natural_turn; ReconstructionError in select_terminal_output
+    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
+    // RenewalAdmissionExpired in renew_once_with_time
+    ("crates/gents-session/src/request/lifecycle/execution_renewal.rs", 1),
+    // InvalidQueuePosition in effective_slots
+    ("crates/gents-session/src/request/lifecycle/queue/position.rs", 1),
+    // ReconstructionError in definitive_output_corruption; RecoveryPlanError in definitive_output_corruption
+    ("crates/gents-session/src/request/lifecycle/recovery.rs", 2),
+    // PendingInputChanged in DefraStreamWriter::try_publish_steering_message
+    ("crates/gents-session/src/request/streaming.rs", 1),
+    // ReplayEvidenceViolation in load_canonical_assistant_candidates_using
+    ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
+    // CaptureStoreReadError in replay_capture_from_row
+    ("crates/gents-session/src/session/output/replay_capture.rs", 1),
+    // CanonicalOutputReadError in validated_canonical_replay_boundary
+    ("crates/gents-session/src/session/output/replay_request.rs", 1),
+    // CanonicalOutputReadError in classify_terminal_read_error; ReconstructionError in classify_terminal_read_error
+    ("crates/gents-session/src/session/request_output.rs", 2),
+    // Error in is_storage_full
+    ("crates/gents-store/src/graphql.rs", 1),
+    // BackendProtectionError in incompatible_store; Error in incompatible_store; IncompatibleStore in find_incompatible
+    ("crates/gents-store/src/local/storage_backend.rs", 3),
+    // StepFailure in JobDriver::step_once
+    ("crates/gents-toolcalls/src/background/job/driver.rs", 1),
+    // GuestTrap in step_on; RecordError in step_on
+    ("crates/gents-toolcalls/src/background/job/driver/step.rs", 2),
+    // ReconstructionError in caused_request_terminals_in_txn
+    ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
+    // BackgroundSlotRefusal in DefraSessionHook::persist_background_tool_call
+    ("crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", 1),
+    // BackgroundSlotRefusal in DefraSessionHook::session_message_commit
+    ("crates/gents-toolcalls/src/call/hook/persistence/session_message.rs", 1),
+    // RecordError in write_terminal_progress
+    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminal_effects.rs", 1),
+    // PluginWritesFailed in ToolCallLifecycle::terminalize_with_options_at
+    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
+    // WriteRecovery in WriteTool::call
+    ("crates/gents-toolcalls/src/plugin/application_write/mod.rs", 1),
+    // GuestTrap in PluginExecutor::run; PluginAttemptError in plugin_attempt_error
+    ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
+    // CollectionDiscoveryError in DefraQueryTool::call
+    ("crates/gents-tools/src/builtin/defra_query/mod.rs", 1),
+    // EnrollmentDecisionRefusal in P2pTool::call_one
+    ("crates/gents-tools/src/builtin/p2p.rs", 1),
+    // SchemaDigestMismatch in SchemaTool::call_one; SchemaSdlFailure in SchemaTool::call_one
+    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 2),
+    // BatchFailure in ConfigCommandTool::call
+    ("crates/gents-tools/src/builtin/self_config/command.rs", 1),
+    // CommandGuidance in ConfigCommandTool::failure_guidance; MissingAgent in ConfigCommandTool::failure_guidance; MissingConfigDocument in ConfigCommandTool::failure_guidance; MissingReference in ConfigCommandTool::failure_guidance; OutcomeSourceSchemaError in ConfigCommandTool::failure_guidance
+    ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
+    // MissingReference in ConfigCommandTool::validate_saved
+    ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
+    // StreamableHttpError in classify
+    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", 1),
+    // PathChanged in pending_requests; SelectionChanged in pending_requests
+    ("crates/gents-tools/src/plugin/approval.rs", 2),
+    // ExecutionOwnershipLost in drive_inference_stream
+    ("crates/gents/src/runtime/agent/daemon/inference/drive.rs", 1),
+    // ExecutionOwnershipLost in lost_execution_ownership
+    ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
+    // StaleCompactionGeneration in is_stale_compaction_generation
+    ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
+    // UnselectedDisabledBackend in resolve_agent_factories
+    ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
+    // ActiveSnapshotReceiverClosed in GenerationSupervisor::handle_proposal
+    ("crates/gents/src/runtime/agent/reconcile.rs", 1),
+    // FatalNodeReadinessWrite in is_fatal_node_readiness_write
+    ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
+    // ReplayEvidenceViolation in replay_resolution_error
+    ("crates/gents/src/turn/provider_input/replay.rs", 1),
 ];
 
 /// Owner classifiers: the functions through which an owner asks an erased
@@ -2001,6 +2125,32 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 /// a new entry is a reviewed addition.
 #[rustfmt::skip]
 const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
+    ("crates/gents-desktop-core/src/error.rs", &["BridgeError::classify_transport_error"]),
+    ("crates/gents-documents/src/desired_state/plan.rs", &["stale_expectation"]),
+    ("crates/gents-eval/src/optimization/driver.rs", &["job_refused"]),
+    ("crates/gents-eval/src/optimization/job.rs", &["journal_conflict"]),
+    ("crates/gents-eval/src/optimization/promote.rs", &["promote_refused"]),
+    ("crates/gents-eval/src/report/mod.rs", &["report_refused"]),
+    ("crates/gents-eval/src/runner/freeze.rs", &["freeze_refused"]),
+    ("crates/gents-eval/src/runner/mod.rs", &["provider_down"]),
+    ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", &["aggregate_token_budget_exhaustion_message"]),
+    ("crates/gents-pack/src/pack/core_packs.rs", &["plugin_interface_refusal"]),
+    ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
+    ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
+    ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
+    ("crates/gents-session/src/request/admission.rs", &["classify_context_error"]),
+    ("crates/gents-session/src/request/lifecycle.rs", &["is_claim_admission_error"]),
+    ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),
+    ("crates/gents-session/src/session/fork.rs", &["fork_error"]),
+    ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
+    ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
+    ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
+    ("crates/gents-store/src/local/home.rs", &["store_lock_held"]),
+    ("crates/gents-store/src/local/storage_backend.rs", &["find_incompatible", "find_insecure_key"]),
+    ("crates/gents-store/src/local/store_key.rs", &["store_key_unavailable"]),
+    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", &["auth_refusal_of"]),
+    ("crates/gents/src/eval/documents.rs", &["already_completed", "already_invalidated", "feedback_off_train"]),
+    ("crates/gents/src/runtime/agent/daemon.rs", &["ShutdownDrainFailure::occurs_in"]),
 ];
 
 /// The one generic chain walker; every other generic downcast hides the type
@@ -2013,6 +2163,10 @@ const CHAIN_WALKER: &str = "crates/gents-protocol/src/error_chain.rs";
 /// docstring names the external premise. This list only shrinks.
 #[rustfmt::skip]
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
+    // in P2pTool::call
+    ("crates/gents-tools/src/builtin/p2p.rs", 1),
+    // in SessionHistoryTool::call
+    ("crates/gents-tools/src/native/session_history.rs", 1),
 ];
 
 /// Adapter-boundary classifiers: functions that decide on error text because
@@ -2021,6 +2175,22 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
 /// debt; a new entry is a reviewed addition.
 #[rustfmt::skip]
 const ADAPTER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
+    ("crates/gents-cli/src/commands/eval/watch.rs", &["store_locked"]),
+    ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", &["provider_reason_from_failure"]),
+    ("crates/gents-loop/src/error.rs", &["ProviderReport::classify_failure_text"]),
+    ("crates/gents-loop/src/tool.rs", &["schema_args_error"]),
+    ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", &["classify_error_text"]),
+    ("crates/gents-migration/src/engine.rs", &["collection_already_exists"]),
+    ("crates/gents-observe/src/observe/trace_export.rs", &["looks_like_deadline_or_inference_failure"]),
+    ("crates/gents-protocol/src/graphql/response.rs", &["is_collection_missing_error_message"]),
+    ("crates/gents-protocol/src/node_readiness.rs", &["is_behavior_unavailable_rejection"]),
+    ("crates/gents-service/src/native_service.rs", &["ensure_launchd_result"]),
+    ("crates/gents-session/src/workspace/action_plan.rs", &["parse_action_plan_json"]),
+    ("crates/gents-session/src/workspace/adapter.rs", &["git_blob_missing"]),
+    ("crates/gents-store/src/config_client/retry.rs", &["ConfigClientError::is_missing_or_denied_write", "is_transaction_conflict_text"]),
+    ("crates/gents-tools/src/builtin/schema_help/mod.rs", &["sdl_help_call"]),
+    ("crates/gents-tools/src/builtin/self_config/command/patch.rs", &["serde_found_string"]),
+    ("crates/gents-tools/src/mcp/health.rs", &["classify_last_error"]),
 ];
 
 const EXTERNAL_PREMISE: &str = "External premise:";
@@ -2121,6 +2291,10 @@ fn macro_renders_error(invocation: &syn::Macro, bound: &[String]) -> bool {
                     ["{e:", "{e}", "{err", "{error"]
                         .iter()
                         .any(|start| text.contains(start))
+                        || bound.iter().any(|name| {
+                            text.contains(&format!("{{{name}}}"))
+                                || text.contains(&format!("{{{name}:"))
+                        })
                 }
                 _ => false,
             })
@@ -2272,9 +2446,10 @@ fn first_type(arguments: &syn::AngleBracketedGenericArguments) -> Option<&syn::T
 /// The Rust expressions a macro invocation holds. Macro input is not parsed
 /// by `syn`, so a site inside `matches!`, `assert!` or `tokio::select!` would
 /// otherwise never count. The input is read as an expression list, then as
-/// statements; where both fail it is split at `,`, `;`, `=>` and `if` and
-/// each piece is read alone. Pieces that are still not expressions give up
-/// their groups to the same reading and their remaining tokens to `loose`.
+/// statements; where both fail it is split at `,`, `;`, `=>` and `if`, and a
+/// piece that is no expression at its lone `:` (a `json!` key), and each
+/// piece is read alone. Pieces that are still not expressions give up their
+/// groups to the same reading and their remaining tokens to `loose`.
 fn macro_expressions(
     tokens: proc_macro2::TokenStream,
     parsed: &mut Vec<Expr>,
@@ -2309,9 +2484,18 @@ fn macro_expressions(
                     && equals.spacing() == Spacing::Joint
                     && greater.as_char() == '>'
         );
+        // A `,` before `>` ends a generic argument list, not an expression.
+        let closes_generics = matches!(
+            tokens.get(index + 1),
+            Some(TokenTree::Punct(next)) if next.as_char() == '>'
+        );
         let boundary = arrow
             || match &tokens[index] {
-                TokenTree::Punct(punct) => matches!(punct.as_char(), ',' | ';'),
+                TokenTree::Punct(punct) => match punct.as_char() {
+                    ',' => !closes_generics,
+                    ';' => true,
+                    _ => false,
+                },
                 TokenTree::Ident(ident) => ident == "if",
                 _ => false,
             };
@@ -2329,13 +2513,33 @@ fn macro_expressions(
         if piece.is_empty() {
             continue;
         }
-        match syn::parse2::<Expr>(piece.iter().cloned().collect()) {
-            Ok(expression) => parsed.push(expression),
-            Err(_) => {
-                for token in piece {
-                    match token {
-                        TokenTree::Group(group) => macro_expressions(group.stream(), parsed, loose),
-                        other => loose.push(other),
+        if let Ok(expression) = syn::parse2::<Expr>(piece.iter().cloned().collect()) {
+            parsed.push(expression);
+            continue;
+        }
+        let colon = |token: Option<&TokenTree>| matches!(token, Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
+        let mut keyed = vec![Vec::new()];
+        for (index, token) in piece.iter().enumerate() {
+            let lone = colon(Some(token))
+                && !colon(piece.get(index + 1))
+                && !(index > 0 && colon(piece.get(index - 1)));
+            if lone {
+                keyed.push(Vec::new());
+            } else if let Some(part) = keyed.last_mut() {
+                part.push(token.clone());
+            }
+        }
+        for part in keyed {
+            match syn::parse2::<Expr>(part.iter().cloned().collect()) {
+                Ok(expression) => parsed.push(expression),
+                Err(_) => {
+                    for token in part {
+                        match token {
+                            TokenTree::Group(group) => {
+                                macro_expressions(group.stream(), parsed, loose)
+                            }
+                            other => loose.push(other),
+                        }
                     }
                 }
             }
@@ -2470,7 +2674,7 @@ impl DeclaredErrors {
 #[derive(Default)]
 struct SiteFindings {
     debt: Vec<String>,
-    compliant: BTreeSet<String>,
+    compliant: BTreeMap<String, usize>,
 }
 
 struct ClassifierVisitor<'declared> {
@@ -2529,7 +2733,7 @@ impl ClassifierVisitor<'_> {
             _ => false,
         };
         if compliant {
-            self.downcasts.compliant.insert(function);
+            *self.downcasts.compliant.entry(function).or_default() += 1;
         } else {
             let asked = asked.map_or_else(|| "an inferred type".to_string(), type_name);
             self.downcasts
@@ -2541,7 +2745,7 @@ impl ClassifierVisitor<'_> {
     fn text_site(&mut self, line: usize) {
         let function = self.function_name();
         if self.frames.last().is_some_and(|frame| frame.premise) {
-            self.texts.compliant.insert(function);
+            *self.texts.compliant.entry(function).or_default() += 1;
         } else {
             self.texts.debt.push(format!("{line}: in {function}"));
         }
@@ -2812,7 +3016,7 @@ fn classifier_sites(
 #[derive(Default)]
 struct ClassifierFindings {
     debt: BTreeMap<String, Vec<String>>,
-    compliant: BTreeSet<(String, String)>,
+    compliant: BTreeMap<(String, String), usize>,
 }
 
 impl ClassifierFindings {
@@ -2824,7 +3028,7 @@ impl ClassifierFindings {
             sites
                 .compliant
                 .into_iter()
-                .map(|function| (path.to_string(), function)),
+                .map(|(function, sites)| ((path.to_string(), function), sites)),
         );
     }
 
@@ -2834,7 +3038,7 @@ impl ClassifierFindings {
 
     fn functions(&self) -> Vec<&str> {
         self.compliant
-            .iter()
+            .keys()
             .map(|(_, function)| function.as_str())
             .collect()
     }
@@ -2881,12 +3085,13 @@ impl ClassifierFindings {
                     .map(|function| (path.to_string(), function.to_string()))
             })
             .collect::<BTreeSet<_>>();
-        for (path, function) in self.compliant.difference(&registered) {
+        let compliant = self.compliant.keys().cloned().collect::<BTreeSet<_>>();
+        for (path, function) in compliant.difference(&registered) {
             failures.push(format!(
                 "{path}: `{function}` is a compliant classifier that is not registered; add it to the registry for review"
             ));
         }
-        for (path, function) in registered.difference(&self.compliant) {
+        for (path, function) in registered.difference(&compliant) {
             failures.push(format!(
                 "{path}: `{function}` is registered but holds no compliant site; remove it from the registry"
             ));
@@ -2899,16 +3104,22 @@ impl ClassifierFindings {
             .debt
             .iter()
             .map(|(path, sites)| {
-                format!(
-                    "    (\"{path}\", {}),\n        // {}",
-                    sites.len(),
-                    sites.join("\n        // ")
-                )
+                let what = sites
+                    .iter()
+                    .map(|site| {
+                        site.split_once(": ")
+                            .map_or(site.as_str(), |(_, what)| what)
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!("    // {what}\n    (\"{path}\", {}),", sites.len())
             })
             .collect::<Vec<_>>()
             .join("\n");
         let mut registry = BTreeMap::<&str, Vec<&str>>::new();
-        for (path, function) in &self.compliant {
+        for (path, function) in self.compliant.keys() {
             registry.entry(path).or_default().push(function);
         }
         let registry = registry
@@ -2917,8 +3128,10 @@ impl ClassifierFindings {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "current allowlist ({} sites):\n{debt}\n\ncurrent registry ({} functions):\n{registry}",
+            "current allowlist ({} sites in {} files):\n{debt}\n\ncurrent registry ({} sites in {} functions):\n{registry}",
             self.sites(),
+            self.debt.len(),
+            self.compliant.values().sum::<usize>(),
             self.compliant.len()
         )
     }
@@ -3028,6 +3241,8 @@ fn downcast_fence_counts_type_classification_outside_tests() {
         ("fn f(e: &anyhow::Error) { assert!(e.downcast_ref::<E>().is_some(), \"typed\"); }", 1),
         ("async fn f() { tokio::select! { r = a() => { if let Err(e) = r { e.is::<E>(); } } _ = b() => {} } }", 1),
         ("macro_rules! typed { ($e:expr) => { $e.downcast_ref::<E>() }; }", 1),
+        ("fn f(e: &anyhow::Error) -> Value { json!({ \"code\": find_source::<E>(e.as_ref()).map(E::code) }) }", 1),
+        ("fn f(e: &anyhow::Error) -> Value { json!({ \"a\": 1, \"code\": find_source::<E,>(e.as_ref()).map(E::code) }) }", 1),
     ] {
         assert_eq!(downcast_sites(source), sites, "{source}");
     }
