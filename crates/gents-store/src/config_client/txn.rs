@@ -31,6 +31,7 @@ pub use apply_txn::ConfigApplyTxn;
 pub use cursor::ConfigCursor;
 pub use gate::LocalConfigAccess;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
+pub use owner_staged::CallbackAgentSelection;
 pub(super) use owner_staged::OwnerStagedRevocations;
 pub(super) use owner_staged::StagedRelation;
 #[cfg(any(test, feature = "test-fixtures"))]

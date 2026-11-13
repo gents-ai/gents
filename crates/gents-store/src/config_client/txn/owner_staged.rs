@@ -36,6 +36,13 @@ use crate::config_client::ConfigRelationshipGrant;
 use crate::graphql::escape_graphql_string;
 use gents_protocol::owner_staged::OwnerStagedChange;
 
+/// Which Agents a Callback's own configuration selects, read by the
+/// workspace-selection owner above this crate; the composition root attaches
+/// it, and without it no Callback admits a workspace-selection target.
+pub struct CallbackAgentSelection(
+    pub fn(&str, &Value) -> anyhow::Result<std::collections::BTreeSet<String>>,
+);
+
 /// How an HTTP transaction handles an owner-staged revocation it requests
 /// (`Identity.OwnerStaged.applyOverHttp`). Embedded transactions decide every
 /// change in the transaction and never consult this.
@@ -118,7 +125,7 @@ impl StagedRelation {
                 placement_doc_id,
                 reader_did,
             } => Self {
-                collection: crate::Collection::RepositoryPlacement.graphql_type(),
+                collection: crate::collection::Collection::RepositoryPlacement.graphql_type(),
                 doc_id: placement_doc_id.clone(),
                 relation: "reader",
                 target: actor(reader_did)?,
@@ -177,7 +184,7 @@ impl ConfigApplyTxn<'_> {
     /// callback: it re-reads its inputs, has no effects outside its
     /// transaction, and signs afresh on every attempt. Over HTTP this lets
     /// the transaction owner rerun it after a confirmed PLAN discard.
-    pub(crate) fn authorize_planned_replay(&self) {
+    pub fn authorize_planned_replay(&self) {
         self.planned_replay_authorized
             .store(true, std::sync::atomic::Ordering::Release);
     }
@@ -479,6 +486,7 @@ impl ConfigApplyTxn<'_> {
                     r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
                     escape_graphql_string(runtime.as_str()),
                 ),
+                None,
                 Some(runtime.clone()),
                 None,
             )
@@ -507,7 +515,7 @@ impl ConfigApplyTxn<'_> {
     ) -> Result<bool> {
         let read = |query: String| async move {
             let response = self
-                .execute_local_response_with_actor(&query, Some(runtime.clone()), None)
+                .execute_local_response_with_actor(&query, None, Some(runtime.clone()), None)
                 .await?;
             Ok::<_, ConfigClientError>(response.data.unwrap_or(Value::Null))
         };
@@ -537,8 +545,6 @@ impl ConfigApplyTxn<'_> {
                 }))
             }
             TargetKind::BoundCallback { callback_doc_id } => {
-                // The Callback's own configuration selects the Agent, read by
-                // the workspace-selection owner (`selected_agents`).
                 let data = read(format!(
                     r#"{{ Agent(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{agent_did node_did}} Callback(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{callback_id node_did enabled handler}} }}"#,
                     escape_graphql_string(doc_id),
@@ -566,12 +572,10 @@ impl ConfigApplyTxn<'_> {
                 if value["enabled"] == Value::Bool(false) {
                     return Ok(false);
                 }
-                Ok(
-                    super::super::desired_state::workspace_selection::selected_agents(
-                        node_did, &value,
-                    )
-                    .is_ok_and(|agents| agents.contains(agent_did)),
-                )
+                let Some(selection) = self.extension::<CallbackAgentSelection>() else {
+                    return Ok(false);
+                };
+                Ok((selection.0)(node_did, &value).is_ok_and(|agents| agents.contains(agent_did)))
             }
         }
     }
@@ -590,6 +594,7 @@ impl ConfigApplyTxn<'_> {
                     escape_graphql_string(runtime.as_str()),
                     escape_graphql_string(agent.as_str()),
                 ),
+                None,
                 Some(runtime.clone()),
                 None,
             )

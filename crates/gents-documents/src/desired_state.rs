@@ -133,3 +133,7 @@ pub async fn apply_desired_state_plan_with_node_binding(
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn callback_agent_selection() -> gents_store::config_client::CallbackAgentSelection {
+    gents_store::config_client::CallbackAgentSelection(workspace_selection::selected_agents)
+}

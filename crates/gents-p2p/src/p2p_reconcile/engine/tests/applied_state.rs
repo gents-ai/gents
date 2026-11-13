@@ -681,7 +681,7 @@ trait NativePairingReader {
     }
 }
 
-impl NativePairingReader for ConfigAccess {
+impl NativePairingReader for gents_store::config_client::ConfigAccess {
     async fn native_reader(
         &self,
         collection: &str,

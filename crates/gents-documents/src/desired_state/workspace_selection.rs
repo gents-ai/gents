@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Default)]
 pub(super) struct Capture(BTreeMap<(String, String), BTreeSet<(String, String)>>);
 
-pub(in crate::store::config_client) fn selected_agents(
+pub(crate) fn selected_agents(
     owner: &str,
     callback: &Value,
 ) -> Result<BTreeSet<String>> {

@@ -124,7 +124,7 @@ pub use schema_install::{
 };
 pub use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{
-    ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
+    CallbackAgentSelection, ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
     NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite, TransactionFinalityError,
 };
 
@@ -269,8 +269,30 @@ impl GraphqlEndpoint {
         Ok(self)
     }
 
-pub mod node_readiness;
-mod owed_delivery;
+    pub fn with_extension<T>(
+        mut self,
+        value: Arc<T>,
+    ) -> std::result::Result<Self, crate::node_extension::ExtensionError>
+    where
+        T: std::any::Any + Send + Sync,
+    {
+        self.extensions.attach(value)?;
+        Ok(self)
+    }
+
+    pub fn with_extensions(
+        mut self,
+        extensions: &crate::node_extension::Extensions,
+    ) -> std::result::Result<Self, crate::node_extension::ExtensionError> {
+        self.extensions.attach_all(extensions)?;
+        Ok(self)
+    }
+
+    pub fn extension<T>(&self) -> Option<Arc<T>>
+    where
+        T: std::any::Any + Send + Sync,
+    {
+        self.extensions.get::<T>()
     }
 
     pub(crate) fn replays_pack(&self) -> bool {
