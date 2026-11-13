@@ -1180,6 +1180,117 @@ async fn owner_staged_targets_follow_their_operation_kind() {
     f.node.shutdown().await.unwrap();
 }
 
+/// Lean `Conformance.OwnerStaged.hostAccess`
+/// (`Identity.OwnerStaged.host_access_stages_only_controlled_cursor_writers`):
+/// a hosted Agent holding Node administration grants a runtime-owned cursor's
+/// writer in its own embedded transaction. Through the access the host builds
+/// from the Agent's derived signer it stages a sibling Agent and refuses a
+/// forged row's DID and an outsider by kind; through an embedded transaction
+/// without the runtime key every target is refused by kind.
+#[tokio::test]
+async fn host_access_stages_only_controlled_cursor_writers() {
+    let f = Fixture::start().await;
+    let runtime = f.runtime.clone();
+    let runtime_access = ConfigAccess::local_as(f.node.clone(), did(runtime.did()));
+    let node_doc = runtime_node_doc(&f).await;
+    let requester = genuine_agent(&f, &runtime_access).await;
+    let requester_did = did(requester.did());
+    f.client(f.user.as_ref())
+        .add_actor_relationship("Node", &node_doc, "administrator", &requester_did)
+        .await
+        .unwrap();
+    let sibling = genuine_agent(&f, &runtime_access).await;
+    let forged: Arc<dyn NodeIdentity> = Arc::new(
+        crate::identity::KeyIdentity::load_or_create(f.keys.path().join("forged.key"), None)
+            .unwrap(),
+    );
+    agent_row(
+        &runtime_access,
+        runtime.did(),
+        forged.did(),
+        &"f".repeat(64),
+    )
+    .await
+    .unwrap();
+    let cursor = create_linked(
+        &runtime_access,
+        "EventSourceCursor",
+        serde_json::json!({
+            "cursor_key": "host-access",
+            "owner_did": runtime.did(),
+            "consumer": {"agent_did": requester.did()},
+            "source_collection": "Node",
+        }),
+        &node_doc,
+    )
+    .await;
+    let host_access = ConfigAccess::local_with_agent_signer(
+        f.node.clone(),
+        requester_did.clone(),
+        requester.managed_agent_signer().unwrap(),
+    )
+    .unwrap();
+    let foreign_access = ConfigAccess::local_as(f.node.clone(), requester_did.clone());
+    for case in gents_lean_vocab::families::owner_staged_host_access::cases() {
+        let input = &case.input;
+        let target = did(match input.target.as_str() {
+            "sibling" => sibling.did(),
+            "user" => forged.did(),
+            "outsider" => f.outsider.did(),
+            other => panic!("unknown modeled target {other}"),
+        });
+        let change = OwnerStagedChange::EventCursorWriter {
+            cursor_doc_id: cursor.clone(),
+            agent_did: target.to_string(),
+        };
+        assert!(
+            !f.reads(&target, "EventSourceCursor", &cursor).await,
+            "{input:?}"
+        );
+        let request = |grant: bool| {
+            let change = &change;
+            let (host_access, foreign_access) = (&host_access, &foreign_access);
+            async move {
+                match input.carrier.as_str() {
+                    "host_access" => {
+                        host_access
+                            .transact_write("test.owner_staged_route.host_access", |txn| {
+                                Box::pin(
+                                    async move { txn.request_owner_staged(change, grant).await },
+                                )
+                            })
+                            .await
+                    }
+                    "foreign" => {
+                        foreign_access
+                            .request_verified_client_owner_staged(change, grant)
+                            .await
+                    }
+                    other => panic!("unknown modeled carrier {other}"),
+                }
+            }
+        };
+        let outcome = match request(true).await {
+            Ok(()) => "staged",
+            Err(ConfigClientError::OwnerStagedRelationshipDenied { .. }) => "denied",
+            Err(ConfigClientError::OwnerStagedRelationshipUnmanaged { .. }) => "unmanaged",
+            Err(ConfigClientError::OwnerStagedTargetRefused { .. }) => "out_of_kind",
+            Err(error) => panic!("{input:?}: unexpected owner-staged error {error:#}"),
+        };
+        let staged = f.reads(&target, "EventSourceCursor", &cursor).await;
+        assert_eq!(staged, outcome == "staged", "{input:?}");
+        case.check(
+            gents_lean_vocab::families::owner_staged_host_access::HostOutput {
+                outcome: outcome.to_owned(),
+            },
+        );
+        if staged {
+            request(false).await.unwrap();
+        }
+    }
+    f.node.shutdown().await.unwrap();
+}
+
 /// `Identity.OwnerStaged.applyOverHttp` with `planDiscarded = false`: when the
 /// PLAN transaction cannot be confirmed discarded, nothing is revoked and the
 /// apply is not run again.
