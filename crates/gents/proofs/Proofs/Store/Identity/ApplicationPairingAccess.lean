@@ -83,7 +83,11 @@ def unpaired : State :=
     "a" "user" "author" "node" true
 
 /-- `pairings_apply` as document ACP sees it: the author creates the overlay
-through the native create gate and links it to its Node. -/
+through the native create gate and links it to its Node, both in the one
+native transaction that creates it. External premise (defradb.rs #2770):
+outside a transaction a relationship change also requires node
+`get-collection`, which the author Agent does not hold, so the `parent` grant
+below stands only for the in-transaction link. -/
 def paired : State :=
   apply (directCreate unpaired "author" "application_pairings" "overlay" true true)
     (.grantAs "author" ⟨"application_pairings", "overlay", "parent", .object "nodes" "node"⟩)
