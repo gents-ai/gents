@@ -1188,9 +1188,6 @@ pub struct LeanContractSnapshot {
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub session_input_edit_cases: Vec<LeanSessionInputEditCase>,
-    pub session_input_edit_client_observation_cases: Vec<
-        LeanSessionInputEditClientObservationCase,
-    >,
     pub canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
     pub native_completion_cases: Vec<LeanNativeCompletionCase>,
@@ -3965,16 +3962,6 @@ pub struct LeanSessionInputEditCase {
     pub authority: LeanSessionInputEditAuthority,
     pub after: LeanSessionInputEditState,
     pub receipt: Option<LeanSessionInputEditReceipt>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionInputEditClientObservationCase {
-    pub command_outcome: String,
-    pub name: String,
-    pub projection_fresh: bool,
-    pub projection_refresh_succeeded: bool,
-    pub receipt_outcome: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -9,8 +9,9 @@ use crate::client::store::{ClientStore, ClientStoreRows};
 mod tests;
 
 /// A validated applied receipt is the command result. The local projection is
-/// a separate replica observation; if it is unavailable, the selected-session
-/// refresh and normal observer path reconcile it without inviting replay.
+/// a separate replica observation, returned beside it; if it is unavailable,
+/// the selected-session refresh and normal observer path reconcile it without
+/// inviting replay.
 async fn merge_accepted_edit_projection(
     access: &ConfigAccess,
     store: &ObservedStore,
@@ -19,7 +20,10 @@ async fn merge_accepted_edit_projection(
     node_did: &str,
     session_id: &str,
     requester_did: &str,
-) -> gents_protocol::session_input_edit::SessionInputEditReceipt {
+) -> (
+    gents_protocol::session_input_edit::SessionInputEditReceipt,
+    anyhow::Result<()>,
+) {
     let result = async {
         let mut doc_ids = selected_doc_ids.to_vec();
         doc_ids.extend(receipt.request_doc_ids.iter().cloned());
@@ -50,16 +54,7 @@ async fn merge_accepted_edit_projection(
         anyhow::Result::<()>::Ok(())
     }
     .await;
-    if let Err(error) = result {
-        tracing::warn!(
-            command_id = %receipt.command_id,
-            node_did,
-            session_id,
-            error = %error,
-            "accepted pending edit awaits local projection refresh"
-        );
-    }
-    receipt
+    (receipt, result)
 }
 
 fn normalize_pending_edit_skills(edit: &mut gents_session::request::lifecycle::PendingQueueEdit) {
@@ -207,7 +202,7 @@ impl ClientCore {
                     .as_ref()
                     .map(|record| self.requester_did(record))
                     .unwrap_or_else(|| self.node_identity.did().to_string());
-                let receipt = merge_accepted_edit_projection(
+                let (receipt, projection) = merge_accepted_edit_projection(
                     &self.session_queue_access(node_did)?,
                     self.stores.ensure(node_did).as_ref(),
                     receipt,
@@ -217,6 +212,15 @@ impl ClientCore {
                     &requester_did,
                 )
                 .await;
+                if let Err(error) = projection {
+                    tracing::warn!(
+                        command_id = %receipt.command_id,
+                        node_did,
+                        session_id,
+                        error = %error,
+                        "accepted pending edit awaits local projection refresh"
+                    );
+                }
                 self.clear_mutation_error();
                 Ok(receipt)
             }

@@ -1638,8 +1638,8 @@ def caseCoverage : List CoverageEntry :=
       "SessionInputEditCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_client_observation_cases"
-      "SessionInputEditClientObservationCases")
+      "family"
+      "fold_queue_contracts_input_edit_client_observation")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

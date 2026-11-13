@@ -426,8 +426,6 @@ def snapshotRequestCasesJson : String :=
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
-    ++ "\"session_input_edit_client_observation_cases\":"
-      ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
