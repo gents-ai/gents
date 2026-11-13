@@ -197,8 +197,7 @@ fn find_incompatible<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a IncompatibleStore> {
     find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<IncompatibleStore>()
+        IncompatibleStore::of(cause)
             .or_else(|| cause.downcast_ref::<StorageBackendError>()?.incompatible())
             .or_else(|| {
                 cause
