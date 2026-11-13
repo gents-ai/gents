@@ -806,4 +806,42 @@ theorem acknowledgement_projection_has_no_partial_crash_state :
     deliveryCrashRecoveryAccepted .duringAcknowledgement = true := by
   native_decide
 
+inductive RedriveDecision where
+  | ineligible
+  | coalesced
+  | deferred
+  | redriven
+  deriving DecidableEq, Repr
+
+/-- A failed wake as the redrive sweep reads it: its retry budget, the seconds
+since its persisted terminal time, and whether a pending wake with the same
+queue key already stands in for it. -/
+structure WakeSweepRow where
+  retryCount : Nat
+  maxRetries : Nat
+  elapsedSeconds : Nat
+  pendingSibling : Bool
+  deriving Repr
+
+def WakeSweepRow.failedWake (row : WakeSweepRow) : FailedWake :=
+  { requestId := 1
+    ctx := { state := .failed, origin := .scheduled, admission := .released
+             retryCount := row.retryCount, maxRetries := row.maxRetries, depth := 0
+             parentRequestId := none, deadline := none }
+    source := .backgroundCompletion, policy := .coalesce, queueKey := some 1 }
+
+/-- The sweep checks eligibility, then a standing same-key wake, then the
+persisted backoff measured from the terminal time; only a due wake is redriven. -/
+def redriveSweepDecision (row : WakeSweepRow) : RedriveDecision :=
+  if ¬ CanRedriveWake row.failedWake then .ineligible
+  else if row.pendingSibling then .coalesced
+  else if row.elapsedSeconds < wakeRetryDelaySeconds row.retryCount then .deferred
+  else .redriven
+
+theorem failed_background_wake_without_pending_sibling_obeys_persisted_backoff :
+    redriveSweepDecision ⟨4, 6, 0, false⟩ = .deferred := by decide
+
+theorem a_due_wake_is_redriven :
+    redriveSweepDecision ⟨4, 6, wakeRetryDelaySeconds 4, false⟩ = .redriven := by decide
+
 end BackgroundCompletion

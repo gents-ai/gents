@@ -149,25 +149,6 @@ async fn rejects_raw_mailbox_writer_even_when_declaration_is_canonical() {
 }
 
 #[tokio::test]
-async fn rejects_a_persisted_protected_collection_at_execution() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    let mut protected = decl();
-    protected.collection = gents_protocol::schemas::EVAL_VERDICT_NAME.into();
-    let tool = BoundedWriteTool::new(ConfigAccess::local(node), protected);
-    assert!(!tool.is_well_formed());
-    let err = Tool::call(
-        &tool,
-        serde_json::from_value(json!({
-            "drift_sig": "abc", "summary": "stale host doc", "status": "open"
-        }))
-        .unwrap(),
-    )
-    .await
-    .unwrap_err();
-    assert!(format!("{err:#}").contains("protected"), "{err:#}");
-}
-
-#[tokio::test]
 async fn rejects_client_publication_mutations() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let mut protected = decl();
@@ -370,147 +351,179 @@ async fn rejects_decl_with_non_identifier_field_name() {
 }
 
 #[tokio::test]
-async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_time() {
-    let node = node_with_actionrequest().await;
-    let tool = BoundedWriteTool::new(
-        ConfigAccess::local(Arc::clone(&node)),
-        WriteToolDecl {
-            notification: None,
-            tool_name: "write_result".into(),
-            collection: "ActionRequest".into(),
-            description: "write a correlated result".into(),
-            fields: vec![
-                WriteToolField {
-                    name: "summary".into(),
-                    required: true,
-                    fill: None,
+async fn bounded_writes_follow_the_datastore_write_model() {
+    const CORRELATION: &str = "run-42";
+    for case in
+        gents_lean_vocab::families::datastore_write_tool_call::cases::<String, String, String>()
+    {
+        let input = &case.input;
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        node.add_collection(&format!(
+            "type {} {{ drift_sig: String summary: String status: String run_id: String expected_total: String }}",
+            input.collection
+        ))
+        .await
+        .unwrap();
+        let fields = input
+            .fields
+            .iter()
+            .map(|field| WriteToolField {
+                name: field.name.clone(),
+                required: field.required,
+                fill: match field.fill.as_str() {
+                    "caller" => None,
+                    "correlation" => Some(WriteToolFieldFill::Correlation),
+                    "source_field" => Some(WriteToolFieldFill::SourceField(field.name.clone())),
+                    other => panic!("unknown fill {other}"),
                 },
-                WriteToolField {
-                    name: "run_id".into(),
-                    required: false,
-                    fill: Some(WriteToolFieldFill::Correlation),
-                },
-                WriteToolField {
-                    name: "expected_total".into(),
-                    required: false,
-                    fill: Some(WriteToolFieldFill::SourceField("expected_total".into())),
-                },
-            ],
-            output_obligation: None,
-        },
-    );
-    let definition = Tool::definition(&tool, String::new()).await;
-    let properties = definition.parameters["properties"].as_object().unwrap();
-    assert!(properties.contains_key("summary"));
-    assert!(!properties.contains_key("run_id"));
-    assert!(!properties.contains_key("expected_total"));
-
-    let supplied = Tool::call(
-        &tool,
-        serde_json::from_value(json!({"summary": "done", "run_id": "model-value"})).unwrap(),
-    )
-    .await;
-    assert!(supplied.unwrap_err().to_string().contains("runtime-filled"));
-    let declared = tool.clone().declared_by(Some("results".into()));
-    let refused = Tool::call(
-        &declared,
-        serde_json::from_value(json!({"summary": "done", "run_id": "model-value"})).unwrap(),
-    )
-    .await
-    .unwrap_err()
-    .to_string();
-    assert!(
-        refused.contains("request/trigger correlation ID")
-            && refused.contains("remove fill")
-            && refused.contains(r#"surface "results", entry "write_result""#)
-            && refused.contains("next request"),
-        "{refused}"
-    );
-
-    let mut source_fields = std::collections::BTreeMap::new();
-    source_fields.insert("expected_total".to_string(), "3".to_string());
-    crate::runtime_context::scope_request_tool_execution_with_trigger_context(
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        None,
-        None,
-        None,
-        Some("run-42".to_string()),
-        source_fields,
-        false,
-        async {
-            let receipt = Tool::call(
-                &tool,
-                serde_json::from_value(json!({"summary": "done"})).unwrap(),
-            )
-            .await
-            .expect("runtime-filled write");
-            let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-            assert_eq!(receipt["document"]["run_id"], "run-42");
-            assert!(receipt["document_id"].as_str().is_some());
-        },
-    )
-    .await;
-
-    let response = node
-        .execute("{ ActionRequest { summary run_id expected_total } }")
+            })
+            .collect::<Vec<_>>();
+        let tool = BoundedWriteTool::new(
+            ConfigAccess::local(Arc::clone(&node)),
+            WriteToolDecl {
+                notification: None,
+                tool_name: "write_result".into(),
+                collection: input.collection.clone(),
+                description: "write a correlated result".into(),
+                fields: fields.clone(),
+                output_obligation: None,
+            },
+        )
+        .declared_by(input.surface.clone());
+        let definition = Tool::definition(&tool, String::new()).await;
+        let properties = definition.parameters["properties"].as_object().unwrap();
+        assert!(
+            properties
+                .keys()
+                .all(|key| fields.iter().any(|field| &field.name == key)),
+            "{definition:?}"
+        );
+        let exposed = fields
+            .iter()
+            .filter(|field| properties.contains_key(&field.name))
+            .map(|field| field.name.clone())
+            .collect();
+        let arguments = input
+            .supplied
+            .iter()
+            .map(|key| (key.clone(), json!(format!("{key}-value"))))
+            .collect::<serde_json::Map<_, _>>();
+        let captured = input
+            .captured
+            .iter()
+            .map(|name| (name.clone(), format!("captured-{name}")))
+            .collect();
+        let result = crate::runtime_context::scope_request_tool_execution_with_trigger_context(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            None,
+            input.correlation.then(|| CORRELATION.to_string()),
+            captured,
+            false,
+            Tool::call(&tool, super::BoundedWriteParams(arguments)),
+        )
         .await;
-    let row = response.data.unwrap()["ActionRequest"][0].clone();
-    assert_eq!(row["run_id"], "run-42");
-    assert_eq!(row["expected_total"], "3");
-}
-
-#[tokio::test]
-async fn uncaptured_optional_source_fill_is_omitted_from_the_write() {
-    let node = node_with_actionrequest().await;
-    let tool = BoundedWriteTool::new(
-        ConfigAccess::local(Arc::clone(&node)),
-        WriteToolDecl {
-            notification: None,
-            tool_name: "write_result".into(),
-            collection: "ActionRequest".into(),
-            description: "write a result stamped from its trigger".into(),
-            fields: vec![
-                WriteToolField {
-                    name: "summary".into(),
-                    required: true,
-                    fill: None,
-                },
-                WriteToolField {
-                    name: "expected_total".into(),
-                    required: false,
-                    fill: Some(WriteToolFieldFill::SourceField("expected_total".into())),
-                },
-            ],
-            output_obligation: None,
-        },
-    );
-    crate::runtime_context::scope_request_tool_execution_with_trigger_context(
-        None,
-        tokio_util::sync::CancellationToken::new(),
-        None,
-        None,
-        None,
-        Some("run-42".to_string()),
-        std::collections::BTreeMap::new(),
-        false,
-        async {
-            Tool::call(
-                &tool,
-                serde_json::from_value(json!({"summary": "done"})).unwrap(),
-            )
-            .await
-            .expect("an uncaptured optional source fill does not block the write");
-        },
-    )
-    .await;
-
-    let response = node
-        .execute("{ ActionRequest { summary expected_total } }")
-        .await;
-    let row = response.data.unwrap()["ActionRequest"][0].clone();
-    assert_eq!(row["summary"], "done");
-    assert!(row["expected_total"].is_null());
+        let selection = format!(
+            "{{ {} {{ _docID {} }} }}",
+            input.collection,
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let rows = node.execute(&selection).await.data.unwrap()[input.collection.as_str()]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(rows.len() <= 1, "{rows:?}");
+        let outcome = match &result {
+            Ok(receipt) => {
+                let receipt: serde_json::Value = serde_json::from_str(receipt).unwrap();
+                let row = rows.first().expect("a written receipt names a stored row");
+                assert_eq!(receipt["document_id"], row["_docID"], "{receipt}");
+                for field in &fields {
+                    assert_eq!(
+                        receipt["document"][&field.name], row[&field.name],
+                        "{receipt}"
+                    );
+                }
+                "written"
+            }
+            Err(error) => {
+                let text = error.to_string();
+                assert!(rows.is_empty(), "{text}: {rows:?}");
+                if let Some(field) = fields
+                    .iter()
+                    .find(|field| field.fill.is_some() && input.supplied.contains(&field.name))
+                    .filter(|_| text.contains("is runtime-filled"))
+                {
+                    assert_eq!(
+                        text,
+                        gents_documents::runtime_filled_refusal(
+                            "field",
+                            &field.name,
+                            "write_result",
+                            input.surface.as_deref(),
+                            field.fill.as_ref().unwrap(),
+                        )
+                    );
+                    assert!(
+                        text.contains("remove fill") && text.contains("next request"),
+                        "{text}"
+                    );
+                    if let Some(surface) = &input.surface {
+                        assert!(
+                            text.contains(&format!(r#"surface "{surface}", entry "write_result""#)),
+                            "{text}"
+                        );
+                    }
+                    if field.fill == Some(WriteToolFieldFill::Correlation) {
+                        assert!(text.contains("request/trigger correlation ID"), "{text}");
+                    }
+                    "refused_runtime_filled"
+                } else if text.contains("is protected") {
+                    "refused_protected"
+                } else if text.contains("requires a non-empty correlation") {
+                    "refused_uncorrelated"
+                } else if text.contains("invalid field") {
+                    "refused_invalid"
+                } else {
+                    panic!("{input:?}: {text}")
+                }
+            }
+        };
+        let written = rows.first().map(|row| {
+            fields
+                .iter()
+                .map(|field| {
+                    let value = &row[&field.name];
+                    if value.is_null() {
+                        "absent"
+                    } else if *value == json!(format!("{}-value", field.name)) {
+                        "caller"
+                    } else if *value == json!(CORRELATION) {
+                        "correlation"
+                    } else if *value == json!(format!("captured-{}", field.name)) {
+                        "source_field"
+                    } else {
+                        panic!("{input:?}: unexpected stored {value}")
+                    }
+                    .to_string()
+                })
+                .collect()
+        });
+        case.check(
+            gents_lean_vocab::families::datastore_write_tool_call::Output {
+                well_formed: tool.is_well_formed(),
+                exposed,
+                outcome: outcome.to_string(),
+                written,
+            },
+        );
+    }
 }
 
 #[tokio::test]

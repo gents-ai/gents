@@ -1,33 +1,27 @@
 use super::*;
 
 #[test]
-fn calibration_scales_up_and_never_down() {
-    assert_eq!(calibrated_input_tokens(561_000, 18_000), 1_009_800);
-    assert_eq!(calibrated_input_tokens(3, 15_000), 5, "rounds up");
-    assert_eq!(
-        calibrated_input_tokens(1_000, 5_000),
-        1_000,
-        "floored at one"
-    );
-    let calibration = ContextCalibration::with_ratio(1);
-    assert_eq!(
-        calibration.ratio_basis_points(),
-        UNIT_INPUT_RATIO_BASIS_POINTS
-    );
-    assert_eq!(
-        calibration.observe(500, 1_000),
-        Some(UNIT_INPUT_RATIO_BASIS_POINTS)
-    );
-    assert_eq!(
-        calibration.observe(1_000_000, 1),
-        Some(MAX_INPUT_RATIO_BASIS_POINTS)
-    );
-    assert_eq!(calibration.observe(0, 1_000), None);
-    assert_eq!(calibration.observe(1_000, 0), None);
-    assert_eq!(
-        calibration.ratio_basis_points(),
-        MAX_INPUT_RATIO_BASIS_POINTS
-    );
+fn scaling_matches_the_lean_calibration_model() {
+    gents_lean_vocab::families::provider_input_calibration_scaling::replay(|input| {
+        let calibration = ContextCalibration::with_ratio(input.prior);
+        let initial_ratio = calibration.ratio_basis_points();
+        let readings: Vec<Option<u64>> = input
+            .observations
+            .iter()
+            .map(|sample| {
+                calibration.observe(sample.observed, usize::try_from(sample.estimated).unwrap())
+            })
+            .collect();
+        gents_lean_vocab::families::provider_input_calibration_scaling::ScalingOutput {
+            calibrated: calibrated_input_tokens(
+                usize::try_from(input.raw).unwrap(),
+                calibration.ratio_basis_points(),
+            ) as u64,
+            initial_ratio,
+            ratio: calibration.ratio_basis_points(),
+            readings,
+        }
+    });
 }
 
 #[test]

@@ -50,9 +50,4 @@ def assembled : Family HistoryInput (List IdentityWire) where
   inputs := responsesCases
   model := HistoryInput.projected
 
-@[conformance_family]
-def continued : Family HistoryInput (List (Option String)) where
-  inputs := responsesCases
-  model := fun i => i.projected.map (·.callId)
-
 end Conformance.ProviderToolIdentity

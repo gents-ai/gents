@@ -978,39 +978,68 @@ mod tests {
     use gents_protocol::message::{AssistantContent, Message, Reasoning};
 
     #[test]
-    fn provider_stop_marks_the_exact_reasoning_block_once() {
-        use super::AssistantTurnAccumulator;
+    fn claude_audit_stop_matches_lean_model() {
         use crate::provider_audit::{ClaudeAuditEvent as Event, ClaudeBlockKind};
+        use gents_lean_vocab::families::claude_audit_stop_reasoning_stop as family;
 
-        let mut turn = AssistantTurnAccumulator::default();
-        turn.apply_provider_audit(&Event::BlockStart {
-            index: 0,
-            kind: ClaudeBlockKind::Thinking,
-        })
-        .unwrap();
-        turn.apply_provider_audit(&Event::ThinkingText {
-            index: 0,
-            fragment: "thought".into(),
-        })
-        .unwrap();
-        turn.apply_provider_audit(&Event::Signature {
-            index: 0,
-            fragment: "sig".into(),
-        })
-        .unwrap();
-        let stop = Event::BlockStop { index: 0 };
-        turn.apply_provider_audit(&stop).unwrap();
-        assert_eq!(turn.reasoning_stop_index(&stop).unwrap(), Some(0));
-        assert!(turn.apply_provider_audit(&stop).is_err());
-
-        turn.apply_provider_audit(&Event::BlockStart {
-            index: 1,
-            kind: ClaudeBlockKind::Text,
-        })
-        .unwrap();
-        let text_stop = Event::BlockStop { index: 1 };
-        turn.apply_provider_audit(&text_stop).unwrap();
-        assert_eq!(turn.reasoning_stop_index(&text_stop).unwrap(), None);
+        family::replay::<String, String>(|case| {
+            let mut turn = AssistantTurnAccumulator::default();
+            let mut steps = Vec::new();
+            for step in &case.steps {
+                let index = u32::try_from(step.index).expect("modeled block index fits u32");
+                let event = match step.kind.as_str() {
+                    "block_start_text" => Event::BlockStart {
+                        index,
+                        kind: ClaudeBlockKind::Text,
+                    },
+                    "block_start_thinking" => Event::BlockStart {
+                        index,
+                        kind: ClaudeBlockKind::Thinking,
+                    },
+                    "block_start_tool_use" => Event::BlockStart {
+                        index,
+                        kind: ClaudeBlockKind::ToolUse {
+                            id: format!("toolu_{index}"),
+                            name: "lookup".into(),
+                        },
+                    },
+                    "thinking_text" => Event::ThinkingText {
+                        index,
+                        fragment: "thought".into(),
+                    },
+                    "signature" => Event::Signature {
+                        index,
+                        fragment: "sig".into(),
+                    },
+                    "block_stop" => Event::BlockStop { index },
+                    other => panic!("unsupported modeled provider step {other}"),
+                };
+                let outcome = match turn.apply_provider_audit(&event) {
+                    Err(_) => family::ProviderStepOutcome {
+                        verdict: "rejected".into(),
+                        reasoning_stop: None,
+                    },
+                    Ok(_) if matches!(event, Event::BlockStop { .. }) => {
+                        match turn.reasoning_stop_index(&event) {
+                            Ok(stop) => family::ProviderStepOutcome {
+                                verdict: "accepted".into(),
+                                reasoning_stop: stop.map(u64::from),
+                            },
+                            Err(_) => family::ProviderStepOutcome {
+                                verdict: "refused_stop".into(),
+                                reasoning_stop: None,
+                            },
+                        }
+                    }
+                    Ok(_) => family::ProviderStepOutcome {
+                        verdict: "accepted".into(),
+                        reasoning_stop: None,
+                    },
+                };
+                steps.push(outcome);
+            }
+            family::ProviderOutcome { steps }
+        });
     }
 
     #[test]

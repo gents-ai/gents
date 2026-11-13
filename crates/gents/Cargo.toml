@@ -25,7 +25,7 @@ test-fixtures = ["dep:gents-lean-vocab", "test-home-guard", "axum/ws", "gents-st
 
 # All other test binaries are auto-discovered; this explicit target overrides
 # autodiscovery for e2e_live so the link only happens on live runs
-# (`cargo test -p gents --features live-e2e --test e2e_live -- --ignored`).
+# (`cargo test -p gents --features live-e2e --test e2e_live`).
 [[test]]
 name = "e2e_live"
 path = "tests/e2e_live.rs"
