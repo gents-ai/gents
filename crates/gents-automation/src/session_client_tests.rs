@@ -180,26 +180,28 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         )
         .await
         .unwrap();
-    access
-        .delete_resource_relationship(
-            "AgentRequest",
-            &submitted.doc_id,
-            "parent",
-            "agents",
-            row.agent_doc_id.as_deref().unwrap(),
-        )
-        .await
-        .unwrap();
-    access
-        .delete_resource_relationship(
-            "AgentRequest",
-            &submitted.doc_id,
-            "session",
-            "sessions",
-            row.session_doc_id.as_deref().unwrap(),
-        )
-        .await
-        .unwrap();
+    gents_store::test_support::relationships::resource_in_txn(
+        &access,
+        "AgentRequest",
+        &submitted.doc_id,
+        "parent",
+        "agents",
+        row.agent_doc_id.as_deref().unwrap(),
+        true,
+    )
+    .await
+    .unwrap();
+    gents_store::test_support::relationships::resource_in_txn(
+        &access,
+        "AgentRequest",
+        &submitted.doc_id,
+        "session",
+        "sessions",
+        row.session_doc_id.as_deref().unwrap(),
+        true,
+    )
+    .await
+    .unwrap();
     let retry = crate::goal::submit_goal_backed_request_with_identity(
         &node,
         identity::Did::new(agent.did()).unwrap(),
