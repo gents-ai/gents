@@ -203,7 +203,9 @@ impl ReplayFixture {
         let sink =
             DefraRenderedRequestSink::new_managed(self.node.clone(), self.agent.as_ref()).unwrap();
         match storage {
-            CaptureStorage::Exact => sink.capture(rendered).await.expect("durable capture owner"),
+            CaptureStorage::Exact => {
+                sink.capture(rendered).await.expect("durable capture owner");
+            }
             CaptureStorage::Corrupt => sink
                 .create_stored_for_test(&rendered, "not a capture record")
                 .await

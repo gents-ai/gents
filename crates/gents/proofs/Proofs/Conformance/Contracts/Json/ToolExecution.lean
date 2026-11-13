@@ -5,6 +5,8 @@ import Proofs.Conformance.ContractCases
 import Proofs.Session.ToolExecution
 import Proofs.Tools.MCPHealth.Executable
 import Proofs.Runtime.BackendHealth.Executable
+import Proofs.Conformance.Functions.Runtime
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -234,18 +236,56 @@ example :
     Proofs.MCPHealth.transitionCases.any (fun c => c.nextState.isSome && c.thresholdK ≥ 2) = true := by
   native_decide
 
-def backendHealthCaseJson (witness : Proofs.BackendHealth.TransitionCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"start_state\":" ++ jsonString witness.startState.toDefraDB ++ ","
-    ++ "\"start_count\":" ++ toString witness.startCount ++ ","
-    ++ "\"event\":" ++ jsonString witness.event.toDefraDB ++ ","
-    ++ "\"threshold_k\":" ++ toString witness.thresholdK ++ ","
-    ++ "\"next_state\":" ++ jsonString witness.nextState.toDefraDB ++ ","
-    ++ "\"next_count\":" ++ toString witness.nextCount ++ ","
-    ++ "\"blocks_routing\":" ++ boolString witness.blocksRouting ++ ","
-    ++ "\"readiness_reason\":" ++ jsonOptionalString witness.readinessReason
-    ++ "}"
+namespace BackendHealthTransition
+
+open Lean
+
+deriving instance ToJson for Proofs.BackendHealth.Event
+
+structure Input where
+  startState : Proofs.BackendHealth.HealthState
+  startCount : Nat
+  event : Proofs.BackendHealth.Event
+  thresholdK : Nat
+  deriving ToJson
+
+structure Output where
+  nextState : Proofs.BackendHealth.HealthState
+  nextCount : Nat
+  blocksRouting : Bool
+  readinessReason : Option String
+  deriving ToJson
+
+/-- Production clamps a configured threshold below one to one; every modeled
+input carries a threshold of at least one. -/
+def threshold (k : Nat) : Proofs.BackendHealth.Threshold :=
+  ⟨max k 1, Nat.le_max_right k 1⟩
+
+example : [1, 2, 3].all fun k => Proofs.BackendHealth.transitionCases.any (·.thresholdK == k) := by native_decide
+
+example : Proofs.BackendHealth.HealthState.all.all fun s => Proofs.BackendHealth.transitionCases.any (·.startState == s) := by native_decide
+
+example :
+    (Proofs.BackendHealth.step { state := .degraded, failureCount := 2 } .probeFail (threshold 3)).state = .unhealthy := by
+  decide
+
+end BackendHealthTransition
+
+@[conformance_family]
+def backendHealthTransition :
+    Family BackendHealthTransition.Input BackendHealthTransition.Output where
+  inputs := Proofs.BackendHealth.transitionCases.map fun c =>
+    { startState := c.startState, startCount := c.startCount, event := c.event
+      thresholdK := c.thresholdK }
+  model := fun i =>
+    let next := Proofs.BackendHealth.step
+      { state := i.startState, failureCount := i.startCount } i.event
+      (BackendHealthTransition.threshold i.thresholdK)
+    { nextState := next.state
+      nextCount := next.failureCount
+      blocksRouting := next.state.blocksRouting
+      readinessReason := next.state.readinessReason.map
+        RuntimeState.AgentUnavailableReason.code }
 
 def backendProbeConfigurationJson (config : Proofs.BackendHealth.ProbeConfiguration) : String :=
   "{\"backend_id\":" ++ toString config.backendId

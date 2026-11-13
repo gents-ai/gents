@@ -580,58 +580,81 @@ async fn openai_responses_wire_body_leaves_include_to_the_server_default_store()
     assert!(!requests_encrypted_reasoning(&body), "{body}");
 }
 
-#[tokio::test]
-async fn modeled_service_tiers_match_the_terminal_responses_body() {
-    for case in gents_lean_vocab::lean_prompt_assembly_service_tier_cases() {
-        if !case.allowed || !matches!(case.family.as_str(), "OpenAiCompatible" | "ChatGptCodex") {
-            continue;
-        }
+#[test]
+fn service_tier_validation_follows_the_lean_model() {
+    gents_lean_vocab::families::contracts_service_tier_validation::replay(|input| {
+        let family = BackendProviderKind::parse_optional(Some(&input.family)).expect("Lean family");
         let tier: Option<crate::resolved::ServiceTier> =
-            serde_json::from_value(serde_json::to_value(&case.requested).unwrap()).unwrap();
-        let family = BackendProviderKind::parse_optional(Some(&case.family)).unwrap();
+            serde_json::from_value(serde_json::to_value(&input.requested).unwrap())
+                .expect("Lean tier");
+        gents_lean_vocab::families::contracts_service_tier_validation::ServiceTierAllowed {
+            allowed: crate::resolved::validate_service_tier(family, tier).is_ok(),
+        }
+    });
+}
+
+#[tokio::test]
+async fn service_tier_transport_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::contracts_service_tier_transport::cases() {
+        let tier: Option<crate::resolved::ServiceTier> =
+            serde_json::from_value(serde_json::to_value(&case.input.requested).unwrap()).unwrap();
+        let family = BackendProviderKind::parse_optional(Some(&case.input.family)).unwrap();
         let terminal = WireCapturingClient::default();
         let bodies = terminal.bodies.clone();
         let request = core_request("service tier selection");
         let counter = ProviderInputCounter::new(family, OpenAiWireApi::Responses, "test-model")
             .with_service_tier(tier);
         let expected = counter.project_body(&request).unwrap();
-        if family == BackendProviderKind::ChatGptCodex {
-            let transport = crate::clients::chatgpt_codex::ChatGptCodexHttpClient::with_inner(
-                Arc::new(StaticBearer),
-                terminal,
-            )
-            .with_policy(crate::clients::chatgpt_codex::ChatGptCodexPolicy { service_tier: tier });
-            let client = crate::clients::inference_http::build_openai_responses_client(
-                "managed-test-key",
-                "http://provider.invalid",
-                transport,
-                Default::default(),
-            )
-            .unwrap();
-            if let Ok(mut response) = client.completion_model("test-model").stream(request).await {
-                let _ = response.next().await;
+        match family {
+            BackendProviderKind::ChatGptCodex => {
+                let transport = crate::clients::chatgpt_codex::ChatGptCodexHttpClient::with_inner(
+                    Arc::new(StaticBearer),
+                    terminal,
+                )
+                .with_policy(crate::clients::chatgpt_codex::ChatGptCodexPolicy {
+                    service_tier: tier,
+                });
+                let client = crate::clients::inference_http::build_openai_responses_client(
+                    "managed-test-key",
+                    "http://provider.invalid",
+                    transport,
+                    Default::default(),
+                )
+                .unwrap();
+                if let Ok(mut response) =
+                    client.completion_model("test-model").stream(request).await
+                {
+                    let _ = response.next().await;
+                }
             }
-        } else {
-            let transport =
-                crate::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal)
-                    .with_service_tier(tier);
-            let client = crate::clients::inference_http::build_openai_responses_client(
-                "test-key",
-                "http://provider.invalid",
-                transport,
-                Default::default(),
-            )
-            .unwrap();
-            if let Ok(mut response) = client.completion_model("test-model").stream(request).await {
-                let _ = response.next().await;
+            BackendProviderKind::OpenAiCompatible => {
+                let transport =
+                    crate::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal)
+                        .with_service_tier(tier);
+                let client = crate::clients::inference_http::build_openai_responses_client(
+                    "test-key",
+                    "http://provider.invalid",
+                    transport,
+                    Default::default(),
+                )
+                .unwrap();
+                if let Ok(mut response) =
+                    client.completion_model("test-model").stream(request).await
+                {
+                    let _ = response.next().await;
+                }
             }
+            other => panic!("no Responses transport carries a service tier for {other:?}"),
         }
         let actual = bodies.lock().unwrap().pop().expect("terminal wire body");
-        assert_eq!(
-            actual.get("service_tier").and_then(Value::as_str),
-            case.wire.as_deref(),
-            "{case:?}"
+        assert_eq!(actual, expected, "{:?}", case.input);
+        case.check(
+            gents_lean_vocab::families::contracts_service_tier_transport::ServiceTierWire {
+                wire: actual
+                    .get("service_tier")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            },
         );
-        assert_eq!(actual, expected, "{case:?}");
     }
 }

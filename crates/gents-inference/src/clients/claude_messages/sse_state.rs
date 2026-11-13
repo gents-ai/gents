@@ -644,7 +644,10 @@ fn mapped_tool_call(
     if !seen_ids.insert(tool.id.clone()) {
         return Err(MessagesParseError::DuplicateToolUseId { id: tool.id });
     }
-    if surface.is_empty() || !surface.contains(&tool.name) {
+    if surface.is_empty() {
+        return Err(MessagesParseError::EmptyToolSurface { names: tool.name });
+    }
+    if !surface.contains(&tool.name) {
         return Err(MessagesParseError::ToolUse { names: tool.name });
     }
     let raw = tool.arguments_json();

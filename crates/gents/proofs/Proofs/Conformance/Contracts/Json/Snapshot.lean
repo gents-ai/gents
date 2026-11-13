@@ -345,14 +345,6 @@ def snapshotPromptTailJson : String :=
       ++ promptAssemblyRetentionCasesJson ++ ","
     ++ "\"prompt_assembly_compaction_trigger_cases\":"
       ++ promptAssemblyCompactionTriggerCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_map_cases\":"
-      ++ promptAssemblyClaudeMapCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_body_cases\":"
-      ++ promptAssemblyClaudeBodyCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_stream_cases\":"
-      ++ promptAssemblyClaudeStreamCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_thinking_stream_cases\":"
-      ++ promptAssemblyClaudeThinkingStreamCasesJson ++ ","
     ++ "\"prompt_assembly_claude_replay_cases\":"
       ++ promptAssemblyClaudeReplayCasesJson ++ ","
     ++ "\"prompt_assembly_claude_checkpoint_cases\":"
@@ -368,8 +360,6 @@ def snapshotPromptTailJson : String :=
 
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"rendered_capture_cases\":"
-      ++ renderedCaptureCasesJson ++ ","
     ++ "\"durable_reduction_cases\":"
       ++ durableReductionCasesJson ++ ","
     ++ "\"compaction_projection_join_cases\":"
@@ -378,8 +368,6 @@ def snapshotCaptureTailJson : String :=
       ++ compactionCanonicalProjectionCasesJson ++ ","
     ++ "\"repaired_projection_admission_cases\":"
       ++ repairedProjectionAdmissionCasesJson ++ ","
-    ++ "\"rendered_capture_key_cases\":"
-      ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"auxiliary_session_child_binding_cases\":"
       ++ Identity.SessionChild.childScopeCasesJson ++ ","
     ++ "\"goal_link_cases\":"
@@ -388,8 +376,6 @@ def snapshotCaptureTailJson : String :=
       ++ Identity.SessionChild.clientRequestPublicationCasesJson ++ ","
     ++ "\"capture_scope_cases\":"
       ++ captureScopeCasesJson ++ ","
-    ++ "\"capture_order_cases\":"
-      ++ captureOrderCasesJson ++ ","
     ++ "\"aggregate_token_budget_cases\":"
       ++ aggregateTokenBudgetCasesJson ++ ","
     ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
@@ -404,9 +390,6 @@ def snapshotCaptureTailJson : String :=
     ++ "\"compaction_cursor_cases\":"
       ++ jsonArray
         (Compaction.compactionCursorCases.map compactionCursorCaseJson) ++ ","
-    ++ "\"backend_health_cases\":"
-      ++ jsonArray
-        (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
     ++ "\"backend_probe_schedule_cases\":"
       ++ jsonArray
         (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
@@ -929,9 +912,6 @@ def snapshotFileCasesJson : String :=
       (StreamingResponse.ReasoningDeltas.cases.map reasoningDeltaCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
-    ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
-    ++ "\"prompt_assembly_service_tier_cases\":" ++
-      promptAssemblyServiceTierCasesJson ++ ","
     ++ "\"prompt_assembly_responses_storage_cases\":" ++
       promptAssemblyResponsesStorageCasesJson ++ ","
     ++ "\"prompt_assembly_responses_effort_cases\":" ++

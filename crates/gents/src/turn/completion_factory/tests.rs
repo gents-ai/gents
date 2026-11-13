@@ -651,61 +651,45 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
 }
 
 #[test]
-fn generated_service_tier_cases_drive_loop_config() {
-    let cases = gents_lean_vocab::lean_prompt_assembly_service_tier_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let family = BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
+fn service_tier_loop_config_follows_the_lean_model() {
+    gents_lean_vocab::families::contracts_service_tier_loop_config::replay(|input| {
+        let family = BackendProviderKind::parse_optional(Some(&input.family)).expect("Lean family");
         let tier: Option<gents_inference::resolved::ServiceTier> =
-            serde_json::from_value(serde_json::to_value(&case.requested).unwrap())
+            serde_json::from_value(serde_json::to_value(&input.requested).unwrap())
                 .expect("Lean tier");
-        assert_eq!(
-            gents_inference::resolved::validate_service_tier(family, tier).is_ok(),
-            case.allowed,
-            "{case:?}"
-        );
-        if !case.allowed {
-            continue;
+        let wire = match input.openai_wire_api.as_str() {
+            "responses" => gents_loop::openai_wire::OpenAiWireApi::Responses,
+            "chat_completions" => gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+            other => panic!("unknown modeled OpenAI wire {other}"),
+        };
+        let mut agent = agent_with_retry(Default::default());
+        agent.backend_provider_kind = family;
+        agent.openai_wire_api = wire;
+        agent.service_tier = tier;
+        let config = loop_config(&agent, "preamble".into(), 0, CaptureScopeKind::Inference);
+        let request = rig::completion::CompletionRequest {
+            model: None,
+            preamble: config.preamble.clone(),
+            chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user("hi")),
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: config.additional_params.clone(),
+            output_schema: None,
+        };
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .expect("provider body");
+        gents_lean_vocab::families::contracts_service_tier_loop_config::ServiceTierWire {
+            wire: body
+                .get("service_tier")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
         }
-        for wire in [
-            gents_loop::openai_wire::OpenAiWireApi::Responses,
-            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
-        ] {
-            if family == BackendProviderKind::ChatGptCodex
-                && wire != gents_loop::openai_wire::OpenAiWireApi::Responses
-            {
-                continue;
-            }
-            let mut agent = agent_with_retry(Default::default());
-            agent.backend_provider_kind = family;
-            agent.openai_wire_api = wire;
-            agent.service_tier = tier;
-            let config = loop_config(&agent, "preamble".into(), 0, CaptureScopeKind::Inference);
-            let request = rig::completion::CompletionRequest {
-                model: None,
-                preamble: config.preamble.clone(),
-                chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user(
-                    "hi",
-                )),
-                documents: Vec::new(),
-                tools: Vec::new(),
-                temperature: None,
-                max_tokens: None,
-                tool_choice: None,
-                additional_params: config.additional_params.clone(),
-                output_schema: None,
-            };
-            let body = config
-                .provider_input_counter
-                .project_body(&request)
-                .expect("provider body");
-            assert_eq!(
-                body.get("service_tier").and_then(serde_json::Value::as_str),
-                case.wire.as_deref(),
-                "{case:?}, {wire:?}"
-            );
-        }
-    }
+    });
 }
 
 fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>) -> String {

@@ -1093,17 +1093,17 @@ def caseCoverage : List CoverageEntry :=
       "Local mutation acknowledgements, stale reads and visible rows are observations of DefraDB, not proofs of its internal commit algorithm.")
       "storage-observation" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
-      "backend_health_cases"
+      "backend_health_admission_cases"
       "BackendHealthAdmissionCases"
       "A provider models-endpoint probe does not establish completion health, remote-node reachability or fleet-wide document freshness.")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "backend_health_cases"
+      "backend_health_admission_cases"
       "BackendHealthAdmissionCases")
       "backend-health" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "backend_health_cases"
-      "BackendHealthTransitionCases")
+      "family"
+      "contracts_backend_health_transition")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_probe_schedule_cases"
@@ -1119,8 +1119,8 @@ def caseCoverage : List CoverageEntry :=
       "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports, duplicate-call accounting and goal charges that include reviews while excluding titles. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "backend_health_cases"
-      "BackendHealthTransitionCases")
+      "family"
+      "contracts_backend_health_transition")
       "backend-health" [Surface.operatorCli]
   , tagged (followUpCoverage
       "native_filesystem_boundary_cases"
@@ -2429,9 +2429,17 @@ def caseCoverage : List CoverageEntry :=
       "Generated decisions bind workspace isolation, configured ceilings, action/revision grants and automatic-review fallback to the native routing owner. Canonical host paths, command fingerprints, sandbox enforcement and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_service_tier_cases"
-      "PromptAssemblyServiceTierCases"
-      "Generated decisions cover every provider family with unset, Standard and Fast selections. Native validation rejects unsupported carriers; supported cases compare the actual provider request body. Provider account/model eligibility and delivered speed are external.")
+      "family"
+      "contracts_service_tier_validation"
+      "Generated decisions cover every provider family with unset, Standard and Fast selections; native validation rejects unsupported carriers. Provider account/model eligibility and delivered speed are external.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_service_tier_loop_config")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_service_tier_transport")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_responses_storage_cases"
@@ -2459,8 +2467,12 @@ def caseCoverage : List CoverageEntry :=
       "The cursor fixtures share the migrated immutable compaction contract; the native bridge has not yet been regenerated.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "routing_affinity_cases"
-      "RoutingAffinityCases")
+      "family"
+      "contracts_routing_affinity")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_routing_affinity_dispatches")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "current_input_cases"
@@ -2500,12 +2512,20 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyRetentionCases")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_map_cases"
-      "PromptAssemblyClaudeMapCases")
+      "family"
+      "contracts_claude_map")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_body_cases"
-      "PromptAssemblyClaudeBodyCases")
+      "family"
+      "claude_prompt_assembly_body_system")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "claude_prompt_assembly_body_effort")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "claude_prompt_assembly_body_plan")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2528,17 +2548,17 @@ def caseCoverage : List CoverageEntry :=
       "claude_prompt_assembly_field_row")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "prompt_assembly_claude_stream_cases"
-      "PromptAssemblyClaudeStreamCases")
+      "family"
+      "contracts_claude_stream")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_thinking_stream_cases"
-      "PromptAssemblyClaudeThinkingStreamCases"
+      "family"
+      "contracts_claude_thinking_stream"
       "Drives the native Claude Messages SSE parser and compares cumulative provisional text and sealed signed/redacted content. The owned loop's persistence and provider continuation are not exercised here.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_thinking_stream_cases"
-      "PromptAssemblyClaudeThinkingStreamCases"
+      "family"
+      "contracts_claude_thinking_seal"
       "Drives modeled nonempty thinking-start text through the native parser and canonical accumulator, checking exact sealed content. Owned-loop persistence and provider continuation remain unbound.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2583,14 +2603,9 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyModeSanitizeCases"
       "Checks the composed native provider-view sanitizer on finite coherent, unique-call-id witnesses, and that the tagged association view is the native-order view whose send-boundary ordering is that composed view. General native reachability and arbitrary transcript premises remain outside this fence.")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "rendered_capture_cases"
-      "RenderedCaptureCases"
-      "Drives provider-send ordering with scripted sink outcomes. Durable fresh/idempotent/conflicting bindings are observed separately by the real sink consumer; no test-side store model remains.")
-      "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "RenderedCaptureCases")
+      "family"
+      "contracts_rendered_capture")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -2616,24 +2631,24 @@ def caseCoverage : List CoverageEntry :=
       "Drives absent, zero and positive pinned limits with inference/compaction rows through the real physical-request query and ledger factory. Full process restart and InferenceCall write ownership remain separate boundaries.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "RenderedCaptureKeyCases")
+      "family"
+      "contracts_rendered_capture_key")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
+      "capture_scope_cases"
       "CaptureScopeCases")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "CaptureOrderCases")
+      "family"
+      "contracts_capture_order")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "RenderedCaptureCases")
+      "family"
+      "contracts_rendered_capture")
       "rendered-capture" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "rendered_capture_cases"
-      "RenderedCaptureCases")
+      "family"
+      "contracts_rendered_capture")
       "rendered-capture" [Surface.operatorUi]
   , tagged (consumerCoverage "family" "event_delivery_watcher_transitions")
       "event-delivery" [Surface.runtimeInternal]
