@@ -10,7 +10,6 @@ use crate::plugin::job_calls;
 use crate::test_support::plugin_job::*;
 use gents_lean_vocab::families::plugin_job_recoveries::PluginJobRow;
 use gents_lean_vocab::lean_recovery_sweep_cases;
-use gents_lean_vocab::{lean_plugin_job_adoption_cases, LeanPluginJobAdoptionCase};
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobResume, JobState, JobStepOutput};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,7 +48,7 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                     true,
                     None,
                     false,
-                    Some(gents_lean_vocab::family::Json(row_json(&admitted))),
+                    Some(gents_lean_vocab::family::Json(row_wire(&admitted))),
                     Vec::new(),
                     admitted,
                 ),
@@ -127,129 +126,109 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     }
 }
 
-/// Lean `adopt`, `adoptTerminal`, `hostPin`, `uniqueHandle` and `splitAddress`
-/// through the production adoption owner: the written pin, the adopted call,
-/// inline delivery with no Continuation for a pinned terminal, and the
-/// receipt compare-and-set that commits once and then conflicts.
+fn decoded<T>(value: &gents_lean_vocab::family::Json) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(value.0.clone()).expect("modeled plugin-job wire decodes")
+}
+
+/// Lean `adopt` and `adoptTerminal` through the production adoption owner:
+/// the adopted row and call, inline delivery with no Continuation for a
+/// pinned terminal, and the receipt compare-and-set that commits once and
+/// then conflicts.
 #[test]
-fn generated_plugin_job_adoption_cases_drive_adopt() {
-    let cases = lean_plugin_job_adoption_cases();
-    assert_eq!(
-        cases.len(),
-        12,
-        "Lean pins twelve adoption rows in `adoption_regressions`"
-    );
-    let mut names = BTreeSet::new();
-    for case in cases {
-        assert!(names.insert(case.name()), "duplicate {}", case.name());
-        match case {
-            LeanPluginJobAdoptionCase::Step0 {
-                name,
-                tool_call: call,
-                context: ctx,
-                job,
-                output: out,
-                expected,
-            } => {
-                let call = tool_call(call);
-                match crate::background::job::dispatch::adopt(
-                    &context(ctx, job, out),
-                    &call,
-                    &row(job),
-                    &output(out),
-                ) {
-                    Ok(adopted) => {
-                        assert!(expected.admitted, "{name}: adopted a refused step");
-                        assert_eq!(expected.code, None, "{name}");
-                        assert_eq!(
-                            Some(&adopted.row),
-                            expected.job.as_ref().map(row).as_ref(),
-                            "{name}: adopted row"
-                        );
-                        assert_eq!(
-                            adopted.call,
-                            tool_call(&expected.tool_call),
-                            "{name}: adopted call"
-                        );
-                        assert_eq!(
-                            delivery_spelling(adopted.delivery),
-                            expected.delivery.as_deref(),
-                            "{name}: delivery"
-                        );
-                        assert_eq!(
-                            adopted.delivery == Some(Delivery::Continuation),
-                            expected.continuation_appended,
-                            "{name}: continuation"
-                        );
-                        let (terminal, late) = adopted.receipt_decisions();
-                        let receipt = expected
-                            .receipt
-                            .as_ref()
-                            .unwrap_or_else(|| panic!("{name}: adopted row without receipt"));
-                        assert_eq!(
-                            (terminal.spelling(), late.spelling()),
-                            (
-                                receipt.terminal_decision.as_str(),
-                                receipt.late_decision.as_str()
-                            ),
-                            "{name}: receipt decisions"
-                        );
-                    }
-                    Err(refusal) => {
-                        assert!(!expected.admitted, "{name}: refused an adopted step");
-                        assert_eq!(refusal.code(), expected.code.as_deref(), "{name}");
-                        assert!(expected.job.is_none(), "{name}");
-                        assert_eq!(
-                            call,
-                            tool_call(&expected.tool_call),
-                            "{name}: a refused step leaves the call"
-                        );
-                        assert_eq!(expected.delivery, None, "{name}");
-                        assert!(!expected.continuation_appended, "{name}");
-                        assert!(expected.receipt.is_none(), "{name}");
+fn plugin_job_step0_adoption_follows_the_lean_model() {
+    use gents_lean_vocab::family::Json;
+
+    gents_lean_vocab::families::plugin_job_adoption_step0::replay(|input| {
+        let ctx: gents_lean_vocab::LeanPluginJobContext = decoded(&input.context);
+        let job: gents_lean_vocab::LeanPluginJobRow = decoded(&input.job);
+        let out: gents_lean_vocab::LeanPluginJobOutput = decoded(&input.output);
+        let call = tool_call(
+            &input.tool_call.state,
+            &input.tool_call.operation,
+            &input.tool_call.await_mode,
+        );
+        let call_wire = |call: &crate::background::job::dispatch::ToolCallView| {
+            let (state, operation, await_mode) = tool_call_wire(call);
+            gents_lean_vocab::families::plugin_job_adoption_step0::ToolCallWire {
+                state,
+                operation,
+                await_mode,
+            }
+        };
+        Some(
+            match crate::background::job::dispatch::adopt(
+                &context(&ctx, &job, &out),
+                &call,
+                &row(&job),
+                &output(&out),
+            ) {
+                Ok(adopted) => {
+                    let (terminal, late) = adopted.receipt_decisions();
+                    gents_lean_vocab::families::plugin_job_adoption_step0::Step0Output {
+                        admitted: true,
+                        code: None,
+                        job: Some(Json(row_wire(&adopted.row))),
+                        tool_call: call_wire(&adopted.call),
+                        delivery: delivery_spelling(adopted.delivery).map(str::to_owned),
+                        continuation_appended: adopted.delivery == Some(Delivery::Continuation),
+                        receipt: Some(
+                            gents_lean_vocab::families::plugin_job_adoption_step0::ReceiptWire {
+                                terminal_decision: terminal.spelling().to_owned(),
+                                late_decision: late.spelling().to_owned(),
+                            },
+                        ),
                     }
                 }
+                Err(refusal) => {
+                    gents_lean_vocab::families::plugin_job_adoption_step0::Step0Output {
+                        admitted: false,
+                        code: refusal.code().map(str::to_owned),
+                        job: None,
+                        tool_call: call_wire(&call),
+                        delivery: None,
+                        continuation_appended: false,
+                        receipt: None,
+                    }
+                }
+            },
+        )
+    });
+}
+
+/// Lean `hostPin` through the production pin writer: only the guest fields
+/// of a claimed pin survive.
+#[test]
+fn plugin_job_host_pin_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_job_adoption_host_pin::replay(|input| {
+        let claimed: gents_lean_vocab::LeanPluginJobPin = decoded(&input.claimed);
+        let facts: gents_lean_vocab::LeanPluginJobHostFacts = decoded(&input.facts);
+        Some(gents_lean_vocab::family::Json(pin_wire(&host_pin(
+            &guest_of(&claimed),
+            &host_facts(&facts),
+        ))))
+    });
+}
+
+#[test]
+fn plugin_job_unique_handle_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_job_adoption_handle::replay(|input| {
+        unique_handle(&input.taken, &input.handle)
+    });
+}
+
+#[test]
+fn plugin_job_address_split_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_job_adoption_address::replay(|input| {
+        split_address(&input.address).map(|(session_id, tool_call_id)| {
+            gents_lean_vocab::families::plugin_job_adoption_address::SplitWire {
+                session_id,
+                tool_call_id,
             }
-            LeanPluginJobAdoptionCase::HostPin {
-                name,
-                claimed,
-                facts,
-                expected,
-            } => {
-                assert_eq!(
-                    host_pin(&guest_of(claimed), &host_facts(facts)),
-                    pin(&expected.pin),
-                    "{name}: host pin"
-                );
-            }
-            LeanPluginJobAdoptionCase::Handle {
-                name,
-                taken,
-                handle,
-                expected,
-            } => {
-                assert_eq!(
-                    unique_handle(taken, handle),
-                    expected.handle,
-                    "{name}: handle"
-                );
-            }
-            LeanPluginJobAdoptionCase::Address {
-                name,
-                address,
-                expected,
-            } => {
-                assert_eq!(
-                    split_address(address),
-                    expected
-                        .split
-                        .as_ref()
-                        .map(|s| (s.session_id.clone(), s.tool_call_id.clone())),
-                    "{name}: address split"
-                );
-            }
-        }
-    }
+        })
+    });
 }
 
 fn observed_by_key<'a, I>(observed: I) -> BTreeMap<String, KillObservation>

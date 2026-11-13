@@ -1,28 +1,16 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use defra_node::Node as EmbeddedNode;
 use gents_loop::provider_audit::{AuxiliaryOutputEvent, AuxiliaryOutputObservation};
 use gents_loop::provider_input::ProviderInputProfile;
-use gents_protocol::message::{AssistantContent, Message, Reasoning, ReasoningContent};
-use gents_protocol::output::live::{
-    project_live, reconstruct_dense_prefix, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
-};
+use gents_protocol::output::live::reconstruct_dense_prefix;
 use gents_protocol::output::reconstruction::ObservedSegment;
-use gents_protocol::output::{
-    OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose, StreamPayload,
-};
-use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use gents_protocol::output::{OutputSource, OutputWriter, SourceClose, StreamPayload};
+use gents_protocol::rendered_request::CaptureScope;
 
-use super::{auxiliary, canonical, native_encoding, DefraStreamWriter};
+use super::{auxiliary, DefraStreamWriter};
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use gents_lean_vocab::{
-    lean_auxiliary_output_cases, LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure,
-    LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication,
-    LeanMessageRole, LeanOutcome, LeanPayloadKind, LeanPresentation, LeanReasoningAuditResult,
-    LeanReasoningPart,
-};
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_store::config_client::ConfigAccess;
 

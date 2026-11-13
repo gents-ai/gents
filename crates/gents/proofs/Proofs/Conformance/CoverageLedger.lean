@@ -2328,8 +2328,20 @@ def caseCoverage : List CoverageEntry :=
       "plugin_job_dispatch_refusal")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_job_adoption_cases"
-      "PluginJobAdoptionCases")
+      "family"
+      "plugin_job_adoption_step0")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_adoption_host_pin")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_adoption_handle")
+      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_adoption_address")
       "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2911,9 +2923,13 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the join of the observed request row with the own-lease title or access-review world runs only through the Lean activation and claim owner; no production scenario materializes those rows for the native watcher admission and claim owners, nor renewal, recovery or output capture.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "canonical_payload_presentation_cases"
-      "CanonicalPayloadPresentationCases"
-      "The four generated cases bind presented payload-field bytes and missing-dependency failure to native canonical reconstruction; stored-byte quantities remain Lean expectations. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
+      "family"
+      "payload_presentation_contracts_lengths"
+      "The four generated cases bind stored and presented payload-field bytes and missing-dependency failure to native canonical reconstruction; payload_presentation_contracts_malformed_lengths binds integrity rejection of a corrupted stored flush. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
+      "canonical-output" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "payload_presentation_contracts_malformed_lengths")
       "canonical-output" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "family"
@@ -2938,9 +2954,9 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: no production path reaches these emitted cases yet. Model-derived projection/estimate/reduction and rebuilt-admission observations bind exact input identities, failure propagation and threshold/output-capacity boundaries. Provider projection and estimation are explicit fallible native premises, not modeled serializers. Native adapters and the real serialized-request experiment remain pending; controlled observations are not native consumer coverage.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
-      "compaction_canonical_projection_cases"
-      "CompactionCanonicalProjectionCases"
-      "Concrete canonical records and selected identities exercise the composed reconstruction/projection/reduction entry. Compare full native messages at initial and checkpoint-rebuild callbacks, and reject missing or loading dependencies without shortened history. The native serializer and ACP-authorized snapshot remain external premises.")
+      "family"
+      "compaction_canonical_projection_unreached"
+      "model-production-gap: production composes canonical reconstruction, provider projection, estimation and reduction inside gents-loop request assembly over the serialized request; no production function takes a canonical world, selected identities and supplied estimates. Concrete canonical records and selected identities pin the full native messages at initial and checkpoint-rebuild callbacks and reject missing or loading dependencies without shortened history.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "family"
@@ -2948,18 +2964,23 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: production admits a fresh provider request inside gents-loop request assembly over the serialized request, where projection and estimation are the provider's own calls; no production function takes a supplied projection outcome and estimate. This does not model the repair transformation.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "canonical_output_projection_cases"
-      "CanonicalOutputProjectionCases"
+      "family"
+      "canonical_output_projection_view"
+      "project_live replays every projection observation and its whole view (published envelope and reconstructed native message, preview streams, or the loading, denied, conflicted, invalid, retracted and absent verdicts) is compared with the model's project. This binds the projection owner, not ACP or genesis validation.")
+      "canonical-output" [Surface.agentFacing, Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "family"
+      "canonical_output_projection_presentation"
       "The two published mixed/all-opaque reasoning cases bind present_message to renderedKinds. This binds stateless reasoning presentation, not projection selection, ACP or genesis validation.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "canonical_output_projection_cases"
-      "CanonicalOutputProjectionCases"
+      "family"
+      "canonical_output_projection_preview"
       "The two published mixed/all-opaque reasoning cases bind render_reasoning_text to renderedKinds. This binds the stateless per-event rendering function, not stream-event delivery or reconnect behavior.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "reasoning_audit_cases"
-      "ReasoningAuditCases"
+      "family"
+      "reasoning_audit_prefix"
       "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2968,24 +2989,29 @@ def caseCoverage : List CoverageEntry :=
       "Generated fragment cases drive the native accumulator across reasoning identities, signed boundaries, text boundaries and UTF-8 bytes.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "reasoning_signature_cases"
-      "ReasoningSignatureCases"
-      "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. Invalid UTF-8 is rejected at the byte-to-String adapter boundary because native OutputSegment payload is typed String; this does not establish provider-event capture, durable write admission, or ACP.")
+      "family"
+      "reasoning_audit_signature"
+      "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. This does not establish provider-event capture, durable write admission, or ACP.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "reasoning_audit_signature_unreached"
+      "model-production-gap: native OutputSegment payload is a UTF-8 String, so a flush whose modeled bytes are not UTF-8 cannot be written or translated; the model rejects such a signature run as malformed.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "auxiliary_output_cases"
-      "AuxiliaryOutputCases"
+      "family"
+      "auxiliary_output_owned"
       "Generated compaction/fallback cases bind claimed append denial, own begin/append, Complete or Partial exact close, stale-writer close replay denial, and nonempty auxiliary publication denial to native request/output owners. Empty-assistant publication is Lean-only because the native encoder rejects that shape. This does not cover title ownership, recovery after crash, or every provider cancellation path.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "auxiliary_output_cases"
-      "AuxiliaryOutputCases"
+      "family"
+      "auxiliary_output_sink"
       "Generated compaction/fallback cases drive the non-Claude auxiliary sink with typed reasoning, signature, encrypted and redacted observations, then compare durable bytes, exact closure, private audit reconstruction and absent public live/message output to Lean. This does not cover crash durability before sink acknowledgement, title ownership, recovery after crash, or every provider cancellation path.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "auxiliary_output_cases"
-      "AuxiliaryOutputCases"
-      "Generated compaction/fallback records bind exact private audit bytes and absent public live projection to native reconstruction. This is a read-only projection check; it does not establish provider-event capture, durable write admission, recovery transactions, title ownership, or ACP.")
+      "family"
+      "auxiliary_output_projection"
+      "Generated compaction/fallback records bind exact private audit bytes and absent public live projection to native reconstruction. The expired-lease recovery plan closes the record without retained streams. This is a read-only projection check; it does not establish provider-event capture, durable write admission, recovery transactions, title ownership, or ACP.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

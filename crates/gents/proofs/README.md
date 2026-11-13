@@ -252,9 +252,9 @@ outside it, as a remote merge is. Its observations include exact normalized
 immutable segments and messages, not only row counts.
 `Conformance/Contracts/Json/PayloadPresentation` exports stored and presented
 payload lengths from reconstruction, not provider request sizes or token usage.
-`canonical_presentation/native_adapter.rs` runs its four generated cases through
-native reconstruction for presented payload bytes and missing dependencies;
-stored-byte values remain Lean expectations, not native provider estimates.
+Its families replay native reconstruction for stored and presented payload
+bytes, missing dependencies and corrupted flushes; these are payload lengths,
+not native provider estimates.
 The compaction projection join connects exact canonical message reconstruction
 to a fallible complete-request projection and estimation boundary, then to the
 existing reduction decision. Rebuilt requests are projected and measured again;
@@ -262,15 +262,15 @@ dispatch requires both threshold admission and positive output capacity. The
 provider serializer and estimator remain explicit native parameters, not a
 second implementation in Lean. `contract_cases_compaction_projection_join_projection_join` supplies
 controlled observations at that boundary; it does not establish that native
-serialization produced them. `compaction_canonical_projection_cases` supplies
-the immutable records and checks full reconstructed native messages;
+serialization produced them. the leftover family `compaction_canonical_projection_unreached` supplies
+the immutable records and pins full reconstructed native messages;
 the family `contract_cases_compaction_canonical_projection_repaired_admission_unreached`
 covers remeasurement of repaired input.
 The actual serialized-request/threshold experiment
 remains `native.external-projected-request-threshold` in the implementation layer.
 
 The canonical output groups are registered in `tests/conformance/coverage.rs`.
-Native projection consumers live in `crates/gents-lean-vocab/src/canonical_presentation.rs`,
+Native projection consumers live in `crates/gents-protocol/tests/canonical_output.rs`,
 and `src/runtime/agent/tests/canonical_execution_native_adapter.rs` binds selected
 execution scripts to native owners, including live partial publication and replay.
 The retired `streaming_response_cases` generator is no longer a runtime/test

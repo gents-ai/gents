@@ -315,6 +315,9 @@ import Proofs.Conformance.GoalDeliveryInput
 import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.SchemaArgumentRepairFamily
+import Proofs.Conformance.ReasoningAudit
+import Proofs.Conformance.CanonicalOutputProjection
+import Proofs.Conformance.AuxiliaryOutput
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientDelivery
@@ -357,8 +360,6 @@ set_option maxHeartbeats 2000000 in
 checks grow with the family count past the default heartbeat budget. -/
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"compaction_canonical_projection_cases\":"
-      ++ compactionCanonicalProjectionCasesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
 
@@ -399,8 +400,6 @@ def snapshotRequestCasesJson : String :=
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
-    ++ "\"canonical_payload_presentation_cases\":"
-      ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""
@@ -437,7 +436,6 @@ def snapshotRecoveryCasesJson : String :=
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
 
@@ -446,15 +444,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
-    ++ "\"canonical_output_projection_cases\":"
-      ++ jsonArray
-        (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
-    ++ "\"reasoning_audit_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
-    ++ "\"reasoning_signature_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
-    ++ "\"auxiliary_output_cases\":" ++ jsonArray
-      (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
 
 
 def snapshotJson : String :=

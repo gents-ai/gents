@@ -52,7 +52,7 @@
   {
     "id":"tools.plugin-job-driver","constructors":[],
     "model_symbols":[{"file":"crates/gents/proofs/Proofs/ToolCalls/PluginJob/Admission.lean","symbol":"PluginJob.admitStep"},{"file":"crates/gents/proofs/Proofs/ToolCalls/PluginJob/Adoption.lean","symbol":"PluginJob.adopt"},{"file":"crates/gents/proofs/Proofs/ToolCalls/PluginJob/Control.lean","symbol":"PluginJob.Control.kill"},{"file":"crates/gents/proofs/Proofs/ToolCalls/Recovery/Sweeps/PluginJob.lean","symbol":"Recovery.pluginJobRecoverySweep"}],
-    "generated_groups":["plugin_job_adoption_cases"],"fixture_status":"concrete_inputs",
+    "generated_groups":["families"],"fixture_status":"concrete_inputs",
     "native_owner_paths":["crates/gents-toolcalls/src/call/lifecycle.rs","crates/gents-toolcalls/src/call/lifecycle/recovery.rs","crates/gents-session/src/request/lifecycle/materialize.rs"],
     "consumer_paths":["crates/gents/tests/conformance/recovery_sweeps.rs","crates/gents/tests/conformance/tool_policy.rs","crates/gents-tools/src/builtin/self_config/tests.rs","crates/gents/tests/conformance/background.rs"],"native_status":"pending",
     "required_cases":["Each driver step is admitted only through the pure step owner; a refusal leaves the job unchanged.","Adoption binds a job to its pinned row and key exactly once.","Kill is a single winner: it ends the job once and reaches only the job's own children.","The recovery sweep redrives or terminalizes a job row from durable facts only."],"retired_bindings":[]
