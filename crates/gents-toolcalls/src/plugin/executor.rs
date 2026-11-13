@@ -108,7 +108,7 @@ pub(crate) enum RunError {
     #[error("{source:#}")]
     Attempt {
         source: anyhow::Error,
-        receipt: PluginExecutionReceipt,
+        receipt: Box<PluginExecutionReceipt>,
     },
 }
 
@@ -792,7 +792,10 @@ impl PluginExecutor {
                 receipt: receipt.clone(),
             })
         }.await;
-        result.map_err(|source| RunError::Attempt { source, receipt })
+        result.map_err(|source| RunError::Attempt {
+            source,
+            receipt: Box::new(receipt),
+        })
     }
 
     fn admit(&self, record: &InstalledPlugin) -> Result<Arc<Admitted>> {
@@ -961,7 +964,7 @@ fn receipt_of(
 ) -> PluginExecutionReceipt {
     match result {
         Ok(call) => call.receipt.clone(),
-        Err(RunError::Attempt { receipt, .. }) => receipt.clone(),
+        Err(RunError::Attempt { receipt, .. }) => receipt.as_ref().clone(),
         Err(RunError::Refused(_)) => refused,
     }
 }
