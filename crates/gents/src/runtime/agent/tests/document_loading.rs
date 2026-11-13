@@ -449,39 +449,46 @@ async fn from_default_agent_documents_filters_inactive_agent_targets() {
 }
 
 #[tokio::test]
-async fn from_default_agent_documents_rejects_unresolved_agent_target() {
-    let (db, _owner_identity, owner) = test_node("agent-target-missing").await;
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    let did = identity.did().to_string();
-    let default_agent_did = install_default_agent(&node, identity.as_ref(), &owner).await;
+async fn document_loading_follows_the_lean_tool_admission_model() {
+    use gents_lean_vocab::families::tool_admission_document_loading;
+    for case in gents_lean_vocab::families::tool_admission_document_loading::cases::<
+        String,
+        AgentReadinessUnavailableReason,
+    >() {
+        let (db, _owner_identity, owner) = test_node("agent-target-missing").await;
+        let node = db.node.clone();
+        let identity = db.node_identity.clone();
+        let did = identity.did().to_string();
+        let default_agent_did = install_default_agent(&node, identity.as_ref(), &owner).await;
 
-    let target_did =
-        install_agent(&node, identity.as_ref(), &owner, "target-before-corruption").await;
-    write_document(
-        &owner,
-        gents_store::collection::Collection::AgentTarget,
-        &AgentTargetDocument {
-            target_id: format!("{default_agent_did}:missing-behavior"),
-            node_did: did.clone(),
-            target_node_did: did.clone(),
-            agent_did: target_did,
-            name: "missing-behavior".to_string(),
-            description: None,
-            tags: Vec::new(),
-        },
-    )
-    .await
-    .unwrap();
-    let mut tools = load_installed_tools(&owner, &did, &default_agent_did).await;
-    tools.agents = Some(gents_documents::AgentTools {
-        target_ids: vec![format!("{default_agent_did}:missing-behavior")],
-        enabled: Some(true),
-    });
-    upsert_tools(&owner, &tools).await;
+        let target_did =
+            install_agent(&node, identity.as_ref(), &owner, "target-before-corruption").await;
+        write_document(
+            &owner,
+            gents_store::collection::Collection::AgentTarget,
+            &AgentTargetDocument {
+                target_id: format!("{default_agent_did}:missing-behavior"),
+                node_did: did.clone(),
+                target_node_did: did.clone(),
+                agent_did: target_did,
+                name: "missing-behavior".to_string(),
+                description: None,
+                tags: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+        let mut tools = load_installed_tools(&owner, &did, &default_agent_did).await;
+        tools.agents = Some(gents_documents::AgentTools {
+            target_ids: vec![format!("{default_agent_did}:missing-behavior")],
+            enabled: Some(true),
+        });
+        upsert_tools(&owner, &tools).await;
 
-    let target_id = format!("{default_agent_did}:missing-behavior");
-    owner.transact_write("test.corrupt_target", |txn| {
+        match case.input.admission.as_str() {
+            "unresolved_target" => {
+                let target_id = format!("{default_agent_did}:missing-behavior");
+                owner.transact_write("test.corrupt_target", |txn| {
         let did = &did;
         let target_id = &target_id;
         Box::pin(async move {
@@ -494,31 +501,33 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
             Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
-    let agent = Gents::from_default_agent_documents(
-        node,
-        identity,
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: ToolCeiling::readonly(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
+            }
+            "builds" => {}
+            other => panic!("unmodeled tool admission {other}"),
+        }
+        let agent = Gents::from_default_agent_documents(
+            node,
+            identity,
+            DocumentRuntimeOptions {
+                backend_admission: Some(db.home.backend_admission()),
+                tool_ceiling: ToolCeiling::readonly(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
-    assert!(!agent
-        .agents()
-        .iter()
-        .any(|behavior| behavior.agent.agent_did == default_agent_did));
-    let unavailable = agent
-        .unavailable_agents()
-        .get(default_agent_did.as_str())
-        .expect("parent with unresolved target must be unavailable");
-    assert_eq!(
-        unavailable.public_reason,
-        AgentReadinessUnavailableReason::ToolConfigurationInvalid
-    );
-    assert!(unavailable.diagnostic.contains("missing-behavior"));
+        let unavailable = agent.unavailable_agents().get(default_agent_did.as_str());
+        case.check(tool_admission_document_loading::LoadingOutput {
+            runnable: agent
+                .agents()
+                .iter()
+                .any(|behavior| behavior.agent.agent_did == default_agent_did),
+            reason: unavailable.map(|unavailable| unavailable.public_reason),
+            diagnostic_names_target: unavailable
+                .is_some_and(|unavailable| unavailable.diagnostic.contains("missing-behavior")),
+        });
+    }
 }
 
 #[tokio::test]

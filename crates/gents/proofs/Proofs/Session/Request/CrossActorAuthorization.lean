@@ -493,4 +493,29 @@ def caseJson (c : Case) : Json := Json.mkObj
 
 def casesJson : String := (toJson (cases.map caseJson)).compress
 
+/-! Pending rejection: a request the runtime rejects before admission is
+terminalized only through the runtime's own distinct managed Agent, and only
+when the selected identity is that Agent. -/
+
+inductive PendingRejectionOutcome where
+  | invalidAgent
+  | notMatched
+
+structure PendingRejectionSelection where
+  nodeIsLocal : Bool
+  agentIsNode : Bool
+  identityIsAgent : Bool
+
+/-- The runtime must be the local node, the requested Agent must be distinct
+from it, and the selected identity must be that Agent. The request document is
+absent in this model, so an authorized rejection matches no row; a present
+pending row is terminalized by the transaction, which is not decided here. -/
+def pendingRejectionOutcome (s : PendingRejectionSelection) : PendingRejectionOutcome :=
+  if s.nodeIsLocal && !s.agentIsNode && s.identityIsAgent then .notMatched else .invalidAgent
+
+theorem pending_rejection_requires_the_selected_managed_agent
+    (s : PendingRejectionSelection) (h : s.identityIsAgent = false) :
+    pendingRejectionOutcome s = .invalidAgent := by
+  simp [pendingRejectionOutcome, h]
+
 end Request.CrossActorAuthorization

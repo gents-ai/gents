@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::lineage_fixtures::{seed_lineage_case, started_node, FIXTURE_DID};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::session::SessionProvenance;
 use serde_json::json;
@@ -145,32 +146,45 @@ fn group_caused_keeps_every_request_of_one_call() {
 }
 
 #[tokio::test]
-async fn caused_requests_projection_omits_a_call_with_two_requests() {
-    let node_db = gents_inference::test_support::test_db(
-        "caused-requests-projection-omits-a-call-",
-        crate::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = node_db.node.clone();
-    for (request_id, call) in [("a1", "call-one"), ("b1", "call-two"), ("b2", "call-two")] {
-        create(
-            &node,
-            format!(
-                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_did: "worker", session_id: "child", caused_by_parent_request_id: "p1", caused_by_parent_request_doc_id: "bae-parent", caused_by_parent_tool_call_id: "{call}", caused_by_parent_tool_call_doc_id: "{call}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
-            ),
-            "AgentRequest",
+async fn caused_requests_match_the_lean_projection() {
+    for case in gents_lean_vocab::families::session_origin_projection::cases() {
+        let node_db = gents_inference::test_support::test_db(
+            "caused-requests-match-the-lean-projection",
+            crate::test_support::no_lifecycle_plugins(),
         )
         .await;
+        let node = node_db.node.clone();
+        for request in &case.input.requests {
+            create(
+                &node,
+                format!(
+                    r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{}", node_did: "did:test:node", requester_did: "did:test:node", agent_did: "worker", session_id: "child", caused_by_parent_request_id: "p1", caused_by_parent_request_doc_id: "bae-parent", caused_by_parent_tool_call_id: "{}", caused_by_parent_tool_call_doc_id: "{}", content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+                    request.request_id, request.call, request.call
+                ),
+                "AgentRequest",
+            )
+            .await;
+        }
+        let access = ConfigAccess::local(node.clone());
+        let projected = caused_requests(&access, case.input.calls.iter().map(String::as_str))
+            .await
+            .unwrap();
+        node.shutdown().await.expect("shut down test node");
+        let output = gents_lean_vocab::families::session_origin_projection::ProjectionOutput {
+            projections: case
+                .input
+                .calls
+                .iter()
+                .map(
+                    |call| gents_lean_vocab::families::session_origin_projection::CallProjection {
+                        call: call.clone(),
+                        request: projected.get(call).cloned(),
+                    },
+                )
+                .collect(),
+        };
+        case.check(output);
     }
-    let access = ConfigAccess::local(node.clone());
-    let projection = caused_requests(&access, ["call-one", "call-two"])
-        .await
-        .unwrap();
-    assert_eq!(
-        projection,
-        std::collections::BTreeMap::from([("call-one".to_owned(), "a1".to_owned())])
-    );
-    node.shutdown().await.expect("shut down test node");
 }
 
 fn scope(session_id: &str) -> SessionScope {
@@ -179,13 +193,6 @@ fn scope(session_id: &str) -> SessionScope {
         session_id: session_id.into(),
         requester_did: Some("did:test:node".into()),
     }
-}
-
-fn ids(links: &[SessionLink]) -> Vec<&str> {
-    links
-        .iter()
-        .map(|link| link.scope.session_id.as_str())
-        .collect()
 }
 
 #[tokio::test]
@@ -226,58 +233,63 @@ async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_d
     node.shutdown().await.expect("shut down test node");
 }
 
+fn sorted_ids(links: &[SessionLink]) -> Vec<String> {
+    let mut ids = links
+        .iter()
+        .map(|link| link.scope.session_id.clone())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
+fn lineage_seed(input: &gents_lean_vocab::families::session_origin_lineage::LineageInput) -> Value {
+    let rows = input
+        .requests
+        .iter()
+        .map(|request| {
+            let mut row = json!({
+                "_docID": request.doc,
+                "session_id": request.session,
+                "created_at": request.created_at,
+                "is_public": true,
+            });
+            if let Some(cause) = &request.cause {
+                row["caused_by_parent_request_doc_id"] = json!(cause);
+            }
+            row
+        })
+        .collect::<Vec<_>>();
+    json!({ "rows": rows })
+}
+
 #[tokio::test]
-async fn a_parent_pointer_without_a_verified_starter_is_only_messaging() {
-    let node_db = gents_inference::test_support::test_db(
-        "a-parent-pointer-without-a-verified-star",
-        crate::test_support::no_lifecycle_plugins(),
-    )
-    .await;
-    let node = node_db.node.clone();
-    let parent = seed(&node, "p1", "parent", "2026-09-26T00:00:01Z", None).await;
-    seed_session(&node, "parent", None).await;
-    seed(&node, "s1", "existing", "2026-09-26T00:00:00Z", None).await;
-    seed(
-        &node,
-        "s2",
-        "existing",
-        "2026-09-26T00:00:02Z",
-        Some(&parent),
-    )
-    .await;
-    seed_session(&node, "existing", None).await;
-    seed(
-        &node,
-        "c1",
-        "started",
-        "2026-09-26T00:00:02Z",
-        Some(&parent),
-    )
-    .await;
-    seed_session(&node, "started", Some(&parent)).await;
-    let other = seed(&node, "o1", "other", "2026-09-26T00:00:01Z", None).await;
-    seed_session(&node, "other", None).await;
-    seed(&node, "a0", "started", "2026-09-26T00:00:02Z", Some(&other)).await;
-    let access = ConfigAccess::local(node.clone());
-
-    let from_parent = lineage(&access, &scope("parent")).await.unwrap();
-    assert_eq!(from_parent.started_by, None);
-    assert!(from_parent.started.is_empty());
-    let mut sent = ids(&from_parent.sent);
-    sent.sort_unstable();
-    assert_eq!(sent, ["existing", "started"]);
-    assert!(from_parent.received.is_empty());
-
-    let from_started = lineage(&access, &scope("started")).await.unwrap();
-    assert_eq!(from_started.started_by, None);
-    let mut received = ids(&from_started.received);
-    received.sort_unstable();
-    assert_eq!(received, ["other", "parent"]);
-
-    let from_existing = lineage(&access, &scope("existing")).await.unwrap();
-    assert_eq!(from_existing.started_by, None);
-    assert_eq!(ids(&from_existing.received), ["parent"]);
-    node.shutdown().await.expect("shut down test node");
+async fn session_lineage_matches_the_lean_partition() {
+    for case in gents_lean_vocab::families::session_origin_lineage::cases() {
+        let db = started_node("session-lineage-matches-the-lean-partition").await;
+        let node = db.node.clone();
+        seed_lineage_case(&node, &lineage_seed(&case.input), FIXTURE_DID).await;
+        let access = ConfigAccess::local(node.clone());
+        let mut views = Vec::new();
+        for session in &case.input.scopes {
+            let scope = SessionScope {
+                node_did: FIXTURE_DID.into(),
+                session_id: session.clone(),
+                requester_did: Some(FIXTURE_DID.into()),
+            };
+            let found = lineage(&access, &scope).await.unwrap();
+            views.push(
+                gents_lean_vocab::families::session_origin_lineage::LineageView {
+                    session: session.clone(),
+                    started_by: found.started_by.map(|link| link.scope.session_id),
+                    started: sorted_ids(&found.started),
+                    sent: sorted_ids(&found.sent),
+                    received: sorted_ids(&found.received),
+                },
+            );
+        }
+        node.shutdown().await.expect("shut down test node");
+        case.check(gents_lean_vocab::families::session_origin_lineage::LineageOutput { views });
+    }
 }
 
 /// The recorded opening request is read by the session's exact scope: a

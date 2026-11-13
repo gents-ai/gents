@@ -41,7 +41,10 @@ impl Default for MemberRenewalState {
 
 impl MemberRenewalState {
     pub(super) fn due(&mut self) -> bool {
-        let now = std::time::Instant::now();
+        self.due_at(std::time::Instant::now())
+    }
+
+    fn due_at(&mut self, now: std::time::Instant) -> bool {
         if self
             .last_sweep
             .is_some_and(|last| now.duration_since(last) < self.sweep_interval)
@@ -53,8 +56,12 @@ impl MemberRenewalState {
     }
 
     pub(super) fn wait_duration(&self) -> std::time::Duration {
+        self.wait_duration_at(std::time::Instant::now())
+    }
+
+    fn wait_duration_at(&self, now: std::time::Instant) -> std::time::Duration {
         self.last_sweep
-            .map(|last| self.sweep_interval.saturating_sub(last.elapsed()))
+            .map(|last| self.sweep_interval.saturating_sub(now.duration_since(last)))
             .unwrap_or(std::time::Duration::from_secs(60))
     }
 
@@ -64,12 +71,15 @@ impl MemberRenewalState {
     }
 
     pub(super) fn wake(&mut self) {
-        let now = std::time::Instant::now();
+        self.wake_at(std::time::Instant::now());
+    }
+
+    fn wake_at(&mut self, now: std::time::Instant) {
         let period = std::time::Duration::from_secs(1);
         if let Some(last) = self.last_wake {
             let delay = period.saturating_sub(now.duration_since(last));
             if !delay.is_zero() {
-                if self.wait_duration() > delay {
+                if self.wait_duration_at(now) > delay {
                     self.last_sweep = Some(now);
                     self.sweep_interval = delay;
                 }
@@ -320,14 +330,30 @@ mod tests {
     }
 
     #[test]
-    fn a_received_offer_wakes_the_member_without_waiting_for_the_timer() {
-        let mut state = MemberRenewalState::default();
-        assert!(state.due());
-        assert!(!state.due());
-        state.wake();
-        assert!(state.due());
-        state.wake();
-        assert!(state.wait_duration() <= std::time::Duration::from_secs(1));
+    fn wake_clock_matches_the_lean_model() {
+        let base = std::time::Instant::now();
+        gents_lean_vocab::families::enrollment_member_renewal_clock::replay::<String>(|trace| {
+            let mut state = MemberRenewalState::default();
+            trace
+                .steps
+                .iter()
+                .map(|step| {
+                    let now = base + std::time::Duration::from_millis(step.at_millis);
+                    let answer = match step.action.as_str() {
+                        "due" => Some(state.due_at(now)),
+                        "wake" => {
+                            state.wake_at(now);
+                            None
+                        }
+                        other => panic!("unknown renewal clock action {other}"),
+                    };
+                    gents_lean_vocab::families::enrollment_member_renewal_clock::WakeObservation {
+                        answer,
+                        wait_millis: state.wait_duration_at(now).as_millis() as u64,
+                    }
+                })
+                .collect()
+        });
     }
 
     #[test]

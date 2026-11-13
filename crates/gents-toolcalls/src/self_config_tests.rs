@@ -4,6 +4,7 @@ use crate::test_support::self_config::{
 };
 use anyhow::Result;
 use gents_documents::patch::SelfConfigTarget;
+use gents_lean_vocab::families::self_config_structured_trace::TraceOutput;
 use gents_loop::tool::ToolDyn;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 use gents_tools::builtin::self_config::agent_management::agent_mutate;
@@ -1450,41 +1451,59 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
 }
 
 #[tokio::test]
-async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
-    let fixture = SelfConfigFixture::new("structured-config").await;
-    fixture.grant_selected_configuration().await;
-    let tools = fixture.tools(&["agent"]);
-    let tool = tools
-        .iter()
-        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
-        .unwrap();
-    let read = json!({"argv":["agent","context","get"]}).to_string();
-    let before = tool.call(read.clone()).await.unwrap();
-    let prompt = "Quoted \"text\"\nActual newline; literal \\n; Unicode λ; {{ doc.message }}";
-    let mut request = json!({"argv":["agent","context","preview"],"set":{"system_prompt":prompt}});
-    let preview: Value =
-        serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
-    assert_eq!(preview["committed"], false);
-    assert_eq!(preview["config_execution"]["mutation_entered"], false);
-    assert_eq!(tool.call(read.clone()).await.unwrap(), before);
-    request["argv"][2] = json!("edit");
-    let applied: Value =
-        serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
-    assert_eq!(applied["config_execution"]["mutation_entered"], true);
-    let after: Value = serde_json::from_str(&tool.call(read.clone()).await.unwrap()).unwrap();
-    assert_eq!(after["document"]["system_prompt"], prompt);
-    request["set"] = json!({"node_did":"foreign"});
-    assert!(tool.call(request.to_string()).await.is_err());
-    assert_eq!(
-        serde_json::from_str::<Value>(&tool.call(read).await.unwrap()).unwrap(),
-        after
-    );
-    fixture
-        .db
-        .node
-        .shutdown()
-        .await
-        .expect("shut down test node");
+async fn structured_config_preview_and_apply_match_the_lean_model() {
+    for case in gents_lean_vocab::families::self_config_structured_trace::cases() {
+        let fixture = SelfConfigFixture::new("structured-config").await;
+        fixture.grant_selected_configuration().await;
+        let tools = fixture.tools(&["agent"]);
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+            .unwrap();
+        let read = json!({"argv":["agent","context","get"]}).to_string();
+        let before = tool.call(read.clone()).await.unwrap();
+        let prompt = case.input.prompt.clone();
+        let mut request =
+            json!({"argv":["agent","context","preview"],"set":{"system_prompt":prompt}});
+        let preview: Value =
+            serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
+        let preview_committed = preview["committed"]
+            .as_bool()
+            .expect("preview reports whether it committed");
+        let preview_mutation_entered = preview["config_execution"]["mutation_entered"]
+            .as_bool()
+            .expect("preview reports whether it entered the write path");
+        let unchanged_after_preview = tool.call(read.clone()).await.unwrap() == before;
+        request["argv"][2] = json!("edit");
+        let applied: Value =
+            serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
+        let applied_mutation_entered = applied["config_execution"]["mutation_entered"]
+            .as_bool()
+            .expect("apply reports whether it entered the write path");
+        let after: Value = serde_json::from_str(&tool.call(read.clone()).await.unwrap()).unwrap();
+        let stored_prompt_matches =
+            after["document"]["system_prompt"].as_str() == Some(prompt.as_str());
+        request["set"] = json!({"node_did":"foreign"});
+        let foreign_refused = tool.call(request.to_string()).await.is_err();
+        let after_refusal: Value =
+            serde_json::from_str(&tool.call(read).await.unwrap()).unwrap();
+        let unchanged_after_refusal = after_refusal == after;
+        case.check(TraceOutput {
+            preview_committed,
+            preview_mutation_entered,
+            unchanged_after_preview,
+            applied_mutation_entered,
+            stored_prompt_matches,
+            foreign_refused,
+            unchanged_after_refusal,
+        });
+        fixture
+            .db
+            .node
+            .shutdown()
+            .await
+            .expect("shut down test node");
+    }
 }
 
 #[tokio::test]
