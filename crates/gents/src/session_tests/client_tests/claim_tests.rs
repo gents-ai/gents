@@ -10,21 +10,6 @@ use gents_store::config_client::{ConfigAccess, NodePermission};
 async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     use gents_session::request::watcher::{DefraWatcher, Watcher};
     let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let model = snapshot
-        .watcher_scoped_scan_cases
-        .iter()
-        .find(|case| case["name"] == "different-agents-native-order")
-        .unwrap();
-    let expected: Vec<&str> = model["expected"]["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|row| match row["doc_id"].as_str().unwrap() {
-            "earlier" => "z-first",
-            "later" => "a-second",
-            other => panic!("unexpected modeled row {other}"),
-        })
-        .collect();
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let (db, runtime) = serve_client_node(
@@ -189,7 +174,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         vec![first_signer.clone(), second_signer.clone()],
     )
     .unwrap();
-    for request_id in expected {
+    for request_id in ["z-first", "a-second"] {
         assert_eq!(
             watcher.next_request().await.unwrap().unwrap().request_id,
             request_id
@@ -329,38 +314,48 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         .iter()
         .all(|request| request.agent_did == first.agent_did));
     watcher
-        .set_agent_identities(vec![first_signer, second_signer.clone()])
+        .set_agent_identities(vec![first_signer.clone(), second_signer.clone()])
         .unwrap();
-    owner
-        .transact_write("test.watcher.disable_second", |txn| {
-            let agent_doc = &agent_doc;
-            Box::pin(async move {
-                txn.execute_client_signed_update(
-                    &format!(
-                        r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{}", input: $input) {{ _docID }} }}"#,
-                        gents_store::graphql::escape_graphql_string(agent_doc)
-                    ),
-                    &serde_json::json!({"input": {"enabled": false}}),
-                    gents_protocol::schemas::AGENT,
-                )
-                .await
+    async fn set_agent_enabled(owner: &ConfigAccess, agent_doc: &str, enabled: bool) {
+        owner
+            .transact_write("test.watcher.set_agent_enabled", |txn| {
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        &format!(
+                            r#"mutation($input: AgentMutationInputArg!) {{ update_Agent(docID: "{}", input: $input) {{ _docID }} }}"#,
+                            gents_store::graphql::escape_graphql_string(agent_doc)
+                        ),
+                        &serde_json::json!({"input": {"enabled": enabled}}),
+                        gents_protocol::schemas::AGENT,
+                    )
+                    .await
+                })
             })
-        })
-        .await
+            .await
+            .unwrap();
+    }
+    set_agent_enabled(&owner, &agent_doc, false).await;
+    let partial = watcher.scan_pending_requests().await.unwrap();
+    assert_eq!(
+        partial
+            .requests
+            .iter()
+            .map(|request| request.agent_did.as_str())
+            .collect::<Vec<_>>(),
+        [first.agent_did.as_str()]
+    );
+    assert_eq!(
+        partial
+            .failures
+            .iter()
+            .map(|failure| failure.actor())
+            .collect::<Vec<_>>(),
+        [second.agent_did.as_str()]
+    );
+    assert!(partial.needs_rescan());
+    watcher
+        .set_agent_identities(vec![second_signer.clone()])
         .unwrap();
-    let missing = snapshot
-        .watcher_scoped_scan_cases
-        .iter()
-        .find(|case| case["name"] == "missing-root-is-not-empty")
-        .unwrap();
-    assert!(!missing["expected"]["failures"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-    let healthy = watcher.pending_requests().await.unwrap();
-    assert_eq!(healthy.len(), 1);
-    assert_eq!(healthy[0].agent_did, first.agent_did);
-    watcher.set_agent_identities(vec![second_signer]).unwrap();
     let error = watcher
         .pending_requests()
         .await
@@ -369,6 +364,22 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         error.to_string().contains(&second.agent_did),
         "the failed actor is reported: {error:#}"
     );
+    set_agent_enabled(&owner, &agent_doc, true).await;
+    watcher
+        .set_agent_identities(vec![first_signer.clone(), second_signer])
+        .unwrap();
+    let restored = watcher.scan_pending_requests().await.unwrap();
+    assert!(restored.failures.is_empty(), "{:?}", restored.failures);
+    assert!(!restored.needs_rescan());
+    for agent in [&first.agent_did, &second.agent_did] {
+        assert!(
+            restored
+                .requests
+                .iter()
+                .any(|request| &request.agent_did == agent),
+            "{agent} work is scanned once its access returns"
+        );
+    }
     node.shutdown().await.unwrap();
 }
 

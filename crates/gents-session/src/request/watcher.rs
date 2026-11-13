@@ -18,7 +18,7 @@ pub(crate) use cooldown::GOSSIP_FALLBACK_POLL;
 use cooldown::{
     prune_processed_requests, take_next_eligible_pending_request, PROCESSED_REQUEST_COOLDOWN,
 };
-pub use query::agent_request_from_mutation_response;
+pub use query::{agent_request_from_mutation_response, PendingRequestScan, WatcherScanError};
 
 pub trait Watcher: Send + Sync {
     fn set_agent_identities(
@@ -170,8 +170,10 @@ impl Watcher for DefraWatcher {
             let now = Instant::now();
             prune_processed_requests(&mut self.processed_request_ids, now);
 
-            match self.pending_requests().await {
-                Ok(requests) => {
+            match self.scan_pending_requests().await {
+                Ok(scan) => {
+                    let needs_rescan = scan.needs_rescan();
+                    let PendingRequestScan { requests, failures } = scan;
                     let pending_count = requests.len();
                     if let Some(request) = take_next_eligible_pending_request(
                         &mut self.processed_request_ids,
@@ -179,6 +181,10 @@ impl Watcher for DefraWatcher {
                         now,
                     ) {
                         return Some(Ok(request));
+                    }
+                    if let (true, Some(failure)) = (needs_rescan, failures.into_iter().next()) {
+                        self.scan_failed = true;
+                        return Some(Err(failure.into()));
                     }
 
                     if pending_count > 0 {
