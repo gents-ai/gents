@@ -116,10 +116,10 @@ pub fn enabled_wiring(pack: CorePack) -> Wiring {
 /// was built for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Release {
-    pub major: u64,
-    pub minor: u64,
-    pub patch: u64,
-    pub rc: Option<u64>,
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+    pub rc: Option<u32>,
 }
 
 /// A version that is not written as a Gents release.
@@ -180,7 +180,7 @@ impl Release {
     }
 }
 
-fn release_number(part: &str) -> Option<u64> {
+fn release_number(part: &str) -> Option<u32> {
     let canonical = !part.is_empty()
         && part.bytes().all(|byte| byte.is_ascii_digit())
         && (part == "0" || !part.starts_with('0'));
@@ -435,11 +435,12 @@ mod conformance {
     fn interface_admission_conforms_through_the_manifest_check() {
         use families::pack_core_packs_interface_admission_cases as family;
 
+        let number = |value: u64| u32::try_from(value).unwrap();
         let release = |case: &family::Release| Release {
-            major: case.major,
-            minor: case.minor,
-            patch: case.patch,
-            rc: case.rc,
+            major: number(case.major),
+            minor: number(case.minor),
+            patch: number(case.patch),
+            rc: case.rc.map(number),
         };
         family::replay(|input| {
             let mut manifest = crate::pack::PackManifest::from_slice(
