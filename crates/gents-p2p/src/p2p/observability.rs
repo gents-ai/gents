@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct P2pSyncStatusSnapshot {
     pub push_backlog: P2pPushBacklogSnapshot,
@@ -29,6 +29,10 @@ pub struct P2pSyncStatusSnapshot {
     pub car_present_cids: u64,
     pub car_served_cids: u64,
     pub car_filtered_cids: u64,
+    pub car_served_bytes: u64,
+    pub car_received_already_held: u64,
+    /// `car_served_cids` over `car_requested_cids`; 0 before any request.
+    pub car_served_per_requested: f64,
     pub provider_rotations: u64,
     pub provider_demotions_total: u64,
     pub provider_cooldown_skips_total: u64,
@@ -406,6 +410,9 @@ mod tests {
             car_present_cids: 25,
             car_served_cids: 26,
             car_filtered_cids: 27,
+            car_served_bytes: 80,
+            car_received_already_held: 81,
+            car_served_per_requested: 0.5,
             provider_rotations: 28,
             provider_demotions_total: 74,
             provider_cooldown_skips_total: 75,
@@ -613,6 +620,9 @@ mod tests {
                 car_present_cids: 25,
                 car_served_cids: 26,
                 car_filtered_cids: 27,
+                car_served_bytes: 80,
+                car_received_already_held: 81,
+                car_served_per_requested: 0.5,
                 provider_rotations: 28,
                 provider_demotions_total: 74,
                 provider_cooldown_skips_total: 75,
