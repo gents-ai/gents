@@ -895,23 +895,6 @@ def outputProjectionCaseJson
       ((StreamingResponse.renderedKinds witness.expected).map jsonString)
     ++ "}"
 
-def reasoningAuditCaseJson (witness : StreamingResponse.ReasoningAudit.AuditCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"input\":" ++ outputObservationJson witness.input ++
-    ",\"expected\":" ++ (match witness.expected with
-      | .ok streams => tagged "ok" (",\"streams\":" ++ streamsJson streams)
-      | .error .loading => tagged "loading" ""
-      | .error .conflicted => tagged "conflicted" ""
-      | .error .invalid => tagged "invalid" "") ++ "}"
-
-def reasoningSignatureCaseJson
-    (witness : StreamingResponse.ReasoningAudit.SignatureCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"records\":" ++ jsonArray (witness.records.map canonicalSegmentJson) ++
-    ",\"payload\":" ++ payloadSpecJson witness.payload ++
-    ",\"signature\":" ++ optionalStringJson witness.signature ++
-    ",\"accepted\":" ++ boolString witness.accepted ++ "}"
-
 def auxiliaryOutputCaseJson
     (witness : CanonicalOutput.Execution.AuxiliaryCases.Case) : String :=
   let kind := witness.kind

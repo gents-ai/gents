@@ -311,6 +311,7 @@ import Proofs.Conformance.GoalDeliveryInput
 import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.SchemaArgumentRepairFamily
+import Proofs.Conformance.ReasoningAudit
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientDelivery
@@ -558,10 +559,6 @@ def snapshotFileCasesJson : String :=
     ++ "\"canonical_output_projection_cases\":"
       ++ jsonArray
         (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
-    ++ "\"reasoning_audit_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
-    ++ "\"reasoning_signature_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
 

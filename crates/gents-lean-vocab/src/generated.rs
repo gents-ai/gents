@@ -109,14 +109,6 @@ pub fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
     &lean_contract_snapshot().r6_backgrounding_cases
 }
 
-pub fn lean_reasoning_audit_cases() -> &'static [LeanReasoningAuditCase] {
-    &lean_contract_snapshot().reasoning_audit_cases
-}
-
-pub fn lean_reasoning_signature_cases() -> &'static [LeanReasoningSignatureCase] {
-    &lean_contract_snapshot().reasoning_signature_cases
-}
-
 pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
     &lean_contract_snapshot().recovery_sweep_cases
 }
@@ -1142,8 +1134,6 @@ pub struct LeanContractSnapshot {
     pub composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
-    pub reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
-    pub reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
     pub auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
@@ -3694,30 +3684,12 @@ pub struct LeanR6BackgroundingCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanReasoningAuditCase {
-    pub name: String,
-    pub input: LeanCanonicalOutputObservation,
-    pub expected: LeanReasoningAuditResult,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LeanReasoningAuditResult {
     Ok { streams: Vec<LeanCanonicalStream> },
     Loading,
     Conflicted,
     Invalid,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanReasoningSignatureCase {
-    pub name: String,
-    pub records: Vec<LeanCanonicalSegment>,
-    pub payload: LeanPayloadSpec,
-    pub signature: Option<String>,
-    pub accepted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

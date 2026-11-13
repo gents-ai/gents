@@ -38,4 +38,10 @@ def observation (value : StreamingResponse.Observation) : Json :=
 
 def view (value : StreamingResponse.View) : Json := parsed (outputViewJson value)
 
+def auditResult : Except StreamingResponse.OpenError CanonicalOutput.Streams → Json
+  | .ok value => Json.mkObj [("kind", "ok"), ("streams", streams value)]
+  | .error .loading => Json.mkObj [("kind", "loading")]
+  | .error .conflicted => Json.mkObj [("kind", "conflicted")]
+  | .error .invalid => Json.mkObj [("kind", "invalid")]
+
 end Conformance.CanonicalOutputWire

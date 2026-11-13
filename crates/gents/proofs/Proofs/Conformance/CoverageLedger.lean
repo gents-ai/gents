@@ -2716,8 +2716,8 @@ def caseCoverage : List CoverageEntry :=
       "The two published mixed/all-opaque reasoning cases bind render_reasoning_text to renderedKinds. This binds the stateless per-event rendering function, not stream-event delivery or reconnect behavior.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (consumerWithFollowUp
-      "reasoning_audit_cases"
-      "ReasoningAuditCases"
+      "family"
+      "reasoning_audit_prefix"
       "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2726,9 +2726,14 @@ def caseCoverage : List CoverageEntry :=
       "Generated fragment cases drive the native accumulator across reasoning identities, signed boundaries, text boundaries and UTF-8 bytes.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "reasoning_signature_cases"
-      "ReasoningSignatureCases"
-      "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. Invalid UTF-8 is rejected at the byte-to-String adapter boundary because native OutputSegment payload is typed String; this does not establish provider-event capture, durable write admission, or ACP.")
+      "family"
+      "reasoning_audit_signature"
+      "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. This does not establish provider-event capture, durable write admission, or ACP.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "reasoning_audit_signature_unreached"
+      "model-production-gap: native OutputSegment payload is a UTF-8 String, so a flush whose modeled bytes are not UTF-8 cannot be written or translated; the model rejects such a signature run as malformed.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "auxiliary_output_cases"

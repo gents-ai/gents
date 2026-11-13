@@ -5,12 +5,11 @@ use gents_lean_vocab::{
     LeanCanonicalOutputProjectionCase, LeanCanonicalOutputView as View, LeanCanonicalSegment,
     LeanCanonicalSource, LeanCanonicalWriter, LeanMedia, LeanMediaData, LeanMediaKind,
     LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind,
-    LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningAuditCase,
-    LeanReasoningAuditResult, LeanReasoningPart, LeanReasoningSignatureCase, LeanResultPart,
+    LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningAuditResult,
+    LeanReasoningPart, LeanResultPart,
 };
 use gents_protocol::output::live::{
-    project_live, reconstruct_dense_prefix, DensePrefixError, LiveObservation, LiveTarget,
-    LiveView, OwnerLiveness,
+    project_live, reconstruct_dense_prefix, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
 };
 use gents_protocol::output::reconstruction::{
     reconstruct_presented_payload, reconstruct_stream, DependencyDenial, ObservedSegment,
@@ -952,76 +951,6 @@ fn generated_canonical_output_cases_drive_native_reconstruction() {
 }
 
 #[test]
-fn generated_reasoning_audit_cases_drive_exact_native_prefix() {
-    let snapshot: serde_json::Value =
-        gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
-    let cases: Vec<LeanReasoningAuditCase> = serde_json::from_value(
-        snapshot
-            .get("reasoning_audit_cases")
-            .expect("reasoning audit case group")
-            .clone(),
-    )
-    .expect("strict reasoning audit cases");
-    assert!(!cases.is_empty(), "reasoning audit case group is empty");
-    for case in &cases {
-        let records = translate_records(&case.input.records, case.input.session);
-        let observed = records
-            .iter()
-            .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
-            .collect::<Vec<_>>();
-        let actual = reconstruct_dense_prefix(
-            &observed,
-            &nat(case.input.target.coordinate.request),
-            &lean_source(&case.input.target.coordinate.source),
-            &lean_writer(&case.input.target.writer),
-            None,
-        );
-        match (&case.expected, actual) {
-            (LeanReasoningAuditResult::Ok { streams: expected }, Ok(actual)) => {
-                assert_eq!(actual.streams.len(), expected.len(), "{}", case.name);
-                for (actual, expected) in actual.streams.iter().zip(expected) {
-                    assert_eq!(
-                        actual.declaration.block_index,
-                        u32::try_from(expected.declaration.block).unwrap(),
-                        "{}",
-                        case.name
-                    );
-                    assert_eq!(
-                        actual.declaration.part_index,
-                        u32::try_from(expected.declaration.part).unwrap(),
-                        "{}",
-                        case.name
-                    );
-                    assert_eq!(
-                        actual.declaration.payload,
-                        lean_payload_kind(
-                            &expected.declaration.kind,
-                            expected.declaration.tool.as_ref(),
-                            expected.declaration.media_kind.as_ref(),
-                        ),
-                        "{}",
-                        case.name
-                    );
-                    assert_eq!(
-                        actual.text.as_bytes(),
-                        expected.bytes.as_slice(),
-                        "{}",
-                        case.name
-                    );
-                }
-            }
-            (LeanReasoningAuditResult::Loading, Err(DensePrefixError::Loading))
-            | (LeanReasoningAuditResult::Conflicted, Err(DensePrefixError::Conflicted { .. }))
-            | (LeanReasoningAuditResult::Invalid, Err(DensePrefixError::Invalid { .. })) => {}
-            (expected, actual) => panic!(
-                "reasoning audit case `{}`: expected {expected:?}, got {actual:?}",
-                case.name
-            ),
-        }
-    }
-}
-
-#[test]
 fn generated_auxiliary_cases_drive_native_audit_and_public_projection() {
     let snapshot: serde_json::Value =
         gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
@@ -1188,99 +1117,4 @@ fn generated_auxiliary_cases_drive_native_audit_and_public_projection() {
             case.name
         );
     }
-}
-
-#[test]
-fn generated_reasoning_signature_cases_drive_native_header_validation() {
-    let snapshot: serde_json::Value =
-        gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
-    let cases: Vec<LeanReasoningSignatureCase> = serde_json::from_value(
-        snapshot
-            .get("reasoning_signature_cases")
-            .expect("reasoning signature case group")
-            .clone(),
-    )
-    .expect("strict reasoning signature cases");
-    assert!(!cases.is_empty(), "reasoning signature case group is empty");
-    let mut byte_exclusions = 0;
-    for case in &cases {
-        if case.name == "invalid_signature_bytes" {
-            byte_exclusions += 1;
-            assert!(!case.accepted, "invalid UTF-8 cannot publish a signature");
-            assert!(
-                case.records
-                    .iter()
-                    .filter_map(|record| record.flush.as_ref())
-                    .any(|flush| String::from_utf8(flush.payload.clone()).is_err()),
-                "invalid_signature_bytes must fail at the protocol UTF-8 string boundary"
-            );
-            continue;
-        }
-        assert!(
-            matches!(&case.payload.presentation, LeanPresentation::Full),
-            "{}: signature validation requires the modeled full payload",
-            case.name
-        );
-        let records = translate_records(&case.records, 0);
-        let observed = records
-            .iter()
-            .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
-            .collect::<Vec<_>>();
-        let first = &records[0].1;
-        let OutputWriter::RequestExecution {
-            execution_generation,
-        } = &first.writer
-        else {
-            panic!("{}: signature fixture has no request writer", case.name);
-        };
-        let header = TranscriptMessage {
-            message_key: format!("reasoning-signature:{}", case.name),
-            session_id: first.session_id.clone(),
-            node_did: first.node_did.clone(),
-            requester_did: None,
-            request_doc_id: Some(first.request_doc_id.clone()),
-            publication: MessagePublication::RequestExecution {
-                execution_generation: execution_generation.clone(),
-            },
-            outcome: OutputOutcome::Complete,
-            sequence: 0,
-            role: MessageRole::Assistant,
-            native_id: None,
-            native_request_id: None,
-            blocks: vec![MessageBlock::Reasoning {
-                id: None,
-                parts: vec![ReasoningPart::Text {
-                    text: lean_payload_ref(
-                        case.payload.reference.close_id,
-                        case.payload.reference.stream,
-                    ),
-                    signature: case.signature.clone(),
-                }],
-            }],
-            created_at: first.created_at.clone(),
-        };
-        let actual = gents_protocol::output::reconstruction::reconstruct_message(
-            &observed,
-            &[],
-            &[],
-            &header,
-        );
-        assert_eq!(actual.is_ok(), case.accepted, "{}: {actual:?}", case.name);
-        if let Err(error) = actual {
-            assert!(
-                !error.is_incomplete(),
-                "{}: mismatch must fail closed",
-                case.name
-            );
-            assert!(
-                matches!(&error, ReconstructionError::InvalidStructure { detail } if detail.contains("reasoning signature")),
-                "{}: rejected header must fail its signature check: {error:?}",
-                case.name
-            );
-        }
-    }
-    assert_eq!(
-        byte_exclusions, 1,
-        "exactly one modeled byte case is outside String payloads"
-    );
 }

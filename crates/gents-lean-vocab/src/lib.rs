@@ -104,6 +104,7 @@ pub use generated::*;
 
 mod canonical_execution;
 mod canonical_output;
+pub mod canonical_wire;
 pub mod canonical_presentation;
 pub mod claude_replay;
 pub mod consumer_scan;
