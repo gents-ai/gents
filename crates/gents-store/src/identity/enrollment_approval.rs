@@ -53,7 +53,7 @@ pub enum EnrollmentApprovalError {
         "access was granted under this request but its approval did not commit; approve it \
          again to finish, or deny it to withdraw the access"
     )]
-    Approve(#[source] anyhow::Error),
+    Approve(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// The authority one approval is decided with.
@@ -75,18 +75,21 @@ pub struct EnrollmentApproval<'a> {
 /// `Identity.EnrollmentGrant.approval`): verify the signed request, grant its
 /// Node administration as the approver, then run `decide`, the runtime's
 /// Node-signed approval. ACP refusing the approver's grant approves nothing.
-pub async fn approve_enrollment<T, D, F>(
+pub async fn approve_enrollment<T, E, D, F>(
     approval: EnrollmentApproval<'_>,
     decide: D,
 ) -> Result<(EnrollmentGrantOutcome, T), EnrollmentApprovalError>
 where
     D: FnOnce() -> F,
-    F: Future<Output = anyhow::Result<T>>,
+    F: Future<Output = Result<T, E>>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     let granted = grant_as_approver(&approval).await;
     match (ApprovalStep::after_grant(granted.is_ok()), granted) {
         (ApprovalStep::Approve, Ok(outcome)) => {
-            let decided = decide().await.map_err(EnrollmentApprovalError::Approve)?;
+            let decided = decide()
+                .await
+                .map_err(|error| EnrollmentApprovalError::Approve(error.into()))?;
             Ok((outcome, decided))
         }
         (_, Err(refused)) => Err(refused),

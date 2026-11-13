@@ -80,7 +80,7 @@ resources:
         .unwrap();
     let allowed_tool = SessionHistoryTool::new(
         node.clone(),
-        reader.did(),
+        owner.did(),
         identity::Did::new((reader.did()).to_string()).unwrap(),
     );
     assert_eq!(
@@ -92,7 +92,7 @@ resources:
     assert_eq!(found["session"]["requester_did"], "different-requester");
     let denied_tool = SessionHistoryTool::new(
         node.clone(),
-        denied.did(),
+        owner.did(),
         identity::Did::new((denied.did()).to_string()).unwrap(),
     );
     assert_eq!(
@@ -184,7 +184,7 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
         call(&tool, json!({"action":"count","filter":filter})).await["count"],
         2
     );
-    assert_eq!(call(&tool, json!({"action":"count"})).await["count"], 5);
+    assert_eq!(call(&tool, json!({"action":"count"})).await["count"], 4);
     let first = call(&tool, json!({"action":"list","filter":filter,"limit":1})).await;
     assert_eq!(first["sessions"][0]["session_id"], "atlas-b");
     let second = call(
@@ -207,12 +207,15 @@ async fn discovery_counts_and_pages_canonical_sessions_without_requests() {
     assert!(recovery.to_string().contains("next call: sessions"));
     let cross_requester = call(&tool, json!({"action":"get","session_id":"restricted"})).await;
     assert_eq!(cross_requester["session"]["requester_did"], foreign.did());
-    let cross_agent = call(
+    let other_node = Tool::call(
         &tool,
-        json!({"action":"get","session_id":"foreign-session"}),
+        serde_json::from_value(json!({"action":"get","session_id":"foreign-session"})).unwrap(),
     )
-    .await;
-    assert_eq!(cross_agent["session"]["node_did"], foreign.did());
+    .await
+    .unwrap_err();
+    assert!(other_node
+        .to_string()
+        .contains("unavailable or ambiguous under ACP"));
     node.shutdown().await.expect("shut down test node");
 }
 

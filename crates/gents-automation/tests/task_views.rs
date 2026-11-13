@@ -1,7 +1,7 @@
 use gents_documents::views::tasks::TaskList;
 use gents_protocol::document_query::{fields::task, Create, Input};
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents_store::identity::NodeIdentity;
+use gents_store::identity::{GrantSet, NodeIdentity};
 
 #[tokio::test]
 async fn task_view_selection_matches_lean_on_served_node() -> anyhow::Result<()> {
@@ -21,6 +21,13 @@ async fn task_view_selection_matches_lean_on_served_node() -> anyhow::Result<()>
     };
     let owner_access = access(&owner)?;
     let outsider_access = access(&outsider)?;
+    let node_access =
+        ConfigAccess::local_as(db.node.clone(), identity::Did::new(db.node_identity.did())?);
+    for identity in [&owner, &outsider] {
+        GrantSet::OperatorUser
+            .grant(&node_access, &identity::Did::new(identity.did())?)
+            .await?;
+    }
     for other_agent in [false, true] {
         let node = if other_agent {
             "node-other-agent"

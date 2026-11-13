@@ -4,9 +4,14 @@ and what an archive or a delete does to them. -/
 namespace HomeRetirement
 
 /-- What a top-level entry of a home is to the runtime. `foreign` is anything
-the runtime did not put there: the user's files, a nested home, a backup. -/
+the runtime did not put there: the user's files, a nested home, a backup.
+`reservation` is the one-shot bootstrap reservation a fresh home records before
+it may grant itself authority. Ordinary initialization never clears it, so it
+describes the store beside it and retires with that store: left behind, it
+would refuse the bootstrap of the emptied store and the home could never be
+provisioned again (#3731). -/
 inductive Role where
-  | inventory | lock | maintenance | foreign
+  | inventory | reservation | lock | maintenance | foreign
   deriving DecidableEq, Repr
 
 /-- Whether something outside the entry still needs it: another home's init
@@ -32,11 +37,11 @@ structure Item where
   presence : Presence
   deriving DecidableEq, Repr
 
-/-- Retirement owns an entry only when the runtime inventory names it and
-nothing else points into it. A held lock file is never owned: replacing it
+/-- Retirement owns an entry only when the runtime inventory names it, or it
+is the bootstrap reservation, and nothing else points into it. A held lock file is never owned: replacing it
 would let another writer take a different lock for the same resource. -/
 def Item.owned (item : Item) : Bool :=
-  item.role == .inventory && item.reference == .unreferenced
+  (item.role == .inventory || item.role == .reservation) && item.reference == .unreferenced
 
 def Item.retirable (item : Item) : Bool :=
   item.owned && item.presence != .vanished && item.presence != .uninspectable
@@ -100,9 +105,17 @@ def retire (disposition : Disposition) (items : List Item) : Retirement :=
         owned, reported, inHome := remaining items reported, archived := none
         backup := false, backupMode := Option.none, outsideIntact := true }
 
-theorem only_an_unreferenced_inventory_entry_is_owned (item : Item) (h : item.owned = true) :
-    item.role = .inventory ∧ item.reference = .unreferenced := by
+theorem only_an_unreferenced_inventory_or_reservation_entry_is_owned (item : Item)
+    (h : item.owned = true) :
+    (item.role = .inventory ∨ item.role = .reservation) ∧ item.reference = .unreferenced := by
   simpa [Item.owned] using h
+
+theorem the_reservation_retires_with_the_store (reference : Reference) (presence : Presence) :
+    ({ role := .reservation, reference, presence } : Item).owned
+      = ({ role := .inventory, reference, presence } : Item).owned := rfl
+
+theorem maintenance_is_never_owned (reference : Reference) (presence : Presence) :
+    ({ role := .maintenance, reference, presence } : Item).owned = false := rfl
 
 theorem a_lock_is_never_owned (reference : Reference) (presence : Presence) :
     ({ role := .lock, reference, presence } : Item).owned = false := rfl

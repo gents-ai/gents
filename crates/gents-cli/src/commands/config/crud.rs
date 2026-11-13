@@ -388,7 +388,20 @@ pub(crate) async fn query_collection(
                 if let Some(id) = id {
                     view = view.trigger_ids(vec![id.to_owned()]);
                 }
-                read!(view)
+                access
+                    .read_view(&view)
+                    .await?
+                    .into_iter()
+                    .map(|row| {
+                        let doc_id = row.doc_id.clone();
+                        let mut value = serde_json::to_value(row.into_parts().0)?;
+                        value
+                            .as_object_mut()
+                            .context("trigger must be an object")?
+                            .insert("_docID".into(), Value::String(doc_id));
+                        Ok(value)
+                    })
+                    .collect::<Result<Vec<_>>>()?
             }
             Collection::Schedule => {
                 let mut view = tasks::ScheduleList::new(node_did);

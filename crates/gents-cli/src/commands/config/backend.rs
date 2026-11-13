@@ -239,21 +239,12 @@ mod tests {
     }
 
     async fn seeded() -> ConfigAccess {
-        let node = std::sync::Arc::new(
-            gents_host::test_support::fixture_node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        gents_host::test_support::publish_test_node(&node).await;
-        let access = ConfigAccess::local_as(
-            node,
-            ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID)
-                .unwrap(),
-        );
+        let served = gents_host::test_support::served_config(json!({})).await;
+        let user = served.user.held_client_signing_capability().unwrap().did();
+        let access =
+            ConfigAccess::local_as(served.node.clone(), ::identity::Did::new(user).unwrap())
+                .with_client_signed_writes_through(served.user.clone())
+                .unwrap();
         for (id, kind, endpoint, auth) in [
             (
                 "claude",

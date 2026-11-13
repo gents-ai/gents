@@ -167,6 +167,7 @@ async fn subscription_client() -> Result<&'static reqwest::Client> {
             tokio::task::spawn_blocking(|| {
                 reqwest::Client::builder()
                     .connect_timeout(HANDSHAKE_TIMEOUT)
+                    .pool_idle_timeout(gents_protocol::graphql::POOLED_CONNECTION_IDLE_LIMIT)
                     .build()
                     .map_err(ConfigClientError::HttpClientBuild)
             })
