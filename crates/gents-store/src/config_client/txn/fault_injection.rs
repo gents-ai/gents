@@ -37,9 +37,7 @@ pub struct NativeOperationObservation {
 }
 
 impl NativeOperationObservation {
-    fn slot(
-        &self,
-    ) -> std::sync::MutexGuard<'_, Option<Arc<super::NativeOperationTracker>>> {
+    fn slot(&self) -> std::sync::MutexGuard<'_, Option<Arc<super::NativeOperationTracker>>> {
         self.tracker
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -78,8 +76,7 @@ impl NativeOperationObservation {
     }
 
     pub fn is_abandoned(&self) -> bool {
-        self.tracker()
-            .is_some_and(|tracker| tracker.is_abandoned())
+        self.tracker().is_some_and(|tracker| tracker.is_abandoned())
     }
 
     pub fn in_flight(&self) -> usize {

@@ -134,7 +134,8 @@ async fn a_held_row_waits_for_the_latest_reset() {
 
 #[tokio::test]
 async fn reset_account_facts_drive_resume_at_reset() {
-    for case in gents_lean_vocab::families::goal_reset_account_trace::cases::<String, GoalStatus>() {
+    for case in gents_lean_vocab::families::goal_reset_account_trace::cases::<String, GoalStatus>()
+    {
         let input = &case.input;
         let reset = Reset::new(&input.kind, Some(T)).await;
         if input.kind != "compaction" {
@@ -184,8 +185,7 @@ async fn account_removal_follows_the_lean_reset_model() {
                 )
                 .await
                 .unwrap();
-            let (did, credential) =
-                (reset.f.identity.did(), reset.accounts.a_credential.as_str());
+            let (did, credential) = (reset.f.identity.did(), reset.accounts.a_credential.as_str());
             reset
                 .accounts
                 .access
@@ -198,10 +198,12 @@ async fn account_removal_follows_the_lean_reset_model() {
                 .unwrap();
         }
         let result = reset.resume(case.input.now as i64).await;
-        case.check(gents_lean_vocab::families::goal_reset_resume_account_resumes::ResumeOutput {
-            created: result.as_ref().is_some_and(|receipt| receipt.created),
-            goal_usage_limited: reset.f.goal_status().await == "usage_limited",
-            child_count: reset.f.children().await.len() as u64,
-        });
+        case.check(
+            gents_lean_vocab::families::goal_reset_resume_account_resumes::ResumeOutput {
+                created: result.as_ref().is_some_and(|receipt| receipt.created),
+                goal_usage_limited: reset.f.goal_status().await == "usage_limited",
+                child_count: reset.f.children().await.len() as u64,
+            },
+        );
     }
 }

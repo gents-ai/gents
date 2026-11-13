@@ -24,7 +24,6 @@ async fn list_tools_after_transport_failure(
         String,
     >,
 ) {
-
     let connect_attempts = Arc::new(AtomicUsize::new(0));
     let list_calls = Arc::new(AtomicUsize::new(0));
     let connect_attempts_for_fn = Arc::clone(&connect_attempts);
@@ -90,7 +89,6 @@ async fn call_tool_after_transport_failure(
         String,
     >,
 ) {
-
     let pool = McpPool::new();
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_fn = Arc::clone(&calls);
@@ -131,11 +129,11 @@ async fn call_tool_after_transport_failure(
 
     assert!(error.to_string().contains("transport dropped"));
     let calls = calls.load(Ordering::SeqCst);
-    let parked = pool
-        .inner
-        .read()
-        .await
-        .contains_key(&super::ParkKey::new(&service_id, endpoint, None));
+    let parked =
+        pool.inner
+            .read()
+            .await
+            .contains_key(&super::ParkKey::new(&service_id, endpoint, None));
     assert!(
         parked,
         "{}: a failed call_tool must not evict and reconnect without idempotency evidence",

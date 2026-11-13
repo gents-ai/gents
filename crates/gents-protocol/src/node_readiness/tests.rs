@@ -281,10 +281,10 @@ where
 #[test]
 fn generated_agent_readiness_cases_drive_the_production_projector() {
     use crate::node_readiness::{
-        project_node_readiness, project_node_readiness_source,
-        project_node_readiness_with_storage, AgentReadinessSourceEntry,
-        AgentReadinessUnavailableReason, NodeReadinessProcessState, NodeReadinessRow,
-        ProjectedAgentReadiness, RuntimeStorageObservation, NODE_READINESS_FORMAT_VERSION,
+        project_node_readiness, project_node_readiness_source, project_node_readiness_with_storage,
+        AgentReadinessSourceEntry, AgentReadinessUnavailableReason, NodeReadinessProcessState,
+        NodeReadinessRow, ProjectedAgentReadiness, RuntimeStorageObservation,
+        NODE_READINESS_FORMAT_VERSION,
     };
     use gents_lean_vocab::families::client_agent_readiness_projection::ReadinessOutput;
 

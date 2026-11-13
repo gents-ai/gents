@@ -118,7 +118,11 @@ impl PackInstaller {
         // The pack and each dependency it installed: a dependency's agents
         // run under the same root as the pack's own.
         let coordinates: Vec<String> = std::iter::once(distribution.coordinate())
-            .chain(dependencies.iter().map(|dependency| dependency.coordinate()))
+            .chain(
+                dependencies
+                    .iter()
+                    .map(|dependency| dependency.coordinate()),
+            )
             .collect();
         let host_root_access = crate::surface::pack_root_readers(
             &access,

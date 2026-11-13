@@ -60,10 +60,7 @@ impl LocalConfigAccess {
     }
 
     /// Attach the runtime key's derivation proof when it is this node's key.
-    pub(crate) fn attach_agent_proof(
-        &mut self,
-        proof: crate::identity::RuntimeAgentProof,
-    ) -> bool {
+    pub(crate) fn attach_agent_proof(&mut self, proof: crate::identity::RuntimeAgentProof) -> bool {
         if self.node.node_identity_did() != Some(proof.runtime_did()) {
             return false;
         }

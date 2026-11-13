@@ -215,7 +215,10 @@ pub(crate) async fn agent_step(
 async fn agent_baseline_projection_follows_modeled_lifecycle() {
     use gents_lean_vocab::families::agent_baseline_lifecycle as wire;
 
-    for (index, case) in gents_lean_vocab::families::agent_baseline_lifecycle::cases::<String>().into_iter().enumerate() {
+    for (index, case) in gents_lean_vocab::families::agent_baseline_lifecycle::cases::<String>()
+        .into_iter()
+        .enumerate()
+    {
         let case_name = format!("agent-baseline-{index}");
         let (db, owner, owner_access) = crate::test_support::signed_test_node_without_agent(
             &case_name,

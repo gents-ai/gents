@@ -121,12 +121,7 @@ pub async fn patch_desired_document(
                     add: value.clone(),
                     update: value,
                 }])?;
-                apply_desired_state_plan(
-                    txn,
-                    &plan,
-                    &crate::resolved::ProviderProfilePolicy,
-                )
-                .await
+                apply_desired_state_plan(txn, &plan, &crate::resolved::ProviderProfilePolicy).await
             })
         })
         .await

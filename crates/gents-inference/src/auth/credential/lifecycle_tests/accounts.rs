@@ -162,4 +162,3 @@ async fn another_nodes_account_is_not_touched() {
     }
     assert_eq!(rows(&access, theirs, CLAUDE_OAUTH_PROVIDER).await, before);
 }
-

@@ -8,7 +8,6 @@ pub mod client_media;
 pub mod client_protocol;
 pub mod database_error;
 pub mod document_query;
-pub mod views;
 pub mod enrollment;
 pub mod error_chain;
 pub mod event_delivery;
@@ -53,6 +52,7 @@ pub mod tool_service_health;
 pub mod transcript;
 pub mod trigger_delivery;
 pub mod usage;
+pub mod views;
 pub mod wait_status;
 
 pub const ENGINEER_PROMPT: &str = include_str!("../prompts/engineer.md");

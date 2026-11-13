@@ -1,11 +1,11 @@
 mod accepted;
+#[cfg(test)]
+use gents_session::tool_call::query::result::load_tool_call_read_in_txn;
 pub use gents_session::tool_call::query::result::{
     load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
     load_tool_call_result, load_tool_file_change_observation, render_tool_result,
     CanonicalToolCallPresentation, ToolFileChangeRead,
 };
-#[cfg(test)]
-use gents_session::tool_call::query::result::load_tool_call_read_in_txn;
 
 use std::sync::Arc;
 

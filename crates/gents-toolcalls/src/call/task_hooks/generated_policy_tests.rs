@@ -23,7 +23,9 @@ fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
 }
 
 fn modeled_hook(
-    hook: &gents_lean_vocab::families::task_hooks_contracts_effective_timeout::TaskHook<TaskHookPhase>,
+    hook: &gents_lean_vocab::families::task_hooks_contracts_effective_timeout::TaskHook<
+        TaskHookPhase,
+    >,
 ) -> TaskHook {
     TaskHook {
         hook_id: hook.hook_id.clone(),

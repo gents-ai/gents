@@ -346,11 +346,13 @@ async fn file_tools_match_the_lean_consent_model() {
         .expect("file operation neither finished nor asked for consent");
         let after = std::fs::read_to_string(&path).ok();
         fixture.assert_clear();
-        case.check(gents_lean_vocab::families::workspace_file_consent_file_tools::ConsentOutput {
-            asked,
-            completed,
-            changed: after != before,
-        });
+        case.check(
+            gents_lean_vocab::families::workspace_file_consent_file_tools::ConsentOutput {
+                asked,
+                completed,
+                changed: after != before,
+            },
+        );
     }
 }
 

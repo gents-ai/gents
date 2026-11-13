@@ -176,18 +176,31 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             .unwrap();
             assert_eq!(refreshed.goal.as_ref().map(|goal| &goal.revision), canonical.as_ref(),
                 "periodic durable observation must select the canonical Goal without a notification");
-            let reference = |goal: &gents_protocol::goal_control::ObservedGoal| wire::GoalReference {
-                node: if goal.snapshot.node_did == f.identity.did() { "node".into() } else { goal.snapshot.node_did.clone() },
-                session: if goal.snapshot.session_id == SESSION { "session".into() } else { goal.snapshot.session_id.clone() },
-                document: if goal.revision.document == f.goal.doc_id { "goal-document".into() } else { goal.revision.document.clone() },
-                composite: if goal.revision.composite == old_revision.composite {
-                    "previous-commit".into()
-                } else if Some(&goal.revision) == canonical.as_ref() {
-                    "goal-commit".into()
-                } else {
-                    goal.revision.composite.clone()
-                },
-            };
+            let reference =
+                |goal: &gents_protocol::goal_control::ObservedGoal| wire::GoalReference {
+                    node: if goal.snapshot.node_did == f.identity.did() {
+                        "node".into()
+                    } else {
+                        goal.snapshot.node_did.clone()
+                    },
+                    session: if goal.snapshot.session_id == SESSION {
+                        "session".into()
+                    } else {
+                        goal.snapshot.session_id.clone()
+                    },
+                    document: if goal.revision.document == f.goal.doc_id {
+                        "goal-document".into()
+                    } else {
+                        goal.revision.document.clone()
+                    },
+                    composite: if goal.revision.composite == old_revision.composite {
+                        "previous-commit".into()
+                    } else if Some(&goal.revision) == canonical.as_ref() {
+                        "goal-commit".into()
+                    } else {
+                        goal.revision.composite.clone()
+                    },
+                };
             observed.push(wire::RecoveryOutput {
                 recovery: wire::RecoveryTrace {
                     before: previous.goal.as_ref().map(reference),

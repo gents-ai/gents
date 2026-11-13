@@ -15,12 +15,12 @@ pub use response::{
     extract_mutation_doc_id, first_graphql_row, graphql_rows_from_response,
     is_collection_missing_error_message,
 };
-pub use transport::{GraphqlRequestOptions, POOLED_CONNECTION_IDLE_LIMIT};
 #[cfg(feature = "native")]
 pub use transport::{
     execute_graphql_async, execute_graphql_with_variables_async, graphql_endpoint_available,
     graphql_error_is_retryable, graphql_transport_error_in_chain,
 };
+pub use transport::{GraphqlRequestOptions, POOLED_CONNECTION_IDLE_LIMIT};
 pub use turn_state::{
     parse_session_shape_response, parse_turn_state_response, session_shape_query, turn_state_query,
     GraphqlSessionShape, GraphqlSubmittedRequest, GraphqlTurnState,

@@ -180,7 +180,10 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
         }
         if let Some(opened_doc_id) = &opened_doc_id {
             assert_eq!(
-                &submitted.as_ref().expect("duplicate opening recovers").doc_id,
+                &submitted
+                    .as_ref()
+                    .expect("duplicate opening recovers")
+                    .doc_id,
                 opened_doc_id,
                 "{name}: a duplicate opening returns the request it opened"
             );
@@ -571,8 +574,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
     );
     let task_request_query = task_request_query.as_str();
     let task_request = move || async move {
-        observed_access
-            .execute(task_request_query).await.unwrap()["data"]["AgentRequest"]
+        observed_access.execute(task_request_query).await.unwrap()["data"]["AgentRequest"]
             .as_array()
             .unwrap()
             .first()

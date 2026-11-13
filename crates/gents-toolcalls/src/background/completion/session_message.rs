@@ -418,12 +418,14 @@ mod conformance {
 
     #[test]
     fn folded_outcome_matches_lean() {
-        gents_lean_vocab::families::queued_steering_agent_message_outcome::replay::<String>(|case| {
-            outcome(crate::background::status::select_folded_outcome(
-                case.folded,
-                terminal(&case.caused),
-                terminal(&case.head),
-            ))
-        });
+        gents_lean_vocab::families::queued_steering_agent_message_outcome::replay::<String>(
+            |case| {
+                outcome(crate::background::status::select_folded_outcome(
+                    case.folded,
+                    terminal(&case.caused),
+                    terminal(&case.head),
+                ))
+            },
+        );
     }
 }

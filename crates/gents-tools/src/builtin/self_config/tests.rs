@@ -294,29 +294,34 @@ fn agent_operation(inputs: &AgentDecisionInputs) -> AgentOperation {
 
 #[test]
 fn generated_agent_decision_cases_drive_production_agent_admission() {
-    gents_lean_vocab::families::contracts_self_config_agent_decision::replay::<String, String, String>(
-        |inputs| {
-            let decision = decide_agent_operation(
-                &agent_catalog(inputs),
-                &agent_actor(inputs),
-                &agent_operation(inputs),
-                &inputs.target,
-                inputs.make_default,
-            );
-            gents_lean_vocab::families::contracts_self_config_agent_decision::AgentDecisionOutput {
-                accepted: decision.is_ok(),
-                refusal: decision.as_ref().err().map(|error| {
-                    error
-                        .refusal()
-                        .unwrap_or_else(|| {
-                            panic!("{}: refused without an agent refusal: {error:?}", inputs.name)
-                        })
-                        .as_str()
-                        .to_string()
-                }),
-            }
-        },
-    );
+    gents_lean_vocab::families::contracts_self_config_agent_decision::replay::<
+        String,
+        String,
+        String,
+    >(|inputs| {
+        let decision = decide_agent_operation(
+            &agent_catalog(inputs),
+            &agent_actor(inputs),
+            &agent_operation(inputs),
+            &inputs.target,
+            inputs.make_default,
+        );
+        gents_lean_vocab::families::contracts_self_config_agent_decision::AgentDecisionOutput {
+            accepted: decision.is_ok(),
+            refusal: decision.as_ref().err().map(|error| {
+                error
+                    .refusal()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{}: refused without an agent refusal: {error:?}",
+                            inputs.name
+                        )
+                    })
+                    .as_str()
+                    .to_string()
+            }),
+        }
+    });
 }
 
 fn decode_candidate(
@@ -393,7 +398,11 @@ fn decode_candidate(
 #[test]
 fn generated_agent_materialization_cases_drive_production_agent_materialization() {
     use gents_lean_vocab::families::contracts_self_config_agent_materialization as materialization;
-    gents_lean_vocab::families::contracts_self_config_agent_materialization::replay::<String, String, String>(|case| {
+    gents_lean_vocab::families::contracts_self_config_agent_materialization::replay::<
+        String,
+        String,
+        String,
+    >(|case| {
         let mut decision = serde_json::to_value(case).expect("case encodes");
         decision
             .as_object_mut()

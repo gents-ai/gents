@@ -142,10 +142,12 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
             .write("test.fold", &fold_to(named, &actual_doc))
             .await
             .unwrap();
-        let accepted =
-            crate::background::status::load_session_message_terminal(&owner, &caused_request_doc_id)
-                .await
-                .is_ok();
+        let accepted = crate::background::status::load_session_message_terminal(
+            &owner,
+            &caused_request_doc_id,
+        )
+        .await
+        .is_ok();
         assert_eq!(
             settle_running_session_message_rows_with_access(
                 node,
