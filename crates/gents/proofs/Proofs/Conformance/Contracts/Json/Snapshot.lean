@@ -152,6 +152,7 @@ import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
 import Proofs.Conformance.InferenceObservation
 import Proofs.Store.Identity.PublicationConformance
+import Proofs.Conformance.Identity.Publication
 import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
@@ -444,8 +445,6 @@ def snapshotSessionCasesJson : String :=
 
 def snapshotIdentityCasesJson : String :=
   ""
-    ++ "\"identity_publication_cases\":"
-      ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
     ++ "\"client_publication_protected_collection\":"
