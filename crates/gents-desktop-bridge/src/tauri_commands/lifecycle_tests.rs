@@ -97,7 +97,7 @@ fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     assert!(
         error
             .message
-            .contains("/tmp/desktop was made by an older version of Gents"),
+            .contains("local data at /tmp/desktop/node was made by an older version"),
         "{}",
         error.message
     );
