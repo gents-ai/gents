@@ -2,7 +2,7 @@ use super::native::service_action;
 use super::native::{native_service, run_native};
 use super::pairing::drain_managed_runtime_pairing;
 use super::port::{matching_external_server, user_status_signer};
-use super::preference::read_initialized_did;
+use gents_service::repair::port::read_initialized_did;
 use super::status::emit_status;
 use crate::config::ManagedServerPolicy;
 use crate::error::{BridgeError, BridgeErrorCode};
