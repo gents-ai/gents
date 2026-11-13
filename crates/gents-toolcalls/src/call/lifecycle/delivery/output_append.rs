@@ -94,13 +94,7 @@ pub enum ToolOutputAppendRejection {
 #[derive(Debug)]
 pub struct ToolOutputAppendReceipt {
     pub(crate) range: std::ops::Range<u64>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Conformance binds the returned physical segment ID to the modeled write."
-        )
-    )]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub segment_doc_id: String,
 }
 
@@ -276,6 +270,7 @@ async fn append_tool_output_with_time(
                         );
                         return Ok(ToolOutputAppendReceipt {
                             range: start..start + segment.payload.len() as u64,
+                            #[cfg(any(test, feature = "test-fixtures"))]
                             segment_doc_id: existing.doc_id.clone(),
                         });
                     }
@@ -294,9 +289,11 @@ async fn append_tool_output_with_time(
                             &output_segment_bound_variables(txn, &segment).await?,
                         )
                         .await?;
+                    let _segment_doc_id = created_doc_id(&response, "AgentOutputSegment")?;
                     Ok(ToolOutputAppendReceipt {
                         range: start..start + segment.payload.len() as u64,
-                        segment_doc_id: created_doc_id(&response, "AgentOutputSegment")?,
+                        #[cfg(any(test, feature = "test-fixtures"))]
+                        segment_doc_id: _segment_doc_id,
                     })
                 })
             },

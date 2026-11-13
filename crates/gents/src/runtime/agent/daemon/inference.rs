@@ -12,7 +12,7 @@ use super::{AgentDaemon, HandleRequestOutcome};
 use crate::runtime::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use gents_inference::admission::{self, CallKind};
 use gents_inference::llm::message::Message;
-use gents_inference::resolved::{MaxTurnsProvenance, ResolvedAgent};
+use gents_inference::resolved::MaxTurnsProvenance;
 use gents_loop::error::LoopFailureCause;
 use gents_protocol::row::AgentRequest;
 

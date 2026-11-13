@@ -38,7 +38,7 @@ pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 pub use owner_staged::CallbackAgentSelection;
 pub(super) use owner_staged::OwnerStagedRevocations;
 pub(super) use owner_staged::StagedRelation;
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 pub(super) use transact::client_signed_write_may_retry;
 pub use transact::{IdempotentTransactionRetry, TransactionFinalityError};
 pub use verified_pack::{VerifiedPackTransactionError, VerifiedPackTxn};
@@ -46,24 +46,24 @@ pub use verified_pack::{VerifiedPackTransactionError, VerifiedPackTxn};
 /// Tracing target of DefraDB transaction and read telemetry; tests observe it by this name.
 pub const TRACING_TARGET: &str = module_path!();
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use super::write_telemetry::WriteOperation;
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use apply_txn::{EmbeddedTransactionPurpose, TxnBackend};
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use fault_injection::{EmbeddedFinalizationBoundary, EMBEDDED_FINALIZATION_PAUSE};
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use gate::{
     existing_mutation_write_gate, mutation_write_gate, MutationWriteGate, MutationWriteGuard,
     MUTATION_WRITE_GATE_CAPACITY,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
 use native::NativeOperationTracker;
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use rollback::RollbackDropCleanupPause;
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use rollback::{begin_embedded_owned, cleanup_while_holding_write_gate};
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(test)]
 use transact::{transact_owned, TransactionMode, TransactionOutcome};
 
 type Result<T, E = ConfigClientError> = std::result::Result<T, E>;

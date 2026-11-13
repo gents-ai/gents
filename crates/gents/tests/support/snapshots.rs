@@ -7,7 +7,7 @@ use serde::Deserialize;
 pub enum SnapshotChanges {
     Local(events::DocumentChangeSubscription),
     Remote {
-        access: gents_store::config_client::ConfigAccess,
+        access: Box<gents_store::config_client::ConfigAccess>,
         query: String,
         changes: gents_store::config_client::GraphqlSubscription,
     },
@@ -94,7 +94,7 @@ impl SnapshotReader for gents_store::config_client::ConfigAccess {
             let query = format!("subscription {{ {collection} {{ _docID }} }}");
             let changes = self.subscribe(&query).await.expect("subscribe as actor");
             SnapshotChanges::Remote {
-                access: self.clone(),
+                access: Box::new(self.clone()),
                 query,
                 changes,
             }

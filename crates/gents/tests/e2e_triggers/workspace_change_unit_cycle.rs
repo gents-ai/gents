@@ -25,6 +25,7 @@ use crate::support::snapshots::SnapshotReader;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
 use crate::support::{interrupt::BootedAgent, test_db, TestDb};
 
+#[cfg(feature = "live-e2e")]
 const WORK_UNIT: &str = "change-unit:cycle-accepted";
 const FAILURE_UNIT: &str = "change-unit:cycle-inbox";
 const MODEL: &str = "workspace-cycle-script";
@@ -1020,6 +1021,7 @@ async fn create_work_unit(
     });
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_integrator_outcome(
     access: &ConfigAccess,
     work_unit_id: &str,
@@ -1048,6 +1050,7 @@ async fn wait_integrator_outcome(
     }
 }
 
+#[cfg(feature = "live-e2e")]
 async fn query_rows(
     access: &ConfigAccess,
     collection: &str,
@@ -1064,6 +1067,7 @@ async fn query_rows(
         .clone()
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_rows(
     access: &ConfigAccess,
     collection: &str,
@@ -1100,6 +1104,7 @@ async fn wait_rows(
     }
 }
 
+#[cfg(feature = "live-e2e")]
 async fn cycle_failure_diagnostics(
     access: &ConfigAccess,
     work_unit_id: &str,
@@ -1179,6 +1184,7 @@ async fn cycle_failure_diagnostics(
     failures
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_for_writer(access: &ConfigAccess, work_unit_id: &str, writer: &str) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut changes = access.subscribe_changes("ChangeUnitImplementation").await;
@@ -1209,6 +1215,7 @@ async fn wait_for_writer(access: &ConfigAccess, work_unit_id: &str, writer: &str
     }
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_receipts(
     access: &ConfigAccess,
     work_unit_id: &str,
@@ -1308,6 +1315,7 @@ async fn wait_supervisor_inbox(access: &ConfigAccess, work_unit_id: &str) -> Val
     }
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
     assert_eq!(
         crate::support::live_inference::wait_for_request_terminal(
@@ -1320,6 +1328,7 @@ async fn wait_request_completed(access: &ConfigAccess, request_id: &str) {
     );
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<Value> {
     let unit = escape_graphql_string(work_unit_id);
     let result_query = format!(
@@ -1347,6 +1356,7 @@ async fn wait_rejected_result(access: &ConfigAccess, work_unit_id: &str) -> Vec<
     }
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_cycle_requests_completed(access: &ConfigAccess, work_unit_id: &str, agents: &[&str]) {
     let work_unit_id = escape_graphql_string(work_unit_id);
     let query = format!(

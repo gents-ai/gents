@@ -1,22 +1,12 @@
 use anyhow::Result;
 #[cfg(test)]
 use gents_documents::AgentToolConfig;
-#[cfg(test)]
-use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
-#[cfg(test)]
-use gents_protocol::session::SessionScope;
-#[cfg(test)]
-use gents_store::config_client::ConfigAccess;
-#[cfg(test)]
-use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 #[cfg(test)]
 mod agent_tools_tests;
 #[cfg(test)]
 mod delivery_conformance;
-#[cfg(test)]
-mod hop_tests;
 
 mod body;
 pub mod commit;
@@ -40,7 +30,7 @@ pub use interrupt::{
 };
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use plan::plan;
-pub use plan::{plan_with_delivery, Plan};
+pub use plan::{plan_with_delivery, MessageContent, Plan};
 pub use target::{
     agent_list, load_caller_session_tools, resolve_send_target, target_agent_exists, target_scope,
 };

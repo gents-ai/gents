@@ -96,6 +96,4 @@ pub fn backend_scoped_reduction_engine(
 }
 
 #[cfg(test)]
-use gents_loop::provider_input::budget::{
-    rolling_summary_input_budget, summary_output_ceiling, threshold_decision, ThresholdDecision,
-};
+use gents_loop::provider_input::budget::{rolling_summary_input_budget, summary_output_ceiling};

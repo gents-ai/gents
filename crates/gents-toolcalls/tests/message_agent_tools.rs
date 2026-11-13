@@ -2,6 +2,7 @@ use gents_documents::AgentToolConfig;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_protocol::session::SessionScope;
 use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::message::MessageContent;
 use gents_session::session::message::*;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity as _;
@@ -134,11 +135,13 @@ async fn session_list_names_the_starter_from_the_callers_own_receipt() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        RenderedBody {
-            content: "start the worker".into(),
-            goal: None,
+        MessageContent {
+            rendered: RenderedBody {
+                content: "start the worker".into(),
+                goal: None,
+            },
+            title: None,
         },
-        None,
         false,
         &signer,
     )
@@ -503,11 +506,13 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        RenderedBody {
-            content: "continue shard R3a".to_owned(),
-            goal: None,
+        MessageContent {
+            rendered: RenderedBody {
+                content: "continue shard R3a".to_owned(),
+                goal: None,
+            },
+            title: None,
         },
-        None,
         false,
         &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
@@ -568,11 +573,13 @@ async fn steer_reaches_a_head_parked_for_its_backend() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        RenderedBody {
-            content: "change course".to_owned(),
-            goal: None,
+        MessageContent {
+            rendered: RenderedBody {
+                content: "change course".to_owned(),
+                goal: None,
+            },
+            title: None,
         },
-        None,
         AgentMessageDelivery::Steer,
         &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
@@ -891,8 +898,10 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        body(),
-        None,
+        MessageContent {
+            rendered: body(),
+            title: None,
+        },
         false,
         &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
@@ -905,8 +914,10 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        body(),
-        None,
+        MessageContent {
+            rendered: body(),
+            title: None,
+        },
         true,
         &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
@@ -982,11 +993,13 @@ async fn stop_then_late_message_matches_lean_session_stop_admission() {
                 agent_did: caused.agent_did.clone(),
                 session_id: caused.session_id.clone(),
             },
-            RenderedBody {
-                content: "too late".to_owned(),
-                goal: None,
+            MessageContent {
+                rendered: RenderedBody {
+                    content: "too late".to_owned(),
+                    goal: None,
+                },
+                title: None,
             },
-            None,
             false,
             &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
         )

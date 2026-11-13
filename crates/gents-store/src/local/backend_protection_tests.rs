@@ -1,4 +1,4 @@
-use super::backend_protection::{FreshBackendStore, ProtectedBackendStore};
+use super::backend_protection::ProtectedBackendStore;
 use super::{home, store_key::StoreKey};
 use crate::identity::NodeIdentity;
 use anyhow::Context;

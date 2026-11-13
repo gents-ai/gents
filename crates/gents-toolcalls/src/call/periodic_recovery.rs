@@ -353,7 +353,7 @@ mod tests {
             let position_of = |sweep_id: &str| {
                 metadata
                     .iter()
-                    .position(|entry| entry.sweep_ids.iter().any(|id| *id == sweep_id))
+                    .position(|entry| entry.sweep_ids.contains(&sweep_id))
             };
             let position = position_of(&input.sweep_id);
             SweepOutput {

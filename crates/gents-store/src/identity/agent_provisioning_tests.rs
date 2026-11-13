@@ -1,5 +1,4 @@
 use super::*;
-use crate::config_client::ConfigAccess;
 
 #[tokio::test]
 async fn modeled_agent_creator_and_node_owner_control_native_agent() -> anyhow::Result<()> {
