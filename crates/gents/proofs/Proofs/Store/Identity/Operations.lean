@@ -261,7 +261,7 @@ def networkProtocolResource : String → Option String
   | "ProjectionAcpBinding" => some "configuration"
   | "AgentTarget" => some "configuration"
   | "Task" => some "configuration"
-  | "DataPlanePairingDesired" => some "configuration"
+  | "DataPlanePairingDesired" => some "application_pairings"
   | "Tools" => some "configuration"
   | "DatastoreToolSurface" => some "configuration"
   | "Page" => some "configuration"

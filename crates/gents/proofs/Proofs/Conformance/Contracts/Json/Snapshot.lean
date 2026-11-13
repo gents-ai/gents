@@ -92,6 +92,8 @@ import Proofs.Conformance.Identity.ClientAgentCreation
 import Proofs.Conformance.Identity.SessionChildRecovery
 import Proofs.Conformance.Identity.OwnerRegistration
 import Proofs.Conformance.Identity.CreatedAgentAccess
+import Proofs.Conformance.Identity.ApplicationPairingAccess
+import Proofs.Conformance.ApplicationPairing
 import Proofs.Conformance.Identity.EnrollmentGrantTraces
 import Proofs.Conformance.Functions.Automation
 import Proofs.Conformance.Functions.Clients
