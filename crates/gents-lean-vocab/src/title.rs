@@ -19,13 +19,6 @@ mod tests {
 
     use crate::{required_nullable, LeanRequestPurpose};
 
-    #[test]
-    fn generated_title_groups_decode_without_native_binding_claim() {
-        use super::super::lean_title_usage_cases;
-
-        assert!(!lean_title_usage_cases().is_empty());
-    }
-
     #[derive(Debug, Deserialize)]
     #[serde(deny_unknown_fields)]
     struct RequiredNullableControl {

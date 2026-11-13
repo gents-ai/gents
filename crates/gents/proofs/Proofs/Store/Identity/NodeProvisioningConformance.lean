@@ -34,9 +34,4 @@ def bootstrapCases : List (String × BootstrapObservation) :=
    ("already-published", { freshBootstrap with configurationPublished := true }),
    ("crash-after-reservation", bootstrapAfterCrash freshBootstrap)]
 
-def runtimeNacCasesJson : String := (toJson ([NacStatus.notConfigured, .enabled,
-  .disabledTemporarily].map fun status =>
-    Json.mkObj [("status", toJson status.name),
-      ("may_start", toJson (runtimeMayStart status))])).compress
-
 end Identity.NodeProvisioningConformance

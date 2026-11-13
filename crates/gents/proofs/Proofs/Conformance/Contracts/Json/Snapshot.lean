@@ -92,6 +92,7 @@ import Proofs.Conformance.Identity.WorkspaceCapability
 import Proofs.Conformance.Identity.MailboxAccess
 import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
+import Proofs.Conformance.Identity.WorkspaceRootAccess
 import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.GraphqlName
 import Proofs.Conformance.ClaudeRefresh
@@ -394,8 +395,6 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"root_admission_cases\":"
-      ++ Conformance.RootAdmissionContracts.casesJson ++ ","
     ++ "\"vocabularies\":"
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
@@ -480,8 +479,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
-    ++ "\"title_usage_cases\":"
-      ++ Conformance.TitleUsage.casesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"
@@ -501,14 +498,11 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
     ++ "\"identity_agent_creator_cases\":"
       ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
-    ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
     ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
     ++ "\"identity_private_journal_policy\":"
       ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
     ++ "\"client_publication_protected_collection\":"
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
-    ++ "\"identity_runtime_nac_cases\":"
-      ++ Identity.NodeProvisioningConformance.runtimeNacCasesJson ++ ","
     ++ "\"identity_parent_publication_cases\":"
       ++ Identity.PublicationConformance.parentCasesJson ++ ","
     ++ "\"identity_readiness_preflight_cases\":"
@@ -589,10 +583,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ CompletionRetry.Contracts.casesJson ++ ","
     ++ "\"deviations\":"
       ++ deviationsJson ++ ","
-    ++ "\"command_policy_cases\":"
-      ++ jsonArray (CommandPolicy.commandPolicyCases.map commandPolicyCaseJson) ++ ","
-    ++ "\"command_env_cases\":"
-      ++ jsonArray (CommandPolicy.commandEnvCases.map commandEnvCaseJson) ++ ","
     ++ "\"live_overlay_cases\":"
       ++ jsonArray (liveOverlayCases.map liveOverlayCaseJson) ++ ","
     ++ "\"request_progress_cases\":"
@@ -647,8 +637,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
     ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
     ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","
-    ++ "\"tool_timeout_cases\":"
-      ++ Conformance.ToolTimeouts.casesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
     ++ "\"causal_hop_cap_observation_cases\":"

@@ -112,84 +112,89 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
 
 #[tokio::test]
 async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Result<()> {
-    let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .identity_runtime_nac_cases
-        .iter()
-        .map(|case| (case.status.to_owned(), case.may_start))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(modeled.len(), 3);
-    let directory = tempfile::tempdir()?;
-    let home = directory.path().to_owned();
-    let data = home.join("data");
-    let lock_home = home.clone();
-    let lock_data = data.clone();
-    let lock = tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(&lock_data)?;
-        Ok::<_, anyhow::Error>(home::lock_store(&lock_home, &lock_data)?)
-    })
-    .await??;
-    let key = StoreKey::from_host(&[9; 32])?;
-    let identity_path = home.join("node.key");
-    let runtime = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        Ok(std::sync::Arc::new(
-            gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
-        ))
-    })
-    .await??;
-    let did = runtime.did().to_owned();
-    FreshBackendStore::observe(&data, &lock)
-        .await?
-        .initialize(&key, Some(&did))
-        .await?;
-    let start = |runtime: std::sync::Arc<gents_store::identity::KeyIdentity>| {
-        let (data, key, lock, did) = (&data, &key, &lock, &did);
-        async move {
-            ProtectedBackendStore::open(data, key, lock)
-                .await?
-                .preflight(key, Some(did))
-                .await?
-                .start_node_with_projection(
-                    key,
-                    runtime,
-                    None,
-                    None,
-                    std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
-                    Vec::new(),
-                    &gents_session::test_support::no_lifecycle_plugins(),
-                )
-                .await
+    for case in gents_lean_vocab::families::node_provisioning_runtime_nac::cases::<String>() {
+        let directory = tempfile::tempdir()?;
+        let home = directory.path().to_owned();
+        let data = home.join("data");
+        let lock_home = home.clone();
+        let lock_data = data.clone();
+        let lock = tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&lock_data)?;
+            Ok::<_, anyhow::Error>(home::lock_store(&lock_home, &lock_data)?)
+        })
+        .await??;
+        let key = StoreKey::from_host(&[9; 32])?;
+        let identity_path = home.join("node.key");
+        let runtime = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            Ok(std::sync::Arc::new(
+                gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
+            ))
+        })
+        .await??;
+        let did = runtime.did().to_owned();
+        FreshBackendStore::observe(&data, &lock)
+            .await?
+            .initialize(&key, Some(&did))
+            .await?;
+        let (node, admission) = ProtectedBackendStore::open(&data, &key, &lock)
+            .await?
+            .preflight(&key, Some(&did))
+            .await?
+            .start_node_with_projection(
+                &key,
+                runtime,
+                None,
+                None,
+                std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
+                Vec::new(),
+                &gents_session::test_support::no_lifecycle_plugins(),
+            )
+            .await?;
+        match case.input.status.as_str() {
+            "enabled" => {}
+            "disabled_temporarily" => {
+                let owner = defra_core::RequestContext::default().with_identity(Some(did.clone()));
+                node.disable_nac_as(&owner).await?;
+            }
+            other => panic!("no production start reaches NAC status {other}"),
         }
-    };
-    let (node, admission) = start(runtime.clone()).await?;
-    assert!(modeled["enabled"]);
-    admission.validate(&node).await?;
-    let owner = defra_core::RequestContext::default().with_identity(Some(did.clone()));
-    node.disable_nac_as(&owner).await?;
-    // A node whose NAC an admin disables at runtime admits no further work.
-    assert!(!modeled["disabled_temporarily"]);
-    assert!(matches!(
-        admission.validate(&node).await,
-        Err(
-            gents_store::local::backend_protection::BackendProtectionError::NodeAcpNotEnabled { .. }
-        )
-    ));
-    node.shutdown().await?;
-    drop(node);
-    // Native keeps NAC disabled across a restart; the runtime refuses to start.
-    let refused = ProtectedBackendStore::open(&data, &key, &lock)
-        .await?
-        .preflight(&key, Some(&did))
-        .await;
-    let Err(error) = refused else {
-        panic!("a NAC-disabled store must not pass preflight");
-    };
-    assert!(
-        matches!(
-            error,
-            gents_store::local::backend_protection::BackendProtectionError::NodeAcpNotEnabled { .. }
-        ),
-        "{error}"
-    );
-    assert!(error.to_string().contains("re-enable NAC"), "{error}");
+        let admitted = match admission.validate(&node).await {
+            Ok(()) => true,
+            Err(
+                gents_store::local::backend_protection::BackendProtectionError::NodeAcpNotEnabled {
+                    ..
+                },
+            ) => false,
+            Err(error) => panic!("{:?} refused for another reason: {error}", case.input),
+        };
+        node.shutdown().await?;
+        drop(node);
+        let restarted = match ProtectedBackendStore::open(&data, &key, &lock)
+            .await?
+            .preflight(&key, Some(&did))
+            .await
+        {
+            Ok(_) => true,
+            Err(
+                error @ gents_store::local::backend_protection::BackendProtectionError::NodeAcpNotEnabled {
+                    ..
+                },
+            ) => {
+                assert!(error.to_string().contains("re-enable NAC"), "{error}");
+                false
+            }
+            Err(error) => panic!("{:?} preflight refused for another reason: {error}", case.input),
+        };
+        assert_eq!(
+            admitted, restarted,
+            "{:?}: the running node and its restart disagree",
+            case.input
+        );
+        case.check(
+            gents_lean_vocab::families::node_provisioning_runtime_nac::NacOutput {
+                may_start: admitted,
+            },
+        );
+    }
     Ok(())
 }

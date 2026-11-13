@@ -18,7 +18,6 @@ GROUPS = {
     "reasoning_audit_cases": "LeanReasoningAuditCase",
     "reasoning_signature_cases": "LeanReasoningSignatureCase",
     "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
-    "title_usage_cases": "LeanTitleUsageCase",
     "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
     "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
     "repaired_projection_admission_cases": "LeanRepairedProjectionCase",

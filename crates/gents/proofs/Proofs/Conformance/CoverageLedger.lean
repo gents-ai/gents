@@ -544,8 +544,16 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "root_admission_cases"
-      "RootAdmissionCases")
+      "family"
+      "node_provisioning_runtime_nac")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "node_provisioning_runtime_nac_unreached"
+      "model-production-gap: every production node open enables NAC, so no production path observes a node whose NAC was never configured (not_configured).")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "root_admission_contracts_admission")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1251,10 +1259,29 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "inference_registry_admission")
       "inference-call" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "title_usage_cases"
-      "TitleUsageCases"
-      "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports, duplicate-call accounting and goal charges that include reviews while excluding titles. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
+  , tagged (consumerCoverage
+      "family"
+      "title_usage_catalog")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "title_usage_budget")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "title_usage_goal")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "title_usage_catalog_unreached"
+      "model-production-gap: purpose and binding admission (missing purpose or binding, unauthenticated or cross-purpose bindings, foreign parent scope, mismatched call key) happens in verify_historical_auxiliary_receipt over signed AgentRequest rows on a served node; the pure catalog projections never see these inputs.")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "title_usage_budget_unreached"
+      "model-production-gap: purpose and binding admission (missing purpose or binding, unauthenticated or cross-purpose bindings, foreign parent scope, mismatched call key) happens in verify_historical_auxiliary_receipt over signed AgentRequest rows on a served node; the pure catalog projections never see these inputs.")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "title_usage_goal_unreached"
+      "model-production-gap: the goal usage query never loads title-audit rows while projectGoal validates the whole catalog, so a conflict confined to title-audit rows (conflicting_call_id_fails_closed) cannot reach production's goal charge; purpose and binding admission (missing purpose or binding, unauthenticated or cross-purpose bindings, foreign parent scope, mismatched call key) happens in verify_historical_auxiliary_receipt over signed AgentRequest rows on a served node; the pure catalog projections never see these inputs.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1439,16 +1466,16 @@ def caseCoverage : List CoverageEntry :=
       "compaction_checkpoint_fallback_checkpoint")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "command_policy_cases"
-      "CommandPolicyValidation")
+      "family"
+      "contracts_command_policy_validation")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "command_policy_cases"
-      "CommandPolicySandbox")
+      "family"
+      "contracts_command_sandbox_selection")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "command_policy_cases"
-      "CommandPolicyEnv")
+      "family"
+      "contracts_command_env_filtering")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -1459,8 +1486,8 @@ def caseCoverage : List CoverageEntry :=
       "command_isolation_seatbelt")
       "command-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "command_policy_cases"
-      "CommandPolicyOperatorUi")
+      "family"
+      "contracts_command_policy_validation")
       "command-policy" [Surface.operatorUi]
   , tagged (consumerCoverage
       "queue_deadline_conformance_cases"
@@ -1689,9 +1716,13 @@ def caseCoverage : List CoverageEntry :=
       "workspace_datastore_write_tool_call")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_root_access_cases"
-      "WorkspaceRootAccessCases"
+      "family"
+      "workspace_root_access_root_access"
       "User publication fences on native Node update and commits the physical parent; raw direct creates remain outside the writer-fencing premise.")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_root_access_unrelated_agent_read")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "family"
@@ -2096,8 +2127,24 @@ def caseCoverage : List CoverageEntry :=
       "contracts_self_config_case")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "tool_timeout_cases"
-      "ToolTimeoutCases")
+      "family"
+      "tool_timeouts_foreground_pair")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "tool_timeouts_cli_timeout")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "tool_timeouts_background_lifetime")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "tool_timeouts_wait_policy")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "tool_timeouts_lsp_policy")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
