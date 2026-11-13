@@ -14,7 +14,7 @@ fn install_repair_home_classification_matches_lean() {
 
 #[test]
 fn install_repair_plans_match_lean() {
-    for case in families::install_repair_plans::cases::<String, String, String, String>() {
+    for case in families::install_repair_plans::cases::<String, String, String, String, String>() {
         let input: RepairObservation =
             serde_json::from_value(serde_json::to_value(&case.input).unwrap()).unwrap();
         let actual = planning::plan(&input);
@@ -34,10 +34,10 @@ fn install_repair_refusals_match_lean() {
 #[test]
 fn install_repair_service_plans_match_lean() {
     use super::port::{PortObservation, ServedIdentity};
-    use gents_protocol::operations::install_repair::ServiceMove;
+    use gents_protocol::operations::install_repair::{RepairOperation, ServiceMove};
     use service::{NodeVersion, ServiceAction, ServiceFacts};
     use std::path::PathBuf;
-    for case in families::install_repair_service_plans::cases::<String, String, String>() {
+    for case in families::install_repair_service_plans::cases::<String, String, String, String>() {
         let input = &case.input;
         let home = PathBuf::from("/chosen");
         let facts = ServiceFacts {
@@ -90,6 +90,8 @@ fn install_repair_service_plans_match_lean() {
                 },
                 other => panic!("unknown serving identity {other}"),
             },
+            served_home_present: input.served_home_present,
+            operation: serde_json::from_value::<RepairOperation>(json!(input.operation)).unwrap(),
         };
         let actual: Vec<_> = service::plan_service(&facts, &home).into_iter().map(|action| {
             let (action, start_after, replace_program, answered) = match action {

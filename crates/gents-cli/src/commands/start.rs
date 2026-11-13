@@ -1,6 +1,7 @@
 use gents_protocol::operations::install_repair::RepairInput;
 use gents_protocol::operations::install_repair::{
-    Blocker, HomeChoice, HomeDecision, HomeState, RepairOutcome, RepairReceipt, ServiceMove,
+    Blocker, HomeChoice, HomeDecision, HomeState, RepairOperation, RepairOutcome, RepairReceipt,
+    ServiceMove,
 };
 use gents_service::repair::ServiceProgram;
 use std::future::Future;
@@ -64,8 +65,13 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
         "{}",
         shell_cannot_continue_with_a_prompt()
     );
-    let (home, config, graphql, home_flag) =
-        ready_node(args.home.take(), args.store_key_custody, terminal).await?;
+    let (home, config, graphql, home_flag) = ready_node(
+        args.home.take(),
+        args.store_key_custody,
+        terminal,
+        RepairOperation::Run,
+    )
+    .await?;
     let Some(message) = args.print.take() else {
         report_ignored_client_setting(&home);
         let agent = chosen_agent(&home, &config, &graphql, &args).await?;
@@ -171,7 +177,13 @@ async fn session_agent(graphql: &GraphqlEndpoint, node_did: &str, session: &str)
 
 /// Dispatched before telemetry, so nothing writes over the shell.
 pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
-    let (home, config, graphql, _) = ready_node(args.home, args.store_key_custody, true).await?;
+    let (home, config, graphql, _) = ready_node(
+        args.home,
+        args.store_key_custody,
+        true,
+        RepairOperation::Run,
+    )
+    .await?;
     wait_for_its_agent(&graphql, &config.node_did, None, PUBLISH_WAIT).await;
     let shown = crate::commands::shell::open(&home, None, None, None, runtime).await?;
     if let Some(hint) = continue_hint(shown.as_deref(), None) {
@@ -180,17 +192,32 @@ pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
     Ok(())
 }
 
+/// `gents runtime service repoint`: moves the per-user service to `home` and
+/// starts its node there; a start that does not finish moves it back.
+pub(crate) async fn repoint(home: Option<PathBuf>) -> Result<()> {
+    let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let (home, _, graphql, _) = ready_node(home, None, terminal, RepairOperation::Repoint).await?;
+    eprintln!(
+        "The background service now serves {} at {}",
+        crate::shell_word(&home),
+        graphql.url()
+    );
+    Ok(())
+}
+
 /// Repairs what stands between this home and a running node, sets the home up
 /// when it needs it, and starts its node; also returns the `--home` that
 /// reopens that node. Setup asks its questions on the terminal, so a home that
-/// needs it and has none is refused.
+/// needs it and has none is refused. Only `RepairOperation::Repoint` moves a
+/// service that serves another home that still exists.
 async fn ready_node(
     home: Option<PathBuf>,
     custody: Option<StoreKeyCustodyArg>,
     terminal: bool,
+    operation: RepairOperation,
 ) -> Result<(PathBuf, StoredInitConfig, GraphqlEndpoint, Option<PathBuf>)> {
     let mut progress = TerminalProgress::new();
-    let ready = ready_node_with(home, custody, terminal, &mut progress).await;
+    let ready = ready_node_with(home, custody, terminal, operation, &mut progress).await;
     if ready.is_err() {
         progress.finish();
     }
@@ -201,6 +228,7 @@ async fn ready_node_with(
     home: Option<PathBuf>,
     custody: Option<StoreKeyCustodyArg>,
     terminal: bool,
+    operation: RepairOperation,
     progress: &mut TerminalProgress,
 ) -> Result<(PathBuf, StoredInitConfig, GraphqlEndpoint, Option<PathBuf>)> {
     let mut home_flag = home.map(crate::absolutize).transpose()?;
@@ -214,6 +242,7 @@ async fn ready_node_with(
                 RepairInput::Prepare {
                     choice: choice.clone(),
                     service_move: ServiceMove::AfterSetup,
+                    operation,
                 },
                 &ServiceProgram::new(gents_service::repair::current_program),
                 progress,
@@ -459,7 +488,7 @@ fn exit_code(blocker: &Blocker) -> i32 {
 /// A newer node is running, so it is named on its own.
 fn blocked_line(blocker: &Blocker) -> String {
     match blocker {
-        Blocker::NewerNode { .. } => blocker.to_string(),
+        Blocker::NewerNode { .. } | Blocker::ServiceServesAnotherHome { .. } => blocker.to_string(),
         _ => format!(
             "Your local node couldn't start: {blocker}. Next: {}",
             crate::next_call::command(blocker.next_call(), None)

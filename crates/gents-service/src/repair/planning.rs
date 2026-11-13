@@ -1,6 +1,6 @@
 use gents_protocol::operations::install_repair::{
-    HomeState, RefusalAction, RefusalObservation, RepairObservation, RepairPlan, RepairPlanBlocker,
-    RepairStep, RepairVersion,
+    HomeState, RefusalAction, RefusalObservation, RepairObservation, RepairOperation, RepairPlan,
+    RepairPlanBlocker, RepairStep, RepairVersion,
 };
 
 pub fn needs_archive(home: HomeState) -> bool {
@@ -14,34 +14,15 @@ pub fn needs_archive(home: HomeState) -> bool {
     )
 }
 
-pub fn plan(observed: &RepairObservation) -> RepairPlan {
-    let blocked = |blocker| RepairPlan {
-        steps: Vec::new(),
-        blocker,
-        needs_setup: false,
-    };
-    if observed.version == RepairVersion::Newer || observed.home == HomeState::NewerStore {
-        return blocked(RepairPlanBlocker::NewerVersion);
-    }
-    if !observed.readable {
-        return blocked(RepairPlanBlocker::UnreadableHome);
-    }
-    if observed.busy {
-        return blocked(RepairPlanBlocker::Busy);
-    }
-    if observed.keychain_locked {
-        return blocked(RepairPlanBlocker::Keychain);
-    }
-    if observed.foreign_process {
-        return blocked(RepairPlanBlocker::ForeignProcess);
-    }
-    if needs_archive(observed.home) && observed.explicit_home {
-        return blocked(RepairPlanBlocker::ExplicitHome);
-    }
-    let archive = needs_archive(observed.home);
-    let setup = archive || observed.home == HomeState::Absent;
-    let update = observed.service_present
-        && !observed.managed_update
+pub fn keeps_served_home(observed: &RepairObservation) -> bool {
+    observed.service_present
+        && !observed.service_same_home
+        && observed.served_home_present
+        && observed.operation != RepairOperation::Repoint
+}
+
+fn service_steps(observed: &RepairObservation, archive: bool, setup: bool) -> Vec<RepairStep> {
+    let update = !observed.managed_update
         && (observed.version == RepairVersion::Older
             || !observed.service_program_present
             || !observed.service_same_home);
@@ -51,12 +32,11 @@ pub fn plan(observed: &RepairObservation) -> RepairPlan {
     let restart = update && observed.service_running && !setup;
     let mut steps = Vec::new();
     if drain {
-        if observed.drain_supported {
-            steps.push(RepairStep::Drain);
-        }
-        if !observed.drain_supported {
-            steps.push(RepairStep::Backup);
-        }
+        steps.push(if observed.drain_supported {
+            RepairStep::Drain
+        } else {
+            RepairStep::Backup
+        });
     }
     if stop {
         steps.push(RepairStep::StopOldNode);
@@ -72,6 +52,42 @@ pub fn plan(observed: &RepairObservation) -> RepairPlan {
     }
     if restart {
         steps.extend([RepairStep::StartNode, RepairStep::WaitForNode]);
+    }
+    steps
+}
+
+pub fn plan(observed: &RepairObservation) -> RepairPlan {
+    let blocked = |blocker| RepairPlan {
+        steps: Vec::new(),
+        blocker,
+        needs_setup: false,
+    };
+    if observed.version == RepairVersion::Newer || observed.home == HomeState::NewerStore {
+        return blocked(RepairPlanBlocker::NewerVersion);
+    }
+    if !observed.readable {
+        return blocked(RepairPlanBlocker::UnreadableHome);
+    }
+    if observed.keychain_locked {
+        return blocked(RepairPlanBlocker::Keychain);
+    }
+    if observed.foreign_process {
+        return blocked(RepairPlanBlocker::ForeignProcess);
+    }
+    if needs_archive(observed.home) && observed.explicit_home {
+        return blocked(RepairPlanBlocker::ExplicitHome);
+    }
+    let archive = needs_archive(observed.home);
+    let setup = archive || observed.home == HomeState::Absent;
+    let steps = if observed.service_present && !keeps_served_home(observed) {
+        service_steps(observed, archive, setup)
+    } else if archive {
+        vec![RepairStep::SetAsideFolder]
+    } else {
+        Vec::new()
+    };
+    if observed.busy && (setup || !steps.is_empty()) {
+        return blocked(RepairPlanBlocker::Busy);
     }
     RepairPlan {
         steps,

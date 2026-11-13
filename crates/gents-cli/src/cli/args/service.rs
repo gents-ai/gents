@@ -60,6 +60,17 @@ pub(crate) enum ServiceCommand {
     Restart(ServiceTargetArgs),
     Enable(ServiceTargetArgs),
     Disable(ServiceTargetArgs),
+    #[command(
+        about = "Move the background service to another home and start its node there",
+        long_about = "Move the per-user background service to --home and start that home's node; the node the service served before stops. Other commands never move the service to another home that still exists. If the node does not start, the service is moved back"
+    )]
+    Repoint {
+        #[arg(
+            long,
+            help = "Node home directory the service should serve. Defaults to ~/.gents"
+        )]
+        home: Option<PathBuf>,
+    },
     #[command(about = "Show native supervisor state (not runtime health)")]
     Status(ServiceTargetArgs),
     #[command(about = "Remove the service definition while preserving runtime data")]
@@ -80,8 +91,9 @@ impl ServiceCommand {
             Self::Update(_)
             | Self::UpdateStatus { .. }
             | Self::UpdateRun { .. }
-            | Self::UpdateCheck { .. } => {
-                unreachable!("managed update commands are routed asynchronously")
+            | Self::UpdateCheck { .. }
+            | Self::Repoint { .. } => {
+                unreachable!("managed update and repoint commands are routed asynchronously")
             }
             Self::Install {
                 target,

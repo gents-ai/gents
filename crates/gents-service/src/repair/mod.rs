@@ -1,6 +1,6 @@
 use gents_protocol::operations::install_repair::{
-    Blocker, Finding, HomeChoice, HomeDecision, HomeState, OlderData, RepairOutcome, RepairReceipt,
-    RepairStep, ServiceMove,
+    Blocker, Finding, HomeChoice, HomeDecision, HomeState, OlderData, RepairOperation,
+    RepairOutcome, RepairReceipt, RepairStep, ServiceMove,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,7 +20,8 @@ use crate::native_service::{
 };
 use crate::repair::crash_loop::{job_sample, CrashLoopWatch};
 use crate::repair::home::{
-    aside_label, classify_home, older_label, set_aside_home_as, unless_being_set_up,
+    aside_label, classify_home, held_by_another, older_label, set_aside_home_as,
+    unless_being_set_up,
 };
 use crate::repair::port::{
     observe_port, port_holder, read_initialized_did, served_identity, PortObservation,
@@ -82,6 +83,7 @@ async fn prepare(
     choice: &HomeChoice,
     program: &ServiceProgram,
     service_move: ServiceMove,
+    operation: RepairOperation,
     progress: &mut dyn Progress,
 ) -> Result<RepairReceipt> {
     prepare_with_lock(
@@ -92,6 +94,7 @@ async fn prepare(
         false,
         program,
         service_move,
+        operation,
         progress,
     )
     .await
@@ -105,6 +108,7 @@ async fn restore(choice: &HomeChoice, progress: &mut dyn Progress) -> Result<Rep
         true,
         &ServiceProgram::new(current_program),
         ServiceMove::AfterSetup,
+        RepairOperation::Repoint,
         progress,
     )
     .await
@@ -121,6 +125,7 @@ async fn prepare_with_lock(
     was_serving: bool,
     program: &ServiceProgram,
     service_move: ServiceMove,
+    operation: RepairOperation,
     progress: &mut dyn Progress,
 ) -> Result<RepairReceipt> {
     let _lock = hold_lock(lock).await?;
@@ -187,24 +192,69 @@ async fn prepare_with_lock(
             managed_update: false,
             drain_supported: false,
             previous_version: None,
+            served_home_present: false,
+            operation,
         },
     };
     facts.node_version = served_version(&facts.port);
     facts.was_serving = was_serving;
     facts.service_move = service_move;
+    facts.operation = operation;
+    facts.served_home_present =
+        served_home_present(facts.definition_home.as_deref(), &choice.home).await;
+    let busy = home_busy(manager.as_ref(), &facts, &choice.home).await;
     let serving_home =
         serving_home(facts.definition_home.as_deref(), &facts.port, &choice.home).await;
     let mut report = settle(
         choice,
         &facts,
+        busy,
         manager.as_ref(),
         serving_home.as_deref(),
         program,
         progress,
     )
     .await?;
-    report.serving_home = serving_home;
+    let moved = report
+        .repaired
+        .iter()
+        .any(|finding| matches!(finding, Finding::ServiceForAnotherFolder { .. }));
+    if moved || matches!(report.outcome, RepairOutcome::Decide(_)) {
+        report.serving_home = serving_home;
+    }
     Ok(report)
+}
+async fn served_home_present(definition_home: Option<&Path>, chosen: &Path) -> bool {
+    let Some(served) = definition_home.filter(|home| *home != chosen) else {
+        return false;
+    };
+    let served = served.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        !matches!(classify_home(&served, None), Ok(HomeState::Absent))
+    })
+    .await
+    .unwrap_or(true)
+}
+async fn home_busy(
+    manager: Option<&NativeServiceManager>,
+    facts: &ServiceFacts,
+    chosen: &Path,
+) -> bool {
+    let service_job = match manager {
+        Some(manager) if facts.job_running && facts.definition_home.as_deref() == Some(chosen) => {
+            Some(
+                on_manager(manager.config(), |manager| manager.job_pid())
+                    .await
+                    .ok()
+                    .flatten(),
+            )
+        }
+        _ => None,
+    };
+    let chosen = chosen.to_path_buf();
+    tokio::task::spawn_blocking(move || held_by_another(&chosen, service_job))
+        .await
+        .unwrap_or(false)
 }
 async fn node_serves(manager: Option<&NativeServiceManager>, home: &Path) -> bool {
     let job_running = match manager {
@@ -238,6 +288,7 @@ async fn serving_home(
 async fn settle(
     choice: &HomeChoice,
     facts: &ServiceFacts,
+    busy: bool,
     manager: Option<&NativeServiceManager>,
     serving_home: Option<&Path>,
     program: &ServiceProgram,
@@ -255,7 +306,7 @@ async fn settle(
             None => RepairVersion::Unknown,
         },
         explicit_home: choice.explicit,
-        busy: false,
+        busy,
         keychain_locked: false,
         foreign_process: false,
         readable: true,
@@ -265,6 +316,8 @@ async fn settle(
         service_same_home: facts.definition_home.as_deref() == Some(choice.home.as_path()),
         managed_update: facts.managed_update,
         drain_supported: facts.drain_supported,
+        served_home_present: facts.served_home_present,
+        operation: facts.operation,
     };
     let plan = planning::plan(&observation);
     match plan.blocker {
@@ -597,16 +650,33 @@ async fn start(
     };
     let config = manager.config().clone();
     repairs.step(RepairStep::StartNode);
-    let (running, runs) = match on_manager(&config, |manager| {
-        if manager.installed_home()?.is_none() {
-            manager.install()?;
+    let sample = on_manager(&config, |manager| {
+        match manager.installed_home()? {
+            None => manager.install()?,
+            Some(installed) => {
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                let owned = manager.definition_owned_by_home()?;
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                let owned = installed == manager.home();
+                if !owned {
+                    return Ok(Err(installed));
+                }
+            }
         }
         let runs = manager.last_exit()?.map(|exit| exit.restarts);
-        Ok((manager.status()?.running, runs))
+        Ok(Ok((manager.status()?.running, runs)))
     })
-    .await
-    {
-        Ok(sample) => sample,
+    .await;
+    let (running, runs) = match sample {
+        Ok(Ok(sample)) => sample,
+        Ok(Err(serving)) => {
+            return Ok(
+                repairs.report(RepairOutcome::Blocked(Blocker::ServiceServesAnotherHome {
+                    home: home.to_path_buf(),
+                    serving,
+                })),
+            )
+        }
         Err(blocker) => return Ok(repairs.report(RepairOutcome::Blocked(blocker))),
     };
     let mut started = false;
@@ -1078,7 +1148,8 @@ pub async fn execute(
         RepairInput::Prepare {
             choice,
             service_move,
-        } => prepare(&choice, program, service_move, progress).await,
+            operation,
+        } => prepare(&choice, program, service_move, operation, progress).await,
         RepairInput::Start {
             home,
             serving_home,

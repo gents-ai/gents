@@ -1,4 +1,6 @@
-use gents_protocol::operations::install_repair::{Blocker, HomeState, ServiceMove};
+use gents_protocol::operations::install_repair::{
+    Blocker, HomeState, RepairOperation, ServiceMove,
+};
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -30,6 +32,8 @@ pub struct ServiceFacts {
     pub managed_update: bool,
     pub drain_supported: bool,
     pub previous_version: Option<semver::Version>,
+    pub served_home_present: bool,
+    pub operation: RepairOperation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +113,9 @@ pub fn plan_service(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
         return Vec::new();
     };
     if definition_home != chosen {
+        if facts.served_home_present && facts.operation != RepairOperation::Repoint {
+            return Vec::new();
+        }
         if facts.service_move == ServiceMove::AfterSetup && facts.home != HomeState::Healthy {
             return Vec::new();
         }
@@ -207,6 +214,8 @@ pub async fn gather_facts(
             managed_update: false,
             drain_supported: false,
             previous_version: None,
+            served_home_present: false,
+            operation: RepairOperation::Run,
         };
         let Some(installed_home) = installed_home else {
             return Ok((facts, None));

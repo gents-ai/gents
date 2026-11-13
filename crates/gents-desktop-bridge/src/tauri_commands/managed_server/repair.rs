@@ -11,8 +11,8 @@ use gents_desktop_core::preference::MANAGED_SERVER_CONFIG;
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::operations::install_repair::RepairInput;
 use gents_protocol::operations::install_repair::{
-    Blocker, Finding, HomeChoice, RepairClientScope, RepairOutcome, RepairReceipt, RepairStep,
-    ServiceMove,
+    Blocker, Finding, HomeChoice, RepairClientScope, RepairOperation, RepairOutcome, RepairReceipt,
+    RepairStep, ServiceMove,
 };
 use gents_service::repair::{execute, sets_aside_refused, Progress, ServiceProgram};
 use std::future::Future;
@@ -54,6 +54,7 @@ where
             RepairInput::Prepare {
                 choice,
                 service_move: ServiceMove::BeforeSetup,
+                operation: RepairOperation::Run,
             }
         };
         execute(input, &program, &mut Quiet, None)

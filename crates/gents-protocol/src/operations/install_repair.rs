@@ -104,6 +104,16 @@ pub enum ServiceMove {
     AfterSetup,
 }
 
+/// What the user asked for: `Run` is any command against a home; `Repoint` is
+/// `gents runtime service repoint`, the one operation that moves the per-user
+/// service to another home.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairOperation {
+    Run,
+    Repoint,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Blocker {
@@ -154,6 +164,10 @@ pub enum Blocker {
     NewerNode {
         running: String,
         ours: String,
+    },
+    ServiceServesAnotherHome {
+        home: PathBuf,
+        serving: PathBuf,
     },
 }
 
@@ -214,7 +228,7 @@ impl fmt::Display for Blocker {
             ),
             Self::HomeBusy { home } => write!(
                 f,
-                "{} is being set up right now. Try again when it finishes.",
+                "{} is in use by another Gents process (a node started by hand, or a setup in progress). Stop it or let it finish, then try again.",
                 home.display()
             ),
             Self::OldNodeStillRunning { pid } => write!(
@@ -228,6 +242,12 @@ impl fmt::Display for Blocker {
             Self::NewerNode { running, ours } => write!(
                 f,
                 "Your local node runs Gents {running}, newer than this Gents ({ours}). Open Gents {running} or newer, then try again."
+            ),
+            Self::ServiceServesAnotherHome { home, serving } => write!(
+                f,
+                "{home} has no running node, and the background service serves {serving}, which this command leaves as it is. Start a node for {home} with `gents runtime server --home {home}`, or move the background service to it with `gents runtime service repoint --home {home}`",
+                home = home.display(),
+                serving = serving.display()
             ),
         }
     }
@@ -391,6 +411,10 @@ impl Blocker {
                 resource: "service",
                 verb: "update-status",
             },
+            Self::ServiceServesAnotherHome { .. } => NextCall::VerbHelp {
+                resource: "service",
+                verb: "repoint",
+            },
             _ => NextCall::Verb {
                 resource: "node",
                 verb: "status",
@@ -408,6 +432,7 @@ pub enum RepairInput {
     Prepare {
         choice: HomeChoice,
         service_move: ServiceMove,
+        operation: RepairOperation,
     },
     Start {
         home: PathBuf,
@@ -458,6 +483,8 @@ pub struct RepairObservation {
     pub service_same_home: bool,
     pub managed_update: bool,
     pub drain_supported: bool,
+    pub served_home_present: bool,
+    pub operation: RepairOperation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -20,6 +20,13 @@ inductive Blocker where
   | none | newerVersion | explicitHome | busy | keychain | foreignProcess | unreadableHome
   deriving Repr, DecidableEq, Lean.ToJson
 
+/-- What the user asked for. `run` is any command against a home, `gents --home X` among them;
+`repoint` is `gents runtime service repoint`, the one operation that moves the per-user service to
+another home. -/
+inductive Operation where
+  | run | repoint
+  deriving Repr, DecidableEq, Lean.ToJson
+
 structure Observation where
   home : HomeState
   version : Version
@@ -34,6 +41,9 @@ structure Observation where
   serviceSameHome : Bool
   managedUpdate : Bool
   drainSupported : Bool
+  /-- The home the service definition names, when it is not the chosen home, still exists. -/
+  servedHomePresent : Bool
+  operation : Operation
   deriving Repr, DecidableEq, Lean.ToJson
 
 structure Plan where
@@ -46,27 +56,58 @@ def needsArchive : HomeState → Bool
   | .interrupted | .unreadableSettings | .missingSettings | .missingStoreKey | .olderStore => true
   | _ => false
 
+/-- The per-user service serves one home. When it serves another home that still exists, that
+home's node is someone's working node (the smoke test of #3670 took a live node offline by
+repointing it from `gents --home X`), so only the operation the user asks for by name moves it.
+A service whose home is gone is repaired as before. -/
+def keepsServedHome (o : Observation) : Bool :=
+  o.servicePresent && !o.serviceSameHome && o.servedHomePresent && o.operation != .repoint
+
+def serviceSteps (o : Observation) (archive setup : Bool) : List Step :=
+  let update := !o.managedUpdate &&
+    (o.version == .older || !o.serviceProgramPresent || !o.serviceSameHome)
+  let stop := o.serviceRunning && (archive || o.home == .absent || update)
+  let drain := stop && o.home == .healthy
+  let restart := update && o.serviceRunning && !setup
+  (if drain then (if !o.drainSupported then [Step.backup] else [.drain]) else []) ++
+    (if stop then [.stop] else []) ++
+    (if update && o.home == .healthy then [.coldBackup] else []) ++
+    (if archive then [.archiveHome] else []) ++
+    (if update then [.updateService] else []) ++
+    (if restart then [.start, .health] else [])
+
+/-- A process holding the home (`busy`) blocks only a plan that would change the home or the
+service; a node the user started by hand for this home is used as it is. -/
 def plan (o : Observation) : Plan := Id.run do
   if o.version == .newer || o.home == .newerStore then
     return ⟨[], .newerVersion, false⟩
   if !o.readable then return ⟨[], .unreadableHome, false⟩
-  if o.busy then return ⟨[], .busy, false⟩
   if o.keychainLocked then return ⟨[], .keychain, false⟩
   if o.foreignProcess then return ⟨[], .foreignProcess, false⟩
   if needsArchive o.home && o.explicitHome then return ⟨[], .explicitHome, false⟩
   let archive := needsArchive o.home
   let setup := archive || o.home == .absent
-  let update := o.servicePresent && !o.managedUpdate &&
-    (o.version == .older || !o.serviceProgramPresent || !o.serviceSameHome)
-  let stop := o.serviceRunning && (archive || o.home == .absent || update)
-  let drain := stop && o.home == .healthy
-  let restart := update && o.serviceRunning && !setup
-  return ⟨(if drain then (if !o.drainSupported then [.backup] else [.drain]) else []) ++
-    (if stop then [.stop] else []) ++
-    (if update && o.home == .healthy then [.coldBackup] else []) ++
-    (if archive then [.archiveHome] else []) ++
-    (if update then [.updateService] else []) ++
-    (if restart then [.start, .health] else []), .none, setup⟩
+  let steps := if o.servicePresent && !keepsServedHome o then serviceSteps o archive setup
+    else if archive then [.archiveHome] else []
+  if o.busy && (setup || !steps.isEmpty) then return ⟨[], .busy, false⟩
+  return ⟨steps, .none, setup⟩
+
+/-- The steps that change what the per-user service runs or which home it serves. -/
+def changesService (p : Plan) : Bool :=
+  p.steps.any fun s => s == .drain || s == .stop || s == .updateService || s == .start
+
+theorem plan_keeps_served_home (o : Observation) (h : keepsServedHome o = true) :
+    changesService (plan o) = false := by
+  unfold plan changesService
+  simp only [Id.run, h, Bool.not_true, Bool.and_false, Bool.false_eq_true, ite_false]
+  repeat' split
+  all_goals simp_all
+
+theorem only_repoint_moves_a_present_served_home (o : Observation)
+    (present : o.servicePresent = true) (other : o.serviceSameHome = false)
+    (served : o.servedHomePresent = true) (asked : o.operation = .run) :
+    changesService (plan o) = false :=
+  plan_keeps_served_home o (by simp [keepsServedHome, present, other, served, asked])
 
 structure Inventory where
   keys : List Nat
@@ -127,7 +168,8 @@ theorem repair_never_deletes_documents (steps : List Step) (s : Inventory) :
     exact (ih (applyStep s a)).trans (step_never_deletes_documents s a)
 
 def healthy (running : Bool) : Observation :=
-  ⟨.healthy, .same, false, false, false, false, true, true, running, true, true, false, true⟩
+  ⟨.healthy, .same, false, false, false, false, true, true, running, true, true, false, true,
+   false, .run⟩
 
 theorem healthy_repair_is_noop (running : Bool) :
     plan (healthy running) = ⟨[], .none, false⟩ := by
@@ -140,6 +182,22 @@ theorem older_running_backup_precedes_stop :
 theorem modern_running_drains_before_cold_backup :
     plan { (healthy true) with version := .older } =
       ⟨[.drain, .stop, .coldBackup, .updateService, .start, .health], .none, false⟩ := by decide
+
+theorem repoint_moves_a_running_served_home :
+    plan { healthy true with
+      serviceSameHome := false
+      servedHomePresent := true
+      operation := .repoint } =
+      ⟨[.drain, .stop, .coldBackup, .updateService, .start, .health], .none, false⟩ := by decide
+
+theorem explicit_home_leaves_a_running_served_home :
+    plan { healthy true with
+      serviceSameHome := false
+      servedHomePresent := true
+      explicitHome := true } = ⟨[], .none, false⟩ := by decide
+
+theorem hand_started_node_is_used_as_it_is :
+    plan { (healthy false) with busy := true } = ⟨[], .none, false⟩ := by decide
 
 theorem newer_store_is_untouched (o : Observation) (h : o.home = .newerStore) :
     plan o = ⟨[], .newerVersion, false⟩ := by simp [plan, h, Id.run]
@@ -191,6 +249,9 @@ structure ServiceObservation where
   foreignProgram : Bool
   managedUpdate : Bool
   serving : ServedNode
+  /-- The home the definition names, when it is not the chosen home, still exists. -/
+  servedHomePresent : Bool
+  operation : Operation
   deriving Repr, DecidableEq, Lean.ToJson
 
 inductive ServiceAction where
@@ -207,6 +268,7 @@ structure ServiceStep where
 def servicePlan (s : ServiceObservation) : List ServiceStep := Id.run do
   if !s.definitionPresent then return []
   if !s.sameHome then
+    if s.servedHomePresent && s.operation != .repoint then return []
     if !s.beforeSetup && !s.homeComplete then return []
     return [⟨.move, (s.loaded || s.wasServing) && s.homeComplete, s.foreignProgram, false⟩]
   if !s.executablePresent then return [⟨.reinstall, s.loaded && s.homeComplete, false, false⟩]
@@ -221,6 +283,67 @@ def servicePlan (s : ServiceObservation) : List ServiceStep := Id.run do
      else []) ++
     (if s.failed && !s.loaded && s.homeComplete && !(s.serving == .same) then
       [⟨.restart, false, false, false⟩] else [])
+
+theorem service_plan_keeps_served_home (s : ServiceObservation)
+    (present : s.definitionPresent = true) (other : s.sameHome = false)
+    (served : s.servedHomePresent = true) (asked : s.operation = .run) :
+    servicePlan s = [] := by
+  simp [servicePlan, Id.run, present, other, served, asked]
+
+/-- The service definition: the home it serves and the program it runs. -/
+structure Definition where
+  home : Nat
+  program : Nat
+  deriving Repr, DecidableEq
+
+def applyAction (target : Definition) (d : Definition) : ServiceAction → Definition
+  | .move => { d with home := target.home, program := target.program }
+  | .reinstall | .switch => { d with program := target.program }
+  | .stop | .refreshLog | .restart => d
+
+/-- A repair in progress: the definition now, and the backup taken before each step. -/
+structure Execution where
+  current : Definition
+  backups : List Definition
+  deriving Repr, DecidableEq
+
+def executeStep (target : Definition) (e : Execution) (s : ServiceStep) : Execution :=
+  ⟨applyAction target e.current s.action, e.backups ++ [e.current]⟩
+
+def execute (target found : Definition) (steps : List ServiceStep) : Execution :=
+  steps.foldl (executeStep target) ⟨found, []⟩
+
+/-- Rolling back restores the backups newest first, which leaves the first one. -/
+def rollBack (e : Execution) : Definition :=
+  match e.backups with
+  | [] => e.current
+  | first :: _ => first
+
+theorem execute_keeps_first_backup (target first : Definition) (steps : List ServiceStep)
+    (e : Execution) (h : e.backups.head? = some first) :
+    (steps.foldl (executeStep target) e).backups.head? = some first := by
+  induction steps generalizing e with
+  | nil => simpa using h
+  | cons s rest ih =>
+    apply ih
+    cases hb : e.backups with
+    | nil => simp [hb] at h
+    | cons b bs => simp_all [executeStep]
+
+/-- A command that changed the service definition and then fails, after any number of its steps,
+leaves the definition as it found it. -/
+theorem failed_repair_restores_definition (target found : Definition)
+    (steps : List ServiceStep) (k : Nat) :
+    rollBack (execute target found (steps.take k)) = found := by
+  unfold execute
+  cases h : steps.take k with
+  | nil => rfl
+  | cons s rest =>
+    have := execute_keeps_first_backup target found rest
+      (executeStep target ⟨found, []⟩ s) (by simp [executeStep])
+    unfold rollBack
+    simp only [List.foldl_cons]
+    split <;> simp_all
 
 structure RefusalObservation where
   fresh : Bool
