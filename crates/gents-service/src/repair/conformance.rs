@@ -124,8 +124,15 @@ fn install_repair_client_identities_match_lean() {
 fn install_repair_client_bindings_match_lean() {
     for case in families::install_repair_client_bindings::cases::<String>() {
         let input = serde_json::from_value(serde_json::to_value(&case.input).unwrap()).unwrap();
-        let actual = super::client::classify_binding(&input);
-        case.check(serde_json::from_value(serde_json::to_value(actual).unwrap()).unwrap());
+        use gents_desktop_core::home_reset::ClientBinding;
+        case.check(
+            match super::client::classify_binding(&input) {
+                ClientBinding::Unbound => "unbound",
+                ClientBinding::BoundToHome => "bound_to_home",
+                ClientBinding::Orphaned => "orphaned",
+            }
+            .to_owned(),
+        );
     }
 }
 

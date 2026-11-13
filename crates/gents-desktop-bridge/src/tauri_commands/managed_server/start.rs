@@ -101,6 +101,7 @@ where
                 }
                 replace_loaded_job = !managed_selection
                     && (outdated.is_some()
+                        || (initial_native.job_loaded && !initial_native.installed)
                         || (initial_native.job_loaded
                             && !initial_native.running
                             && run_native(native_service(app, state)?, |service| {

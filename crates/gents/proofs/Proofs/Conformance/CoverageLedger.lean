@@ -193,8 +193,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "mcp-health"
-    , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
-    , deferred := []
+    , required := [Surface.runtimeInternal, Surface.operatorUi]
+    , deferred :=
+        [ (Surface.operatorCli,
+           "No CLI test replays a generated family: the runtime transition is replayed through contracts_mcp_health_transition and the view through contracts_mcp_health_view. A CLI consumer family is follow-up conversion work.") ]
     }
   , { feature := "identity-permission"
     , required := [Surface.runtimeInternal, Surface.api]
