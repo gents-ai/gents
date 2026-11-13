@@ -623,51 +623,64 @@ impl ModeledQueue {
 }
 
 #[tokio::test]
-async fn unanswered_sweep_discovers_malformed_command_for_transactional_validation() {
-    let fixture = Fixture::empty().await;
-    let (session, _, _, _) = test_signed_replacement_fields(
-        &fixture.client_access(),
-        fixture.identity.as_ref(),
-        fixture.identity.did(),
-        SESSION,
-        &[],
-    )
-    .await;
-    let identity = &fixture.identity;
-    let agent_did = &fixture.agent_did;
-    let doc_id = fixture.client_access().transact_write("test.edit.malformed_intent", |txn| {
-        let session = &session;
-        Box::pin(async move {
-            let response = txn.execute_client_signed_create(
-                "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
-                &serde_json::json!({"input": {"command_id":"malformed", "requester_did":identity.did(), "node_did":identity.did(), "session_id":SESSION, "intent_json":"not-json"}}),
-                gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
-            ).await?;
-            let doc = gents_store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
-            txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", session).await?;
-            txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(agent_did)?).await?;
-            Ok::<_, anyhow::Error>(doc)
-        })
-    }).await.unwrap();
+async fn session_input_edit_malformed_intent_matches_lean_model() {
+    for case in gents_lean_vocab::families::session_input_edit_malformed_intent::cases() {
+        let fixture = if case.input.intent_decodes {
+            Fixture::new().await
+        } else {
+            Fixture::empty().await
+        };
+        let doc_id = if case.input.intent_decodes {
+            let command = fixture.command().await;
+            fixture.submit(&command).await
+        } else {
+            let (session, _, _, _) = test_signed_replacement_fields(
+                &fixture.client_access(),
+                fixture.identity.as_ref(),
+                fixture.identity.did(),
+                SESSION,
+                &[],
+            )
+            .await;
+            let identity = &fixture.identity;
+            let agent_did = &fixture.agent_did;
+            fixture.client_access().transact_write("test.edit.malformed_intent", |txn| {
+                let session = &session;
+                Box::pin(async move {
+                    let response = txn.execute_client_signed_create(
+                        "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
+                        &serde_json::json!({"input": {"command_id":"malformed", "requester_did":identity.did(), "node_did":identity.did(), "session_id":SESSION, "intent_json":"not-json"}}),
+                        gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
+                    ).await?;
+                    let doc = gents_store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+                    txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", session).await?;
+                    txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(agent_did)?).await?;
+                    Ok::<_, anyhow::Error>(doc)
+                })
+            }).await.unwrap()
+        };
 
-    let unanswered = unanswered_commands(
-        CommandKind::InputEdit,
-        &fixture.node,
-        fixture.identity.as_ref(),
-        fixture.agent_identity.as_ref(),
-        Sweep::Unanswered,
-    )
-    .await
-    .unwrap();
-    assert_eq!(unanswered, vec![doc_id.clone()]);
-    assert!(process_command(
-        &fixture.node,
-        &fixture.identity,
-        &doc_id,
-        fixture.agent_identity.as_ref()
-    )
-    .await
-    .is_err());
+        let unanswered = unanswered_commands(
+            CommandKind::InputEdit,
+            &fixture.node,
+            fixture.identity.as_ref(),
+            fixture.agent_identity.as_ref(),
+            Sweep::Unanswered,
+        )
+        .await
+        .unwrap();
+        let processing = process_command(
+            &fixture.node,
+            &fixture.identity,
+            &doc_id,
+            fixture.agent_identity.as_ref(),
+        )
+        .await;
+        case.check(gents_lean_vocab::families::session_input_edit_malformed_intent::IntentOutput {
+            unanswered_selected: unanswered == vec![doc_id.clone()],
+            processing_fails: processing.is_err(),
+        });
+    }
 }
 
 #[tokio::test]

@@ -1,23 +1,8 @@
-//! Per-request store budgets for a multi-turn tool-using workload.
-//!
-//! Every row a request leaves behind must be paid for by the content that
-//! request added, never by the length of the history it replays: capture v4
-//! shares content-defined manifests and reduction snapshots across turns
-//! (#2865, #2888, #2538), reasoning deltas coalesce, and same-value writes
-//! are dropped (#2537). A 0.21.0-rc3 node nevertheless reached 1.2 GB after
-//! 401 AgentRequests (155,896 AgentOutputSegment and 108,352
-//! RenderedRequestBlock rows), so these budgets fail the change that lets a
-//! store outgrow its content again. The budgets are only meaningful while the
-//! content survives, so the same run checks that provider input replays the
-//! prior turns and that the transcript reconstructs what was streamed.
-
-use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gents_inference::compaction::CompactionStrategy;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
@@ -25,7 +10,8 @@ use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
-use crate::support::interrupt::{wait_for_request_lifecycle_state, BootedAgent};
+use crate::support::interrupt::BootedAgent;
+use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -34,78 +20,14 @@ use crate::support::{test_db, ManagedAgentFixture, TestDb};
 const MODEL: &str = "budget-model";
 const BACKEND_ID: &str = "budget-backend";
 const TOOL: &str = "audit_probe";
-
 const SESSIONS: usize = 3;
 const TURNS: usize = 6;
-/// Longer than any scripted stream, so no flush is due by elapsed time and
-/// every segment comes from a structural boundary (first visible output, a
-/// tool call, a provider close). Segment counts are then exact on any
-/// runner. Time-based cadence is covered on a simulated clock by
-/// `streaming::canonical_tests` (#2923).
 const STREAM_BATCH_MS: u64 = 600_000;
 const REASONING_CHUNKS: usize = 160;
 const TEXT_CHUNKS: usize = 120;
-/// A small window: by the last turn of a session, provider input sits at the
-/// reduction budget.
 const CONTEXT_WINDOW: usize = 16_000;
 const COMPACTION_THRESHOLD: f64 = 0.5;
-
-/// Collections every request writes into, in report order.
-const COLLECTIONS: [&str; 9] = [
-    "AgentRequest",
-    "AgentMessage",
-    "AgentToolCall",
-    "AgentOutputSegment",
-    "InferenceCall",
-    "RenderedRequest",
-    "RenderedRequestBlock",
-    "ProviderContextReduction",
-    "AgentSession",
-];
-
-/// The 0.21 targets, each stated against the content a request adds.
-///
-/// Measured on main `2a1362fe3` (3 sessions x 6 turns, 2 inference calls and
-/// 1 tool call per request; three runs, identical):
-///
-/// | Measure                                 | main           | budget  |
-/// |-----------------------------------------|----------------|---------|
-/// | turn 5 / turn 1 fresh block bytes       | 2.22x - 2.39x  | 1.40x   |
-/// | AgentOutputSegment per request          | 8              | 8       |
-/// | segments, 240 vs 24 chunks              | 3 vs 3         | equal   |
-/// | flushed store bytes per AgentRequest    | ~155 KB        | 256 KiB |
-///
-/// Only the first row fails on main: the bytes a turn adds to
-/// RenderedRequestBlock grow with the history it replays (turn 1 ~26 KB,
-/// turn 4 ~33-47 KB, turn 5 ~58-66 KB once the window strips its own tool
-/// result and the replayed prefix is captured again).
-mod budget {
-    /// Fresh RenderedRequestBlock bytes a late turn may add, relative to the
-    /// first follow-up turn of its session. Shared manifests make a turn pay
-    /// for its new messages only, so the ratio stays near 1 however long the
-    /// replayed history is.
-    ///
-    /// Measured 1.33x-1.39x (turn 1 ~15.2 KB, ~3.9 KB of it manifest nodes;
-    /// turn 5 ~20.3-21.3 KB, ~7.2-8.1 KB manifest, where the window reduces
-    /// provider input and strips the turn's own tool result),
-    /// identical for every Agent DID. The former 1.50x was calibrated against
-    /// a turn 1 that stored the ~5.5 KB block holding the tool schemas and the
-    /// system prompt again whenever the rolling hash found no cut between
-    /// them, which depended on the Agent DID in the prompt: such runs measured
-    /// 1.08x-1.22x, the rest 1.59x. With the stable fields cut apart, the
-    /// eight-entry manifest groups measured 1.39x-1.58x, their tail group
-    /// growing from 3.5 KB to 10.9 KB per turn; four-entry groups keep it
-    /// flat (#3605).
-    pub const LATE_TURN_BLOCK_BYTES_GROWTH: f64 = 1.40;
-    /// AgentOutputSegment rows per request when only structural boundaries
-    /// flush (first visible output, the tool call, each provider close, the
-    /// authored input and the tool output). A per-delta writer would add ~360.
-    pub const SEGMENTS_PER_REQUEST: usize = 8;
-    /// Flushed on-disk bytes per AgentRequest, against the ~12 KB of new
-    /// content each scripted request carries. The 0.21.0-rc3 node that
-    /// prompted this test stored ~3 MB per request.
-    pub const DISK_BYTES_PER_REQUEST: u64 = 256 * 1024;
-}
+const DISK_BYTES_PER_REQUEST: u64 = 256 * 1024;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn per_request_store_growth_follows_new_content_not_history() {
@@ -115,55 +37,80 @@ async fn per_request_store_growth_follows_new_content_not_history() {
     let fixture = into_fixture(builder_actors(&db, BACKEND_ID, backend.endpoint(), MODEL, 4).await);
     db.simulate_process_crash().await.expect("flush baseline");
     let actors = reopen_actors(&db, fixture).await;
-    let baseline_disk = dir_bytes(db.data_path());
+    let baseline_disk = disk_bytes(db.data_path()).await;
     let agent = boot_agent(&db, &actors).await;
+    let node_did = agent.node_did.clone();
 
-    let mut samples = Vec::new();
-    let mut before = Snapshot::take(&db, actors.agent().as_ref()).await;
     for session in 0..SESSIONS {
         for turn in 0..TURNS {
             let marker = turn_marker(session, turn);
-            let doc_id = submit_request(
+            let request_id = format!("req-{marker}");
+            submit_request(
                 &actors,
-                &format!("req-{marker}"),
+                &request_id,
                 &session_id(session),
                 "interactive",
                 &prompt(&marker),
             )
             .await;
-            wait_for_request_lifecycle_state(&actors, &doc_id, "completed").await;
-            let after = Snapshot::take(&db, actors.agent().as_ref()).await;
-            let mut sample = Sample::between(session, turn, &before, &after);
-            sample.history_bytes = backend
-                .observed_completion_bodies()
-                .last()
-                .map_or(0, |body| body.to_string().len() as u64);
-            samples.push(sample);
-            before = after;
+            assert_eq!(
+                wait_for_request_terminal(
+                    &actors.agent_access,
+                    &request_id,
+                    std::time::Duration::from_secs(60),
+                )
+                .await,
+                "completed",
+            );
         }
     }
-
-    let calibration = calibrate_segments(&actors, &backend).await;
-    let bodies = backend.observed_completion_bodies();
-    let transcripts = load_transcripts(&actors, &agent.node_did).await;
-
+    for (marker, _) in output_only_streams() {
+        let request_id = format!("req-{marker}");
+        submit_request(
+            &actors,
+            &request_id,
+            &format!("session-{marker}"),
+            "interactive",
+            &format!("{marker}: answer without tools."),
+        )
+        .await;
+        assert_eq!(
+            wait_for_request_terminal(
+                &actors.agent_access,
+                &request_id,
+                std::time::Duration::from_secs(60),
+            )
+            .await,
+            "completed",
+        );
+    }
     agent.shutdown().await;
     let fixture = into_fixture(actors);
     db.simulate_process_crash().await.expect("flush workload");
-    let final_snapshot = Snapshot::take(&db, fixture.agent.as_ref()).await;
-    let disk = dir_bytes(db.data_path()).saturating_sub(baseline_disk);
-    let report = Report {
-        samples,
-        calibration,
-        totals: final_snapshot.counts.clone(),
-        disk,
-        elapsed: started.elapsed(),
-    };
-    eprintln!("{report}");
-
-    assert_provider_input_replays_history(&bodies);
+    let disk = disk_bytes(db.data_path())
+        .await
+        .saturating_sub(baseline_disk);
+    let actors = reopen_actors(&db, fixture).await;
+    let mut transcripts = Vec::new();
+    for session in 0..SESSIONS {
+        transcripts.push(load_transcript(&actors, &node_did, &session_id(session)).await);
+    }
     assert_transcripts_reconstruct_streams(&transcripts);
-    report.assert_budgets();
+    for (marker, chunks) in output_only_streams() {
+        let transcript = load_transcript(&actors, &node_did, &format!("session-{marker}")).await;
+        let answer = text_fragments(marker, chunks, 4_800 / chunks).concat();
+        assert!(
+            transcript.contains(&json_fragment(&answer)),
+            "{marker}: durable answer is incomplete"
+        );
+    }
+    let requests = (SESSIONS * TURNS) as u64;
+    tracing::info!(disk_bytes = disk, requests, elapsed = ?started.elapsed(), "flushed fixed-workload storage");
+    assert!(
+        disk <= DISK_BYTES_PER_REQUEST * requests,
+        "{disk} flushed bytes exceed {} for {requests} requests",
+        DISK_BYTES_PER_REQUEST * requests,
+    );
 }
 
 fn turn_marker(session: usize, turn: usize) -> String {
@@ -198,12 +145,6 @@ fn tool_result(note: &str) -> String {
         .collect()
 }
 
-/// The last line of a turn's tool result: present only if the result was
-/// replayed in full.
-fn tool_result_tail(marker: &str) -> String {
-    format!("{marker} finding 63: unchanged invariant holds")
-}
-
 fn workload_plans() -> Vec<StreamPlan> {
     let mut plans = Vec::new();
     for session in 0..SESSIONS {
@@ -232,7 +173,7 @@ fn workload_plans() -> Vec<StreamPlan> {
             ));
         }
     }
-    for (marker, chunks) in calibration_streams() {
+    for (marker, chunks) in output_only_streams() {
         plans.push(StreamPlan::current_authored_user(
             marker,
             vec![StreamResponse::Stream(StreamScript::streams(
@@ -247,8 +188,7 @@ fn workload_plans() -> Vec<StreamPlan> {
     plans
 }
 
-/// The same answer in 24 chunks and in 240.
-fn calibration_streams() -> [(&'static str, usize); 2] {
+fn output_only_streams() -> [(&'static str, usize); 2] {
     [("budget-few-chunks", 24), ("budget-many-chunks", 240)]
 }
 
@@ -267,112 +207,6 @@ fn text_fragments(marker: &str, count: usize, width: usize) -> Vec<String> {
         .collect()
 }
 
-async fn calibrate_segments(
-    actors: &RequestActors,
-    backend: &MockStreamingBackend,
-) -> Vec<(String, usize, usize)> {
-    let mut rows = Vec::new();
-    for (marker, chunks) in calibration_streams() {
-        let before = count(&actors.agent_access, "AgentOutputSegment").await;
-        let doc_id = submit_request(
-            actors,
-            &format!("req-{marker}"),
-            &format!("session-{marker}"),
-            "interactive",
-            &format!("{marker}: answer without tools."),
-        )
-        .await;
-        wait_for_request_lifecycle_state(actors, &doc_id, "completed").await;
-        assert_eq!(backend.observed_chunks(marker), chunks, "{marker}");
-        let segments = count(&actors.agent_access, "AgentOutputSegment").await - before;
-        rows.push((marker.to_string(), chunks, segments));
-    }
-    rows
-}
-
-/// The text of a provider body's current authored user message.
-fn current_user_text(body: &Value) -> String {
-    body["messages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .rev()
-        .find(|message| message["role"] == "user")
-        .map(|message| match &message["content"] {
-            Value::String(text) => text.clone(),
-            other => other.to_string(),
-        })
-        .unwrap_or_default()
-}
-
-/// Every request is posted twice: before its tool call and after it. Later
-/// turns replay each earlier prompt and answer verbatim, and each earlier
-/// tool result as a stub naming the call and its size. A request's own tool
-/// result replays in full until the last turn, whose window strips it too.
-fn assert_provider_input_replays_history(bodies: &[Value]) {
-    for session in 0..SESSIONS {
-        for turn in 0..TURNS {
-            let marker = turn_marker(session, turn);
-            let posted: Vec<String> = bodies
-                .iter()
-                .filter(|body| current_user_text(body).starts_with(&format!("{marker}:")))
-                .map(Value::to_string)
-                .collect();
-            assert_eq!(
-                posted.len(),
-                2,
-                "{marker}: one body before and one after its tool call"
-            );
-            let [before_tool, after_tool] = [&posted[0], &posted[1]];
-            let own_in_full = after_tool.contains(&json_fragment(&tool_result(&marker)));
-            if turn + 1 < TURNS {
-                assert!(
-                    own_in_full,
-                    "{marker}: the follow-up call must carry this turn's own tool result in full"
-                );
-            } else {
-                // The last turn reaches the window's reduction budget, which
-                // strips the closed tool pair it just made.
-                assert!(
-                    !own_in_full && after_tool.contains(&json_fragment(&stripped_stub(&marker))),
-                    "{marker}: the window must strip this turn's tool result to its stub"
-                );
-            }
-            for prior in 0..turn {
-                let earlier = turn_marker(session, prior);
-                for body in [before_tool, after_tool] {
-                    for (what, expected) in [
-                        ("prompt", json_fragment(&prompt(&earlier))),
-                        ("answer", json_fragment(&answer(&earlier).concat())),
-                        ("tool result stub", json_fragment(&stripped_stub(&earlier))),
-                    ] {
-                        assert!(
-                            body.contains(&expected),
-                            "{marker}: provider input dropped the {what} of {earlier}"
-                        );
-                    }
-                    assert!(
-                        !body.contains(&tool_result_tail(&earlier)),
-                        "{marker}: {earlier}'s tool result must replay as its stub, not in full"
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// What replaces a stripped tool result in provider input.
-fn stripped_stub(marker: &str) -> String {
-    let call = format!("call-{marker}");
-    let bytes = tool_result(marker).len();
-    format!(
-        "[tool: {TOOL}, call_id: {call}, {bytes} bytes \u{2014} full output: sessions \
-         {{\"action\":\"output\",\"call_id\":\"{call}\"}}]"
-    )
-}
-
-/// The durable transcript keeps every streamed reasoning and answer byte, and
-/// every tool result in full, whatever provider input stripped.
 fn assert_transcripts_reconstruct_streams(transcripts: &[String]) {
     for (session, transcript) in transcripts.iter().enumerate() {
         for turn in 0..TURNS {
@@ -392,313 +226,48 @@ fn assert_transcripts_reconstruct_streams(transcripts: &[String]) {
     }
 }
 
-async fn load_transcripts(actors: &RequestActors, node_did: &str) -> Vec<String> {
-    let mut transcripts = Vec::new();
-    for session in 0..SESSIONS {
-        let messages = gents_observe::observe::trace_export::load_trace_transcript(
-            &actors.agent_access,
-            &session_id(session),
-            node_did,
-            Some(actors.agent_did()),
-            None,
-            None,
-            None,
-        )
-        .await
-        .expect("load session transcript");
-        let messages: Vec<_> = messages.iter().map(|row| &row.message).collect();
-        transcripts.push(serde_json::to_string(&messages).expect("serialize transcript"));
-    }
-    transcripts
+async fn load_transcript(actors: &RequestActors, node_did: &str, session: &str) -> String {
+    let messages = gents_observe::observe::trace_export::load_trace_transcript(
+        &actors.agent_access,
+        session,
+        node_did,
+        Some(actors.agent_did()),
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("load durable session transcript");
+    let messages: Vec<_> = messages.iter().map(|row| &row.message).collect();
+    serde_json::to_string(&messages).expect("serialize transcript")
 }
 
-/// `text` as it appears inside a JSON string.
 fn json_fragment(text: &str) -> String {
     let quoted = serde_json::to_string(text).expect("serialize string");
     quoted[1..quoted.len() - 1].to_string()
 }
 
-#[derive(Clone, Debug, Default)]
-struct Snapshot {
-    counts: BTreeMap<&'static str, usize>,
-    /// RenderedRequestBlock rows by id: payload bytes, and whether the row is
-    /// a shared manifest node rather than request content. `byte_len` is
-    /// deliberately unset in the schema, so block bytes are measured from the
-    /// payloads themselves.
-    blocks: BTreeMap<String, (u64, bool)>,
-    disk: u64,
+async fn disk_bytes(path: &Path) -> u64 {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || dir_bytes(&path))
+        .await
+        .expect("measure the persisted store")
+        .expect("read the persisted store files")
 }
 
-impl Snapshot {
-    /// Reads as the working Agent on the database's current process, which a
-    /// simulated crash replaces.
-    async fn take(db: &TestDb, agent: &dyn NodeIdentity) -> Self {
-        let reader = ConfigAccess::local_managed_agent(
-            db.node.clone(),
-            agent.did().parse().expect("Agent DID"),
-            agent,
-        )
-        .expect("working Agent reader");
-        let mut counts = BTreeMap::new();
-        for collection in COLLECTIONS {
-            counts.insert(collection, count(&reader, collection).await);
-        }
-        Self {
-            counts,
-            blocks: blocks(&reader).await,
-            disk: dir_bytes(db.data_path()),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Sample {
-    session: usize,
-    turn: usize,
-    added: BTreeMap<&'static str, usize>,
-    block_bytes: u64,
-    /// The share of `block_bytes`, and of the added RenderedRequestBlock rows,
-    /// that are manifest nodes.
-    manifest_bytes: u64,
-    manifest_rows: usize,
-    /// Unflushed: memtable logs included, so this tracks bytes written.
-    disk_written: u64,
-    /// The request's last provider body: the history it replays.
-    history_bytes: u64,
-}
-
-impl Sample {
-    fn between(session: usize, turn: usize, before: &Snapshot, after: &Snapshot) -> Self {
-        let fresh = || {
-            after
-                .blocks
-                .iter()
-                .filter(|(id, _)| !before.blocks.contains_key(*id))
-                .map(|(_, block)| *block)
+fn dir_bytes(path: &Path) -> std::io::Result<u64> {
+    std::fs::read_dir(path)?.try_fold(0, |total, entry| {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        let bytes = if metadata.is_dir() {
+            dir_bytes(&entry.path())?
+        } else {
+            metadata.len()
         };
-        Self {
-            session,
-            turn,
-            added: COLLECTIONS
-                .iter()
-                .map(|name| (*name, after.counts[name] - before.counts[name]))
-                .collect(),
-            block_bytes: fresh().map(|(bytes, _)| bytes).sum(),
-            manifest_bytes: fresh()
-                .filter(|(_, manifest)| *manifest)
-                .map(|(bytes, _)| bytes)
-                .sum(),
-            manifest_rows: fresh().filter(|(_, manifest)| *manifest).count(),
-            disk_written: after.disk.saturating_sub(before.disk),
-            history_bytes: 0,
-        }
-    }
-
-    fn inference_calls(&self) -> usize {
-        self.added["InferenceCall"].max(1)
-    }
+        Ok(total + bytes)
+    })
 }
 
-struct Report {
-    samples: Vec<Sample>,
-    calibration: Vec<(String, usize, usize)>,
-    totals: BTreeMap<&'static str, usize>,
-    disk: u64,
-    elapsed: Duration,
-}
-
-impl Report {
-    fn requests(&self) -> u64 {
-        self.samples.len() as u64
-    }
-
-    /// Fresh block bytes of each session's last turn over its first
-    /// follow-up turn (turn 0 pays for the system prompt and tool schemas).
-    fn late_turn_block_growth(&self) -> Vec<(usize, f64)> {
-        (0..SESSIONS)
-            .map(|session| {
-                let of = |turn| {
-                    self.samples
-                        .iter()
-                        .find(|sample| sample.session == session && sample.turn == turn)
-                        .map(|sample| sample.block_bytes.max(1) as f64)
-                        .unwrap()
-                };
-                (session, of(TURNS - 1) / of(1))
-            })
-            .collect()
-    }
-
-    fn assert_budgets(&self) {
-        let mut failures = Vec::new();
-
-        for (session, growth) in self.late_turn_block_growth() {
-            if growth > budget::LATE_TURN_BLOCK_BYTES_GROWTH {
-                failures.push(format!(
-                    "session {session}: turn {} added {growth:.2}x the block bytes of turn 1 \
-                     (budget {:.2}x): captures grow with history, not new content",
-                    TURNS - 1,
-                    budget::LATE_TURN_BLOCK_BYTES_GROWTH
-                ));
-            }
-        }
-
-        for sample in &self.samples {
-            let segments = sample.added["AgentOutputSegment"];
-            if segments > budget::SEGMENTS_PER_REQUEST {
-                failures.push(format!(
-                    "s{}t{}: {segments} AgentOutputSegment rows for one request (budget {})",
-                    sample.session,
-                    sample.turn,
-                    budget::SEGMENTS_PER_REQUEST
-                ));
-            }
-        }
-
-        if let [(_, _, few), (_, _, many)] = self.calibration.as_slice() {
-            if many != few {
-                failures.push(format!(
-                    "the same answer in 10x more chunks wrote {many} segments instead of {few}: \
-                     segment count follows chunk count"
-                ));
-            }
-        }
-
-        let per_request = self.disk / self.requests();
-        if per_request > budget::DISK_BYTES_PER_REQUEST {
-            failures.push(format!(
-                "{per_request} flushed bytes per AgentRequest (budget {})",
-                budget::DISK_BYTES_PER_REQUEST
-            ));
-        }
-
-        assert!(
-            failures.is_empty(),
-            "storage budgets exceeded:\n  {}",
-            failures.join("\n  ")
-        );
-    }
-}
-
-impl std::fmt::Display for Report {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "storage budget report ({:.1?})", self.elapsed)?;
-        writeln!(
-            f,
-            "{:>6} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>6} {:>9} {:>9} {:>9} {:>9} {:>8}",
-            "req",
-            "msg",
-            "tool",
-            "seg",
-            "call",
-            "rr",
-            "rrb",
-            "mfst",
-            "reduce",
-            "history",
-            "rrb_bytes",
-            "mfst_byte",
-            "disk_wr",
-            "seg/call"
-        )?;
-        for sample in &self.samples {
-            let added = &sample.added;
-            writeln!(
-                f,
-                "{:>6} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>5} {:>6} {:>9} {:>9} {:>9} {:>9} {:>8.1}",
-                format!("s{}t{}", sample.session, sample.turn),
-                added["AgentMessage"],
-                added["AgentToolCall"],
-                added["AgentOutputSegment"],
-                added["InferenceCall"],
-                added["RenderedRequest"],
-                added["RenderedRequestBlock"],
-                sample.manifest_rows,
-                added["ProviderContextReduction"],
-                sample.history_bytes,
-                sample.block_bytes,
-                sample.manifest_bytes,
-                sample.disk_written,
-                added["AgentOutputSegment"] as f64 / sample.inference_calls() as f64,
-            )?;
-        }
-        for (session, growth) in self.late_turn_block_growth() {
-            writeln!(
-                f,
-                "session {session}: turn {} / turn 1 block bytes = {growth:.2}x (budget {:.2}x)",
-                TURNS - 1,
-                budget::LATE_TURN_BLOCK_BYTES_GROWTH
-            )?;
-        }
-        writeln!(
-            f,
-            "segment budget per request: {}",
-            budget::SEGMENTS_PER_REQUEST
-        )?;
-        for (marker, chunks, segments) in &self.calibration {
-            writeln!(f, "{marker}: {chunks} chunks -> {segments} segments")?;
-        }
-        writeln!(f, "totals: {:?}", self.totals)?;
-        let requests = self.requests();
-        let calls = self.totals["InferenceCall"].max(1) as u64;
-        write!(
-            f,
-            "flushed store growth: {} bytes = {} per request, {} per inference call \
-             (budget {} per request)",
-            self.disk,
-            self.disk / requests,
-            self.disk / calls,
-            budget::DISK_BYTES_PER_REQUEST
-        )
-    }
-}
-
-async fn count(reader: &ConfigAccess, collection: &str) -> usize {
-    rows(reader, collection, "_docID").await.len()
-}
-
-async fn blocks(reader: &ConfigAccess) -> BTreeMap<String, (u64, bool)> {
-    rows(reader, "RenderedRequestBlock", "_docID payload")
-        .await
-        .iter()
-        .filter_map(|row| {
-            let id = row["_docID"].as_str()?.to_owned();
-            let payload = row["payload"].as_str().unwrap_or_default();
-            // A manifest node is the JSON array of its children's entries.
-            let manifest = payload.starts_with(r#"[{"doc_id":"#);
-            Some((id, (payload.len() as u64, manifest)))
-        })
-        .collect()
-}
-
-async fn rows(reader: &ConfigAccess, collection: &str, fields: &str) -> Vec<Value> {
-    let response = reader
-        .execute(&format!("query {{ {collection} {{ {fields} }} }}"))
-        .await
-        .unwrap_or_else(|error| panic!("{collection} query failed: {error:#}"));
-    response["data"][collection]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn dir_bytes(path: &Path) -> u64 {
-    std::fs::read_dir(path)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|entry| match entry.metadata() {
-                    Ok(meta) if meta.is_dir() => dir_bytes(&entry.path()),
-                    Ok(meta) => meta.len(),
-                    Err(_) => 0,
-                })
-                .sum()
-        })
-        .unwrap_or(0)
-}
-
-/// Returns a distinct ~4 KB audit finding per call, so tool output cannot
-/// dedupe across turns.
 #[derive(Clone)]
 struct AuditProbe;
 

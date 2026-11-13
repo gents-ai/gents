@@ -837,28 +837,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_non_evidence_verdict_stores_a_null_score() {
+    async fn stored_verdicts_match_the_lean_model() {
         let fixture = crate::eval::test_support::HeldEvalFixture::new()
             .await
             .unwrap();
         let access = &fixture.access;
         let owner = fixture.node_did.as_str();
-        let mut outage = draft("r2", "t", "v1", None);
-        outage.kind = OutcomeKind::Provider;
-        outage.provider_reason = Some(ProviderReason::Unavailable);
-        outage.score_bp = Some(10_000);
-        append_verdict(access, owner, EvalSplit::Validation, &outage)
-            .await
-            .unwrap();
-        let verdicts = load_verdicts(access, owner, "r2").await.unwrap();
-        assert_eq!(
-            verdicts[0].score_bp, None,
-            "nobody can average a fabricated score"
-        );
-        assert_eq!(
-            verdicts[0].provider_reason,
-            Some(ProviderReason::Unavailable)
-        );
+        let cases = gents_lean_vocab::families::eval_stored_verdict::cases::<
+            OutcomeKind,
+            ProviderReason,
+            String,
+        >();
+        for (index, case) in cases.iter().enumerate() {
+            let run_id = format!("stored-{index}");
+            let mut verdict = draft(&run_id, "t", &format!("v-{index}"), None);
+            verdict.kind = case.input.kind;
+            verdict.provider_reason = case.input.provider_reason;
+            verdict.score_bp = case
+                .input
+                .score
+                .map(|score| u32::try_from(score).unwrap());
+            append_verdict(access, owner, EvalSplit::Validation, &verdict)
+                .await
+                .unwrap();
+            let verdicts = load_verdicts(access, owner, &run_id).await.unwrap();
+            let [stored] = verdicts.as_slice() else {
+                panic!("{run_id}: expected one stored verdict, found {}", verdicts.len());
+            };
+            let reason = match (case.input.provider_reason, stored.provider_reason) {
+                (None, None) => "absent".to_owned(),
+                (Some(given), Some(recorded)) if given == recorded => "recorded".to_owned(),
+                _ => "altered".to_owned(),
+            };
+            case.check(gents_lean_vocab::families::eval_stored_verdict::StoredVerdictOutput {
+                score: stored.score_bp.map(u64::from),
+                reason,
+            });
+        }
     }
 
     #[tokio::test]

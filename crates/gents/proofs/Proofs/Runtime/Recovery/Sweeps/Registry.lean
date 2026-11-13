@@ -47,4 +47,36 @@ theorem registered_sweeps_cover_persisted_collections :
   | owedDelivery =>
       exact ⟨owedDeliveryRecoverySweep, by simp [registeredRecoverySweeps], rfl⟩
 
+/-- The sweeps one periodic tick runs, in the order the runtime runs them. This
+is not the registry order above: the tick runs the inference sweep before the
+session-message sweep. -/
+def periodicRecoveryTick : List RecoverySweep :=
+  [ requestRecoverySweep
+  , terminalParentOwnedToolSweep
+  , orphanedBackgroundToolSweep
+  , backgroundCompletionSideEffectSweep
+  , inferenceCallRecoverySweep
+  , sessionMessageRecoverySweep
+  , taskHookRecoverySweep
+  , pluginJobRecoverySweep
+  , owedDeliveryRecoverySweep
+  ]
+
+def periodicRecoveryTickPosition (sweepId : String) : Option Nat :=
+  periodicRecoveryTick.findIdx? fun sweep => sweep.sweepId == sweepId
+
+def periodicRecoveryTickFunction (sweepId : String) : Option String :=
+  (periodicRecoveryTick.find? fun sweep => sweep.sweepId == sweepId).map fun sweep =>
+    sweep.rustFunction
+
+def runsAfterSessionMessageSweep (sweepId : String) : Bool :=
+  match periodicRecoveryTickPosition sweepId,
+      periodicRecoveryTickPosition "tool_call_lifecycle_recover_session_message_rows" with
+  | some position, some sessionPosition => decide (sessionPosition < position)
+  | _, _ => false
+
+theorem plugin_job_sweep_is_registered_after_the_session_message_sweep :
+    runsAfterSessionMessageSweep "tool_call_lifecycle_recover_plugin_job_rows" = true := by
+  native_decide
+
 end Recovery

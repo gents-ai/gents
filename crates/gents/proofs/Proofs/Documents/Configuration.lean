@@ -863,6 +863,35 @@ theorem retired_plugins_release_their_record (plugins : List String) :
     retainPluginStoreRecord plugins true = false := by
   simp [retainPluginStoreRecord]
 
+/-- The installation record a coordinate has when a plugin-store notice
+arrives: none, one a pack install wrote, or one only the plugin store wrote. -/
+inductive PluginNoticePrior where
+  | absent
+  | pack
+  | store
+  deriving DecidableEq, Repr
+
+/-- Decision: a plugin-store notice, a disappearance or a retirement, owns only
+the record the plugin store wrote. A pack's own record outlives both, so a pack
+that ships no documents and no plugins stays installed and removable. -/
+def pluginNoticeKeepsRecord (prior : PluginNoticePrior) (plugins : List String)
+    (retired : Bool) : Bool :=
+  match prior with
+  | .absent => false
+  | .pack => true
+  | .store => retainPluginStoreRecord plugins retired
+
+/-- Only a pack's record is listed as an installed pack and removed as one; a
+plugin-store record is removed through its plugins. -/
+def pluginNoticeListsPack (prior : PluginNoticePrior) (plugins : List String)
+    (retired : Bool) : Bool :=
+  prior == .pack && pluginNoticeKeepsRecord prior plugins retired
+
+theorem a_documentless_pack_install_is_not_a_plugin_store_record (retired : Bool) :
+    pluginNoticeKeepsRecord .pack [] retired = true ∧
+      pluginNoticeListsPack .pack [] retired = true := by
+  cases retired <;> decide
+
 theorem pluginRemovalSafe_iff (references removed : List String) :
     pluginRemovalSafe references removed = true ↔
       ∀ reference ∈ references, reference ∉ removed := by

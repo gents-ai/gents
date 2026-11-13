@@ -1,13 +1,15 @@
+import Lean
+
 namespace EventDelivery
 
 structure DocId where
   raw : String
-  deriving DecidableEq, Repr
+  deriving DecidableEq, Repr, Lean.ToJson
 
 inductive DedupePolicy where
   | ttlCooldown
   | monotoneOnce
-  deriving DecidableEq, Repr
+  deriving DecidableEq, Repr, Lean.ToJson
 
 namespace DedupePolicy
 
@@ -33,7 +35,7 @@ structure World where
   subscriptionQueue : List DocId
   processedSet      : List DocId
   handled           : List DocId
-  deriving DecidableEq, Repr
+  deriving DecidableEq, Repr, Lean.ToJson
 
 def World.empty : World :=
   { persistentSet := []
@@ -51,7 +53,7 @@ inductive Action where
   | rescanTick
   | handle (d : DocId)
   | release (d : DocId)
-  deriving DecidableEq, Repr
+  deriving DecidableEq, Repr, Lean.ToJson
 
 def Action.isRescan : Action → Bool
   | .rescanTick => true

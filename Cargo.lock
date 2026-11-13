@@ -5164,6 +5164,7 @@ dependencies = [
  "gents-loop",
  "gents-observe",
  "gents-p2p",
+ "gents-pack",
  "gents-protocol",
  "gents-session",
  "gents-store",
