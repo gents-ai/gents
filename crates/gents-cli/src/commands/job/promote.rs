@@ -146,7 +146,7 @@ pub fn javy_command() -> String {
 
 fn javy_version(javy: &str) -> Result<String, JavyMissing> {
     match gents_session::exec::native_spawn::output_std(
-        std::process::Command::new(&javy).arg("--version"),
+        std::process::Command::new(javy).arg("--version"),
     ) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -159,6 +159,14 @@ fn javy_version(javy: &str) -> Result<String, JavyMissing> {
     }
 }
 
+/// The run to promote and the plugin it becomes.
+#[derive(Clone, Copy)]
+pub struct PromoteRequest<'a> {
+    pub selector: &'a str,
+    pub name: Option<&'a str>,
+    pub agent: Option<&'a str>,
+}
+
 /// Promotes the dynamic run `selector` names (its address
 /// `SESSION_ID:TOOL_CALL_ID` or tool call id) into the installed plugin
 /// `gents/<name>`, wired into `agent` (default: the agent that ran it). Every
@@ -168,12 +176,15 @@ pub async fn promote(
     access: &ConfigAccess,
     home: &Path,
     actor: &str,
-    selector: &str,
-    name: Option<&str>,
-    agent: Option<&str>,
+    request: &PromoteRequest<'_>,
     javy: &str,
     report: &mut dyn FnMut(PromoteStep),
 ) -> Result<PromoteReport, PromotionError> {
+    let PromoteRequest {
+        selector,
+        name,
+        agent,
+    } = *request;
     report(PromoteStep::Javy);
     let javy = javy_version(javy)?;
 
@@ -374,9 +385,11 @@ mod tests {
             &access,
             home.path(),
             "did:key:z6Mknode",
-            "no-such-job",
-            None,
-            None,
+            &PromoteRequest {
+                selector: "no-such-job",
+                name: None,
+                agent: None,
+            },
             "/nonexistent/javy",
             &mut |step| steps.push(step),
         )
