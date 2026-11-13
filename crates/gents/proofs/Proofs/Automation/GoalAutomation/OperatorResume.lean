@@ -237,4 +237,41 @@ theorem created_receipt_reports_resumed_status (s : Snapshot) (r : Request) (com
   have resumed := (created_publishes_atomically s r commit h).1
   simp [receiptStatus, h, resumed]
 
+/-- The profiles an account resume moves: the profile that hit the usage limit
+(by backend id) and the compaction profile, which a switch never moves. -/
+structure OperatorProfiles where
+  limited : String
+  compaction : Option String
+  deriving DecidableEq, Repr
+
+def switchLimited (p : OperatorProfiles) (target : String) : OperatorProfiles :=
+  { p with limited := target }
+
+/-- A switch is due exactly when no canonical receipt exists for the request:
+`resume_goal_on_account` returns an existing receipt before it touches a profile. -/
+def switchesProfile (s : Snapshot) (r : Request) : Bool :=
+  (s.children.find? (sameKey r.binding)).isNone
+
+def resumeOnProfiles (s : Snapshot) (p : OperatorProfiles) (r : Request) (target : String) :
+    OperatorProfiles :=
+  if switchesProfile s r then switchLimited p target else p
+
+/-- One account resume: the Goal transition and the profile move that precede it. -/
+def accountResume (s : Snapshot) (p : OperatorProfiles) (r : Request) (target : String) :
+    Snapshot × OperatorProfiles × Outcome :=
+  let (post, outcome) := resumeOn s r true true
+  (post, resumeOnProfiles s p r target, outcome)
+
+def operatorMove (p : OperatorProfiles) : Option String → OperatorProfiles
+  | none => p
+  | some backend => switchLimited p backend
+
+theorem canonical_receipt_moves_no_profile (s : Snapshot) (p : OperatorProfiles)
+    (r : Request) (target : String) (h : switchesProfile s r = false) :
+    resumeOnProfiles s p r target = p := by
+  simp [resumeOnProfiles, h]
+
+theorem switch_moves_only_the_limited_profile (p : OperatorProfiles) (target : String) :
+    (switchLimited p target).compaction = p.compaction := rfl
+
 end GoalAutomation.OperatorResume

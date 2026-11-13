@@ -80,3 +80,21 @@ pub async fn interrupt_session_with_access(
         })
         .await
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::agent_interrupt_allowed;
+
+    #[test]
+    fn interrupt_permission_matches_the_lean_model() {
+        gents_lean_vocab::families::causal_hop_contracts_interrupt::replay(|i| {
+            agent_interrupt_allowed(
+                &i.caller_session,
+                &i.target_session,
+                i.target_origin_cause.as_deref(),
+                i.same_node,
+                i.task_triggered,
+            )
+        });
+    }
+}

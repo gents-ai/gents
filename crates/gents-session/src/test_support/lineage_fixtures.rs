@@ -188,6 +188,22 @@ fn request_input(
     input.join(", ")
 }
 
+fn same_group<'a>(rows: &'a [Value], row: &Value) -> Vec<&'a Value> {
+    rows.iter()
+        .filter(|other| {
+            other["session_id"] == row["session_id"] && other["created_at"] == row["created_at"]
+        })
+        .collect()
+}
+
+fn ready_to_write(group: &[&Value], ids: &BTreeMap<String, String>, case_ids: &[&str]) -> bool {
+    group.iter().all(|member| {
+        member["caused_by_parent_request_doc_id"]
+            .as_str()
+            .is_none_or(|cause| ids.contains_key(cause) || !case_ids.contains(&cause))
+    })
+}
+
 /// Write a lineage case's rows, then one session per `session_id`, into
 /// `node`. Returns each row's model `_docID` mapped to its native one.
 ///
@@ -206,16 +222,13 @@ pub async fn seed_lineage_case(
     let case_ids: Vec<String> = rows.iter().map(model_id).collect();
     let case_ids: Vec<&str> = case_ids.iter().map(String::as_str).collect();
     let mut ids = BTreeMap::<String, String>::new();
-    for row in rows {
-        if ids.contains_key(&model_id(row)) {
-            continue;
-        }
-        let group: Vec<&Value> = rows
+    loop {
+        let next = rows
             .iter()
-            .filter(|other| {
-                other["session_id"] == row["session_id"] && other["created_at"] == row["created_at"]
-            })
-            .collect();
+            .filter(|row| !ids.contains_key(&model_id(*row)))
+            .map(|row| same_group(rows, row))
+            .find(|group| ready_to_write(group, &ids, &case_ids));
+        let Some(group) = next else { break };
         let mut settled = false;
         for attempt in 0..64 {
             let mut written = Vec::new();
@@ -245,6 +258,10 @@ pub async fn seed_lineage_case(
         }
         assert!(settled, "no native id order matched after 64 attempts");
     }
+    assert!(
+        rows.iter().all(|row| ids.contains_key(&model_id(row))),
+        "plan_contradiction: a lineage row is caused by a row that is never written"
+    );
     let mapped = |id: &str| ids.get(id).cloned().unwrap_or_else(|| id.to_owned());
     let mut sessions = Vec::<&str>::new();
     for row in rows {

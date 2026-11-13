@@ -487,4 +487,58 @@ theorem replayed_latest_preserves_work (state : State) (fire : Fire)
     admitLatest state fire true = state := by simp [admitLatest, h]
 
 
+inductive DispatchOutcome where
+  | duplicate
+  | fired
+  | rejected
+  deriving DecidableEq, Repr
+
+/-- Dispatch looks up a fire identity's receipt before it renders the task
+template. A replayed admission returns its admitted request even when the
+template no longer renders, and never reaches latest-only supersession. A fire
+that is not admitted and does not render is rejected before any write. -/
+def replayDispatch (state : State) (id : Identity) (renders : Bool) : DispatchOutcome :=
+  if admitted state id then .duplicate else if renders then .fired else .rejected
+
+/-- Only a newly fired admission can supersede earlier work. -/
+def priorWorkKept (outcome : DispatchOutcome) : Bool := outcome != .fired
+
+theorem admitted_replay_precedes_render_and_latest_only_supersession
+    (state : State) (id : Identity) (renders : Bool) (h : admitted state id = true) :
+    replayDispatch state id renders = .duplicate ∧
+      priorWorkKept (replayDispatch state id renders) = true := by
+  simp [replayDispatch, h, priorWorkKept]
+
+/-- A goal-backed Task fire admitted into a session. A fire that targets an
+existing session binds the session's current Goal when it is admitted, not the
+Goal identity the fire prepared, and carries no assignment root: the Task did
+not open the session. The binding is part of the admitted receipt, so a replay
+of the fire is a duplicate that leaves it and the rows untouched even after the
+session's Goal is replaced. -/
+structure GoalTaskSession where
+  targetExisting : Bool
+  currentGoal : String
+  admittedGoal : Option String := none
+  deriving DecidableEq, Repr
+
+def taskOpensSession (targetExisting : Bool) : Bool := !targetExisting
+
+def GoalTaskSession.publish (s : GoalTaskSession) : GoalTaskSession × DispatchOutcome :=
+  match s.admittedGoal with
+  | some _ => (s, .duplicate)
+  | none => ({ s with admittedGoal := some s.currentGoal }, .fired)
+
+def GoalTaskSession.replaceGoal (s : GoalTaskSession) (goal : String) : GoalTaskSession :=
+  { s with currentGoal := goal }
+
+theorem durable_goal_task_replay_retains_its_admitted_assignment
+    (s : GoalTaskSession) (later : String) :
+    let admitted := s.publish.1
+    let replay := (admitted.replaceGoal later).publish
+    s.admittedGoal = none →
+      replay.2 = .duplicate ∧ replay.1.admittedGoal = some s.currentGoal ∧
+        replay.1 = admitted.replaceGoal later := by
+  intro admitted replay h
+  simp [admitted, replay, GoalTaskSession.publish, GoalTaskSession.replaceGoal, h]
+
 end Triggers.Durable
