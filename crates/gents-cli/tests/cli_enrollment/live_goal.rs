@@ -132,7 +132,7 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
             agent.context_id = Some(context.context_id.clone());
             agent.inference_profile_id = profile.profile_id.clone();
             agent.display_name = Some("live Goal Agent".into());
-            core.save_agent(&agent).await?;
+            core.save_agent(&agent, None).await?;
 
             let session = Uuid::new_v4().to_string();
             let predecessor = core.submit_request(&session, &node_did,

@@ -45,11 +45,10 @@ use gents_desktop_bridge::types::{
     DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshotRequest,
     DesktopProbeMcpServiceRequest, DesktopSessionProvenanceRequest, EnrollmentRequestView,
     EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
-    InferenceProfileSaveRequest, NodeConfigSaveRequest, PeerStatusFetchRequest,
-    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
-    SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
-    ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
-    TriggerSaveRequest,
+    InferenceProfileSaveRequest, NodeConfigSaveRequest, ScheduleDeleteRequest, ScheduleRunRequest,
+    ScheduleSaveRequest, SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
+    TriggerDeleteRequest, TriggerSaveRequest,
 };
 use gents_server::packs;
 
@@ -419,26 +418,6 @@ pub(super) async fn handle_request(
             require_live_fixture()?;
             let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
-        }
-        ("POST", "/desktop/peer/status") => {
-            let request = decode::<PeerStatusFetchRequest>(
-                &request.body,
-                "decoding saved peer status request",
-            )?;
-            let address = fixture
-                .desktop_core()
-                .peer_records()
-                .await
-                .into_iter()
-                .find(|record| record.peer_id == request.peer_id)
-                .map(|record| record.addr)
-                .with_context(|| format!("saved peer {} was not found", request.peer_id))?;
-            let payload = fetch_runtime_connection_payload(
-                &address,
-                Some(fixture.desktop_core().node_identity()),
-            )
-            .await?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))
         }
         ("POST", "/desktop/peer/enroll-status") => {
             let request = decode::<EnrollmentStatusRequest>(

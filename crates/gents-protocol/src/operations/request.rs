@@ -58,6 +58,43 @@ pub struct MessageSendInput {
     pub mailbox_item_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct MessageSendRoute {
+    pub node_did: String,
+    pub session_id: Option<String>,
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MessageSendBody {
+    pub agent_did: Option<String>,
+    pub content: String,
+    pub input: RequestInput,
+    pub delivery: DeliveryChoice,
+    pub valid_until: Option<DateTime<Utc>>,
+    pub mailbox_item_id: Option<String>,
+}
+
+impl MessageSendInput {
+    pub fn into_parts(self) -> (MessageSendRoute, MessageSendBody) {
+        (
+            MessageSendRoute {
+                node_did: self.node_did,
+                session_id: self.session_id,
+                request_id: self.request_id,
+            },
+            MessageSendBody {
+                agent_did: self.agent_did,
+                content: self.content,
+                input: self.input,
+                delivery: self.delivery,
+                valid_until: self.valid_until,
+                mailbox_item_id: self.mailbox_item_id,
+            },
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RequestReceipt {
     pub request_id: String,
@@ -255,9 +292,15 @@ pub enum RequestOperationError {
         refusal: MailboxCauseRefusal,
     },
     #[error("request {request_id} was not found on node {node_did}")]
-    NotFound { node_did: String, request_id: String },
+    NotFound {
+        node_did: String,
+        request_id: String,
+    },
     #[error("request id {request_id} names more than one request on node {node_did}; name its requester")]
-    Ambiguous { node_did: String, request_id: String },
+    Ambiguous {
+        node_did: String,
+        request_id: String,
+    },
     #[error("request {request_id} is {state} ({failure_reason}); {kind} needs {needs}")]
     ReissueParentState {
         kind: &'static str,
@@ -266,7 +309,9 @@ pub enum RequestOperationError {
         failure_reason: String,
         needs: &'static str,
     },
-    #[error("request {request_id} was not started by a person; only an interactive turn can be retried")]
+    #[error(
+        "request {request_id} was not started by a person; only an interactive turn can be retried"
+    )]
     ReissueNotInteractive { request_id: String },
     #[error("request {request_id} has used its retry budget ({retry_count} of {max_retries}); send the message again as a new request")]
     RetryBudgetExhausted {
@@ -275,17 +320,15 @@ pub enum RequestOperationError {
         max_retries: i64,
     },
     #[error("request {request_id} passed its deadline {deadline}; send the message again as a new request")]
-    ReissueDeadlineClosed { request_id: String, deadline: String },
+    ReissueDeadlineClosed {
+        request_id: String,
+        deadline: String,
+    },
     #[error("request {request_id} is not the latest turn of session {session_id} ({latest_request_id} is); retry that one or send a new message")]
     ReissueNotLatest {
         request_id: String,
         session_id: String,
         latest_request_id: String,
-    },
-    #[error("request {request_id} is already {state} and cannot be interrupted")]
-    InterruptTerminal {
-        request_id: String,
-        state: &'static str,
     },
     #[error("request {request_id} did not reach a terminal state within {timeout_secs}s; it is still {state}")]
     WaitTimedOut {
@@ -293,7 +336,9 @@ pub enum RequestOperationError {
         timeout_secs: u64,
         state: String,
     },
-    #[error("request {request_id} reached its end but its answer is {observation}; read its transcript")]
+    #[error(
+        "request {request_id} reached its end but its answer is {observation}; read its transcript"
+    )]
     OutputUnavailable {
         request_id: String,
         observation: &'static str,
@@ -303,14 +348,18 @@ pub enum RequestOperationError {
         request_id: String,
         reason: &'static str,
     },
-    #[error("the request committed under id {request_id} is not the one this send signed: {reason}")]
+    #[error(
+        "the request committed under id {request_id} is not the one this send signed: {reason}"
+    )]
     ReceiptMismatch {
         request_id: String,
         reason: &'static str,
     },
     #[error("the interrupt of request {request_id} was written but is not on the request")]
     InterruptNotLatched { request_id: String },
-    #[error("the submission of request {request_id} is unconfirmed; send the same request id again")]
+    #[error(
+        "the submission of request {request_id} is unconfirmed; send the same request id again"
+    )]
     Unconfirmed {
         request_id: String,
         #[source]
@@ -350,7 +399,6 @@ impl RequestOperationError {
             Self::RetryBudgetExhausted { .. } => "retry_budget_exhausted",
             Self::ReissueDeadlineClosed { .. } => "reissue_deadline_closed",
             Self::ReissueNotLatest { .. } => "reissue_not_latest",
-            Self::InterruptTerminal { .. } => "interrupt_terminal",
             Self::WaitTimedOut { .. } => "wait_timed_out",
             Self::OutputUnavailable { .. } => "output_unavailable",
             Self::SuccessorInvalid { .. } => "successor_invalid",
@@ -393,7 +441,6 @@ impl RequestOperationError {
             },
             Self::ReissueParentState { .. }
             | Self::ReissueNotInteractive { .. }
-            | Self::InterruptTerminal { .. }
             | Self::WaitTimedOut { .. }
             | Self::OutputUnavailable { .. }
             | Self::SuccessorInvalid { .. }

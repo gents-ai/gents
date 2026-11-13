@@ -80,10 +80,10 @@ fn machine_pairing_never_claims_an_unlisted_node() {
 }
 
 #[tokio::test]
-async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync() {
+async fn submitted_request_survives_refresh_failure_without_duplicating_observer_resync() {
     let stores = crate::client::observe::ObservedStores::new();
     let store = stores.ensure("did:test:node");
-    let mut wake = stores.subscribe_resync_requests();
+    let wake = stores.subscribe_resync_requests();
     let receipt = SubmittedRequest {
         request_id: "accepted-request".into(),
         session_id: "accepted-session".into(),
@@ -96,12 +96,8 @@ async fn submitted_request_survives_refresh_failure_and_requests_scoped_resync()
     })
     .await;
     assert_eq!(accepted, receipt);
-    assert!(wake.has_changed().unwrap());
-    wake.borrow_and_update();
-    assert_eq!(
-        stores.take_resync_requests(),
-        vec!["did:test:node".to_owned()]
-    );
+    assert!(!wake.has_changed().unwrap());
+    assert!(stores.take_resync_requests().is_empty());
     assert_eq!(store.projection_revision(), before);
     assert!(store.snapshot().requests.is_empty());
 }

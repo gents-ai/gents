@@ -80,7 +80,7 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
         agent.agent_did = binding.agent_did.clone();
         agent.creation_nonce = binding.creation_nonce;
         agent.display_name = Some("household second agent".into());
-        core.save_agent(&agent).await.context("saving Agent as enrolled client")?;
+        core.save_agent(&agent, None).await.context("saving Agent as enrolled client")?;
         let client_did = core.node_identity().did().to_owned();
         assert_ne!(client_did, owner_identity.did());
         let access = core.operator_access(&node_did)?;

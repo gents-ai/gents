@@ -143,6 +143,7 @@ where
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
         }
         external.pairing_ready = pairing_is_ready(state, external.node_did.as_deref()).await;
+        reconnect_started_runtime(state, &external).await;
         return Ok(external);
     }
     let lifecycle = _lifecycle;
@@ -284,5 +285,15 @@ where
         status_from(&managed, stored.as_ref(), Some(&native), None, None)
     };
     status.pairing_ready = pairing_is_ready(state, status.node_did.as_deref()).await;
+    reconnect_started_runtime(state, &status).await;
     Ok(status)
+}
+
+pub(super) async fn reconnect_started_runtime(
+    state: &DesktopAppState,
+    status: &ManagedServerStatus,
+) {
+    if let (Some(core), Some(node_did)) = (current_core(state), status.node_did.as_deref()) {
+        core.request_runtime_reconnect(Some(node_did)).await;
+    }
 }

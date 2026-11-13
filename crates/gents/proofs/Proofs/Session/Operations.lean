@@ -226,4 +226,11 @@ theorem reset_rule_never_refuses (maxRetries : Nat) (h : 0 < maxRetries) :
     simp only [reissueChain, reissueStep, hb, if_true, Option.some_bind, resetRetryCount]
     exact reset_rule_never_refuses maxRetries h n
 
+/-- Stop is already settled when the request is terminal or its interrupt is latched.
+The runtime owner alone certifies termination; this answer writes no new latch. -/
+def interruptSettled (terminal interrupted : Bool) : Bool := terminal || interrupted
+
+theorem terminal_stop_is_settled (interrupted : Bool) :
+    interruptSettled true interrupted = true := by simp [interruptSettled]
+
 end SessionOperations

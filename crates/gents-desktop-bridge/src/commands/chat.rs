@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::operations::request::MessageSendInput;
+use gents_protocol::operations::request::{MessageSendBody, MessageSendRoute};
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
@@ -90,38 +90,40 @@ pub async fn send_chat_message(
             "this message was written under another client identity"
         );
     }
-    let captured_context = request.captured_context.unwrap_or_default();
-    let attachments = request.attachments.unwrap_or_default();
-    let (content, question_reply, asking_agent) = match &request.answer {
-        Some(answer) => {
-            if !request.content.trim().is_empty()
-                || !captured_context.is_empty()
-                || !attachments.is_empty()
-            {
-                bail!("an answer renders its own content; send empty content");
-            }
-            let prepared = super::mailbox::question_reply_content(
-                core,
-                request.caused_by_source_doc_id.as_deref(),
-                request.session_id.as_deref(),
-                &node_did,
-                request.agent_did.as_deref(),
-                answer,
-            )?;
-            (
-                prepared.content,
-                prepared.question_reply,
-                Some(prepared.agent_did),
-            )
-        }
-        None => (request.content.trim().to_string(), None, None),
+    let route = MessageSendRoute {
+        node_did: node_did.clone(),
+        session_id: request.session_id.clone(),
+        request_id: request.request_id.clone(),
     };
-    let submitted = core
-        .send_message(MessageSendInput {
-            node_did,
-            session_id: request.session_id,
+    let message = async {
+        let captured_context = request.captured_context.unwrap_or_default();
+        let attachments = request.attachments.unwrap_or_default();
+        let (content, question_reply, asking_agent) = match &request.answer {
+            Some(answer) => {
+                if !request.content.trim().is_empty()
+                    || !captured_context.is_empty()
+                    || !attachments.is_empty()
+                {
+                    bail!("an answer renders its own content; send empty content");
+                }
+                let prepared = super::mailbox::question_reply_content(
+                    core,
+                    request.caused_by_source_doc_id.as_deref(),
+                    request.session_id.as_deref(),
+                    &node_did,
+                    request.agent_did.as_deref(),
+                    answer,
+                )?;
+                (
+                    prepared.content,
+                    prepared.question_reply,
+                    Some(prepared.agent_did),
+                )
+            }
+            None => (request.content.trim().to_string(), None, None),
+        };
+        Ok(MessageSendBody {
             agent_did: asking_agent.or(request.agent_did),
-            request_id: request.request_id,
             content,
             input: gents_protocol::request_input::RequestInput {
                 question_reply,
@@ -134,7 +136,8 @@ pub async fn send_chat_message(
             valid_until: None,
             mailbox_item_id: request.caused_by_source_doc_id,
         })
-        .await?;
+    };
+    let submitted = core.send_message_with(route, message).await?;
     Ok(submitted.into())
 }
 

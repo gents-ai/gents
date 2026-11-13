@@ -58,6 +58,6 @@ namespace SessionOperations
 deriving instance Lean.ToJson for DeliveryChoice, Delivery, Matches, Lookup, ReissueKind,
   ReissueParent, ReissueDecision
 
-attribute [conformance_function] resolveDelivery requestLookup reissueDecision
+attribute [conformance_function] resolveDelivery requestLookup reissueDecision interruptSettled
 
 end SessionOperations

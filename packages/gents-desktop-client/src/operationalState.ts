@@ -508,7 +508,7 @@ const SYNC_CAUSE_TEXT: Record<string, SyncCauseText> = {
   runtime_disconnected: {
     label: "Runtime unreachable",
     shortLabel: "Reconnecting",
-    detail: "The runtime connection was lost; reconnecting.",
+    detail: "The runtime is not answering; it may be stopped. Reconnecting.",
   },
   runtime_refused: {
     label: "Runtime refused this app",
@@ -519,12 +519,14 @@ const SYNC_CAUSE_TEXT: Record<string, SyncCauseText> = {
   runtime_no_endpoint: {
     label: "Runtime has no endpoint",
     shortLabel: "No endpoint",
-    detail: "This runtime has no endpoint this app can read. Connect the runtime again.",
+    detail:
+      "This runtime has no endpoint this app can read. Connect the runtime again.",
   },
   enrollment_authentication: {
     label: "Enrollment failed",
     shortLabel: "Enroll again",
-    detail: "The enrolled runtime could not be authenticated. Enroll this device again.",
+    detail:
+      "The enrolled runtime could not be authenticated. Enroll this device again.",
   },
   enrollment_route: {
     label: "Finishing enrollment",
@@ -534,12 +536,12 @@ const SYNC_CAUSE_TEXT: Record<string, SyncCauseText> = {
   discovery_degraded: {
     label: "Discovery degraded",
     shortLabel: "Discovery degraded",
-    detail: "The peer-to-peer transport probe is failing; retrying.",
+    detail: "The peer-to-peer discovery probe is failing; retrying.",
   },
   discovery_offline: {
-    label: "Offline",
-    shortLabel: "Offline",
-    detail: "No configured peer can be reached. Check this device's network connection.",
+    label: "Discovery offline",
+    shortLabel: "Discovery offline",
+    detail: "No configured peer can be reached for discovery; retrying.",
   },
 };
 
@@ -552,9 +554,9 @@ export function projectSyncOperationalStatus(
       kind: "waiting",
       layer: "sync",
       reason: "sync_not_observed",
-      label: "Checking sync",
-      shortLabel: "Checking sync",
-      detail: "Waiting for the secure client's first sync observation.",
+      label: "Checking connection",
+      shortLabel: "Checking connection",
+      detail: "Waiting for the first runtime connection check.",
     });
   }
   if (state === "healthy") {
@@ -562,16 +564,16 @@ export function projectSyncOperationalStatus(
       kind: "ready",
       layer: "sync",
       reason: "healthy",
-      label: "Sync is healthy",
-      shortLabel: "Sync healthy",
-      detail: "The runtime is reachable, enrollment is current and peers are discoverable.",
+      label: "Connection is healthy",
+      shortLabel: "Connected",
+      detail: "Every runtime is connected and enrollment is current.",
     });
   }
   const cause = syncHealth?.cause ?? "unknown";
   const text = SYNC_CAUSE_TEXT[cause] ?? {
-    label: "Sync needs attention",
-    shortLabel: "Sync",
-    detail: `Sync is ${state}.`,
+    label: "Connection needs attention",
+    shortLabel: "Connection",
+    detail: `Connection is ${state}.`,
   };
   return status({
     kind: state,
@@ -591,7 +593,8 @@ export function syncHealthDiagnostics(
     cause: syncHealth?.cause ?? null,
     nextAction: syncHealth?.nextAction ?? null,
     lastError: syncHealth?.lastError ?? null,
-    connectedPeerCount: syncHealth?.connectedPeerCount ?? 0,
+    runtimeCount: syncHealth?.runtimeCount ?? 0,
+    connectedRuntimeCount: syncHealth?.connectedRuntimeCount ?? 0,
     activationErrorCount: syncHealth?.activationErrorCount ?? 0,
   };
 }

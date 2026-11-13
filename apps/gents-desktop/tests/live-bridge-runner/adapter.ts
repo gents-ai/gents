@@ -134,8 +134,6 @@ export function createBridgeHttpAdapter(
     setSelectedNode: async (nodeDid) => {
       await client.postJson("/desktop/selected-node", { nodeDid });
     },
-    fetchPeerStatus: async (peerId) =>
-      client.postJson("/desktop/peer/status", { peerId }),
     requestStatusEnrollment: async (serverAddress) =>
       client.postJson("/desktop/peer/enroll-status", { serverAddress }),
     fetchSessionSnapshot: async (sessionId, nodeDid, requestId, timelinePage) =>
@@ -279,6 +277,8 @@ export function createBridgeHttpAdapter(
       throw new Error("desktop_job_control is not served by the live bridge runner");
     },
     processControl: unsupported("processControl"),
+    listJobs: unsupported("listJobs"),
+    getJobView: unsupported("getJobView"),
   };
 }
 

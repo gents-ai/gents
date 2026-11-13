@@ -21,6 +21,7 @@ import type {
   UxDataWatchEvent,
   UxDataSurfaceDecl,
   UxDeployment,
+  UxNotifyOutcome,
 } from "./contract";
 import { isGentsUxPlugin } from "./contract";
 import { IMPORT_TIMEOUT_MS, rewriteSpecifiers, unsupportedImports } from "./module";
@@ -426,7 +427,7 @@ export function createSandboxRuntime(
       },
       plugin: (name, input) => rpc("plugin", name, input),
       send: (content) => rpc("send", content).then(() => undefined),
-      notify: (request) => rpc("notify", request).then(() => undefined),
+      notify: (request) => rpc("notify", request) as Promise<UxNotifyOutcome>,
       shell: {
         route: () => shell.route as Route,
         navigate: (route) => void rpc("navigate", route),

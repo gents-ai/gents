@@ -9,6 +9,7 @@ mod policy;
 pub mod presets;
 mod root_admission;
 mod root_publication;
+pub mod root_selection;
 mod runtime_context;
 mod selection;
 mod source_policy;
@@ -64,12 +65,12 @@ pub(crate) fn configured_plugin_refs(
         .collect())
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use pack_readers::FAIL_GRANTS_FOR;
 pub use pack_readers::{
     grant_pack_root_readers, grant_reader_command, pack_root_readers, planned_root_agents,
     publish_root_command, root_review, PackRootReader, PackRoots,
 };
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use pack_readers::FAIL_GRANTS_FOR;
 pub use root_admission::RootExecutionGuard;
 #[doc(hidden)]
 pub use root_admission::{

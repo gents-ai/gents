@@ -132,7 +132,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             agent.creation_nonce = binding.creation_nonce.clone();
             agent.context_id = Some(context_id.clone());
             agent.display_name = Some(label.into());
-            core.save_agent(&agent).await?;
+            core.save_agent(&agent, None).await?;
         }
         let target_agent_doc = access.transact_readonly("test.live_delegation_target", |txn| {
             let (node_did, target) = (&node_did, &b.agent_did);

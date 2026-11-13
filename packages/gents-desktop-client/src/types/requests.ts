@@ -20,7 +20,6 @@ import type { InferenceProfileSaveRequest as GeneratedInferenceProfileSaveReques
 import type { InferenceProbeRequest as GeneratedInferenceProbeRequest } from "../generated/InferenceProbeRequest.js";
 import type { CodexLoginRequest as GeneratedCodexLoginRequest } from "../generated/CodexLoginRequest.js";
 import type { EnrollmentStatusRequest as GeneratedEnrollmentStatusRequest } from "../generated/EnrollmentStatusRequest.js";
-import type { PeerStatusFetchRequest as GeneratedPeerStatusFetchRequest } from "../generated/PeerStatusFetchRequest.js";
 import type { ScheduleDeleteRequest as GeneratedScheduleDeleteRequest } from "../generated/ScheduleDeleteRequest.js";
 import type { ScheduleRunRequest as GeneratedScheduleRunRequest } from "../generated/ScheduleRunRequest.js";
 import type { ScheduleSaveRequest as GeneratedScheduleSaveRequest } from "../generated/ScheduleSaveRequest.js";
@@ -55,7 +54,6 @@ export type InferenceProfileSaveRequest = GeneratedInferenceProfileSaveRequest;
 export type InferenceProbeRequest = GeneratedInferenceProbeRequest;
 export type CodexLoginRequest = GeneratedCodexLoginRequest;
 export type EnrollmentStatusRequest = GeneratedEnrollmentStatusRequest;
-export type PeerStatusFetchRequest = GeneratedPeerStatusFetchRequest;
 export type ScheduleDeleteRequest = GeneratedScheduleDeleteRequest;
 export type ScheduleRunRequest = GeneratedScheduleRunRequest;
 export type ScheduleSaveRequest = GeneratedScheduleSaveRequest;

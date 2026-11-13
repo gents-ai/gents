@@ -111,6 +111,7 @@ pub async fn resolve_pack_source(
             coordinate: record.coordinate,
             version: record.version,
             digest: record.digest,
+            source: record.source,
         })
         .collect();
     let options = ResolveOptions {

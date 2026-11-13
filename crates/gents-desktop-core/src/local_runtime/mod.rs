@@ -646,7 +646,7 @@ pub async fn init_standard_local_runtime(
         peer_record_id: peer.peer_id,
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
-            "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
+            "Wait for the app to show `Connected`.".to_string(),
             "Then submit prompts from Chat, or run `gents` in another terminal.".to_string(),
         ],
     })
@@ -782,12 +782,12 @@ Saved desktop deployment: {label}
 Desktop data dir: {desktop_home}
 Peer directory: {peer_directory}
 
-Note: init saves the discovered runtime. The desktop app completes P2P pairing
-and replication bootstrap on launch.
+Note: init saves the discovered runtime. The desktop app connects to it on
+launch.
 
 Next:
   1. Run `gents-desktop` and leave it open.
-  2. Wait for the status bar to show `replication subscriptions armed`.
+  2. Wait for the app to show `Connected`.
   3. Then submit prompts from Chat, or run `gents` in another terminal.
 ",
         discovery_line = discovery_line,

@@ -617,6 +617,96 @@ mod tests {
         runtime.shutdown().await;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn agent_and_context_save_matches_lean_atomic_publication() -> Result<()> {
+        use gents_lean_vocab::families::apply_reconcile_contract_cases_atomic_agent_context as family;
+        let cases = family::cases();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let runtime = ServedRuntimeHome::start().await;
+            let access = runtime.user_access();
+            let owner = runtime.node_did();
+            let binding = runtime.provision_agent().await;
+            let seed: gents_documents::PackConfig = serde_json::from_value(json!({
+                "node":{"node_did":owner},
+                "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+                "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+                "tools":[{"node_did":owner,"tools_id":"tools"}],
+                "contexts":[{"node_did":owner,"context_id":"context","system_prompt":"initial","tools_id":"tools","description":"retained"}]
+            }))?;
+            apply_config_components(&access, &seed).await?;
+            let agent: gents_documents::Agent = serde_json::from_value(json!({
+                "node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,
+                "display_name":"Saved","context_id":"context",
+                "inference_profile_id":if case.input.agent_valid { "profile" } else { "missing-profile" }
+            }))?;
+            let patch = gents_protocol::operations::agent::AgentContextPatch {
+                context_id: "context".into(),
+                changes: serde_json::from_value(
+                    json!({"system_prompt":"edited","tools_id":if case.input.context_valid { "tools" } else { "missing-tools" }}),
+                )?,
+            };
+            let admission = gents::operations::agent::observe(
+                &access,
+                owner,
+                std::slice::from_ref(&binding.agent_did),
+            )
+            .await?;
+            let outcome = access
+                .transact_write("test.agent_context.atomic", |txn| {
+                    let (agent, binding, admission, patch) = (&agent, &binding, &admission, &patch);
+                    Box::pin(async move {
+                        gents::operations::agent::put_in_txn(
+                            txn,
+                            owner,
+                            admission,
+                            agent,
+                            Some(binding.clone()),
+                            Some(patch),
+                            &gents_tools::surface::SelfConfigProcessCeiling::default(),
+                        )
+                        .await
+                        .map_err(anyhow::Error::new)
+                    })
+                })
+                .await;
+            let accepted = outcome.is_ok();
+            case.check(accepted);
+            access
+                .transact_readonly("test.agent_context.verify", |txn| {
+                    let binding = &binding;
+                    Box::pin(async move {
+                        let (_, context) = read_desired_state_record_in_txn(
+                            txn,
+                            Collection::AgentContext,
+                            owner,
+                            "context",
+                        )
+                        .await?
+                        .unwrap();
+                        let agent = read_desired_state_record_in_txn(
+                            txn,
+                            Collection::Agent,
+                            owner,
+                            &binding.agent_did,
+                        )
+                        .await?;
+                        assert_eq!(agent.is_some(), accepted);
+                        assert_eq!(
+                            context["system_prompt"],
+                            if accepted { "edited" } else { "initial" }
+                        );
+                        assert_eq!(context["description"], "retained");
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await?;
+            runtime.shutdown().await;
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> Result<()>
     {

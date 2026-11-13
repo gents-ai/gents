@@ -278,6 +278,36 @@ where
     Ok(())
 }
 
+const NODE_RECONNECT_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tauri::command]
+pub async fn desktop_node_reconnect(
+    state: State<'_, DesktopAppState>,
+    node_did: Option<String>,
+) -> Result<Option<String>, BridgeError> {
+    let core = current_core(&state).ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::ClientNotRunning,
+            "desktop client not initialized",
+        )
+    })?;
+    let Some(node_did) = node_did
+        .map(|did| did.trim().to_owned())
+        .filter(|did| !did.is_empty())
+    else {
+        core.request_runtime_reconnect(None).await;
+        return Ok(None);
+    };
+    Ok(tokio::time::timeout(
+        NODE_RECONNECT_ANSWER_TIMEOUT,
+        core.reconnect_runtime_now(&node_did),
+    )
+    .await
+    .ok()
+    .flatten()
+    .map(|status| status.as_str().to_owned()))
+}
+
 #[derive(serde::Serialize, ts_rs::TS)]
 pub struct DesktopObserverMetrics {
     pub events_received: u64,

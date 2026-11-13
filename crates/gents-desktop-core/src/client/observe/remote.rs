@@ -119,6 +119,7 @@ const RECONNECT_FLAT_ATTEMPTS: u32 = 5;
 const RECONNECT_CAP_MS: u64 = 30_000;
 /// `RuntimeConnectionObservation.reconnectStableMs`.
 pub(super) const RECONNECT_STABLE: Duration = Duration::from_secs(30);
+pub(super) const RETRY_NOW_COUNT: u32 = 0;
 
 /// `RuntimeConnectionObservation.Origin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -209,6 +210,16 @@ impl Sources {
         }
         self.attempts
             .insert(node.to_owned(), attempt.saturating_add(1));
+    }
+
+    pub(super) fn retry_now(&mut self, node: &str, now: Instant) -> bool {
+        let Some(source) = self.entries.get_mut(node) else {
+            return false;
+        };
+        source.reconnect_at = Some(now);
+        source.abort.abort();
+        self.attempts.insert(node.to_owned(), RETRY_NOW_COUNT);
+        true
     }
 
     /// A source for `node` whose task never sends, as `reconcile` would start

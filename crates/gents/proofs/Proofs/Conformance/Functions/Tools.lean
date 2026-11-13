@@ -61,4 +61,13 @@ attribute [conformance_function]
   readerDecision
   Refusal.recovery
 
+structure RetargetInput where
+  selectingContexts : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def retargetAllowedCases : Conformance.Family RetargetInput Bool where
+  inputs := (List.range 4).map fun n => { selectingContexts := n }
+  model := fun i => retargetAllowed i.selectingContexts
+
 end WorkspaceRootOperations

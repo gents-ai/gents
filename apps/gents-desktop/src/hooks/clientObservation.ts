@@ -45,12 +45,15 @@ export function startClientObservation(
       logShellEvent(`desktop update listener failed: ${message}`);
       lifecycle.setError(message);
     };
+    const hidden = () => document.visibilityState === "hidden";
     const controller = createProjectionController({
       currentSessionId: () => selection.getState().sessionId,
       refreshSnapshot,
       refreshSession,
       rereadSession,
       readSessionUpdate,
+
+      defersUpdates: () => hidden() && !trackedRequestId(),
       onError: reportListenerError,
     });
     const unfollowReads = actions.followSessionReads(
@@ -127,14 +130,13 @@ export function startClientObservation(
       });
     };
 
-    const hidden = () => document.visibilityState === "hidden";
-
     publishSelection();
     unregisteredTimer = setTimeout(readUnregistered, UNREGISTERED_READ_MS);
     listen();
     const unsubscribeSelection = selection.subscribe((state, prev) => {
       if (state.nodeDid !== prev.nodeDid) publishSelection();
       if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
+        actions.showRecentRead();
         void controller.request("session");
       }
     });
@@ -143,9 +145,14 @@ export function startClientObservation(
       void controller.request("session");
     });
 
-    /* showing the window reads it in full */
+    let wasHidden = hidden();
     const refreshForegroundState = () => {
-      if (hidden()) return;
+      if (hidden()) {
+        wasHidden = true;
+        return;
+      }
+      if (wasHidden) void actions.reconnectNode(null).catch(() => {});
+      wasHidden = false;
       void controller.request("full");
     };
     document.addEventListener("visibilitychange", refreshForegroundState);

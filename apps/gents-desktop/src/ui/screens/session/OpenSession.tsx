@@ -420,7 +420,10 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
 /* The turn the view goes to after a send from here, by key. The session's
    folds of what was sent are read as one string, so a snapshot that
    changes nothing about them re-renders nothing here. */
-function useSentTurnKey(sessionId: string | null, latestRequestId: string | null) {
+export function useSentTurnKey(
+  sessionId: string | null,
+  latestRequestId: string | null,
+) {
   const sentTurns = useView((view) => view.sentTurns);
   const { folds } = useSelectedSessionFields((held) => ({
     folds: JSON.stringify(

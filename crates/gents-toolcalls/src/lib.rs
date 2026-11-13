@@ -11,3 +11,4 @@ mod rendered_request_sink_tests;
 mod self_config_tests;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
+pub mod views;

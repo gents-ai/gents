@@ -14,11 +14,12 @@ permissions = [
 
 [[set]]
 identifier = "client-lifecycle"
-description = "Client start/shutdown, selected-agent, and application quit"
+description = "Client start/shutdown, selected-agent, runtime reconnect, and application quit"
 permissions = [
   "allow-desktop-client-start",
   "allow-desktop-client-shutdown",
   "allow-desktop-set-selected-node",
+  "allow-desktop-node-reconnect",
   "allow-desktop-app-quit",
 ]
 
@@ -84,10 +85,8 @@ permissions = [
 
 [[set]]
 identifier = "fleet-read"
-description = "Peer status (by saved id)"
-permissions = [
-  "allow-desktop-peer-status-fetch",
-]
+description = "Node addresses, routes and enrollment requests in the client snapshot"
+permissions = []
 
 [[set]]
 identifier = "workspace-read"
@@ -148,10 +147,12 @@ permissions = [
 
 [[set]]
 identifier = "operations-read"
-description = "Operations snapshot, health, session provenance, MCP probe"
+description = "Operations snapshot, health, session provenance, MCP probe, workflow runs"
 permissions = [
   "allow-desktop-operations-snapshot",
   "allow-desktop-session-provenance",
+  "allow-desktop-jobs-list",
+  "allow-desktop-job-view",
   "allow-desktop-list-backends-with-health",
   "allow-desktop-list-mcp-services-with-health",
   "allow-desktop-probe-mcp-service",

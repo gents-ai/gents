@@ -42,7 +42,6 @@ def nextActionToken : NextAction → String
   | .restoreAccess => "restore_access"
   | .connectRuntime => "connect_runtime"
   | .enrollAgain => "enroll_again"
-  | .checkNetwork => "check_network"
 
 private def caseJson (facts : Facts) : String :=
   let shown := view facts
@@ -53,6 +52,8 @@ private def caseJson (facts : Facts) : String :=
   ",\"transport\":" ++ jsonString (transportToken facts.discovery.transport) ++
   ",\"configured_peers\":" ++ toString facts.discovery.configuredPeers ++
   ",\"dialed_peers\":" ++ toString facts.discovery.dialedPeers ++
+  ",\"runtime_count\":" ++ toString (runtimeCount facts) ++
+  ",\"connected_runtime_count\":" ++ toString (connectedRuntimeCount facts) ++
   ",\"state\":" ++ jsonString (stateToken shown.state) ++
   ",\"cause\":" ++ jsonOptionalString (shown.cause.map causeToken) ++
   ",\"next_action\":" ++ jsonOptionalString (shown.nextAction.map nextActionToken) ++ "}"

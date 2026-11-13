@@ -160,4 +160,11 @@ theorem reader_refusals_list_agents (change : ReaderChange) (subject : ReaderSub
   revert h
   cases change <;> cases subject <;> cases refusal <;> decide
 
+/-- Retargeting shared Tools would also change another Context's workspace.
+The handler checks before publication and again in the transaction that writes Tools. -/
+def retargetAllowed (selectingContexts : Nat) : Bool := selectingContexts <= 1
+
+theorem shared_tools_cannot_retarget (count : Nat) (shared : 1 < count) :
+    retargetAllowed count = false := by simp [retargetAllowed]; omega
+
 end WorkspaceRootOperations

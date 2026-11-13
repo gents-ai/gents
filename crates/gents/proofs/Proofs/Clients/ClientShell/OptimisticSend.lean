@@ -7,7 +7,7 @@ The client picks the request identity when the person sends, shows the
 message as pending at once and keeps its payload. It sends one signed create.
 A reply confirms it; a refusal, or no reply by the client's deadline (the
 reply was lost, the runtime restarted, the app closed), shows it as failed
-with Retry. Retry resends the same payload under the same identity. The
+with Retry, unless the runtime denied this client (`view`). Retry resends the same payload under the same identity. The
 runtime treats a repeat of that identity as the same request, so a retry after
 a lost reply never makes a second turn. The payload is released only once the
 message is confirmed or the person discards it.
@@ -37,6 +37,10 @@ Code owners of each action:
 * `receive true` marks the message confirmed before the view applies the
   reply; a failure to update the view is reported as such and never shows a
   confirmed message as failed.
+* `observe` is the client reading the selected session
+  (`observeLandedChatSends` in `chatDelivery.ts`): a failed message whose
+  identity the session holds is confirmed. A pending one waits for its reply
+  or deadline, so the reply still updates the view that sent it.
 
 Decisions (#3538, user):
 * No receipt journal, no reconcile of an unknown outcome and no
@@ -51,6 +55,11 @@ Decisions (#3538, user):
   pending, failed or confirmed: a second answer to one question is a new
   authored answer, not a retry, and a confirmed answer stays shown until the
   question is observed closed (the runtime claims it after the reply).
+* `compose` moves the authored text out of the composer into the kept
+  message, which shows it with Retry and Discard. The composer therefore never
+  holds text that a second send would author again under a fresh identity
+  (TLA RED `RetryFreshId`), whether the first send is pending, failed after a
+  slow commit, or confirmed late.
 
 TLA `ClientSubmissionContention` checks the same flow with the runtime's
 conflict rebuild, and its REDs show that a retry under a fresh identity
@@ -118,6 +127,8 @@ inductive Action where
   | retry (id : Nat)
   /-- The person discards a failed message. -/
   | discard (id : Nat)
+  /-- The client observes the session holding a failed message's identity. -/
+  | observe (id : Nat)
   deriving DecidableEq, Repr
 
 def onReply (ok : Bool) (message : Message) : Message :=
@@ -134,6 +145,10 @@ def onRetry (message : Message) : Message := { message with status := .pending }
 
 def onDiscard (message : Message) : Message :=
   { message with status := .discarded, payload := false }
+
+def onObserve (message : Message) : Message :=
+  if message.status = .failed then { message with status := .confirmed, payload := false }
+  else message
 
 def step (s : State) : Action → Option State
   | .compose id =>
@@ -169,6 +184,10 @@ def step (s : State) : Action → Option State
   | .discard id =>
     if statusOf s.messages id = some .failed then
       some { s with messages := update s.messages id onDiscard }
+    else none
+  | .observe id =>
+    if id ∈ s.turns ∧ statusOf s.messages id = some .failed then
+      some { s with messages := update s.messages id onObserve }
     else none
 
 inductive Reachable : State → Prop where
@@ -280,6 +299,8 @@ theorem onTimeout_id (m : Message) : (onTimeout m).id = m.id := by
   unfold onTimeout; split <;> rfl
 theorem onRetry_id (m : Message) : (onRetry m).id = m.id := rfl
 theorem onDiscard_id (m : Message) : (onDiscard m).id = m.id := rfl
+theorem onObserve_id (m : Message) : (onObserve m).id = m.id := by
+  unfold onObserve; split <;> rfl
 
 theorem init_inv : Inv init := by
   refine ⟨by simp [init], by simp [init], ⟨by simp [init], by simp [init]⟩, by simp [init, retained]⟩
@@ -441,6 +462,24 @@ theorem step_inv (s s' : State) (action : Action) (inv : Inv s) (h : step s acti
       intro m _ _ active
       simp [onDiscard] at active
     · contradiction
+  | observe id =>
+    simp only [step] at h
+    split at h
+    · cases h
+      refine ⟨by simpa [update_ids _ _ _ onObserve_id] using ids, turns,
+        ⟨fun x hx => known_update _ _ _ onObserve_id x (wire x hx),
+         fun x hx => known_update _ _ _ onObserve_id x (held x hx)⟩, ?_⟩
+      apply retained_update s id _ kept
+      intro m mem _ active
+      unfold onObserve at active ⊢
+      split
+      · rename_i failed
+        simp only [failed, ↓reduceIte] at active
+        simp at active
+      · rename_i notFailed
+        simp only [notFailed, ↓reduceIte] at active
+        exact kept m mem (Or.inl (active.resolve_right (fun f => f)))
+    · contradiction
 
 theorem reachable_inv {s : State} (h : Reachable s) : Inv s := by
   induction h with
@@ -530,6 +569,20 @@ theorem failed_offers_retry {s : State} (h : Reachable s) (m : Message) (mem : m
     exact ⟨m, mem, by simp [failed, payload]⟩
   simp only [step, offered, ↓reduceIte, Option.isSome_some]
 
+/-- A failed message the runtime holds is confirmed once the client observes
+it in the session, so a landed send never stays shown as failed. -/
+theorem observed_failure_confirms {s : State} (h : Reachable s) (m : Message)
+    (mem : m ∈ s.messages) (held : m.id ∈ s.turns) (failed : m.status = .failed) :
+    ∃ s', step s (.observe m.id) = some s' ∧ statusOf s'.messages m.id = some .confirmed := by
+  have inv := reachable_inv h
+  have current := statusOf_of_mem inv.ids mem
+  rw [failed] at current
+  refine ⟨{ s with messages := update s.messages m.id onObserve }, ?_, ?_⟩
+  · simp only [step]
+    rw [if_pos ⟨held, current⟩]
+  · rw [statusOf_update_self onObserve onObserve_id inv.ids mem]
+    simp [onObserve, failed]
+
 /-- The runtime never refuses an identity it holds: a resend of a held
 identity (a retry after a lost reply, a retry after the question it answers
 was claimed) can only be answered by its commit, which confirms it. -/
@@ -565,29 +618,94 @@ structure View where
   blocksComposer : Bool
   deriving DecidableEq, Repr
 
-/-- `mailbox` marks an answer to a mailbox question. -/
-def view (status : Status) (mailbox : Bool) : View :=
+/-- `mailbox` marks an answer to a mailbox question. `refused` marks a failure
+that a resend under the same identity meets again: the runtime denied this
+client the operation (the bridge's `permissionDenied`). Its view withholds
+Retry and keeps Discard; access is the node owner's to grant. Every other
+failure (a lost reply, the deadline, a full disk, an unclassified refusal)
+keeps Retry, which succeeds once its cause passes. The bridge's `retryable`
+flag does not decide this: it marks errors that retrying the same call may
+clear unattended, and a full disk is not one, yet Retry is how its recovery
+resends the message. -/
+def view (status : Status) (mailbox refused : Bool) : View :=
   match status with
   | .pending => ⟨.sending, false, false, mailbox⟩
   | .confirmed => ⟨.delivered, false, false, mailbox⟩
-  | .failed => ⟨.failed, true, true, mailbox⟩
+  | .failed => ⟨.failed, !refused, true, mailbox⟩
   | .discarded => ⟨.hidden, false, false, false⟩
 
 /-- Every view is progressing (sending), settled (delivered or hidden), or
-names its next action (Retry, Discard). -/
-theorem view_progresses_or_acts (status : Status) (mailbox : Bool) :
-    (view status mailbox).shown = .sending ∨ (view status mailbox).shown = .delivered ∨
-      (view status mailbox).shown = .hidden ∨
-      ((view status mailbox).retry = true ∧ (view status mailbox).discard = true) := by
-  cases status <;> simp [view]
+names its next action: Discard, and Retry unless the runtime refused this
+client. -/
+theorem view_progresses_or_acts (status : Status) (mailbox refused : Bool) :
+    (view status mailbox refused).shown = .sending ∨
+      (view status mailbox refused).shown = .delivered ∨
+      (view status mailbox refused).shown = .hidden ∨
+      ((view status mailbox refused).discard = true ∧
+        ((view status mailbox refused).retry = true ∨ refused = true)) := by
+  cases status <;> cases refused <;> simp [view]
+
+/-- Retry is offered exactly for a failed message the runtime did not refuse. -/
+theorem retry_offered_iff (status : Status) (mailbox refused : Bool) :
+    (view status mailbox refused).retry = true ↔ status = .failed ∧ refused = false := by
+  cases status <;> cases refused <;> simp [view]
 
 /-- A blocked composer is a mailbox answer that is sending, delivered, or
-offers Retry; a chat send never blocks the composer. -/
-theorem composer_blocks_only_mailbox (status : Status) (mailbox : Bool)
-    (blocks : (view status mailbox).blocksComposer = true) :
-    mailbox = true ∧ ((view status mailbox).shown = .sending ∨
-      (view status mailbox).shown = .delivered ∨ (view status mailbox).retry = true) := by
+failed with Discard offered; a chat send never blocks the composer. -/
+theorem composer_blocks_only_mailbox (status : Status) (mailbox refused : Bool)
+    (blocks : (view status mailbox refused).blocksComposer = true) :
+    mailbox = true ∧ ((view status mailbox refused).shown = .sending ∨
+      (view status mailbox refused).shown = .delivered ∨
+      (view status mailbox refused).discard = true) := by
   cases status <;> cases mailbox <;> simp_all [view]
+
+/-- The row a kept chat message draws in its session's transcript, or none.
+`observed` is the client reading the session holding the message's identity
+(`sessionHoldsRequest`, the predicate `observe` reads).
+
+Decisions (user): a chat message is in its conversation from the moment it is
+composed, as its own row, not beside the composer: sending while pending, and
+failed with Retry and Discard. Once the session is observed holding its
+identity, the session's row stands for it and the kept message draws nothing,
+even while its reply is still on its way, so the message is never drawn twice.
+A confirmed or discarded message draws nothing from the client. A mailbox
+answer is shown with its question, not as a transcript row. -/
+def keptRow (status : Status) (mailbox observed : Bool) : Option ViewToken :=
+  if mailbox || observed then none
+  else match status with
+    | .pending => some .sending
+    | .failed => some .failed
+    | .confirmed | .discarded => none
+
+/-- The kept row never stands beside the session's row for the same identity. -/
+theorem kept_row_yields_to_session (status : Status) (mailbox : Bool) :
+    keptRow status mailbox true = none := by
+  simp [keptRow]
+
+/-- A kept row shows the message's own view: sending, or failed with Discard
+and Retry unless the runtime refused this client. -/
+theorem kept_row_is_view (status : Status) (mailbox observed refused : Bool) (token : ViewToken)
+    (drawn : keptRow status mailbox observed = some token) :
+    token = (view status mailbox refused).shown ∧
+      (token = .sending ∨ ((view status mailbox refused).discard = true ∧
+        ((view status mailbox refused).retry = true ∨ refused = true))) := by
+  cases status <;> cases mailbox <;> cases observed <;> cases refused <;>
+    simp_all [keptRow, view]
+
+/-- A composed chat message draws its sending row at once, before any reply. -/
+theorem compose_draws_sending_row {s s' : State} {id : Nat} (h : Reachable s)
+    (stepped : step s (.compose id) = some s') :
+    (statusOf s'.messages id).bind (fun status => keptRow status false false) =
+      some .sending := by
+  have inv := reachable_inv (Reachable.step (.compose id) h stepped)
+  have mem : (⟨id, .pending, true⟩ : Message) ∈ s'.messages := by
+    simp only [step] at stepped
+    split at stepped
+    · contradiction
+    · cases stepped; simp
+  have composed : statusOf s'.messages id = some .pending := statusOf_of_mem inv.ids mem
+  rw [composed]
+  simp [keptRow]
 
 /-! ### Conformance cases -/
 
@@ -606,11 +724,22 @@ def viewTokenString : ViewToken → String
 def allStatuses : List Status := [.pending, .confirmed, .failed, .discarded]
 
 def viewCasesJson : Json :=
-  toJson (allStatuses.flatMap fun status => [false, true].map fun mailbox =>
-    let shown := view status mailbox
+  toJson (allStatuses.flatMap fun status => [false, true].flatMap fun mailbox =>
+    [false, true].map fun refused =>
+    let shown := view status mailbox refused
     Json.mkObj [("status", toJson (statusToken status)), ("mailbox", toJson mailbox),
+      ("refused", toJson refused),
       ("view", toJson (viewTokenString shown.shown)), ("retry", toJson shown.retry),
       ("discard", toJson shown.discard), ("blocksComposer", toJson shown.blocksComposer)])
+
+def rowCasesJson : Json :=
+  toJson (allStatuses.flatMap fun status => [false, true].flatMap fun mailbox =>
+    [false, true].map fun observed =>
+      Json.mkObj [("status", toJson (statusToken status)), ("mailbox", toJson mailbox),
+        ("observed", toJson observed),
+        ("row", match keptRow status mailbox observed with
+          | some token => toJson (viewTokenString token)
+          | none => Json.null)])
 
 def actionJson : Action → Json
   | .compose id => Json.mkObj [("kind", toJson "compose"), ("id", toJson id)]
@@ -622,11 +751,12 @@ def actionJson : Action → Json
   | .timeout id => Json.mkObj [("kind", toJson "timeout"), ("id", toJson id)]
   | .retry id => Json.mkObj [("kind", toJson "retry"), ("id", toJson id)]
   | .discard id => Json.mkObj [("kind", toJson "discard"), ("id", toJson id)]
+  | .observe id => Json.mkObj [("kind", toJson "observe"), ("id", toJson id)]
 
 /-- The actions on one message `1` the generated traces explore. -/
 def traceActions : List Action :=
   [.compose 1, .commit 1, .refuse 1, .drop 1, .loseReply 1 true, .loseReply 1 false,
-   .receive 1 true, .receive 1 false, .timeout 1, .retry 1, .discard 1]
+   .receive 1 true, .receive 1 false, .timeout 1, .retry 1, .discard 1, .observe 1]
 
 /-- Every enabled trace of `depth` actions from `s`, with its end state. -/
 def traces : Nat → State → List (List Action × State)
@@ -670,6 +800,7 @@ def traceCasesJson : Json :=
       ("after", toJson (replay init actions))])
 
 def casesJson : String :=
-  (Json.mkObj [("views", viewCasesJson), ("traces", traceCasesJson)]).compress
+  (Json.mkObj [("views", viewCasesJson), ("rows", rowCasesJson),
+    ("traces", traceCasesJson)]).compress
 
 end ClientOptimisticSend

@@ -1,12 +1,20 @@
 import { inferenceActivityStatus } from "@source-inc/gents-desktop-chat";
 import { SentAttachments } from "./session/attachments";
 import {
+  TranscriptSendFailure,
+  useTranscriptSends,
+} from "./session/ChatDeliveryFeedback";
+import { chatDraftRequest } from "../../hooks/chatDrafts";
+import { drawnInTranscript, type TranscriptSend } from "../../hooks/chatDeliveryView";
+import { splitSkillLines } from "@/lib/skillLines";
+import {
   Fragment,
   createContext,
   memo,
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -47,6 +55,7 @@ import {
   holdLive,
   lingerSentTurn,
   noDrawKeys,
+  requestOf,
   withSentTurns,
   type DrawKeys,
   type HeldLive,
@@ -163,6 +172,27 @@ function AttachmentsOnly({ item }: { item: PersonInput }) {
 
 const ParentContext = createContext<ParentWork | null>(null);
 
+function keptSendItem({ draft }: TranscriptSend): RenderedTimelineItem {
+  let request = null;
+  try {
+    request = chatDraftRequest(draft);
+  } catch {}
+  const sent = splitSkillLines(request?.content ?? "");
+  return {
+    kind: "pendingUserTurn",
+    itemKey: `local:${draft.requestId}`,
+    requestId: draft.requestId,
+    content: sent.text,
+    attachments: request?.attachments ?? [],
+    selectedSkillIds: sent.skills,
+    lifecycleState: "pending",
+    foldedIntoRequestId: null,
+    origin: null,
+    createdAt:
+      draft.composedAt === undefined ? null : new Date(draft.composedAt).toISOString(),
+  };
+}
+
 /* how far below the view's top a place asked for lands, so the reader sees
    what led up to it */
 const PLACE_OFFSET = 96;
@@ -188,15 +218,30 @@ function sentAt(at: string | null | undefined, worked?: number) {
 function OwnInput({
   item,
   state,
+  kept,
 }: {
   item: Extract<RenderedTimelineItem, { kind: "userMessage" | "pendingUserTurn" }>;
   state: string | null;
+
+  kept?: TranscriptSend;
 }) {
   const branch = useEditInBranch(item.kind === "userMessage" ? item : null);
+  const sending = kept?.row === "sending";
+  const failed = kept?.row === "failed" ? kept.draft : null;
   const bare = onlyAttachments(item);
+
   return (
-    <div>
-      {bare && !state ? null : (
+    <div
+      className={cn("transition-opacity duration-150", sending && "opacity-60")}
+      aria-busy={sending || undefined}
+    >
+      {bare && !state ? (
+        sending && (
+          <span role="status" className="sr-only">
+            Sending…
+          </span>
+        )
+      ) : (
         <UserInputWithState
           content={bare ? <AttachmentsOnly item={item} /> : <InputText item={item} />}
           state={state}
@@ -210,14 +255,23 @@ function OwnInput({
                   ...(branch ? [branch] : []),
                 ]
           }
-          meta={item.kind === "userMessage" ? sentAt(item.timestamp) : undefined}
+          meta={
+            item.kind === "userMessage" ? (
+              sentAt(item.timestamp)
+            ) : sending ? (
+              <span role="status">Sending…</span>
+            ) : undefined
+          }
+          pinActions={sending}
         />
       )}
       <SentAttachments
         items={item.attachments}
-        requestId={item.requestId}
+
+        requestId={kept ? null : item.requestId}
         messageKey={item.kind === "userMessage" ? item.itemKey : undefined}
       />
+      {failed && <TranscriptSendFailure draft={failed} />}
     </div>
   );
 }
@@ -268,8 +322,10 @@ const TranscriptItem = memo(function TranscriptItem({
   worked,
   background,
   workers,
+  kept,
 }: {
   item: RenderedTimelineItem;
+  kept?: TranscriptSend;
   /** how long the turn this item ends worked, in milliseconds */
   worked?: number;
   background?: BackgroundResult[];
@@ -305,7 +361,7 @@ const TranscriptItem = memo(function TranscriptItem({
         );
       }
       const sender = parentWork?.sentBy(item.requestId) ?? null;
-      if (!sender) return <OwnInput item={item} state={state} />;
+      if (!sender) return <OwnInput item={item} state={state} kept={kept} />;
       const message = (
         <div>
           {!onlyAttachments(item) && (
@@ -489,6 +545,7 @@ const ItemRow = memo(function ItemRow({
   changes,
   worked,
   day,
+  kept,
 }: {
   /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
@@ -502,6 +559,8 @@ const ItemRow = memo(function ItemRow({
   worked?: number;
   /** the day this row opens, when it is the first of its day */
   day: number | null;
+
+  kept?: TranscriptSend;
 }) {
   return (
     <div
@@ -521,6 +580,7 @@ const ItemRow = memo(function ItemRow({
         worked={worked}
         background={background}
         workers={workers}
+        kept={kept}
       />
       {changes && (
         <TurnChanges scope={changes.scope} turn={rowKey} files={changes.files} />
@@ -620,10 +680,11 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   /* the session screen's composer reads the foot and the way back to it */
   onOwner?: (owner: TranscriptOwner) => void;
 }) {
-  const { actions } = useApp();
+  const { actions, stores } = useApp();
   const [retrying, setRetrying] = useState(false);
   const sessionKey = session?.sessionId ?? null;
   const rows = useHeldRows(
+    session?.nodeDid ?? null,
     sessionKey,
     session?.timelineItems ?? EMPTY_ITEMS,
     session?.timelinePage?.hasOlder ?? false,
@@ -684,13 +745,51 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       view.sentTurns.find((sent) => sent.requestId === localTurn?.requestId)?.queued ??
       false,
   );
+  const selectedNodeDid = stores.selection.use.nodeDid();
+  const keptSends = useTranscriptSends(session?.nodeDid ?? selectedNodeDid, sessionKey);
+  const keptByRequest = useMemo(
+    () => new Map(keptSends.map((send) => [send.draft.requestId, send])),
+    [keptSends],
+  );
+  const keptItems = useMemo(() => keptSends.map(keptSendItem), [keptSends]);
+  const keptOf = (item: RenderedTimelineItem) =>
+    item.kind === "pendingUserTurn" && item.itemKey.startsWith("local:")
+      ? keptByRequest.get(item.requestId)
+      : undefined;
   const turns = useMemo(
     () =>
       rows.joined
-        ? withSentTurns(held.items, localTurn, sessionKey, localQueued)
+        ? withSentTurns(held.items, localTurn, sessionKey, localQueued, keptItems)
         : held.items,
-    [rows.joined, held.items, localTurn, sessionKey, localQueued],
+    [rows.joined, held.items, localTurn, sessionKey, localQueued, keptItems],
   );
+  const keptNode = session?.nodeDid ?? selectedNodeDid;
+  const chatDrafts = stores.chat.use.chatDrafts();
+
+  const draws = useMemo(() => {
+    if (!sessionKey || rows.failure?.denied) return "";
+    const drawn = new Set(turns.map(requestOf));
+    return chatDrafts
+      .filter(
+        (draft) =>
+          drawnInTranscript(draft, keptNode, sessionKey) && drawn.has(draft.requestId),
+      )
+      .map((draft) => draft.requestId)
+      .join("\n");
+  }, [chatDrafts, keptNode, sessionKey, rows.failure?.denied, turns]);
+  useLayoutEffect(() => {
+    if (!sessionKey) return;
+    const published = {
+      nodeDid: keptNode,
+      sessionId: sessionKey,
+      requestIds: draws ? draws.split("\n") : [],
+    };
+    stores.chat.setState({ transcriptDraws: published });
+    return () => {
+      if (stores.chat.getState().transcriptDraws === published)
+        stores.chat.setState({ transcriptDraws: null });
+    };
+  }, [stores.chat, keptNode, sessionKey, draws]);
   const keysRef = useRef<DrawKeys>(noDrawKeys(sessionKey));
   const keys = useMemo(
     () => drawKeys(keysRef.current, turns, held.replacedBy, sessionKey),
@@ -854,6 +953,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     onMeasured,
     sentTurn: rows.joined ? sentTurn : null,
     anchorSentTurn,
+    tookSentTurn: actions.tookSentTurn,
     turnWorks,
     turns: turnKeys,
     opening,
@@ -960,7 +1060,11 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     if (!joined) reset();
     toBottom();
   }, [joined, reset, toBottom]);
+
+  const sentSeen = useRef(sentTurn);
   useEffect(() => {
+    if (sentTurn === sentSeen.current) return;
+    sentSeen.current = sentTurn;
     if (!joined && sentTurn) reset();
   }, [joined, sentTurn, reset]);
   useEffect(() => {
@@ -1052,6 +1156,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                         changes={changes.get(entry.key)}
                         worked={worked.get(entry.key)}
                         day={dayOpens.get(entry.key) ?? null}
+                        kept={keptOf(entry.item)}
                       />
                     ) : (
                       <GroupRow entry={entry} workers={workers} />

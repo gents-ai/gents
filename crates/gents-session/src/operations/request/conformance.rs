@@ -103,3 +103,10 @@ async fn an_unknown_outcome_is_rechecked_under_its_own_identity() -> anyhow::Res
     db.node.shutdown().await?;
     Ok(())
 }
+
+#[test]
+fn interrupt_settled_matches_lean() {
+    gents_lean_vocab::families::session_operations_interrupt_settled::replay(|i| {
+        super::interrupt_settled(i.terminal, i.interrupted)
+    });
+}

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::job::JobControlOutcome;
+use gents_protocol::job::{JobControlOutcome, JobState, JobView};
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
 use gents_store::config_client::ConfigAccess;
 use tauri::State;
@@ -225,6 +225,40 @@ pub async fn desktop_job_control(
         ),
     }
     result
+}
+
+#[tauri::command]
+pub async fn desktop_jobs_list(
+    state: State<'_, DesktopAppState>,
+    node_did: String,
+    states: Option<Vec<JobState>>,
+    plugin: Option<String>,
+    session_id: Option<String>,
+) -> Result<Vec<JobView>, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    crate::job_view::jobs_list(
+        &core,
+        gents_protocol::operations::job::JobListInput {
+            node_did,
+            states,
+            plugin,
+            session_id,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn desktop_job_view(
+    state: State<'_, DesktopAppState>,
+    node_did: String,
+    address: Option<String>,
+    row_doc_id: Option<String>,
+) -> Result<JobView, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    crate::job_view::job_view(&core, &node_did, address, row_doc_id).await
 }
 
 #[tauri::command]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-node-reconnect"
+description = "Enables the desktop_node_reconnect command without any pre-configured scope."
+commands.allow = ["desktop_node_reconnect"]
+
+[[permission]]
+identifier = "deny-desktop-node-reconnect"
+description = "Denies the desktop_node_reconnect command without any pre-configured scope."
+commands.deny = ["desktop_node_reconnect"]

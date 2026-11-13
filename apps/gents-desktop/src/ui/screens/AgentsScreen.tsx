@@ -10,6 +10,8 @@ import {
 import { toast } from "sonner";
 import {
   enrollmentActivationMessage,
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
   type EndedAccessView,
   type EnrollmentRequestView,
 } from "@source-inc/gents-desktop-client";
@@ -46,9 +48,11 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
+import { connectionLine } from "@/lib/nodeConnection";
 import { href } from "@/lib/router";
 import { NodeAvatar, nodeAvatarOf } from "./AgentAvatar";
 import { NodeHoverCard } from "./HoverCards";
+import { StateDot, statusTone } from "./NodeFacts";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
@@ -149,7 +153,11 @@ export function AgentsScreen() {
       label: "Remote nodes",
       nodes: shown
         .filter((d) => !isWorkingNode(d, homeDid))
-        .sort((a, b) => Number(b.dialSucceeded) - Number(a.dialSucceeded)),
+        .sort(
+          (a, b) =>
+            Number(runtimeConnectionBlocksAdmission(a.runtimeConnection)) -
+            Number(runtimeConnectionBlocksAdmission(b.runtimeConnection)),
+        ),
       count: true,
     },
     /* out of the menus on this device, and only here when there are any */
@@ -506,7 +514,7 @@ const AgentRow = memo(function AgentRow({
 }) {
   const {
     stores,
-    actions: { fetchPeerStatus },
+    actions: { reconnectNode },
   } = useApp();
   const configRead = useStore(stores.client, (state) =>
     state.snapshot ? configIsRead(state.snapshot, d.nodeDid) : false,
@@ -515,7 +523,7 @@ const AgentRow = memo(function AgentRow({
     useShallow((s) => activityOf(s, d.nodeDid)),
   );
   const name = d.node.displayName ?? d.label;
-  const online = d.dialSucceeded;
+  const connection = projectRuntimeConnectionStatus(d.runtimeConnection);
   const lease = isLocalNode(d, homeDid) ? null : leaseLeft(d.leaseExpiresAt);
   /* the node the app is working with, ringed as the rail's avatar is */
   const active = useSelectedNode()?.nodeDid === d.nodeDid;
@@ -524,14 +532,17 @@ const AgentRow = memo(function AgentRow({
     nodeDid: d.nodeDid,
     section: "agent",
   });
+
   const check = async () => {
     try {
-      const r = (await fetchPeerStatus(d.peerId)) as {
-        reachable?: boolean;
-      };
-      toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`);
+      toast(
+        connectionLine(
+          name,
+          projectRuntimeConnectionStatus(await reconnectNode(d.nodeDid)),
+        ),
+      );
     } catch (e) {
-      toast(`Status check failed: ${errorText(e)}`);
+      toast(`Couldn't check ${name}: ${errorText(e)}`);
     }
   };
   return (
@@ -559,13 +570,10 @@ const AgentRow = memo(function AgentRow({
             <NodeAvatar name={name} {...nodeAvatarOf(d)} className="size-8" />
           </span>
         </NodeHoverCard>
-        <span
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            online ? "bg-brand" : "bg-destructive",
-          )}
-          aria-label={online ? "online" : "offline"}
-          role="img"
+        <StateDot
+          tone={statusTone(connection.kind)}
+          label={connection.shortLabel}
+          className="size-2"
         />
         <span className="grid min-w-0 flex-1 auto-cols-[minmax(0,max-content)] grid-flow-col items-baseline justify-start gap-3">
           <span className="truncate font-heading text-base font-medium text-heading">
@@ -683,7 +691,9 @@ const AgentRow = memo(function AgentRow({
             >
               Rename
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => void check()}>Check peer</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void check()}>
+              Check connection
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onHide(d, !hidden)}>
               {hidden ? "Show in menus" : "Hide from menus"}
             </DropdownMenuItem>

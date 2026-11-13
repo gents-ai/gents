@@ -2,13 +2,9 @@ use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::schemas::ALL_COLLECTION_NAMES;
 
+#[cfg(test)]
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     gents_store::schema::ensure_runtime_schemas(node).await
-}
-
-#[allow(dead_code)]
-pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
-    ensure_runtime_schemas(node).await
 }
 
 pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {

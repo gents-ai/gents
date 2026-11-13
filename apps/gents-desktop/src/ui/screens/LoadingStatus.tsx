@@ -27,6 +27,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
     stores,
     lifecycle,
     actions: {
+      reconnectNode,
       refreshLocalServer,
       refreshSession,
       refreshSnapshot,
@@ -82,7 +83,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
         }
       />,
     );
-  if (!status) return null;
+  if (!status || status.quiet) return null;
   const act = async () => {
     const action = status.action;
     if (!action) return;
@@ -94,6 +95,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
     }
     setBusy(true);
     try {
+      if (nodeDid) await reconnectNode(nodeDid);
       if (action === "reloadSession") await reloadSession(selectedSessionId);
       else await Promise.all([refreshSnapshot(), refreshSession(selectedSessionId)]);
     } catch (e) {

@@ -25,8 +25,9 @@ use authority::{
     runtime_tool_ceiling, validate_ready_runtime, validate_tool_root, EffectiveManagedAuthority,
 };
 use gents_desktop_core::preference::StoredManagedServer;
-use gents_desktop_core::workspace_root::{select_agent_workspace_root, AgentWorkspaceRoot};
+use gents_desktop_core::workspace_root::select_agent_workspace_root;
 use gents_protocol::operations::service::ServiceLifecycleAction;
+use gents_protocol::operations::workspace_root::AgentWorkspaceRoot;
 use gents_service::args::ServiceAction;
 use launch::{fail_managed_start, install_then_launch, LaunchFailure, NativeLaunch};
 use native::{
@@ -41,7 +42,7 @@ use port::{
 use preference::{load_bound_preference, refuse_renaming_home, save_confirmed_preference};
 use readiness::ensure_selected_restart_compatible;
 use reset::{plan_state_reset, retire_incompatible_home};
-use start::start_managed_server;
+use start::{reconnect_started_runtime, start_managed_server};
 use start_wait::{
     begin_start_wait, cancel_start_wait, ensure_no_start_waiting, finish_start_wait,
     lock_lifecycle_superseding_start,
@@ -80,7 +81,7 @@ pub async fn desktop_agent_workspace_root_select(
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let access = core
         .operator_access(&request.node_did)
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+        .map_err(BridgeError::classify_transport_error)?;
     select_agent_workspace_root(
         &access,
         &request.node_did,
@@ -88,7 +89,7 @@ pub async fn desktop_agent_workspace_root_select(
         &canonical.to_string_lossy(),
     )
     .await
-    .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+    .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -650,6 +651,7 @@ where
     .map(|external| project_external_status(external, &native))
     .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
     status.pairing_ready = pairing_is_ready(state, status.node_did.as_deref()).await;
+    reconnect_started_runtime(state, &status).await;
     Ok(status)
 }
 

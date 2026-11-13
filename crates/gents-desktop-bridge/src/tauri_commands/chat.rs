@@ -15,7 +15,7 @@ pub async fn desktop_session_goal(
     crate::commands::session_goal(&core, &node_did, &session_id)
         .await
         .map(Some)
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -123,7 +123,7 @@ pub async fn desktop_tool_file_changes(
         None,
     )
     .await
-    .map_err(|error| BridgeError::untyped(error.to_string()))
+    .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -138,7 +138,7 @@ pub async fn desktop_session_reload(
     let node_did = crate::commands::resolve_session_node(&session_id, node_did)?;
     core.reload_session(&session_id, &node_did)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -174,7 +174,7 @@ pub async fn desktop_session_live_delta(
             &base_reasoning_hash,
         )
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?,
+        .map_err(BridgeError::classify_transport_error)?,
     ))
 }
 
@@ -265,10 +265,32 @@ pub async fn desktop_request_timeline(
     let timeline = core
         .request_timeline(&node_did, &request_id)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    let value =
-        serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))?;
-    serde_json::from_value(value).map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(|error| {
+            let mut presented = BridgeError::classify_transport_error(error);
+            presented.message = strip_cli_operator_hints(&presented.message);
+            presented
+        })?;
+    let encoding = |error: serde_json::Error| {
+        BridgeError::untyped(format!(
+            "the request timeline could not be encoded: {error}"
+        ))
+    };
+    let value = serde_json::to_value(&timeline).map_err(encoding)?;
+    serde_json::from_value(value).map_err(encoding)
+}
+
+fn strip_cli_operator_hints(message: &str) -> String {
+    message
+        .lines()
+        .filter(|line| {
+            !line.contains("gents init")
+                && !line.contains("gents runtime server")
+                && !line.contains("--graphql")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 #[tauri::command]
@@ -281,7 +303,7 @@ pub async fn desktop_pending_queue_edit(
     };
     crate::commands::edit_pending_queue(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -294,7 +316,7 @@ pub async fn desktop_pending_message_steer(
     };
     crate::commands::steer_pending_message(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]

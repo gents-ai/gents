@@ -6,7 +6,11 @@ use crate::client::mutations;
 use crate::client::mutations::submission_journal::publication;
 
 impl ClientCore {
-    pub async fn save_agent(&self, row: &gents_documents::Agent) -> Result<()> {
+    pub async fn save_agent(
+        &self,
+        row: &gents_documents::Agent,
+        context_patch: Option<&gents_protocol::operations::agent::AgentContextPatch>,
+    ) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         let result = async {
             publication::ensure_recovered(
@@ -22,12 +26,13 @@ impl ClientCore {
                 self.node_identity.did().to_owned(),
                 vec![(row.agent_did.clone(), row.node_did.clone())],
             );
-            mutations::upsert_agent_with_publication_on(&access, row, observer).await
+            mutations::upsert_agent_with_publication_on(&access, row, context_patch, observer).await
         }
         .await;
         match result {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save agent")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -53,7 +58,8 @@ impl ClientCore {
         let access = self.operator_access(node_did)?;
         match mutations::patch_config_components_on(&access, node_did, patches).await {
             Ok(()) => {
-                self.refresh_config_source(node_did).await?;
+                self.observe_committed_config(node_did, "patch config components")
+                    .await;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -101,10 +107,8 @@ impl ClientCore {
             .map(ConfigAccess::Graphql)
             .context("Connect this local runtime before changing authentication.")?;
         mutations::save_backend_authentication_on(&access, node_did, id, revision, auth).await?;
-        if self.refresh_config_source(node_did).await.is_err() {
-            tracing::warn!("Authentication saved; client observation will resynchronize");
-            self.stores.ensure(node_did).request_resync();
-        }
+        self.observe_committed_config(node_did, "save backend authentication")
+            .await;
         Ok(())
     }
 
@@ -123,10 +127,8 @@ impl ClientCore {
         let saved =
             mutations::save_config_editor_on(&access, node_did, target, id, revision, content)
                 .await?;
-        if self.refresh_config_source(node_did).await.is_err() {
-            tracing::warn!("Configuration saved; client observation will resynchronize");
-            self.stores.ensure(node_did).request_resync();
-        }
+        self.observe_committed_config(node_did, "save config editor")
+            .await;
         Ok(saved)
     }
 
@@ -162,7 +164,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(()) => {
-                self.refresh_config_source(&document.node.node_did).await?;
+                self.observe_committed_config(&document.node.node_did, "apply config components")
+                    .await;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -175,7 +178,8 @@ impl ClientCore {
         let result = mutations::upsert_node_on(&access, row).await;
         match result {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save node")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -193,7 +197,8 @@ impl ClientCore {
         let access = self.operator_access(node_did)?;
         match mutations::set_default_agent_on(&access, node_did, agent_did).await {
             Ok(()) => {
-                self.refresh_config_source(node_did).await?;
+                self.observe_committed_config(node_did, "set default agent")
+                    .await;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -205,7 +210,8 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_inference_backend_on(&access, row).await {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save backend")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -231,7 +237,8 @@ impl ClientCore {
         let access = self.operator_access(node_did)?;
         match mutations::set_backend_rotation_on(&access, node_did, id, expected, rotation).await {
             Ok(outcome) => {
-                self.refresh_config_source(node_did).await?;
+                self.observe_committed_config(node_did, "set backend rotation")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -250,7 +257,8 @@ impl ClientCore {
         let result = mutations::upsert_tools_on(&access, row).await;
         match result {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save tools")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -271,7 +279,8 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_tool_service_registry_on(&access, row).await {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save tool service registry")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -305,10 +314,8 @@ impl ClientCore {
             service_tier,
         )
         .await?;
-        if self.refresh_config_source(node_did).await.is_err() {
-            tracing::warn!("Model saved; client observation will resynchronize");
-            self.stores.ensure(node_did).request_resync();
-        }
+        self.observe_committed_config(node_did, "select agent model")
+            .await;
         Ok(saved)
     }
 
@@ -319,7 +326,8 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_inference_profile_on(&access, row).await {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save inference profile")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -350,7 +358,8 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_task_on(&access, row).await {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save task")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -368,7 +377,8 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_skill_on(&access, row).await {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save skill")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -386,7 +396,8 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_schedule_on(&access, row).await {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save schedule")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -404,7 +415,8 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_trigger_on(&access, row).await {
             Ok(()) => {
-                self.refresh_config_source(&row.node_did).await?;
+                self.observe_committed_config(&row.node_did, "save trigger")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -422,7 +434,8 @@ impl ClientCore {
         let access = self.operator_access(&document.node_did)?;
         match mutations::upsert_event_source_on(&access, document).await {
             Ok(()) => {
-                self.refresh_config_source(&document.node_did).await?;
+                self.observe_committed_config(&document.node_did, "save event source")
+                    .await;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -438,7 +451,8 @@ impl ClientCore {
                 anyhow::anyhow!("no EventSource document with event_source_id {event_source_id:?}"),
             )),
             Ok(_) => {
-                self.refresh_config_source(node_did).await?;
+                self.observe_committed_config(node_did, "delete event source")
+                    .await;
                 self.clear_mutation_error();
                 Ok(())
             }

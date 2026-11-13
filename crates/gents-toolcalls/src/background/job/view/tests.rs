@@ -393,7 +393,10 @@ fn explicit_database_denial_is_not_an_unavailable_or_missing_job() {
             json!([{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]),
         ),
     );
-    assert_eq!(super::unavailable(error), JobReadError::PermissionDenied);
+    assert_eq!(
+        super::unavailable_view(gents_store::views::ViewError::Execute(error)),
+        JobReadError::PermissionDenied
+    );
 }
 
 const EVERY_STATE: [JobState; 7] = [

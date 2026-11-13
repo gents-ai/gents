@@ -43,8 +43,6 @@ pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
 pub use writes::{ChatRouteRefusal, LocalHomeAccessError, RefreshedRequestProjection};
 
-/// Peer bootstrap retries need a deadline so an unreachable peer does not hold
-/// startup indefinitely.
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 /// Route installation must report an unresponsive peer-add operation.
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -154,7 +152,6 @@ pub struct ClientPeerStatus {
     pub addr: String,
     pub dial_succeeded: bool,
     pub last_error: Option<String>,
-    pub pairing: Vec<PairingCollectionStatus>,
     pub routes: Vec<ClientRouteStatus>,
 }
 
@@ -174,67 +171,6 @@ pub struct ClientRouteStatus {
     pub retry_count: u32,
     pub last_retry_at: Option<SystemTime>,
     pub last_retry_error_class: Option<PairingErrorClass>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PairingCollectionStatus {
-    pub collection_id: String,
-    pub pairing_retry_count: u32,
-    pub last_retry_at: Option<SystemTime>,
-    pub last_retry_error_class: Option<PairingErrorClass>,
-    pub stuck_since: Option<SystemTime>,
-    first_failure_at: Option<SystemTime>,
-}
-
-/// Repeated unsuccessful attempts report a stuck pairing; success clears it.
-pub const STUCK_THRESHOLD_ATTEMPTS: u32 = 6;
-/// A long-running failure also reports stuck when attempts are infrequent.
-pub const STUCK_THRESHOLD_DURATION: Duration = Duration::from_secs(5 * 60);
-
-impl PairingCollectionStatus {
-    pub fn new(collection_id: impl Into<String>) -> Self {
-        Self {
-            collection_id: collection_id.into(),
-            pairing_retry_count: 0,
-            last_retry_at: None,
-            last_retry_error_class: None,
-            stuck_since: None,
-            first_failure_at: None,
-        }
-    }
-
-    pub fn record_retry(&mut self, class: PairingErrorClass) {
-        let now = SystemTime::now();
-        self.pairing_retry_count = self.pairing_retry_count.saturating_add(1);
-        self.last_retry_at = Some(now);
-        self.last_retry_error_class = Some(class);
-        if self.first_failure_at.is_none() {
-            self.first_failure_at = Some(now);
-        }
-    }
-
-    pub fn record_success(&mut self) {
-        self.pairing_retry_count = 0;
-        self.last_retry_at = None;
-        self.last_retry_error_class = None;
-        self.stuck_since = None;
-        self.first_failure_at = None;
-    }
-
-    pub fn update_stuck_indicator(&mut self, now: SystemTime) {
-        if self.stuck_since.is_some() {
-            return;
-        }
-        let attempts_trigger = self.pairing_retry_count >= STUCK_THRESHOLD_ATTEMPTS;
-        let duration_trigger = self
-            .first_failure_at
-            .and_then(|first| now.duration_since(first).ok())
-            .map(|elapsed| elapsed >= STUCK_THRESHOLD_DURATION)
-            .unwrap_or(false);
-        if attempts_trigger || duration_trigger {
-            self.stuck_since = Some(now);
-        }
-    }
 }
 
 /// How a direct refresh read settled (`ObserverResync.Settlement`). Both
@@ -388,7 +324,6 @@ pub struct ClientCore {
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
-    bootstrap_errors: Vec<String>,
 }
 
 #[cfg(test)]
@@ -571,10 +506,6 @@ impl ClientCore {
         self.stores.subscribe()
     }
 
-    pub fn bootstrap_errors(&self) -> &[String] {
-        &self.bootstrap_errors
-    }
-
     pub fn last_mutation_error(&self) -> Option<String> {
         self.last_mutation_error
             .read()
@@ -584,6 +515,23 @@ impl ClientCore {
 
     pub async fn request_p2p_repair(&self) -> Result<()> {
         self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
+    }
+
+    pub async fn reconnect_runtime_now(
+        &self,
+        node_did: &str,
+    ) -> Option<super::RuntimeConnectionStatus> {
+        let settled = self.observer.lock().await.as_ref()?.retry_now(node_did);
+        settled.await
+    }
+
+    pub async fn request_runtime_reconnect(&self, node_did: Option<&str>) {
+        if let Some(observer) = self.observer.lock().await.as_ref() {
+            match node_did {
+                Some(node_did) => drop(observer.retry_now(node_did)),
+                None => observer.retry_all_now(),
+            }
+        }
     }
 
     /// Reads `node_did` through its own connection and publishes the read

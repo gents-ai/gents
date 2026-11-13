@@ -77,7 +77,7 @@ test.describe("half-screen window", () => {
       await expectInsideViewport(page, page.getByRole("button", { name: "Menu" }));
       await expectApart(
         header.getByRole("link", { name: "Nodes" }).first(),
-        header.getByRole("button", { name: /Sync healthy/ }),
+        header.getByRole("button", { name: /^Connected/ }),
       );
       await expectInsideViewport(
         page,
@@ -283,7 +283,7 @@ test.describe("nav modes", () => {
       expect(foot.y + foot.height).toBeLessThanOrEqual(520);
       /* the middle ends above the sync status, which nothing passes under */
       const sync = await boxOf(
-        page.getByRole("button", { name: /Show sync diagnostics/ }).last(),
+        page.getByRole("button", { name: /Show connection details/ }).last(),
       );
       const scroll = await boxOf(middle);
       expect(scroll.y + scroll.height).toBeLessThanOrEqual(sync.y + 1);

@@ -18,6 +18,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import type { ShellProjection } from "../src/hooks/shellProjection";
 import { shellStores } from "./shell-fixture";
 import { assistantMessage, sessionSnapshot, userMessage } from "./timeline-fixture";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 function chatActions(
   api: DesktopApiAdapter,
@@ -39,6 +40,7 @@ function chatActions(
     refreshSession: vi.fn(),
     refreshSnapshot: vi.fn(),
     reportFailure,
+    sendAttachments: memorySendAttachments(),
   });
   return { actions, stores };
 }
