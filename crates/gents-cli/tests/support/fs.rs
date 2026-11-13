@@ -180,7 +180,6 @@ pub async fn assert_runtime_init_state(
         r#"{{
             Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
                 node_did
-                default_agent_did
                 enabled
             }}
             Agent(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
