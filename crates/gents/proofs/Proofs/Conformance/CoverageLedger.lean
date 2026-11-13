@@ -1375,8 +1375,20 @@ def caseCoverage : List CoverageEntry :=
       "client_settings_fields")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "client_data_publication_cases"
-      "ClientDataNoticeDeliveryCases")
+      "family"
+      "client_data_publication_publication")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_data_publication_node_publication")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_data_publication_recovery")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "client_data_publication_notice_delivery")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
