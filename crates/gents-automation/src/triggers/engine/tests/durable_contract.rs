@@ -41,7 +41,6 @@ impl GoalBinding {
 
 #[derive(Deserialize)]
 struct State {
-    receipts: Vec<FireIdentity>,
     requests: Vec<Request>,
     outcomes: Vec<FireIdentity>,
     goals: Vec<GoalBinding>,
