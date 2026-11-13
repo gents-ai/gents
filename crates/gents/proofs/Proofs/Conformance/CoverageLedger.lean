@@ -579,7 +579,13 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family" "callback_parent_actor")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases")
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_trace")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_durable_trace")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_reopened_acknowledgement")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage "family" "goal_client_delivery_contracts_racing_proposals")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -1631,8 +1637,20 @@ def caseCoverage : List CoverageEntry :=
       "contracts_command_policy_validation")
       "command-policy" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "queue_deadline_conformance_cases"
-      "QueueDeadlineConformanceCases")
+      "family"
+      "contracts_queue_deadline_admission")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_claim_deadline")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_completion_delivery")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_queue_deadline_interrupt_scope")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1760,8 +1778,8 @@ def caseCoverage : List CoverageEntry :=
       "SessionInputEditCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_client_observation_cases"
-      "SessionInputEditClientObservationCases")
+      "family"
+      "fold_queue_contracts_input_edit_client_observation")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -1836,8 +1854,24 @@ def caseCoverage : List CoverageEntry :=
       "operator_base_freeze_contracts_freeze")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_path_capability_cases"
-      "WorkspacePathCapabilityCases")
+      "family"
+      "workspace_path_capability_contracts_provision")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_sealing")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_tree_delta")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_integrate")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_path_capability_contracts_replay")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2079,8 +2113,8 @@ def caseCoverage : List CoverageEntry :=
       "client_agent_journal_local_signer")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "file_review_subscription_cases"
-      "FileReviewSubscriptionCases")
+      "family"
+      "file_review_route_contracts_subscription")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2648,8 +2682,16 @@ def caseCoverage : List CoverageEntry :=
       "GoalSessionFoldCases")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "plugin_approval_cases"
-      "PluginApprovalCases")
+      "family"
+      "plugin_approval_unscoped_step")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_approval_scoped_step")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_approval_delivery")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

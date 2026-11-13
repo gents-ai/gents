@@ -25,7 +25,7 @@ use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
 use gents_lean_vocab::{
-    lean_contract_snapshot, lean_queue_deadline_cases, lean_r6_backgrounding_case,
+    lean_contract_snapshot, lean_r6_backgrounding_case,
     lean_r6_backgrounding_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
     LeanLifecycleTransitionCase,
 };

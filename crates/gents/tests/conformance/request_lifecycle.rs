@@ -1390,31 +1390,52 @@ async fn materialized_lineage_follows_the_lean_model() {
     }
 }
 
-pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
-    let cases = lean_queue_deadline_cases();
-    assert!(!cases.is_empty());
+use gents_lean_vocab::families::contracts_queue_deadline_admission::{
+    QueueAdmissionInput, QueueAdmissionOutput,
+};
+use gents_lean_vocab::families::contracts_queue_deadline_claim_deadline::{
+    ClaimDeadlineInput, ClaimDeadlineOutput,
+};
 
-    for case in cases {
-        drive_queue_deadline_case(case).await;
+pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
+    for case in gents_lean_vocab::families::contracts_queue_deadline_admission::cases() {
+        let observed = match case.input.name.as_str() {
+            "active_request_blocks_later_same_session_claim" => {
+                drive_active_request_blocks_later_same_session_claim(&case.input).await
+            }
+            "terminal_active_allows_next_pending_same_session_claim" => {
+                drive_terminal_active_allows_next_pending_same_session_claim(&case.input).await
+            }
+            "cancel_drains_automated_wakeups_preserves_user_pending" => {
+                drive_cancel_drains_automated_wakeups_preserves_user_pending(&case.input).await
+            }
+            other => panic!("unhandled queue admission case {other}"),
+        };
+        case.check(observed);
+    }
+    for case in gents_lean_vocab::families::contracts_queue_deadline_claim_deadline::cases() {
+        let observed = drive_claim_preserves_explicit_deadline(&case.input).await;
+        case.check(observed);
     }
 }
 
-async fn drive_queue_deadline_case(case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase) {
-    match case.name.as_str() {
-        "active_request_blocks_later_same_session_claim" => {
-            drive_active_request_blocks_later_same_session_claim(case).await;
-        }
-        "terminal_active_allows_next_pending_same_session_claim" => {
-            drive_terminal_active_allows_next_pending_same_session_claim(case).await;
-        }
-        "background_completion_notification_creates_no_agent_request" => {}
-        "cancel_drains_automated_wakeups_preserves_user_pending" => {
-            drive_cancel_drains_automated_wakeups_preserves_user_pending(case).await;
-        }
-        "claim_preserves_explicit_deadline" => {
-            drive_claim_preserves_explicit_deadline(case).await;
-        }
-        other => panic!("unhandled queue/deadline conformance case {other}"),
+fn admission_output(
+    legal: bool,
+    claimed_request_id: Option<usize>,
+    blocked_by_active: bool,
+    post: QueueRuntimeSnapshot,
+) -> QueueAdmissionOutput {
+    let ids = |ids: Vec<usize>| ids.into_iter().map(|id| id as u64).collect::<Vec<_>>();
+    QueueAdmissionOutput {
+        legal,
+        post_active_request_id: post.active_request_id.map(|id| id as u64),
+        post_pending_request_ids: ids(post.pending_request_ids),
+        post_terminal_request_ids: ids(post.terminal_request_ids),
+        post_coalesced_pending_count: post.coalesced_pending_count as u64,
+        claimed_request_id: claimed_request_id.map(|id| id as u64),
+        blocked_by_active,
+        automated_drained_request_ids: ids(post.automated_terminal_request_ids),
+        preserved_user_pending_request_ids: ids(post.user_pending_request_ids),
     }
 }
 
@@ -1431,6 +1452,12 @@ struct QueueRuntimeSnapshot {
     pending_request_ids: Vec<usize>,
     terminal_request_ids: Vec<usize>,
     coalesced_pending_count: usize,
+    automated_terminal_request_ids: Vec<usize>,
+    user_pending_request_ids: Vec<usize>,
+}
+
+fn row_queue_source(row: &QueueRuntimeRow) -> Option<&str> {
+    row.input.as_ref()?.get("queue")?.get("source")?.as_str()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1538,53 +1565,45 @@ async fn fetch_queue_runtime_snapshot(
         .filter(|row| row_matches_coalesced_key(row, queue_key))
         .count();
 
+    let automated_terminal_request_ids = rows
+        .iter()
+        .filter(|row| {
+            row_is_terminal(row) && row_queue_source(row) == Some("background_completion")
+        })
+        .filter_map(|row| symbolic_request_id(&row.request_id, generated_ids))
+        .collect::<Vec<_>>();
+    let user_pending_request_ids = rows
+        .iter()
+        .filter(|row| row_is_pending(row) && row_queue_source(row) == Some("user"))
+        .filter_map(|row| symbolic_request_id(&row.request_id, generated_ids))
+        .collect::<Vec<_>>();
+
     QueueRuntimeSnapshot {
         active_request_id: active_request_ids.first().copied(),
         pending_request_ids,
         terminal_request_ids,
         coalesced_pending_count,
+        automated_terminal_request_ids,
+        user_pending_request_ids,
     }
 }
 
-fn assert_pre_queue_snapshot(
-    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
-    snapshot: &QueueRuntimeSnapshot,
-) {
+fn assert_pre_queue_snapshot(input: &QueueAdmissionInput, snapshot: &QueueRuntimeSnapshot) {
     assert_eq!(
-        snapshot.active_request_id, case.pre_active_request_id,
+        snapshot.active_request_id.map(|id| id as u64),
+        input.pre_active_request_id,
         "{} pre active request drifted",
-        case.name
+        input.name
     );
     assert_eq!(
-        snapshot.pending_request_ids, case.pre_pending_request_ids,
+        snapshot
+            .pending_request_ids
+            .iter()
+            .map(|id| *id as u64)
+            .collect::<Vec<_>>(),
+        input.pre_pending_request_ids,
         "{} pre pending queue drifted",
-        case.name
-    );
-}
-
-fn assert_post_queue_snapshot(
-    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
-    snapshot: &QueueRuntimeSnapshot,
-) {
-    assert_eq!(
-        snapshot.active_request_id, case.post_active_request_id,
-        "{} post active request drifted",
-        case.name
-    );
-    assert_eq!(
-        snapshot.pending_request_ids, case.post_pending_request_ids,
-        "{} post pending queue drifted",
-        case.name
-    );
-    assert_eq!(
-        snapshot.terminal_request_ids, case.post_terminal_request_ids,
-        "{} terminalized requests drifted",
-        case.name
-    );
-    assert_eq!(
-        snapshot.coalesced_pending_count, case.post_coalesced_pending_count,
-        "{} coalesced pending count drifted",
-        case.name
+        input.name
     );
 }
 
@@ -1620,17 +1639,17 @@ fn lifecycle_for(
 }
 
 async fn drive_active_request_blocks_later_same_session_claim(
-    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
-) {
+    case: &QueueAdmissionInput,
+) -> QueueAdmissionOutput {
     let db = test_db("queue-deadline-active-blocks").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
-    let active_id = case.pre_active_request_id.expect("active request id");
+    let active_id = case.pre_active_request_id.expect("active request id") as usize;
     let pending_id = case
         .pre_pending_request_ids
         .first()
         .copied()
-        .expect("pending request id");
+        .expect("pending request id") as usize;
     let active_created_at = "2026-03-23T00:00:10Z";
     let pending_created_at = "2026-03-23T00:00:20Z";
 
@@ -1682,24 +1701,29 @@ async fn drive_active_request_blocks_later_same_session_claim(
         None,
     );
     let mut pending_lifecycle = lifecycle_for(&actors, pending_request, DEADLINE_SECS);
-    assert_eq!(
-        pending_lifecycle.claim().await.unwrap(),
-        ClaimOutcome::Queued
-    );
-    assert_eq!(case.claimed_request_id, None);
+    let outcome = pending_lifecycle.claim().await.unwrap();
 
     let post = fetch_queue_runtime_snapshot(&actors, &session_id, None, &generated_ids).await;
-    assert_post_queue_snapshot(case, &post);
+    admission_output(
+        outcome == ClaimOutcome::Claimed,
+        (outcome == ClaimOutcome::Claimed).then_some(pending_id),
+        outcome == ClaimOutcome::Queued,
+        post,
+    )
 }
 
 async fn drive_terminal_active_allows_next_pending_same_session_claim(
-    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
-) {
+    case: &QueueAdmissionInput,
+) -> QueueAdmissionOutput {
     let db = test_db("queue-deadline-terminal-allows").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
-    let active_id = case.pre_active_request_id.expect("active request id");
-    let pending_id = case.claimed_request_id.expect("claimed request id");
+    let active_id = case.pre_active_request_id.expect("active request id") as usize;
+    let pending_id = case
+        .pre_pending_request_ids
+        .first()
+        .copied()
+        .expect("pending request id") as usize;
     let active_created_at = "2026-03-23T00:00:10Z";
     let pending_created_at = "2026-03-23T00:00:20Z";
 
@@ -1763,18 +1787,20 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
         None,
     );
     let mut pending_lifecycle = lifecycle_for(&actors, pending_request, DEADLINE_SECS);
-    assert_eq!(
-        pending_lifecycle.claim().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
+    let outcome = pending_lifecycle.claim().await.unwrap();
 
     let post = fetch_queue_runtime_snapshot(&actors, &session_id, None, &generated_ids).await;
-    assert_post_queue_snapshot(case, &post);
+    admission_output(
+        outcome == ClaimOutcome::Claimed,
+        (outcome == ClaimOutcome::Claimed).then_some(pending_id),
+        outcome == ClaimOutcome::Queued,
+        post,
+    )
 }
 
 async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
-    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
-) {
+    case: &QueueAdmissionInput,
+) -> QueueAdmissionOutput {
     let db = test_db("queue-deadline-cancel-drain").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
@@ -1792,8 +1818,8 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     )
     .await;
 
-    let automated_id = case.automated_drained_request_ids[0];
-    let user_id = case.preserved_user_pending_request_ids[0];
+    let automated_id = case.pre_pending_request_ids[0];
+    let user_id = case.pre_pending_request_ids[1];
     create_queue_request(
         &actors,
         &automated_id.to_string(),
@@ -1832,13 +1858,12 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     .await;
     assert_pre_queue_snapshot(case, &pre);
 
-    gents_session::request::interrupt::interrupt_request(
+    let interrupted = gents_session::request::interrupt::interrupt_request(
         &db.node,
         actors.agent().as_ref(),
         parent_request_id,
     )
-    .await
-    .unwrap();
+    .await;
 
     let post = fetch_queue_runtime_snapshot(
         &actors,
@@ -1847,21 +1872,14 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         &generated_ids,
     )
     .await;
-    assert_post_queue_snapshot(case, &post);
-    assert_eq!(
-        post.pending_request_ids, case.preserved_user_pending_request_ids,
-        "{} should preserve only the user pending row",
-        case.name
-    );
+    admission_output(interrupted.is_ok(), None, false, post)
 }
 
-async fn drive_claim_preserves_explicit_deadline(
-    case: &gents_lean_vocab::LeanQueueDeadlineConformanceCase,
-) {
+async fn drive_claim_preserves_explicit_deadline(case: &ClaimDeadlineInput) -> ClaimDeadlineOutput {
     let db = test_db("queue-deadline-explicit-deadline").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;
     let session_id = case.session_id.to_string();
-    let request_id = case.claimed_request_id.expect("claimed request id");
+    let request_id = case.claimed_request_id.expect("claimed request id") as usize;
     let created_at = support::agent_requests::canonical_now();
     let explicit_deadline_at =
         chrono::Utc::now() + chrono::Duration::seconds(case.pre_request_deadline.unwrap() as i64);
@@ -1893,18 +1911,17 @@ async fn drive_claim_preserves_explicit_deadline(
         request,
         case.synthesized_claim_deadline.unwrap() as u64,
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let outcome = lifecycle.claim().await.unwrap();
 
     let row = fetch_deadline_runtime_row(&actors, request_id).await;
-    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Claimed));
+    assert_eq!(
+        row.lifecycle_state == Some(RequestLifecycleState::Claimed),
+        outcome == ClaimOutcome::Claimed
+    );
 
     let persisted_deadline = chrono::DateTime::parse_from_rfc3339(&row.deadline).unwrap();
-    assert_eq!(
-        persisted_deadline,
-        chrono::DateTime::parse_from_rfc3339(&explicit_deadline).unwrap(),
-        "{} should preserve the request's explicit deadline",
-        case.name
-    );
+    let explicit_deadline_preserved =
+        persisted_deadline == chrono::DateTime::parse_from_rfc3339(&explicit_deadline).unwrap();
     assert!(
         persisted_deadline.with_timezone(&chrono::Utc)
             < before_claim
@@ -1912,7 +1929,10 @@ async fn drive_claim_preserves_explicit_deadline(
         "{} should keep the tighter explicit deadline instead of the synthesized claim deadline",
         case.name
     );
-    assert!(case.explicit_deadline_preserved);
+    ClaimDeadlineOutput {
+        legal: outcome == ClaimOutcome::Claimed,
+        explicit_deadline_preserved,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

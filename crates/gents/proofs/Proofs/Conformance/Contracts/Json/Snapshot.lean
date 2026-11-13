@@ -389,8 +389,6 @@ def snapshotGoalCasesJson : String :=
 def snapshotGoalMutationCasesJson : String :=
   ""
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
-    ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
-    ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
 
 def snapshotRequestCasesJson : String :=
   ""
@@ -399,8 +397,6 @@ def snapshotRequestCasesJson : String :=
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
-    ++ "\"session_input_edit_client_observation_cases\":"
-      ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
@@ -417,7 +413,6 @@ def snapshotIdentityCasesJson : String :=
 
 def snapshotClientCasesJson : String :=
   ""
-    ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
 
 def snapshotRuntimeCasesJson : String :=
   ""
@@ -431,9 +426,6 @@ def snapshotRuntimeCasesJson : String :=
 
 def snapshotRecoveryCasesJson : String :=
   ""
-    ++ "\"queue_deadline_conformance_cases\":"
-      ++ jsonArray
-        (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
@@ -448,10 +440,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
-    ++ "\"workspace_path_capability_cases\":"
-      ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
-    ++ "\"file_review_subscription_cases\":"
-      ++ Conformance.FileReviewRouteContracts.subscriptionCasesJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""
