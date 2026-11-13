@@ -1136,8 +1136,8 @@ mod tests {
             );
         }
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../gents")
-            .join("src/tools/builtin/self_config");
+            .join("../gents-tools")
+            .join("src/builtin/self_config");
         let mut scanned = 0;
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
@@ -1181,31 +1181,31 @@ mod tests {
                 );
             }
         }
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../gents")
-            .join("src");
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let root = crates.join("gents-tools/src");
+        let calls = crates.join("gents-toolcalls/src");
         let mut files = Vec::new();
         for surface in [
-            "tools/builtin/self_config",
-            "tools/native",
-            "tools/mcp/meta",
-            "tools/background/status",
-            "tools/surface",
+            root.join("builtin/self_config"),
+            root.join("native"),
+            root.join("mcp/meta"),
+            root.join("surface"),
+            calls.join("background/status"),
         ] {
-            sources(&root.join(surface), &mut files);
+            sources(&surface, &mut files);
         }
         for module in [
-            "tools/native.rs",
-            "tools/mcp/meta.rs",
-            "tools/background/status.rs",
-            "tools/call/control.rs",
+            root.join("native.rs"),
+            root.join("mcp/meta.rs"),
+            calls.join("background/status.rs"),
+            calls.join("call/control.rs"),
         ] {
-            files.push(root.join(module));
+            files.push(module);
         }
         assert!(
             files.len() > 10,
             "expected the agent tool surfaces under {}",
-            root.display()
+            crates.display()
         );
         for path in files {
             let source = std::fs::read_to_string(&path).unwrap();
