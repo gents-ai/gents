@@ -22,9 +22,29 @@ fn cumulative_usage_keeps_start_counters_and_requires_message_stop() {
         (
             "messages_cumulative",
             "data: {\"type\":\"message_stop\"}\n\n",
-            gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: Some(20), cached_input_tokens: Some(64), cache_creation_input_tokens: Some(36), reasoning_output_tokens: None, provider_total_tokens: None, final_response: true },
+            gents_protocol::usage::TokenUsage {
+                input_tokens: Some(100),
+                output_tokens: Some(20),
+                cached_input_tokens: Some(64),
+                cache_creation_input_tokens: Some(36),
+                reasoning_output_tokens: None,
+                provider_total_tokens: None,
+                final_response: true,
+            },
         ),
-        ("messages_eof", "", gents_protocol::usage::TokenUsage { input_tokens: Some(100), output_tokens: Some(20), cached_input_tokens: Some(64), cache_creation_input_tokens: Some(36), reasoning_output_tokens: None, provider_total_tokens: None, final_response: false }),
+        (
+            "messages_eof",
+            "",
+            gents_protocol::usage::TokenUsage {
+                input_tokens: Some(100),
+                output_tokens: Some(20),
+                cached_input_tokens: Some(64),
+                cache_creation_input_tokens: Some(36),
+                reasoning_output_tokens: None,
+                provider_total_tokens: None,
+                final_response: false,
+            },
+        ),
     ] {
         let events =
             parse_messages_sse(&format!("{start}{delta}{stop}"), &RapidHashSet::new()).unwrap();
@@ -869,7 +889,9 @@ fn claude_sse_dispatch_cases_drive_the_stream_state() {
             MessagesParseError::MalformedToolUse { .. } => {
                 fail_closed_tool_use();
                 assert!(
-                    error.to_string().contains("fail-closed: malformed tool_use"),
+                    error
+                        .to_string()
+                        .contains("fail-closed: malformed tool_use"),
                     "{error}"
                 );
                 "malformed_tool_use".into()

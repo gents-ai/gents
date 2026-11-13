@@ -1,6 +1,8 @@
 use gents_documents::mailbox_write_decl::MailboxAction;
 use gents_protocol::document_query::fields::{agent, default_agent_selection, node};
-use gents_protocol::document_query::{get as field, rows, Collection, Filter, Query, QuerySet, Selection};
+use gents_protocol::document_query::{
+    get as field, rows, Collection, Filter, Query, QuerySet, Selection,
+};
 use gents_protocol::operations::request::{MailboxCauseRefusal, RequestOperationError};
 use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
@@ -96,9 +98,7 @@ pub(super) async fn resolve_agent(
         })
         .await
         .map_err(RequestOperationError::passthrough)?;
-    let requested = requested
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let requested = requested.map(str::trim).filter(|value| !value.is_empty());
     if let (Some(existing), Some(requested)) = (session_agent.as_deref(), requested) {
         if existing != requested {
             return Err(RequestOperationError::SessionAgentMismatch {

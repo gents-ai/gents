@@ -63,10 +63,10 @@ pub use input::row_is_automated_wakeup;
 pub(crate) use input::{background_wake_queue, is_automated_wakeup, row_queue};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use intake::pending_in_txn;
-pub use intake::{steer_reachable, SteerAdmissionRefusal};
 pub(crate) use intake::{pending_ids_in_txn, pending_with_new_candidate_in_txn};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use intake::{pending_rows_in_txn, steering_compatible};
+pub use intake::{steer_reachable, SteerAdmissionRefusal};
 pub use intake::{steering_inputs, steering_snapshot};
 pub use management::{
     apply_pending_user_edit_in_txn, persisted_replacements_in_txn,
@@ -86,9 +86,7 @@ use mutation::session_request_create_mutation_at_hop_with_signer;
 use mutation::SessionRequestFields;
 pub use position::validate_position;
 pub(crate) use position::{effective_slots, InvalidQueuePosition};
-pub use submission::{
-    prepare_user_message_input, queue_user_message_input, UserMessageInputError,
-};
+pub use submission::{prepare_user_message_input, queue_user_message_input, UserMessageInputError};
 
 #[derive(Debug)]
 pub struct EnqueuedBackgroundCompletionInput {

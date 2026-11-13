@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::document_query::{
-    fields::agent_request as request_fields, fields::owed_delivery as fields, Delete, Filter, Input, Query, Selection, Update,
+    fields::agent_request as request_fields, fields::owed_delivery as fields, Delete, Filter,
+    Input, Query, Selection, Update,
 };
 use gents_protocol::owed_delivery::{
     delivery_key, OwedDeliveryRow, OwedSettlement, OwedSubject, OWED_DELIVERY_FIELDS,
@@ -521,7 +522,10 @@ async fn newest_request(
     node_did: &str,
     session_id: &str,
 ) -> anyhow::Result<Option<(Option<String>, Option<String>)>> {
-    let (session, node) = (escape_graphql_string(session_id), escape_graphql_string(node_did));
+    let (session, node) = (
+        escape_graphql_string(session_id),
+        escape_graphql_string(node_did),
+    );
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{node}" }} }}, order: {{ created_at: DESC }}, limit: 1) {{ _docID created_at interrupt_requested_at }} }}"#

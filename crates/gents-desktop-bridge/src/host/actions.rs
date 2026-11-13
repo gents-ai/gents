@@ -1,9 +1,9 @@
 use anyhow::{ensure, Context, Result};
-use gents_documents::{Schedule, Task};
-use gents_documents::config_projection;
-use gents_store::graphql::escape_graphql_string;
-use gents_store::collection::Collection;
 use gents_desktop_core::client::ClientCore;
+use gents_documents::config_projection;
+use gents_documents::{Schedule, Task};
+use gents_store::collection::Collection;
+use gents_store::graphql::escape_graphql_string;
 
 use crate::types::{ConfiguredActionKind, ConfiguredActionView};
 

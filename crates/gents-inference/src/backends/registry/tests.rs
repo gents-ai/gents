@@ -109,27 +109,27 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
 
     gents_lean_vocab::families::backend_health_admission_admission::replay::<String>(
         |input: &wire::ObservedInput<String>| {
-        let mut backend = base_backend();
-        backend.enabled = input.enabled;
-        let observation = InferenceBackendObservation {
-            metadata_doc_id: None,
-            backend_id: backend.backend_id.clone(),
-            catalogs: Vec::new(),
-            probe_status: Some(input.probe_status.clone()),
-            last_probe: None,
-        };
-        let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)
-            .expect("valid backend config and observation");
-        let available = admission_config.is_available();
-        assert_eq!(
-            crate::admission::document_configured_from_fields(
-                backend.enabled,
-                observation.probe_status.as_deref().unwrap()
-            ),
-            available,
-            "{input:?}: document-configured availability and admission availability disagree"
-        );
-        wire::AdmissionOutput { available }
+            let mut backend = base_backend();
+            backend.enabled = input.enabled;
+            let observation = InferenceBackendObservation {
+                metadata_doc_id: None,
+                backend_id: backend.backend_id.clone(),
+                catalogs: Vec::new(),
+                probe_status: Some(input.probe_status.clone()),
+                last_probe: None,
+            };
+            let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)
+                .expect("valid backend config and observation");
+            let available = admission_config.is_available();
+            assert_eq!(
+                crate::admission::document_configured_from_fields(
+                    backend.enabled,
+                    observation.probe_status.as_deref().unwrap()
+                ),
+                available,
+                "{input:?}: document-configured availability and admission availability disagree"
+            );
+            wire::AdmissionOutput { available }
         },
     );
 }

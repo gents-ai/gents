@@ -383,11 +383,10 @@ async fn run_inner(
                 .await??;
         let requested =
             gents_pack::operations::pack::parse_inference_slots(&received.request.inference_slots)?;
-        let supplied =
-            gents_pack::pack::install_flow::supplied_variables(
-                &received.request.dependency_variables,
-                &received.request.bind_agents,
-            )?;
+        let supplied = gents_pack::pack::install_flow::supplied_variables(
+            &received.request.dependency_variables,
+            &received.request.bind_agents,
+        )?;
         let overrides = gents_pack::operations::pack::dependency_overrides(&supplied);
         let mut prepared = gents_pack::pack::prepare_document_pack_archive(
             &access,
