@@ -2421,8 +2421,20 @@ def caseCoverage : List CoverageEntry :=
       "goal_edit_contracts_edit")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_client_control_cases"
-      "GoalClientControlCases")
+      "family"
+      "goal_client_control_contracts_control")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_control_contracts_denied_submission")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_control_contracts_foreign_submission")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_control_contracts_submission_trace")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_client_start_cases"
