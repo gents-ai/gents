@@ -1977,23 +1977,23 @@ def caseCoverage : List CoverageEntry :=
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_direct_reader_cases"
-      "FileInventoryDirectReaderCases"
+      "family"
+      "file_inventory_contracts_direct_reader_snapshot"
       "Drives actual operator reads and bounded pages under the authenticated reader. HTTP extraction and installed consumption remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_fork_cases"
-      "FileInventoryForkCases"
+      "family"
+      "file_inventory_contracts_fork_snapshot"
       "Uses the native fork owner and source snapshot reader to preserve selected physical origins while excluding later parent work. Installed acceptance remains a separate obligation.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_reader_cases"
-      "FileInventoryReaderCases"
+      "family"
+      "file_inventory_contracts_shared_reader_snapshot"
       "Refines public-root visibility, exact physical binding, explicit projection read permission, revocation and reauthorization for the authenticated direct reader in one native source snapshot. Installed consumption remains a separate obligation.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_source_projection_cases"
-      "FileInventorySourceProjectionCases"
+      "family"
+      "file_inventory_contracts_source_projection_pages"
       "Refines source projection scope, terminal coverage, path coherence, authenticated native owners and unsigned bounded pages. Remaining canonical admission, fork and publication refinements stay separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
