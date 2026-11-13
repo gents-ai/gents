@@ -7,43 +7,6 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-private def boolJson (value : Bool) : String := if value then "true" else "false"
-
-def agentRequestAdmissionCaseJson (c : AgentRequestAdmissionCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString c.name ++ ","
-    ++ "\"observation_available\":" ++ boolJson c.observationAvailable ++ ","
-    ++ "\"kind\":" ++ jsonString c.kind ++ ","
-    ++ "\"signature_valid\":" ++ boolJson c.signatureValid ++ ","
-    ++ "\"signed_fields_match\":" ++ boolJson c.signedFieldsMatch ++ ","
-    ++ "\"branch_fields_exact\":" ++ boolJson c.branchFieldsExact ++ ","
-    ++ "\"pending_deadline_absent\":" ++ boolJson c.pendingDeadlineAbsent ++ ","
-    ++ "\"signer_matches_requester\":" ++ boolJson c.signerMatchesRequester ++ ","
-    ++ "\"requester_matches_target\":" ++ boolJson c.requesterMatchesTarget ++ ","
-    ++ "\"signer_matches_target\":" ++ boolJson c.signerMatchesTarget ++ ","
-    ++ "\"signer_matches_issuer\":" ++ boolJson c.signerMatchesIssuer ++ ","
-    ++ "\"requester_matches_session_scope\":" ++ boolJson c.requesterMatchesSessionScope ++ ","
-    ++ "\"current_approval\":" ++ boolJson c.currentApproval ++ ","
-    ++ "\"exact_generation\":" ++ boolJson c.exactGeneration ++ ","
-    ++ "\"authorization_fresh\":" ++ boolJson c.authorizationFresh ++ ","
-    ++ "\"runtime_evidence_present\":" ++ boolJson c.runtimeEvidencePresent ++ ","
-    ++ "\"runtime_source_kind\":" ++ jsonString c.runtimeSourceKind ++ ","
-    ++ "\"target_runtime_attestation_valid\":" ++
-      boolJson c.targetRuntimeAttestationValid ++ ","
-    ++ "\"source_binding_current\":" ++ boolJson c.sourceBindingCurrent ++ ","
-    ++ "\"trigger_config_document_binding_current\":" ++
-      boolJson c.triggerConfigDocumentBindingCurrent ++ ","
-    ++ "\"source_document_binding_current\":" ++ boolJson c.sourceDocumentBindingCurrent ++ ","
-    ++ "\"target_policy_allows\":" ++ boolJson c.targetPolicyAllows ++ ","
-    ++ "\"native_create_authorized\":" ++ boolJson c.nativeCreateAuthorized ++ ","
-    ++ "\"hop_within_bound\":" ++ boolJson c.hopWithinBound ++ ","
-    ++ "\"expected_admitted\":" ++ boolJson c.expectedAdmitted ++ ","
-    ++ "\"expected_disposition\":" ++ jsonString c.expectedDisposition
-    ++ "}"
-
-def agentRequestAdmissionCasesJson : String :=
-  jsonArray (agentRequestAdmissionCases.map agentRequestAdmissionCaseJson)
-
 structure TitleAdmissionTitleWire where
   text : String
   source : String
@@ -265,3 +228,108 @@ def titlePurposeWire : Conformance.Family TitlePurposeWireInput (Option RequestP
   model := fun i => i.wire.bind RequestPurpose.fromWire?
 
 end Conformance.Contracts
+
+namespace Conformance.RequestAdmission
+
+open Lean Enrollment Conformance.ContractCases
+
+structure AdmissionInput where
+  name : String
+  observationAvailable : Bool
+  kind : String
+  signatureValid : Bool
+  signedFieldsMatch : Bool
+  branchFieldsExact : Bool
+  pendingDeadlineAbsent : Bool
+  signerMatchesRequester : Bool
+  requesterMatchesTarget : Bool
+  signerMatchesTarget : Bool
+  signerMatchesIssuer : Bool
+  requesterMatchesSessionScope : Bool
+  currentApproval : Bool
+  exactGeneration : Bool
+  authorizationFresh : Bool
+  runtimeEvidencePresent : Bool
+  runtimeSourceKind : String
+  targetRuntimeAttestationValid : Bool
+  sourceBindingCurrent : Bool
+  triggerConfigDocumentBindingCurrent : Bool
+  sourceDocumentBindingCurrent : Bool
+  targetPolicyAllows : Bool
+  nativeCreateAuthorized : Bool
+  hopWithinBound : Bool
+  deriving ToJson
+
+structure Admission where
+  admitted : Bool
+  disposition : String
+  deriving ToJson, BEq
+
+def AdmissionInput.ofCase (c : AgentRequestAdmissionCase) : AdmissionInput :=
+  { name := c.name, observationAvailable := c.observationAvailable, kind := c.kind
+    signatureValid := c.signatureValid, signedFieldsMatch := c.signedFieldsMatch
+    branchFieldsExact := c.branchFieldsExact, pendingDeadlineAbsent := c.pendingDeadlineAbsent
+    signerMatchesRequester := c.signerMatchesRequester
+    requesterMatchesTarget := c.requesterMatchesTarget
+    signerMatchesTarget := c.signerMatchesTarget, signerMatchesIssuer := c.signerMatchesIssuer
+    requesterMatchesSessionScope := c.requesterMatchesSessionScope
+    currentApproval := c.currentApproval, exactGeneration := c.exactGeneration
+    authorizationFresh := c.authorizationFresh, runtimeEvidencePresent := c.runtimeEvidencePresent
+    runtimeSourceKind := c.runtimeSourceKind
+    targetRuntimeAttestationValid := c.targetRuntimeAttestationValid
+    sourceBindingCurrent := c.sourceBindingCurrent
+    triggerConfigDocumentBindingCurrent := c.triggerConfigDocumentBindingCurrent
+    sourceDocumentBindingCurrent := c.sourceDocumentBindingCurrent
+    targetPolicyAllows := c.targetPolicyAllows, nativeCreateAuthorized := c.nativeCreateAuthorized
+    hopWithinBound := c.hopWithinBound }
+
+private def kindOf (name : String) : AgentRequestAdmissionKind :=
+  ([.enrollment, .client, .localSelf, .runtimeInternal, .peer].find?
+    (requestAdmissionKindName · == name)).getD .client
+
+private def sourceKindOf (name : String) : RuntimeInternalSourceKind :=
+  ([.localControl, .automatedTrigger].find? (runtimeInternalSourceKindName · == name)).getD .localControl
+
+def AdmissionInput.observation (i : AdmissionInput) : AgentRequestAdmissionObservation :=
+  { kind := kindOf i.kind, signatureValid := i.signatureValid
+    signedFieldsMatch := i.signedFieldsMatch, branchFieldsExact := i.branchFieldsExact
+    pendingDeadlineAbsent := i.pendingDeadlineAbsent
+    signerMatchesRequester := i.signerMatchesRequester
+    requesterMatchesTarget := i.requesterMatchesTarget, signerMatchesTarget := i.signerMatchesTarget
+    signerMatchesIssuer := i.signerMatchesIssuer
+    requesterMatchesSessionScope := i.requesterMatchesSessionScope
+    currentApproval := i.currentApproval, exactGeneration := i.exactGeneration
+    authorizationFresh := i.authorizationFresh, runtimeEvidencePresent := i.runtimeEvidencePresent
+    runtimeSourceKind := sourceKindOf i.runtimeSourceKind
+    targetRuntimeAttestationValid := i.targetRuntimeAttestationValid
+    sourceBindingCurrent := i.sourceBindingCurrent
+    triggerConfigDocumentBindingCurrent := i.triggerConfigDocumentBindingCurrent
+    sourceDocumentBindingCurrent := i.sourceDocumentBindingCurrent
+    targetPolicyAllows := i.targetPolicyAllows, nativeCreateAuthorized := i.nativeCreateAuthorized
+    hopWithinBound := i.hopWithinBound }
+
+def admission (i : AdmissionInput) : Admission :=
+  { admitted := projectAgentRequestAdmission i.observation
+    disposition := requestAdmissionDispositionName
+      (projectAgentRequestAdmissionDisposition i.observationAvailable i.observation) }
+
+@[conformance_family]
+def projected : Family AdmissionInput Admission where
+  inputs := agentRequestAdmissionCases.map AdmissionInput.ofCase
+  model := admission
+
+/-- A served Agent can claim a historical local-self request whose requester
+was never recorded; that is the one admission observation the background
+process-control scenario persists and verifies natively. -/
+@[conformance_family]
+def absentRequester : Family AdmissionInput Admission where
+  inputs := (agentRequestAdmissionCases.filter (·.name == "local-self-absent-requester")).map
+    AdmissionInput.ofCase
+  model := admission
+
+theorem projected_model_matches_case_expectations :
+    agentRequestAdmissionCases.all (fun c =>
+      admission (AdmissionInput.ofCase c) == ⟨c.expectedAdmitted, c.expectedDisposition⟩) = true := by
+  native_decide
+
+end Conformance.RequestAdmission

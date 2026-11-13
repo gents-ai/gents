@@ -43,14 +43,6 @@ def actorCases : List (String × List ActorCandidate) :=
   , ("mixed", [⟨"a", true, true, true⟩, ⟨"b", true, true, false⟩,
       ⟨"c", true, false, false⟩, ⟨"d", false, true, false⟩]) ]
 
-def actorCaseJson (c : String × List ActorCandidate) : Json := Json.mkObj
-  [("name", toJson c.1), ("candidates", toJson (c.2.map fun candidate => Json.mkObj
-    [("did", toJson candidate.did), ("configured", toJson candidate.configured),
-     ("identity_resolved", toJson candidate.identityResolved), ("available", toJson candidate.available)])),
-   ("expected", toJson (scanActors c.2))]
-
-def actorCasesJson : String := (toJson (actorCases.map actorCaseJson)).compress
-
 def rowJson (row : ScopedRow) : Json := Json.mkObj
   [("doc_id", toJson row.docId), ("selected_agent", toJson row.selectedAgent)]
 

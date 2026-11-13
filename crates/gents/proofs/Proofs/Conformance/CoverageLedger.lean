@@ -701,8 +701,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_goal_readiness_gate_served")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_claimed_readiness_cases"
-      "GoalClaimedReadinessCases")
+      "family"
+      "goal_claimed_readiness_claimed")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -969,8 +969,12 @@ def caseCoverage : List CoverageEntry :=
       "RequestProgressCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "agent_request_admission_cases"
-      "AgentRequestAdmissionCases")
+      "family"
+      "request_admission_projected")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "request_admission_absent_requester")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1561,8 +1565,8 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: production stages a must-commit point only after core's transition committed, so a refused transition never reaches stage_dropping; the model finds that such a case commits nothing and owes nothing.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_rerun_cases"
-      "LifecycleHookRerunCases"
+      "family"
+      "hooks_contracts_rerun"
       "Production TransactionFailure::rerun_requested classifies a ConfigClientError::rerun carried through production wrappers (anyhow context, HookError::Operation, CommitError::Other re-erased as on the plugin-job path, text rendering). The transaction owner's rerun loop itself is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1721,8 +1725,8 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathCapabilityCases")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "identity_private_journal_policy"
-      "PrivateJournalPolicy")
+      "family"
+      "client_agent_journal_private_access")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "family"
@@ -1888,12 +1892,27 @@ def caseCoverage : List CoverageEntry :=
       "session_input_edit_native_discovery")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_native_claim_cases"
-      "SessionInputEditNativeClaim")
+      "family"
+      "session_input_edit_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "watcher_actors_scanned_unreached"
+      "model-production-gap: the served runtime fixture provisions one Agent, so the mixed candidate set (an available, an unavailable, an unresolved and an unconfigured Agent in one view) is not built by any production test yet.")
+      "event-delivery" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "node_provisioning_agent_creator_unreached"
+      "model-production-gap: no served creation scenario denies the native Agent create or its parent relation to an otherwise authorized creator yet (native-create-denied, native-relation-denied).")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "delegated_finality_served_unreached"
+      "model-production-gap: the session-message commit keeps no caller-side knowledge state for a pending read, a foreign receipt or an invalid abort proof, and no attempt counter or retry and failure-report permission, so pending-is-unconfirmed, foreign-receipt, no-proof-of-abort and failure-proof-cannot-undo-child have no production form.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "identity_private_journal_policy"
-      "PrivateJournalSigner")
+      "family"
+      "client_agent_journal_local_signer")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "file_review_subscription_cases"
@@ -1973,8 +1992,8 @@ def caseCoverage : List CoverageEntry :=
       "schema_argument_repair_arguments")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "invalid_tool_progress_cases"
-      "InvalidToolProgressCases")
+      "family"
+      "invalid_tool_progress_contracts_composed")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2291,8 +2310,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_request_assignment_contracts_unread_history_scope")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_wake_receipt_cases"
-      "GoalWakeReceiptCases")
+      "family"
+      "goal_wake_receipt_contracts_receipt")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2589,9 +2608,9 @@ def caseCoverage : List CoverageEntry :=
       "IdentityContracts"
       "Route through the canonical DID registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "canonical_worker_capacity_cases"
-      "CanonicalWorkerCapacityCases"
+  , tagged (consumerWithFollowUp
+      "family"
+      "worker_capacity_contracts_transition"
       "Bind modeled acquire, full-capacity refusal and release to the slot-owned Rust capacity scheduler. No request parks a worker while waiting on another session.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -3005,8 +3024,8 @@ def caseCoverage : List CoverageEntry :=
       "contract_cases_reduction_engine_outcome")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "budget_rehydration_cases"
-      "BudgetRehydrationCases"
+      "family"
+      "budget_rehydration_ledger"
       "Drives absent, zero and positive pinned limits with inference/compaction rows through the real physical-request query and ledger factory. Full process restart and InferenceCall write ownership remain separate boundaries.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage

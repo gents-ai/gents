@@ -24,8 +24,7 @@ async fn verified_signer_as(
 
 #[tokio::test]
 async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> anyhow::Result<()> {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().session_input_edit_native_claim_cases;
-    for case in cases {
+    for case in gents_lean_vocab::families::session_input_edit_claim::cases() {
         let db = gents_inference::test_support::test_db(
             "verified-graph",
             gents_automation::lifecycle_hooks::composition(),
@@ -144,7 +143,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 authored_input: None,
             }],
         };
-        let author: &dyn NodeIdentity = if case["selectedAllowed"].as_bool().unwrap() {
+        let author: &dyn NodeIdentity = if case.input.selected_allowed {
             &user
         } else {
             &collaborator
@@ -215,10 +214,6 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         let tampered_accepted = gents_store::config_client::verify_request_evidence(input, altered)
             .await
             .is_ok();
-        assert_eq!(
-            tampered_accepted,
-            case["tamperedAccepted"].as_bool().unwrap()
-        );
         let command_doc =
             gents_session::request::lifecycle::queue::publish_edit_command(&edit_access, &command)
                 .await?;
@@ -232,10 +227,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             verified_signer_as(&node, &command_version.cid, user.did()).await?,
             author.did()
         );
-        if !case["selectedAllowed"]
-            .as_bool()
-            .context("modeled selection missing")?
-        {
+        if !case.input.selected_allowed {
             let selected_agent = ConfigAccess::local_managed_agent(
                 node.clone(),
                 ::identity::Did::new(agent.did())?,
@@ -297,7 +289,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 [defra_node::DocumentAccessDecision::Denied]
             );
         }
-        if case["selectedAllowed"].as_bool().unwrap() {
+        let rollback = {
             let (failure, mutations) = ConfigApplyTxn::with_successful_mutation_failure_at(
                 Some(1),
                 process_command(&node, &root, &command_doc, agent.as_ref()),
@@ -309,16 +301,12 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             let rows = after_abort["data"]["AgentRequest"]
                 .as_array()
                 .context("requests unavailable after abort")?;
-            assert_eq!(
-                rows.len() > 1,
-                case["rollbackReplacement"].as_bool().unwrap()
-            );
             assert_eq!(rows[0]["lifecycle_state"], "pending");
-            assert_eq!(
+            (
+                rows.len() > 1,
                 !after_abort["data"]["AgentSessionInputEdit"][0]["receipt_json"].is_null(),
-                case["rollbackReceipt"].as_bool().unwrap()
-            );
-        }
+            )
+        };
         process_command(&node, &root, &command_doc, agent.as_ref()).await?;
         let response = access.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#, escape_graphql_string(&command_doc))).await?;
         let receipt: SessionInputEditReceipt = serde_json::from_str(
@@ -334,13 +322,13 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         )
         .await?
         .is_some());
-        assert_eq!(
-            receipt.outcome == SessionInputEditOutcome::Applied,
-            case["applied"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
+        let applied = receipt.outcome == SessionInputEditOutcome::Applied;
         let old = access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state superseded_by_request_doc_id }} }}"#, escape_graphql_string(&old_doc))).await?;
+        let agent_access = ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(&binding.agent_did)?,
+            agent.as_ref(),
+        )?;
         if receipt.outcome == SessionInputEditOutcome::Applied {
             assert_eq!(
                 old["data"]["AgentRequest"][0]["lifecycle_state"],
@@ -360,11 +348,6 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 verified_signer_as(&node, &version.cid, user.did()).await?,
                 user.did()
             );
-            let agent_access = ConfigAccess::local_managed_agent(
-                node.clone(),
-                ::identity::Did::new(&binding.agent_did)?,
-                agent.as_ref(),
-            )?;
             let request = agent_access
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
@@ -419,109 +402,115 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 verified_signer_as(&node, &claim_version.cid, agent.did()).await?,
                 agent.did()
             );
-            let mut removed_request = original.clone();
-            removed_request.request_id = "removal-only".into();
-            removed_request.content = "remove this pending message".into();
-            gents_session::request::admission::sign_agent_request_create(
-                &user,
-                &mut removed_request,
-            )
-            .await?;
-            gents_session::request::lifecycle::submit_client_request(&access, &removed_request)
-                .await?;
-            let pending = access
-                .execute(
-                    r#"{ AgentRequest(filter: {request_id: {_eq: "removal-only"}}) {_docID} }"#,
-                )
-                .await?;
-            let removed_doc = pending["data"]["AgentRequest"][0]["_docID"]
-                .as_str()
-                .context("removal request missing")?
-                .to_owned();
-            let mut removal = SessionInputEdit {
-                version: SESSION_INPUT_EDIT_VERSION,
-                command_id: uuid::Uuid::new_v4().to_string(),
-                requester_did: user.did().into(),
-                requester_peer_id: None,
-                node_did: root.did().into(),
-                session_id: command.session_id.clone(),
-                session_doc_id: command.session_doc_id.clone(),
-                agent_did: command.agent_did.clone(),
-                agent_doc_id: command.agent_doc_id.clone(),
-                issued_at: (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
-                expires_at: (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
-                edit: PendingQueueEdit {
-                    expected_request_doc_ids: vec![removed_doc.clone()],
-                    selected_request_doc_ids: vec![removed_doc.clone()],
-                    messages: vec![],
-                },
-                replacements: vec![],
-                replacement_evidence: vec![],
-                signature: vec![],
-            };
-            removal.signature = user.sign(&removal.signing_payload()).await?;
-            let removal_doc =
-                gents_session::request::lifecycle::queue::publish_edit_command(&access, &removal)
-                    .await?;
-            process_command(&node, &root, &removal_doc, agent.as_ref()).await?;
-            let removed = access
-                .execute(&format!(
-                    r#"{{ AgentRequest(docID: "{}") {{ lifecycle_state failure_reason }} }}"#,
-                    escape_graphql_string(&removed_doc)
-                ))
-                .await?;
-            assert_eq!(
-                removed["data"]["AgentRequest"][0]["lifecycle_state"],
-                "interrupted"
-            );
-            agent_access.write("test.edit.lost_removal_receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{{}}" }}) {{ _docID }} }}"#, escape_graphql_string(&removal_doc))).await?;
-            process_command(&node, &root, &removal_doc, agent.as_ref()).await?;
-            let uncertain = access.execute(&format!(r#"{{ AgentSessionInputEdit(docID: "{}") {{ receipt_json }} AgentRequest(docID: "{}") {{ lifecycle_state failure_reason }} }}"#, escape_graphql_string(&removal_doc), escape_graphql_string(&removed_doc))).await?;
-            assert_eq!(
-                uncertain["data"]["AgentSessionInputEdit"][0]["receipt_json"],
-                "{}"
-            );
-            assert_eq!(
-                uncertain["data"]["AgentRequest"][0],
-                removed["data"]["AgentRequest"][0]
-            );
-            assert_eq!(case["unprovenRemovalPending"], true);
-            access
-                .delete_actor_relationship(
-                    "AgentRequest",
-                    &receipt.request_doc_ids[0],
-                    "working_agent",
-                    &::identity::Did::new(&binding.agent_did)?,
-                )
-                .await?;
-            process_command(&node, &root, &command_doc, agent.as_ref()).await?;
-            let decision = agent_access
-                .transact_readonly("test.edit.revoke", |txn| {
-                    let doc = &receipt.request_doc_ids[0];
-                    let agent_did = &binding.agent_did;
-                    Box::pin(async move {
-                        let decisions = txn
-                            .observe_document_access(
-                                &::identity::Did::new(agent_did)?,
-                                "AgentRequest",
-                                std::slice::from_ref(doc),
-                                defra_node::DocumentAccessMode::Named {
-                                    permission: "update".into(),
-                                    node_permission: NodePermission::DocumentUpdate,
-                                },
-                            )
-                            .await?;
-                        Ok::<_, anyhow::Error>(decisions)
-                    })
-                })
-                .await?;
-            let no_regrant = decision.as_slice() == [defra_node::DocumentAccessDecision::Denied];
-            assert_eq!(no_regrant, case["noRegrant"].as_bool().unwrap());
         } else {
             assert_eq!(old["data"]["AgentRequest"][0]["lifecycle_state"], "pending");
             assert!(receipt.request_doc_ids.is_empty());
         }
+        let mut removed_request = original.clone();
+        removed_request.request_id = "removal-only".into();
+        removed_request.content = "remove this pending message".into();
+        gents_session::request::admission::sign_agent_request_create(&user, &mut removed_request)
+            .await?;
+        gents_session::request::lifecycle::submit_client_request(&access, &removed_request).await?;
+        let pending = access
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "removal-only"}}) {_docID} }"#)
+            .await?;
+        let removed_doc = pending["data"]["AgentRequest"][0]["_docID"]
+            .as_str()
+            .context("removal request missing")?
+            .to_owned();
+        let mut removal = SessionInputEdit {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: uuid::Uuid::new_v4().to_string(),
+            requester_did: user.did().into(),
+            requester_peer_id: None,
+            node_did: root.did().into(),
+            session_id: command.session_id.clone(),
+            session_doc_id: command.session_doc_id.clone(),
+            agent_did: command.agent_did.clone(),
+            agent_doc_id: command.agent_doc_id.clone(),
+            issued_at: (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
+            expires_at: (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
+            edit: PendingQueueEdit {
+                expected_request_doc_ids: if applied {
+                    vec![removed_doc.clone()]
+                } else {
+                    vec![old_doc.clone(), removed_doc.clone()]
+                },
+                selected_request_doc_ids: vec![removed_doc.clone()],
+                messages: vec![],
+            },
+            replacements: vec![],
+            replacement_evidence: vec![],
+            signature: vec![],
+        };
+        removal.signature = user.sign(&removal.signing_payload()).await?;
+        let removal_doc =
+            gents_session::request::lifecycle::queue::publish_edit_command(&access, &removal)
+                .await?;
+        process_command(&node, &root, &removal_doc, agent.as_ref()).await?;
+        let removed = access
+            .execute(&format!(
+                r#"{{ AgentRequest(docID: "{}") {{ lifecycle_state failure_reason }} }}"#,
+                escape_graphql_string(&removed_doc)
+            ))
+            .await?;
+        assert_eq!(
+            removed["data"]["AgentRequest"][0]["lifecycle_state"],
+            "interrupted"
+        );
+        agent_access.write("test.edit.lost_removal_receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{{}}" }}) {{ _docID }} }}"#, escape_graphql_string(&removal_doc))).await?;
+        process_command(&node, &root, &removal_doc, agent.as_ref()).await?;
+        let uncertain = access.execute(&format!(r#"{{ AgentSessionInputEdit(docID: "{}") {{ receipt_json }} AgentRequest(docID: "{}") {{ lifecycle_state failure_reason }} }}"#, escape_graphql_string(&removal_doc), escape_graphql_string(&removed_doc))).await?;
+        let unproven_removal_pending =
+            uncertain["data"]["AgentSessionInputEdit"][0]["receipt_json"] == "{}"
+                && uncertain["data"]["AgentRequest"][0] == removed["data"]["AgentRequest"][0];
+        let regrant_doc = if applied {
+            receipt.request_doc_ids[0].clone()
+        } else {
+            old_doc.clone()
+        };
+        access
+            .delete_actor_relationship(
+                "AgentRequest",
+                &regrant_doc,
+                "working_agent",
+                &::identity::Did::new(&binding.agent_did)?,
+            )
+            .await?;
+        process_command(&node, &root, &command_doc, agent.as_ref()).await?;
+        let decision = agent_access
+            .transact_readonly("test.edit.revoke", |txn| {
+                let doc = &regrant_doc;
+                let agent_did = &binding.agent_did;
+                Box::pin(async move {
+                    let decisions = txn
+                        .observe_document_access(
+                            &::identity::Did::new(agent_did)?,
+                            "AgentRequest",
+                            std::slice::from_ref(doc),
+                            defra_node::DocumentAccessMode::Named {
+                                permission: "update".into(),
+                                node_permission: NodePermission::DocumentUpdate,
+                            },
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>(decisions)
+                })
+            })
+            .await?;
+        let no_regrant = decision.as_slice() == [defra_node::DocumentAccessDecision::Denied];
         node.shutdown().await?;
+        case.check(
+            gents_lean_vocab::families::session_input_edit_claim::ClaimOutput {
+                tampered_accepted,
+                applied,
+                rollback_replacement: rollback.0,
+                rollback_receipt: rollback.1,
+                no_regrant,
+                unproven_removal_pending,
+            },
+        );
     }
     Ok(())
 }

@@ -46,8 +46,6 @@ mod coverage;
 mod enrollment;
 #[path = "conformance/eval.rs"]
 mod eval;
-#[path = "conformance/hooks.rs"]
-mod hooks;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
 #[path = "conformance/p2p_replication.rs"]

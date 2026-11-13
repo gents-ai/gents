@@ -788,13 +788,20 @@ private def carrierString : Carrier → String
   | .transparent => "transparent"
   | .stringified => "stringified"
 
-private def rerunCaseJson (path : List Carrier) : String :=
-  "{\"name\":" ++ jsonString ("direct" :: path.map carrierString |>.foldl
-      (fun acc part => if acc.isEmpty then part else acc ++ "_" ++ part) "") ++
-    ",\"path\":" ++ jsonStringArray (path.map carrierString) ++
-    ",\"rerun\":" ++ boolJson (rerunSurvives path) ++ "}"
+deriving instance Lean.ToJson for Carrier
 
-def rerunCasesJson : String := jsonArray (rerunPaths.map rerunCaseJson)
+structure RerunInput where
+  name : String
+  path : List Carrier
+  deriving Lean.ToJson
+
+@[conformance_family]
+def rerun : Conformance.Family RerunInput Bool where
+  inputs := rerunPaths.map fun path =>
+    { name := ("direct" :: path.map carrierString).foldl
+        (fun acc part => if acc.isEmpty then part else acc ++ "_" ++ part) ""
+      path }
+  model := fun i => rerunSurvives i.path
 
 /-! The Goals instance at resume: `Hooks.GoalResume.restage`, `bind` and
 `resumeGoal`. -/

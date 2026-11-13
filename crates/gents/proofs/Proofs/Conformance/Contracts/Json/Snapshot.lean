@@ -152,6 +152,7 @@ import Proofs.Store.Identity.PublicationConformance
 import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
+import Proofs.Conformance.Identity.DelegatedFinality
 import Proofs.Store.Identity.OperationsConformance
 import Proofs.Conformance.Identity.EvalRecords
 import Proofs.Conformance.Identity.OptimizationPromotion
@@ -181,6 +182,7 @@ import Proofs.Store.Identity.AgentTargetAccess
 import Proofs.Conformance.NativeRoute
 import Proofs.Session.Identity.SessionInputEdit
 import Proofs.Automation.EventDelivery.WatcherConformance
+import Proofs.Conformance.WatcherActors
 import Proofs.Conformance.ClientInstallation
 import Proofs.Conformance.RuntimeServiceReplacement
 import Proofs.Conformance.ClientSettings
@@ -353,8 +355,6 @@ def snapshotCoverageTailJson : String :=
   ""
     ++ "\"trigger_delivery_callback_visibility_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryCallbackVisibilityCasesJson ++ ","
     ++ "\"trigger_delivery_latest_admission_cases\":" ++ Conformance.TriggerDelivery.triggerDeliveryLatestAdmissionCasesJson ++ ","
-    ++ "\"watcher_actor_cases\":"
-      ++ EventDelivery.WatcherConformance.actorCasesJson ++ ","
     ++ "\"watcher_scoped_scan_cases\":"
       ++ EventDelivery.WatcherConformance.casesJson ++ ","
     ++ "\"coverage_ledger\":"
@@ -389,14 +389,10 @@ def snapshotGoalCasesJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
-    ++ "\"goal_wake_receipt_cases\":"
-      ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
     ++ "\"tool_admission_handoff_cases\":"
       ++ CanonicalOutput.Execution.AdmissionHandoff.Cases.casesJson ++ ","
     ++ "\"delegated_publication_cases\":"
       ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
-    ++ "\"delegated_finality_cases\":"
-      ++ Identity.DelegatedFinality.casesJson ++ ","
 
 def snapshotGoalMutationCasesJson : String :=
   ""
@@ -423,27 +419,18 @@ def snapshotRequestCasesJson : String :=
       ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
-    ++ "\"canonical_worker_capacity_cases\":"
-      ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
     ++ "\"process_transition_cases\":"
       ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
-    ++ "\"goal_claimed_readiness_cases\":"
-      ++ Conformance.GoalClaimedReadiness.casesJson ++ ","
     ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
     ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
-    ++ "\"lifecycle_hook_rerun_cases\":"
-      ++ Conformance.HooksContracts.rerunCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
-    ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
-    ++ "\"agent_request_admission_cases\":"
-      ++ agentRequestAdmissionCasesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"
@@ -457,11 +444,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"identity_agent_creator_cases\":"
-      ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
-    ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
-    ++ "\"identity_private_journal_policy\":"
-      ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
     ++ "\"client_publication_protected_collection\":"
       ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
     ++ "\"identity_parent_publication_cases\":"
@@ -549,8 +531,6 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"count_carrier_cases\":" ++ Conformance.CountCarrier.casesJson ++ ","
     ++ "\"schema_argument_repair_cases\":"
       ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
-    ++ "\"invalid_tool_progress_cases\":"
-      ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
 
 def snapshotPluginCasesJson : String :=
   ""

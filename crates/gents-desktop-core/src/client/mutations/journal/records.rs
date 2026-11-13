@@ -116,27 +116,19 @@ mod signer_tests {
             .build()
             .await
             .unwrap();
-        let snapshot = tokio::task::spawn_blocking(
-            gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
-        )
+        let cases = tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::families::client_agent_journal_local_signer::cases()
+        })
         .await
-        .unwrap()
         .unwrap();
-        let checks = snapshot["identity_private_journal_policy"]["signer_checks"]
-            .as_array()
-            .unwrap();
-        assert!(!checks.is_empty());
-        for case in checks {
-            let actor = match case["role"].as_str().unwrap() {
+        for case in cases {
+            let actor = match case.input.role.as_str() {
                 "client" => client.did(),
                 "other" => other.did(),
                 "empty" => "",
-                _ => panic!("unknown modeled signer"),
+                role => panic!("unknown modeled signer {role}"),
             };
-            assert_eq!(
-                require_client_signer(&node, actor).is_ok(),
-                case["expected"].as_bool().unwrap()
-            );
+            case.check(require_client_signer(&node, actor).is_ok());
         }
         node.shutdown().await.unwrap();
     }

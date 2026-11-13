@@ -14,12 +14,6 @@ def agentCreatorCases : List (String × AgentCreatorObservation) :=
    ("native-create-denied", { valid with nativeCreate := false }),
    ("native-relation-denied", { valid with nativeRelation := false })]
 
-def agentCreatorCasesJson : String := (toJson (agentCreatorCases.map fun (name, o) =>
-  Json.mkObj [("name", toJson name), ("runtime_matches", toJson o.runtimeMatches),
-    ("signer_held", toJson o.signerHeld), ("signer_matches", toJson o.signerMatches),
-    ("native_create", toJson o.nativeCreate), ("native_relation", toJson o.nativeRelation),
-    ("allowed", toJson (agentCreatorMayPublish o))])).compress
-
 def freshBootstrap : BootstrapObservation := ⟨true, true, true, true, true, true, true, true, false⟩
 
 def bootstrapCases : List (String × BootstrapObservation) :=

@@ -6,18 +6,18 @@ namespace Conformance.ContractCases
 
 open Enrollment
 
-private def requestAdmissionKindName : AgentRequestAdmissionKind → String
+def requestAdmissionKindName : AgentRequestAdmissionKind → String
   | .enrollment => "enrollment"
   | .client => "client"
   | .localSelf => "local-self"
   | .runtimeInternal => "runtime-internal"
   | .peer => "peer"
 
-private def runtimeInternalSourceKindName : RuntimeInternalSourceKind → String
+def runtimeInternalSourceKindName : RuntimeInternalSourceKind → String
   | .localControl => "local-control"
   | .automatedTrigger => "automated-trigger"
 
-private def requestAdmissionDispositionName : AgentRequestAdmissionDisposition → String
+def requestAdmissionDispositionName : AgentRequestAdmissionDisposition → String
   | .admit => "admit"
   | .deny => "deny"
   | .retry => "retry"

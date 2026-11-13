@@ -1642,6 +1642,9 @@ mod relationship_readiness_tests;
 #[cfg(test)]
 mod unattended_tests;
 
+#[cfg(test)]
+mod projection_conformance;
+
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod workspace_cleanup_tests;
 

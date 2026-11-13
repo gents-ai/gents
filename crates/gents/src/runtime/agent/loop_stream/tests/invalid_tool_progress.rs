@@ -1,17 +1,30 @@
 #[tokio::test]
-async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().invalid_tool_progress_cases;
-    assert_eq!(cases.len(), 11);
+async fn invalid_tool_progress_composition_drives_owned_loop() {
+    let cases = gents_lean_vocab::families::invalid_tool_progress_contracts_composed::cases::<
+        String,
+        String,
+        String,
+    >();
     for case in cases {
         let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
         let node = db.node.clone();
-        let outcomes = &case.outcomes;
-        let mut turns = outcomes
+        let name = case.input.name.clone();
+        let mut turns = case
+            .input
+            .outcomes
             .iter()
             .enumerate()
             .map(|(index, outcome)| {
+                let fixture = match outcome.as_str() {
+                    "invalid_arguments" => "invalidArguments",
+                    "policy_denied" => "policyDenied",
+                    "unknown_tool" => "unknownTool",
+                    "success" => "success",
+                    "ordinary_failure" => "ordinaryFailure",
+                    other => panic!("{name}: no fixture outcome for {other}"),
+                };
                 vec![
-                    invalid_progress_call(index, outcome.as_str()),
+                    invalid_progress_call(index, fixture),
                     RawStreamingChoice::FinalResponse(()),
                 ]
             })
@@ -37,41 +50,27 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
         )
         .await;
-        let name = case.name.as_str();
-        let actions = case
-            .composed_actions
-            .iter()
-            .map(|action| action.as_str())
+        let ending = collected.error.as_deref().map(|error| {
+            if error.contains("invalid_tool_call_budget_exhausted:") {
+                "invalid_exhausted".to_string()
+            } else if error.contains(REPEATED_TOOL_FAILURE_PREFIX) {
+                "repeated_failure".to_string()
+            } else {
+                panic!("{name}: unexpected loop error {error}")
+            }
+        });
+        let calls = model.seen_requests().await.len() - usize::from(ending.is_none());
+        let actions = (0..calls.max(collected.tool_results.len()))
+            .map(|index| match collected.tool_results.get(index) {
+                Some(result) if result.contains("repeated_tool_call_not_run") => {
+                    "suppress".to_string()
+                }
+                Some(_) => "dispatch".to_string(),
+                None => "stop".to_string(),
+            })
             .collect::<Vec<_>>();
-        let ending = case.composed_ending.as_deref();
-        let error = collected.error.as_deref();
-        assert_eq!(error.is_some(), ending.is_some(), "{name}: {error:?}");
-        match (ending, error) {
-            (Some("invalidExhausted"), Some(error)) => {
-                assert!(
-                    error.contains("invalid_tool_call_budget_exhausted:"),
-                    "{error}"
-                )
-            }
-            (Some("repeatedFailure"), Some(error)) => {
-                assert!(error.contains(REPEATED_TOOL_FAILURE_PREFIX), "{error}")
-            }
-            (None, None) => {}
-            other => panic!("{name}: unexpected ending {other:?}"),
-        }
-        let answered = actions.iter().filter(|action| **action != "stop").count();
-        assert_eq!(
-            collected.tool_results.len(),
-            answered,
-            "{name} must emit the last result before failing"
-        );
-        assert_eq!(
-            model.seen_requests().await.len(),
-            actions.len() + usize::from(ending.is_none()),
-            "{name} must not dispatch a suffix"
-        );
         let rows = tool_call_rows(&lifecycle.access().unwrap()).await;
-        let answered_rows = (0..answered)
+        let answered_rows = (0..collected.tool_results.len())
             .map(|index| {
                 rows.iter()
                     .find(|row| row["tool_call_id"] == format!("invalid-progress-{index}"))
@@ -91,10 +90,6 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
                 )
             })
             .count();
-        assert_eq!(
-            charged as u64, case.composed_invalid_used,
-            "{name} typed outcome mapping"
-        );
         for (index, row) in answered_rows.iter().enumerate() {
             let output = agent_tool_output(&lifecycle, row["_docID"].as_str().unwrap()).await;
             assert!(
@@ -103,5 +98,12 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             );
         }
         node.shutdown().await.expect("node shutdown");
+        case.check(
+            gents_lean_vocab::families::invalid_tool_progress_contracts_composed::ComposedOutput {
+                composed_actions: actions,
+                composed_ending: ending,
+                composed_invalid_used: charged as u64,
+            },
+        );
     }
 }

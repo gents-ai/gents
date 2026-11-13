@@ -17,6 +17,8 @@ pub mod prepared;
 mod pushdown_tests;
 pub mod queue_scope;
 pub mod registry;
+#[cfg(test)]
+mod rerun_conformance;
 mod revisions;
 pub mod stage;
 pub mod supersede;

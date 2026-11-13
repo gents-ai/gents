@@ -1714,8 +1714,8 @@ The model proves bounded counts over arbitrary finite traces, monotonic usage,
 a strictly decreasing remaining allowance on accepted invalid outcomes, and
 absorbing exhaustion. This bounds invalid churn, not infinite valid work or
 storage/provider availability. Outcome classification and persistence ordering
-remain runtime consumer obligations. Eleven generated traces in
-`invalid_tool_progress_cases` drive the real owned loop and persistence hook,
+remain runtime consumer obligations. Eleven traces of the
+`invalid_tool_progress_contracts_composed` family drive the real owned loop and persistence hook,
 checked against their composition with `RepeatedToolFailure`; the model is not
 a second lifecycle or permission owner.
 
@@ -1748,8 +1748,8 @@ that a call at the limit is never dispatched, that other calls are, that
 charged outcomes never count, that hook-handled calls not stopped reset, that suppression
 spends one allowance unit, and that an unbounded identical failure stops on
 the fifth call. Interleaved repeats are left to the turn cap and other
-budgets. The `repeated_tool_failure_contracts_owned_loop` family and the composed fields of
-`invalid_tool_progress_cases` drive the real owned loop and persistence hook.
+budgets. The `repeated_tool_failure_contracts_owned_loop` and
+`invalid_tool_progress_contracts_composed` families drive the real owned loop and persistence hook.
 
 ### Logical invocation output obligations
 
