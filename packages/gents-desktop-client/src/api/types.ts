@@ -249,10 +249,7 @@ export type DesktopApiAdapter = {
       limit?: number;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
-  reloadSession: (
-    sessionId: string,
-    nodeDid?: string | null,
-  ) => Promise<void>;
+  reloadSession: (sessionId: string, nodeDid?: string | null) => Promise<void>;
   /** A stretch of a session's display rows by message number, without the
    *  session's request state. */
   fetchSessionRows: (request: {
@@ -481,14 +478,18 @@ export type DesktopApiAdapter = {
   /** installs a pack, or with `preview` reports what installing it would write */
   installPack: (request: PackInstallRequest) => Promise<PackInstallReport>;
   updatePack: (pack: string, edited: PackEditedChoice) => Promise<void>;
-  removePack: (pack: string) => Promise<void>;
+  /** `edited` says what becomes of the pack's documents edited since it was
+      installed: refused by default, or deleted with the rest (`overwrite`). */
+  removePack: (pack: string, edited?: PackEditedChoice) => Promise<void>;
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
   wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
   listPackWireSources: () => Promise<PackWireSources>;
   /** the packs the Engineer starts with on the local node, and how each stands */
   listDefaultPacks: () => Promise<DefaultPacks>;
   /** installs the approved packs; the local node restarts around the install */
-  approveDefaultPacks: (packs: DefaultPackApproval[]) => Promise<DefaultPacksApproval>;
+  approveDefaultPacks: (
+    packs: DefaultPackApproval[],
+  ) => Promise<DefaultPacksApproval>;
   listDynamicWorkflows: () => Promise<DynamicWorkflows>;
   getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
   promoteWorkflow: (
@@ -515,7 +516,10 @@ export type DesktopApiAdapter = {
   listUxPlugins: (
     nodeDid?: string | null,
   ) => Promise<{ plugins: UxPluginListing[]; pagesError?: string | null }>;
-  readUxPluginSource: (id: string, nodeDid?: string | null) => Promise<UxPluginSource>;
+  readUxPluginSource: (
+    id: string,
+    nodeDid?: string | null,
+  ) => Promise<UxPluginSource>;
   callPackPlugin: (
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;

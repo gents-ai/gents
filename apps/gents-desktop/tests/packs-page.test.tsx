@@ -355,6 +355,58 @@ describe("the Packs page", () => {
     );
   });
 
+  it("describes each installed pack from the list itself, asking the registry for none", async () => {
+    const packInfo = vi.fn(async () => ({ description: "From its own page" }));
+    show(undefined, {
+      listInstalledPacks: async () => ({
+        packs: [
+          {
+            ...research,
+            description: "Searches the web and writes a cited summary.",
+            owner: "me",
+          },
+          { ...research, pack: "acme/notes", outdated: false, owner: "acme" },
+        ],
+      }),
+      readPackAccount: async () => ({ account: { username: "me" } }),
+      packInfo,
+    });
+    const installed = await screen.findByRole("list", { name: "Installed packs" });
+    const rows = within(installed).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(
+      within(rows[0]!).getByText("Searches the web and writes a cited summary."),
+    ).toBeInTheDocument();
+    expect(await within(rows[0]!).findByText("Yours")).toBeInTheDocument();
+    expect(within(rows[1]!).queryByText("Yours")).toBeNull();
+    await act(async () => {});
+    expect(packInfo).not.toHaveBeenCalled();
+  });
+
+  it("updates every pack that has an update, one after another", async () => {
+    const updated: string[] = [];
+    let running = 0;
+    show(undefined, {
+      listInstalledPacks: async () => ({
+        packs: [
+          research,
+          { ...research, pack: "acme/notes" },
+          { ...research, pack: "acme/current", latest: "1.0.0", outdated: false },
+        ],
+      }),
+      updatePack: async (pack: string) => {
+        expect(running).toBe(0);
+        running += 1;
+        await Promise.resolve();
+        updated.push(pack);
+        running -= 1;
+      },
+    });
+    await screen.findByRole("list", { name: "Installed packs" });
+    fireEvent.click(screen.getByRole("button", { name: "Update all" }));
+    await waitFor(() => expect(updated).toEqual([RESEARCH, "acme/notes"]));
+  });
+
   it("says a registry pack has no version yet, in place of Install", async () => {
     show(undefined, {
       searchPacks: async () => ({
@@ -515,6 +567,26 @@ describe("the Packs page", () => {
     expect(
       await within(registry).findByRole("button", { name: "Install" }),
     ).toBeDisabled();
+  });
+
+  it("lists a pack's versions without Install on a node it can't install on", async () => {
+    withFlags({ packs: true });
+    const app = testApp({
+      api: {
+        installPack: async () => {
+          throw new Error("not previewed in this test");
+        },
+        packInfo: async () => ({
+          latest: "1.1.0",
+          versions: [{ version: "1.0.0" }, { version: "1.1.0" }],
+        }),
+      },
+      deployments: [{ ...node, nodeDid: "did:key:remote", source: "peer" }],
+    });
+    renderIn(app, <PacksScreen item="acme/docs" />);
+    const versions = await screen.findByRole("region", { name: "Versions" });
+    expect(within(versions).getByText("1.0.0")).toBeInTheDocument();
+    expect(within(versions).queryByRole("button")).toBeNull();
   });
 });
 

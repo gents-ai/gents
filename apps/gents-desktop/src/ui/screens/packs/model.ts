@@ -141,6 +141,7 @@ export const keepPackPlace = (place: string, patch: Partial<PackPlace>) =>
 
 export function resetInstalledPacks() {
   installed.setState({ packs: null, unread: null, info: {} }, true);
+  account.setState({ username: undefined });
   listView.setState({ registry: null, scroll: { installed: 0, registry: 0 } });
   packPlaces.setState({}, true);
 }

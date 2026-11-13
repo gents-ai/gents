@@ -22,15 +22,16 @@ export function createPackCommands(
     readPackAccount: () => invokeDesktop("desktop_pack_whoami"),
     searchPacks: (query: string, page: number) =>
       invokeDesktop("desktop_pack_search", { query, page }),
-    packInfo: (pack: string) => invokeDesktop("desktop_pack_info", { package: pack }),
+    packInfo: (pack: string) =>
+      invokeDesktop("desktop_pack_info", { package: pack }),
     installPack: (request: PackInstallRequest) =>
       invokeDesktop("desktop_pack_install", { request }),
     updatePack: (pack: string, edited: PackEditedChoice) =>
       invokeDesktop("desktop_pack_update", { package: pack, edited }).then(
         () => undefined,
       ),
-    removePack: (pack: string) =>
-      invokeDesktop("desktop_pack_remove", { package: pack }).then(
+    removePack: (pack: string, edited: PackEditedChoice = "refuse") =>
+      invokeDesktop("desktop_pack_remove", { package: pack, edited }).then(
         () => undefined,
       ),
     bindPackPlugin: (plugin: string, profile: string | null) =>

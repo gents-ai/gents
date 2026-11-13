@@ -61,7 +61,6 @@ import {
   partsOf,
   publisherOf,
   readInstalledPacks,
-  readPackInfo,
   readRegistryAccount,
   rememberPacksAuthor,
   rememberPacksQuery,
@@ -326,7 +325,7 @@ function PacksHome({
   scroller: HTMLElement | null;
 }) {
   const { actions } = useApp();
-  const { packs, unread, info } = useInstalledPacks();
+  const { packs, unread } = useInstalledPacks();
   const records = useUxPluginRecords();
   const pages = useContributions(PLUGIN_PAGE_AREA);
   const { busy, install, update, remove } = packActions;
@@ -354,9 +353,6 @@ function PacksHome({
   const plugins = localPlugins(records);
   const blocked = elsewhere(local, name);
 
-  useEffect(() => {
-    if (local) for (const p of packs ?? []) void readPackInfo(actions, p.pack);
-  }, [actions, local, packs]);
   useEffect(() => {
     void readRegistryAccount(actions);
   }, [actions]);
@@ -484,22 +480,21 @@ function PacksHome({
           ) : (
             <PackList label="Installed packs">
               {shown.map((p) => {
-                const read = info[p.pack];
                 const status = statusOf(p);
                 return (
                   <PackCard
                     key={p.pack}
                     pack={p.pack}
                     to={href({ name: "packs", item: p.pack })}
-                    description={
-                      read && read !== "unread" ? text(read.description) : null
-                    }
+                    /* the registry's words came with the list: no
+                       request for each pack */
+                    description={text(p.description)}
                     adds={
                       node ? partsOf(node, p.pack, records, pages).map(partLabel) : []
                     }
                     status={status.text}
                     warn={status.warn}
-                    badge={publisherOf(read, me)?.yours ? "Yours" : null}
+                    badge={publisherOf({ owner: p.owner }, me)?.yours ? "Yours" : null}
                     menu={
                       <PackMenu
                         opens
@@ -511,7 +506,7 @@ function PacksHome({
                             : []),
                           {
                             label: "Remove",
-                            run: () => void remove(p.pack),
+                            run: () => void remove(p.pack, node),
                             destructive: true,
                           },
                         ]}

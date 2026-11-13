@@ -210,7 +210,8 @@ describe("a pack's page before it's installed", () => {
     show(installPack, { name: "packs", review: packPreviewKey(linked) });
     const adds = await wouldAdd();
     await within(adds).findByText("Writer");
-    expect(screen.getByText(/From a link/)).toBeInTheDocument();
+    expect(screen.getByText(/pinned by the link/)).toBeInTheDocument();
+    expect(screen.queryByText(/From a link/)).toBeNull();
     expect(previews(installPack)[0]).toMatchObject({
       package: "acme/docs@2.0.0",
       expectDigest: DIGEST,
@@ -221,6 +222,34 @@ describe("a pack's page before it's installed", () => {
       .setup()
       .click(within(page).getByRole("button", { name: "Install" }));
     expect(await screen.findByTestId("pack-install-review")).toBeInTheDocument();
+    expect(installs(installPack)).toEqual([]);
+  });
+
+  it("says nothing of a link that pins no version", async () => {
+    const linked: PackReviewRequest = { package: "acme/docs", source: "link" };
+    show(bridge(), { name: "packs", review: packPreviewKey(linked) });
+    await within(await wouldAdd()).findByText("Writer");
+    expect(screen.queryByText(/pinned by the link|From a link/)).toBeNull();
+  });
+
+  it("says a link's pack isn't the one it names, and offers no Install", async () => {
+    const linked: PackReviewRequest = {
+      package: "acme/docs",
+      source: "link",
+      digest: "sha256:0000",
+    };
+    const installPack = bridge(() => {
+      throw new Error(
+        `the pack's digest is ${DIGEST}, not the expected sha256:0000. Nothing was installed.`,
+      );
+    });
+    show(installPack, { name: "packs", review: packPreviewKey(linked) });
+    const adds = await wouldAdd();
+    expect(
+      await within(adds).findByText(/This isn't the pack the link names/),
+    ).toBeVisible();
+    const page = screen.getByTestId("pack-page");
+    expect(within(page).getByRole("button", { name: "Install" })).toBeDisabled();
     expect(installs(installPack)).toEqual([]);
   });
 

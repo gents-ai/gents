@@ -5,7 +5,18 @@ import { useApp } from "@/app/AppContext";
 import { refreshRuntimePackUxPlugins } from "@/contrib/runtime-door";
 import { errorText } from "../../../lib/errorText";
 import type { PackReviewRequest } from "@/lib/packReview";
+import type { NodeView } from "../../../hooks/fleetStore";
 import { forgetSetAsideReview } from "../packs/preview";
+import { shortName } from "../packs/model";
+import {
+  editedDocuments,
+  editedQuestion,
+  failedWithDetails,
+  packUses,
+  refusedRemoval,
+  removalQuestion,
+  type PackUse,
+} from "../packs/removal";
 
 /** An install or update that would replace documents someone edited stops and
     names them; the person chooses keep or overwrite. Read from the error's
@@ -112,18 +123,64 @@ export function usePackActions(refresh: () => Promise<void>) {
     }
   }
 
-  /** whether the pack was removed */
-  async function remove(pack: string): Promise<boolean> {
-    if (!window.confirm(`Remove ${pack} and everything it installed?`)) return false;
+  /** The agents on `node` whose tools select the pack's plugins. Unknown
+      when the plugins can't be listed: the removal then goes ahead as it
+      did, and a refusal names who uses them. */
+  async function usesOf(pack: string, node: NodeView | null): Promise<PackUse[]> {
+    if (!node) return [];
+    try {
+      return packUses(node, await actions.listPackWireSources(), pack);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Whether the pack was removed. Agents whose tools select its plugins
+      are named before it's removed, and each plugin comes out of their
+      tools first: the runtime won't retire a plugin a tool set selects. */
+  async function remove(pack: string, node: NodeView | null): Promise<boolean> {
+    const uses = await usesOf(pack, node);
+    if (!window.confirm(removalQuestion(pack, uses))) return false;
     setBusy(pack);
     try {
-      await actions.removePack(pack);
+      for (const use of uses) {
+        for (const plugin of use.plugins) {
+          try {
+            await actions.wirePack({
+              plugin,
+              agent: use.agentDid,
+              targetsFrom: [],
+              remove: true,
+              preview: false,
+            });
+          } catch (error) {
+            failedWithDetails(
+              `Couldn't take ${shortName(plugin)} out of ${use.name}'s tools, so ${shortName(pack)} wasn't removed.`,
+              errorText(error),
+            );
+            return false;
+          }
+        }
+      }
+      try {
+        await actions.removePack(pack);
+      } catch (error) {
+        /* documents of the pack's own edited since it was installed: say
+           which, and delete them with the rest only when asked */
+        const edited = editedDocuments(errorText(error));
+        if (!edited) throw error;
+        if (!window.confirm(editedQuestion(pack, edited))) return false;
+        await actions.removePack(pack, "overwrite");
+      }
       toast.success(`Removed ${pack}`);
       await refresh();
       void refreshPages(pack);
       return true;
     } catch (error) {
-      toast.error(errorText(error));
+      const text = errorText(error);
+      const refused = refusedRemoval(pack, text, node);
+      if (refused) failedWithDetails(refused, text);
+      else toast.error(text);
       return false;
     } finally {
       setBusy(null);

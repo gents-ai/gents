@@ -364,7 +364,11 @@ export function PackPage({
   const versions = versionsOf(registry);
   const latest = text(registry?.latest) ?? versions[0]?.version ?? null;
   const version = report?.version ?? latest;
-  const blocked = elsewhere(local, name);
+  /* a pack that couldn't be read for its review isn't offered: its review
+     would fail the same way, and a link's pack may not be the one named */
+  const unreadable =
+    previewing && preview?.state === "unread" ? readFailure(preview.error) : null;
+  const blocked = elsewhere(local, name) ?? unreadable;
   const description = text(registry?.description) ?? text(report?.description);
   const namespace = namespaceOf(pack);
   /* what it added that the configuration lists; its pages have a section
@@ -426,7 +430,8 @@ export function PackPage({
                       ? `Not installed · ${version}`
                       : "Not installed",
                 fromFile && `From ${requestedName(request!)}`,
-                request?.source === "link" && "From a link",
+                /* a link that names a digest installs that archive or nothing */
+                request?.source === "link" && request.digest && "pinned by the link",
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -500,7 +505,7 @@ export function PackPage({
                   label: "Remove",
                   destructive: true,
                   run: () =>
-                    void remove(pack).then(
+                    void remove(pack, node).then(
                       (removed) => removed && navigate({ name: "packs" }),
                     ),
                 },
@@ -694,6 +699,26 @@ export function PackPage({
                     .filter(Boolean)
                     .join(" · ")}
                 </span>
+                {/* any version the registry still offers, through the same
+                    review as the latest; the one installed has nothing to
+                    install */}
+                {local && pack && installed?.installed !== v.version && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="-my-1 text-muted-foreground hover:text-foreground"
+                    aria-label={`Install ${shortName(pack)} ${v.version}`}
+                    disabled={busy !== null}
+                    onClick={() =>
+                      reviewInstall({
+                        package: `${pack}@${v.version}`,
+                        source: "registry",
+                      })
+                    }
+                  >
+                    Install
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
