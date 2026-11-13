@@ -57,8 +57,8 @@ impl PrivateSessionFixture {
         .await;
     }
 
-    fn request(&self, session: &str) -> AgentRequest {
-        let mut request = request(Some(self.selected.did()), session);
+    fn request(&self, session: &str, agent: &str) -> AgentRequest {
+        let mut request = request(Some(agent), session);
         request.node_did = self.runtime.did().to_owned();
         request.requester_did = Some(self.user.did().to_owned());
         request
@@ -95,31 +95,41 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
             fixture.selected.did()
         };
         fixture.create_session("session-binding", bound, true).await;
-        let resolved =
-            resolve_agent_for_request(&fixture.db.node, &fixture.request("session-binding"))
-                .await
-                .unwrap()
-                .expect("the agent can read the session");
+        let resolved = resolve_agent_for_request(
+            &fixture.db.node,
+            &fixture.request("session-binding", fixture.selected.did()),
+        )
+        .await
+        .unwrap()
+        .expect("the agent can read the session");
         assert_eq!(resolved.agent_did, fixture.selected.did(), "{name}");
         assert_eq!(resolved.rejection_reason.is_none(), case.legal, "{name}");
         fixture.db.node.shutdown().await.unwrap();
     }
 }
 
+fn fixture_agent(fixture: &PrivateSessionFixture, id: u64) -> &str {
+    match id {
+        10 => fixture.selected.did(),
+        20 => fixture.other.did(),
+        other => panic!("the fixture has no agent {other}"),
+    }
+}
+
 #[tokio::test]
 async fn private_session_selection_is_actor_scoped_and_matches_lean() {
     let fixture = PrivateSessionFixture::new().await;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().runtime_session_selection_cases;
-    assert_eq!(cases.len(), 3);
-    for case in cases {
-        let name = case.name.as_str();
-        let bound = if name == "mismatched" {
-            fixture.other.did()
-        } else {
-            fixture.selected.did()
+    let cases =
+        gents_lean_vocab::families::contract_cases_runtime_session_selection::cases::<String>();
+    for case in &cases {
+        let name = case.input.name.as_str();
+        let requested = fixture_agent(&fixture, case.input.requested);
+        let bound = match case.input.visible {
+            Some(id) => fixture_agent(&fixture, id),
+            None => fixture.selected.did(),
         };
         fixture
-            .create_session(name, bound, name != "invisible")
+            .create_session(name, bound, case.input.visible.is_some())
             .await;
         let node_view = ConfigAccess::local_as(
             fixture.db.node.clone(),
@@ -138,7 +148,7 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
                 .is_empty(),
             "runtime must not read private session"
         );
-        let result = resolve_agent_for_request(&fixture.db.node, &fixture.request(name))
+        let result = resolve_agent_for_request(&fixture.db.node, &fixture.request(name, requested))
             .await
             .unwrap();
         let observed = match result {
@@ -146,13 +156,74 @@ async fn private_session_selection_is_actor_scoped_and_matches_lean() {
             Some(value) if value.rejection_reason.is_some() => "mismatched",
             Some(_) => "matched",
         };
-        assert_eq!(observed, case.expected.as_str(), "{name}");
+        case.check(observed.to_owned());
     }
-    assert!(
-        resolve_agent_for_request(&fixture.db.node, &fixture.request("missing"))
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(resolve_agent_for_request(
+        &fixture.db.node,
+        &fixture.request("missing", fixture.selected.did())
+    )
+    .await
+    .unwrap()
+    .is_none());
     fixture.db.node.shutdown().await.unwrap();
+}
+
+/// Lean `RuntimeState.materializedSessionVisible`: a runtime request written by
+/// the production pending-request owner carries its session, so the router's
+/// Agent-scoped selection finds it instead of leaving the request pending.
+#[tokio::test]
+async fn materialized_request_session_is_selectable_and_matches_lean() {
+    let cases =
+        gents_lean_vocab::families::contract_cases_runtime_materialized_session_selection::cases::<
+            String,
+        >();
+    assert!(!cases.is_empty(), "modeled materialized session selection");
+    for case in &cases {
+        assert!(
+            case.input.published_with_request,
+            "the pending-request owner always publishes the session: {}",
+            case.input.name
+        );
+        let (db, _user, _access, binding) =
+            crate::test_support::root::signed_test_node("materialized-session-selection").await;
+        let node_did = db.node_identity.did().to_owned();
+        let agent =
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let enqueued =
+        gents_session::request::lifecycle::materialize::write_pending_agent_request_with_identity(
+            &db.node,
+            identity::Did::new(agent.did()).unwrap(),
+            &node_did,
+            agent.did(),
+            "materialized selection probe",
+            gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+            gents_session::request::lifecycle::TriggerLineage {
+                trigger_id: None,
+                trigger_kind: Some("manual".into()),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+            },
+            Some("materialized probe"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(agent.as_ref()),
+        )
+        .await
+        .unwrap();
+        let mut routed = request(Some(agent.did()), &enqueued.session_id);
+        routed.node_did = node_did;
+        routed.requester_did = Some(agent.did().to_owned());
+        let observed = match resolve_agent_for_request(&db.node, &routed).await.unwrap() {
+            None => "unavailable",
+            Some(value) if value.rejection_reason.is_some() => "mismatched",
+            Some(_) => "matched",
+        };
+        case.check(observed.to_owned());
+        db.node.shutdown().await.unwrap();
+    }
 }

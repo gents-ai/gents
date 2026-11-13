@@ -8,5 +8,6 @@ import Proofs.Shared.ToolPolicy.WriteInput
 import Proofs.Tools.ToolPolicy.PluginCalls
 import Proofs.Tools.ToolPolicy.PluginApproval
 import Proofs.Tools.ToolPolicy.PluginData
+import Proofs.Tools.ToolPolicy.PluginHostServices
 
 import Proofs.Tools.ToolPolicy.WorkspacePermissions

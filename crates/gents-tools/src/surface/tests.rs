@@ -2288,19 +2288,31 @@ async fn agent_config_alias_expands_to_config_scope() {
     }
 }
 
+fn command_mode_wire(mode: crate::native::CommandExecutionMode) -> String {
+    use crate::native::CommandExecutionMode as Mode;
+    let wire = match mode {
+        Mode::ReadOnly => "read_only",
+        Mode::WorkspaceWrite => "workspace_write",
+        Mode::Unrestricted => "unrestricted",
+        Mode::ArtifactWrite => "artifact_write",
+    };
+    wire.to_string()
+}
+
 #[test]
-fn artifact_selection_preserves_effect_only_after_bash_and_operator_ceilings() {
-    use crate::native::CommandExecutionMode;
+fn artifact_selection_matches_the_lean_model() {
+    use crate::native::{CommandNetworkMode, NativeTool};
     let root = temp_root("artifact-selection-ceilings");
-    for (bash_mode, readonly_ceiling, expected) in [
-        ("Unrestricted", false, CommandExecutionMode::ArtifactWrite),
-        ("Unrestricted", true, CommandExecutionMode::ReadOnly),
-        ("ReadOnly", false, CommandExecutionMode::ReadOnly),
-    ] {
+    gents_lean_vocab::families::tool_surface_artifact_selection::replay(|input| {
+        let bash_mode = if input.bash_unrestricted {
+            "Unrestricted"
+        } else {
+            "ReadOnly"
+        };
         let selection = ResolvedToolSelection::from_document(&tools_document(serde_json::json!({
             "host":{"bash":{"mode":bash_mode,"execution_mode":"artifact_write","network_mode":"disabled"}}
         }))).unwrap();
-        let ceiling = if readonly_ceiling {
+        let ceiling = if input.read_only_ceiling {
             ToolCeiling::readonly_at(&root)
         } else {
             ToolCeiling::readwrite(&root)
@@ -2312,21 +2324,24 @@ fn artifact_selection_preserves_effect_only_after_bash_and_operator_ceilings() {
             Vec::new(),
         )
         .unwrap();
-        assert_eq!(config.static_policy().bash.execution_mode, expected);
-        assert_eq!(
-            config.static_policy().bash.network_mode,
-            crate::native::CommandNetworkMode::Disabled
-        );
-        for tool in config.host_tools().native_tools() {
-            match tool {
-                crate::native::NativeTool::BashUnrestricted { policy, .. }
-                | crate::native::NativeTool::BashReadOnly { policy, .. } => {
-                    assert_eq!(policy.mode, expected);
-                }
-                _ => {}
-            }
+        let static_bash = &config.static_policy().bash;
+        gents_lean_vocab::families::tool_surface_artifact_selection::SelectionOutput {
+            static_mode: command_mode_wire(static_bash.execution_mode),
+            network_disabled: static_bash.network_mode == CommandNetworkMode::Disabled,
+            native_modes: config
+                .host_tools()
+                .native_tools()
+                .iter()
+                .filter_map(|tool| match tool {
+                    NativeTool::BashUnrestricted { policy, .. }
+                    | NativeTool::BashReadOnly { policy, .. } => {
+                        Some(command_mode_wire(policy.mode))
+                    }
+                    _ => None,
+                })
+                .collect(),
         }
-    }
+    });
 }
 
 #[test]

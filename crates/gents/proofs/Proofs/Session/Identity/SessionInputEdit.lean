@@ -63,11 +63,17 @@ def shouldSweep (notification resync tick : Bool) : Bool := notification || resy
 
 theorem tick_recovers_a_missed_notification : shouldSweep false false true = true := by rfl
 
-def discoveryCasesJson : String :=
-  (Lean.toJson (["agent", "other"].map fun actor => Lean.Json.mkObj
-    [("actor", Lean.toJson actor),
-     ("visible", Lean.toJson (!(discover fixture [actor] "edit-doc").isEmpty)),
-     ("selected", Lean.toJson (!(selectedForEffect (discover fixture [actor] "edit-doc") "agent").isEmpty))])).compress
+/-- The unanswered sweep selects a command by its receipt alone; the intent is
+not read until the command is processed. -/
+def unansweredSelected (receiptPresent : Bool) : Bool := !receiptPresent
+
+/-- Processing decodes the signed intent before any other check. An undecodable
+intent is an error, and the command stays unanswered. -/
+def processingFails (intentDecodes : Bool) : Bool := !intentDecodes
+
+theorem unanswered_sweep_discovers_malformed_command_for_transactional_validation :
+    unansweredSelected false = true ∧ processingFails false = true := by
+  decide
 
 inductive Outcome where
   | pending | applied | rejected

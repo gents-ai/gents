@@ -174,4 +174,44 @@ theorem stop_partitions_accepted (batch : Batch) (h : batch.stop ≠ .none)
   · intro id hid
     simpa using (List.mem_filter.mp hid).2
 
+structure SettledCall where
+  call : Nat
+  cancelled : Bool
+  deriving Repr, BEq, DecidableEq
+
+/-- A batch dispatched through a session hook: how many calls were started,
+how many results the batch returned, each settlement the hook received in
+call order, and whether the batch terminated. -/
+structure HookBatch where
+  started : Nat
+  results : Nat
+  settled : List SettledCall
+  terminated : Bool
+  deriving Repr, BEq, DecidableEq
+
+/-- A terminating admission returns no results and settles every earlier
+accepted call as cancelled, before any call starts. Otherwise every call is
+returned, and a hook whose cancellation token is already cancelled starts no
+call and settles every accepted call as cancelled. -/
+def hookBatch (actions : List Admission) (hookCancelled : Bool) : HookBatch :=
+  if actions.contains .terminate then
+    { started := 0, results := 0
+      settled := (accepted actions).map fun call => ⟨call, true⟩
+      terminated := true }
+  else
+    { started := if hookCancelled then 0 else (accepted actions).length
+      results := actions.length
+      settled := (accepted actions).map fun call => ⟨call, hookCancelled⟩
+      terminated := false }
+
+theorem batch_dispatch_respects_hook_cancellation_token :
+    hookBatch [.run, .run] true =
+      { started := 0, results := 2, settled := [⟨0, true⟩, ⟨1, true⟩], terminated := false } := by
+  decide
+
+theorem a_cancelled_hook_starts_no_call (actions : List Admission) :
+    (hookBatch actions true).started = 0 := by
+  unfold hookBatch
+  split <;> rfl
+
 end ToolExecution.Parallel

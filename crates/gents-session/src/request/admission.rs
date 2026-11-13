@@ -1690,10 +1690,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_rejection_requires_the_selected_managed_agent() {
+    async fn pending_rejection_selection_matches_lean() {
         let dir = tempfile::tempdir().unwrap();
         let node_db = gents_inference::test_support::test_db(
-            "pending-rejection-requires-selected-agen",
+            "pending-rejection-selection-matches-lean",
             crate::test_support::no_lifecycle_plugins(),
         )
         .await;
@@ -1715,32 +1715,39 @@ mod tests {
             )
             .await
             .unwrap();
-        let denied = super::terminalize_pending_request_rejection(
-            &node,
-            "missing-doc",
-            root.did(),
-            agent.did(),
-            other_agent.as_ref(),
-            "rejected",
-            "test.rejection_foreign_agent",
-        )
-        .await;
-        assert!(matches!(
-            denied,
-            Err(super::PendingRejectionError::InvalidAgent(_))
-        ));
-        let outcome = super::terminalize_pending_request_rejection(
-            &node,
-            "missing-doc",
-            root.did(),
-            agent.did(),
-            agent.as_ref(),
-            "rejected",
-            "test.rejection_selected_agent",
-        )
-        .await
-        .unwrap();
-        assert_eq!(outcome, super::PendingRejectionOutcome::NotMatched);
+        for case in gents_lean_vocab::families::pending_rejection_selection::cases::<String>() {
+            let node_did = if case.input.node_is_local {
+                root.did()
+            } else {
+                other_root.did()
+            };
+            let agent_did = if case.input.agent_is_node {
+                node_did
+            } else {
+                agent.did()
+            };
+            let selected: &dyn NodeIdentity = if case.input.identity_is_agent {
+                agent.as_ref()
+            } else {
+                other_agent.as_ref()
+            };
+            let outcome = match super::terminalize_pending_request_rejection(
+                &node,
+                "missing-doc",
+                node_did,
+                agent_did,
+                selected,
+                "rejected",
+                "test.pending_rejection_selection",
+            )
+            .await
+            {
+                Err(super::PendingRejectionError::InvalidAgent(_)) => "invalid_agent".to_owned(),
+                Ok(super::PendingRejectionOutcome::NotMatched) => "not_matched".to_owned(),
+                unexpected => panic!("unexpected pending rejection result: {unexpected:?}"),
+            };
+            case.check(gents_lean_vocab::families::pending_rejection_selection::RejectionOutput { outcome });
+        }
         node.shutdown().await.unwrap();
     }
 

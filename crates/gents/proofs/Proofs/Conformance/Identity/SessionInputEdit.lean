@@ -47,4 +47,20 @@ def claim : Family ClaimInput ClaimOutput where
         (⟨false, false, false⟩ : Request.ClientSignedEditHandoff.Effect)
       unprovenRemovalPending := unprovenRemovalReplay false true }
 
+structure DiscoveryInput where
+  actor : String
+  deriving ToJson
+
+structure DiscoveryOutput where
+  visible : Bool
+  selected : Bool
+  deriving ToJson
+
+@[conformance_family]
+def nativeDiscovery : Family DiscoveryInput DiscoveryOutput where
+  inputs := ["agent", "other"].map fun actor => { actor }
+  model := fun i =>
+    { visible := !(discover fixture [i.actor] "edit-doc").isEmpty
+      selected := !(selectedForEffect (discover fixture [i.actor] "edit-doc") "agent").isEmpty }
+
 end Conformance.SessionInputEdit
