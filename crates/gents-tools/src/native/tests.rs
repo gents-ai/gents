@@ -2622,3 +2622,55 @@ fn main() {
 }
 "#)) . await ;
 }
+
+#[tokio::test]
+async fn bash_tool_liveness_follows_the_lean_composed_model() {
+    for case in gents_lean_vocab::families::contracts_managed_exec_liveness_tool::cases::<String>()
+    {
+        let root = temp_root(&format!("gents-bash-liveness-{}", case.input.name));
+        let tool: Box<dyn gents_loop::tool::ToolDyn> = Box::new(UnrestrictedBashTool::with_policy(
+            ToolContext::new(root.clone(), false).unwrap(),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            DEFAULT_MAX_COMMAND_CHARS,
+            CommandExecutionPolicy::write_capable(),
+        ));
+        let token = tokio_util::sync::CancellationToken::new();
+        let (command, deadline) = match case.input.trigger.as_str() {
+            "deadline_elapsed" => (
+                "printf partial; sleep 30",
+                Some(chrono::Utc::now() + chrono::Duration::milliseconds(300)),
+            ),
+            "cancel_requested" => {
+                let cancel = token.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    cancel.cancel();
+                });
+                ("sleep 30", None)
+            }
+            "observe_exit_success" => ("true", None),
+            "observe_exit_failure" => ("false", None),
+            other => panic!("no bash scenario for trigger {other}"),
+        };
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(60),
+            crate::runtime_context::scope_request_tool_execution(
+                deadline,
+                token,
+                crate::runtime_context::call_tool_managed(
+                    tool.as_ref(),
+                    serde_json::json!({ "command": command }).to_string(),
+                ),
+            ),
+        )
+        .await
+        .expect("a bash call reaches its terminal within the bound");
+        let _ = std::fs::remove_dir_all(&root);
+        case.check(
+            gents_lean_vocab::families::contracts_managed_exec_liveness_tool::ManagedExecLivenessToolOutput {
+                tool_state: tool_outcome_state(&outcome).to_owned(),
+            },
+        );
+    }
+}

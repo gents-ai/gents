@@ -1322,10 +1322,13 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_native_filesystem_boundary")
       "tool-call" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "managed_exec_liveness_cases"
-      "ManagedExecLivenessCases"
-      "Drive generated exit/deadline/cancel cases through existing managed_exec process tests. Fixture kill flags do not observe OS termination.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_managed_exec_liveness_exec")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_managed_exec_liveness_tool")
       "managed-exec" [Surface.agentFacing]
   , tagged (followUpCoverage
       "managed_exec_tool_boundary_cases"

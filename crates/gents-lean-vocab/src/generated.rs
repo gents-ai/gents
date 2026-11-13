@@ -65,10 +65,6 @@ pub fn lean_identity_permission_cases() -> &'static [LeanIdentityPermissionCase]
     &lean_contract_snapshot().identity_permission_cases
 }
 
-pub fn lean_managed_exec_liveness_cases() -> &'static [LeanManagedExecLivenessCase] {
-    &lean_contract_snapshot().managed_exec_liveness_cases
-}
-
 pub fn lean_managed_exec_tool_boundary_cases() -> &'static [LeanManagedExecToolBoundaryCase] {
     &lean_contract_snapshot().managed_exec_tool_boundary_cases
 }
@@ -1075,7 +1071,6 @@ pub struct LeanContractSnapshot {
     pub persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
-    pub managed_exec_liveness_cases: Vec<LeanManagedExecLivenessCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub deviations: Vec<LeanDeviation>,
@@ -2596,18 +2591,6 @@ pub struct LeanLifecycleTransitionCase {
     pub classification: String,
     pub action: Option<String>,
     pub boundary: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanManagedExecLivenessCase {
-    pub name: String,
-    pub trigger: String,
-    pub pre_exec_state: String,
-    pub pre_tool_state: String,
-    pub expected_exec_state: String,
-    pub expected_tool_state: String,
-    pub max_steps: usize,
-    pub kill_signal_required: bool,
 }
 
 #[derive(Debug, Deserialize)]
