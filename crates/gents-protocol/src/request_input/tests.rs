@@ -111,8 +111,7 @@ fn authored(input: &RequestInput) -> AuthoredRequestInput {
 
 #[test]
 fn request_input_derivations_follow_the_lean_owner() {
-    use gents_lean_vocab::families::request_input_contracts_derivation as derivation;
-    derivation::replay(|case: &derivation::DerivationInput| {
+    gents_lean_vocab::families::request_input_contracts_derivation::replay(|case| {
         let input = production(&case.input);
         let has_authored_input = input.has_authored_input(&case.authored_text);
         assert_eq!(
@@ -139,7 +138,7 @@ fn request_input_derivations_follow_the_lean_owner() {
             .map(gents_lean_vocab::family::recode);
         let edit_queue: RequestQueue = gents_lean_vocab::family::recode(&case.edit_queue);
         let edit_authored = authored(&production(&case.edit_authored_input));
-        derivation::Derived {
+        gents_lean_vocab::families::request_input_contracts_derivation::Derived {
             captured_input_compatible: input.captured_input_compatible(case.runtime_input_version),
             goal_assignment_compatible: input.goal_assignment_compatible(case.runtime_goal_version),
             captures_well_formed,
@@ -195,7 +194,6 @@ fn request_input_rejects_legacy_controls_and_incomplete_goal_facts() {
 #[test]
 fn signed_request_input_fields_follow_the_lean_encoding() {
     use crate::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-    use gents_lean_vocab::families::request_input_contracts_signed_fields as signed;
 
     fn read_length(cursor: &mut &[u8]) -> usize {
         let length = cursor.iter().position(|byte| *byte != 0).unwrap();
@@ -204,7 +202,7 @@ fn signed_request_input_fields_follow_the_lean_encoding() {
         length
     }
 
-    signed::replay(|case: &signed::SigningInput| {
+    gents_lean_vocab::families::request_input_contracts_signed_fields::replay(|case| {
         let decoded = production(&case.input);
         let encoded = serde_json::to_value(&decoded).unwrap();
         if decoded
@@ -256,7 +254,7 @@ fn signed_request_input_fields_follow_the_lean_encoding() {
             .windows(2)
             .rposition(|pair| pair[0] == [1] && pair[1] == b"interactive")
             .unwrap_or_else(|| panic!("{}: execution origin follows the input", case.name));
-        signed::Signed {
+        gents_lean_vocab::families::request_input_contracts_signed_fields::Signed {
             canonical_input_fields: fields[start..origin]
                 .iter()
                 .map(|field| field.iter().map(|byte| u64::from(*byte)).collect())

@@ -1659,30 +1659,20 @@ mod tests {
 
     #[test]
     fn generated_client_claim_queue_candidates_match_the_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
-        for case in cases {
+        gents_lean_vocab::families::request_input_contracts_claim_queue_candidate::replay(|case| {
             let input: gents_protocol::request_input::RequestInput =
-                serde_json::from_value(case["input"].clone()).unwrap();
-            for (agent_message, expected) in [
-                (false, "expected_client_claim_queue_candidate"),
-                (true, "expected_agent_message_claim_queue_candidate"),
-            ] {
-                assert_eq!(
-                    super::client_claim_queue_candidate(Some(&input), agent_message),
-                    case[expected].as_bool().unwrap(),
-                    "{}: local agent message {agent_message}",
-                    case["name"]
-                );
+                gents_lean_vocab::production_request_input(&case.input);
+            gents_lean_vocab::families::request_input_contracts_claim_queue_candidate::Candidates {
+                client_claim_queue_candidate: super::client_claim_queue_candidate(
+                    Some(&input),
+                    false,
+                ),
+                agent_message_claim_queue_candidate: super::client_claim_queue_candidate(
+                    Some(&input),
+                    true,
+                ),
             }
-        }
-        for name in [
-            "client-goal-original-edge-preserved",
-            "goal-source-needs-owned-admission",
-            "client-unrelated-runtime-queue-denied",
-            "client-local-agent-message-steering-candidate",
-        ] {
-            assert!(cases.iter().any(|case| case["name"] == name), "{name}");
-        }
+        });
         assert!(super::client_claim_queue_candidate(None, false));
     }
 

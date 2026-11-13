@@ -181,8 +181,7 @@ mod client_goal_binding_tests {
 
     #[test]
     fn generated_client_goal_claim_requires_the_physical_assignment() {
-        use gents_lean_vocab::families::request_input_contracts_goal_claim_binding as binding;
-        binding::replay(|case: &binding::BindingInput| {
+        gents_lean_vocab::families::request_input_contracts_goal_claim_binding::replay(|case| {
             let goal: GoalDocument = serde_json::from_value(serde_json::json!({
                 "_docID": "physical-goal",
                 "goal_id": if case.matches { "goal" } else { "other-goal" },

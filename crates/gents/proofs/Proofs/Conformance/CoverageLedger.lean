@@ -3398,12 +3398,27 @@ def caseCoverage : List CoverageEntry :=
 
   , tagged (consumerCoverage "family" "contracts_runtime_reconcile_selection")
       "runtime-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
-      "Canonical input serde only. Signed canonical_input_fields/bytes, context whitelist, title materialization and verified goal receipt checks need the migrated admission/signing owners.")
+  , tagged (consumerCoverage "family" "request_input_contracts_derivation")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "request_input_cases" "RequestInputCases")
+  , tagged (consumerCoverage "family" "request_input_contracts_signed_fields")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "request_input_cases" "RequestInputCases")
+  , tagged (consumerCoverage "family" "request_input_contracts_provider")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_provider_refusal")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_goal_claim_binding")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_claim_queue_candidate")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_workspace_source")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_edit_directory")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_replacement")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_admitted_capture")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_published_capture")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "session_reply_preview_observation")
       "request-lifecycle" [Surface.runtimeInternal]

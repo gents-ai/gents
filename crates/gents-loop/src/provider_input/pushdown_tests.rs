@@ -1,5 +1,3 @@
-use gents_lean_vocab::families::request_input_contracts_provider as provider;
-use gents_lean_vocab::families::request_input_contracts_provider_refusal as refusal;
 use gents_protocol::message::{Message, UserContent};
 use gents_protocol::request_input::RequestInput;
 
@@ -28,7 +26,7 @@ fn attachment_part(name: &str, part: UserContent) -> serde_json::Value {
 
 #[test]
 fn accepted_inputs_cross_the_provider_boundary_as_the_model_formats_them() {
-    provider::replay(|case: &provider::ProviderInput| {
+    gents_lean_vocab::families::request_input_contracts_provider::replay(|case| {
         let input: RequestInput = gents_lean_vocab::production_request_input(&case.input);
         let native = input.authored_message(&case.authored_text).unwrap();
         let Message::User { content } =
@@ -47,7 +45,7 @@ fn accepted_inputs_cross_the_provider_boundary_as_the_model_formats_them() {
                 _ => None,
             })
             .collect();
-        provider::ProviderParts {
+        gents_lean_vocab::families::request_input_contracts_provider::ProviderParts {
             chat_attachments_supported: chat_attachments_supported(&input),
             provider_parts,
             attachment_parts: gents_lean_vocab::family::Json(serde_json::Value::Array(
@@ -61,10 +59,10 @@ fn accepted_inputs_cross_the_provider_boundary_as_the_model_formats_them() {
 
 #[test]
 fn refused_inputs_do_not_cross_the_provider_boundary() {
-    refusal::replay(|case: &refusal::ProviderInput| {
+    gents_lean_vocab::families::request_input_contracts_provider_refusal::replay(|case| {
         let input: RequestInput = gents_lean_vocab::production_request_input(&case.input);
         let native = input.authored_message(&case.authored_text).unwrap();
-        refusal::ProviderRefused {
+        gents_lean_vocab::families::request_input_contracts_provider_refusal::ProviderRefused {
             chat_attachments_supported: chat_attachments_supported(&input),
             provider_accepted: crate::provider_input::captured_context_for_provider(native).is_ok(),
         }
