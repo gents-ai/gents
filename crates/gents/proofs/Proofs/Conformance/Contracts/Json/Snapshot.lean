@@ -465,8 +465,6 @@ def snapshotIdentityCasesJson : String :=
 
 def snapshotClientCasesJson : String :=
   ""
-    ++ "\"client_data_publication_cases\":"
-      ++ Conformance.ClientDataPublication.casesJson ++ ","
     ++ "\"client_request_closure_cases\":"
       ++ Conformance.ClientRequestClosure.casesJson ++ ","
     ++ "\"client_session_turn_cases\":"

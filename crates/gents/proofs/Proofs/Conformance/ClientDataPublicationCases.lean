@@ -1,143 +1,188 @@
 import Proofs.Clients.ClientShell.ObservationOrdering
+import Proofs.Conformance.Family
 
 namespace Conformance.ClientDataPublication
 
-open _root_.ClientDataPublication
+open Lean _root_.ClientDataPublication
 
-private def stateJson (state : State) : String :=
-  "{\"data_epoch\":" ++ toString state.dataEpoch ++
-  ",\"provenance_epoch\":" ++ toString state.provenanceEpoch ++
-  ",\"request_event_epoch\":" ++ toString state.requestEventEpoch ++
-  ",\"transcript_epoch\":" ++ toString state.transcriptEpoch ++ "}"
+deriving instance ToJson for Recovery, ClientStoreNotice.Notice
 
-private def caseJson (name : String) (initial current : State) (read : Read)
-    (action : String) : String :=
-  "{\"name\":\"" ++ name ++ "\",\"initial\":" ++ stateJson initial ++
-  ",\"current\":" ++ stateJson current ++ ",\"read\":{\"data_epoch\":" ++
-  toString read.dataEpoch ++ ",\"request_event_epoch\":" ++ toString read.requestEventEpoch ++
-  "},\"actions\":[\"" ++ action ++ "\"],\"initial_request_ids\":[\"old\"]," ++
-  "\"publish_request_ids\":[\"old\"],\"accepted\":" ++
-  toString (accepts current read) ++ "}"
+inductive PublicationStep where
+  | requestEvent
+  | transcriptInvalidation
+  | replaceRequests
+  deriving ToJson
 
-private def natArrayJson (values : List Nat) : String :=
-  "[" ++ String.intercalate "," (values.map toString) ++ "]"
+structure PublicationInput where
+  name : String
+  actions : List PublicationStep
+  initialRequestIds : List String
+  publishRequestIds : List String
+  deriving ToJson
 
-/-- An action on one node's store while a read of node 1 is in flight. -/
-private inductive PublicationAction where
-  | merge (node : Nat)
-  | request (node : Nat)
-  | transcript (node : Nat)
+structure PublicationOutput where
+  accepted : Bool
+  deriving ToJson
 
-private def applyPublicationAction (state : Fleet × (Nat → String))
-    (action : PublicationAction) : Fleet × (Nat → String) :=
-  match action with
-  | .merge node =>
-      (state.1.on node dataChange,
-        fun other => if other = node then "concurrent" else state.2 other)
-  | .request node => (state.1.on node requestEvent, state.2)
-  | .transcript node => (state.1.on node transcriptInvalidation, state.2)
+def publicationStart : State :=
+  { dataEpoch := 4, provenanceEpoch := 7, requestEventEpoch := 3, transcriptEpoch := 2 }
 
-private def publicationActionJson : PublicationAction → String
-  | .merge node => "{\"op\":\"merge\",\"node\":" ++ toString node ++ "}"
-  | .request node => "{\"op\":\"request\",\"node\":" ++ toString node ++ "}"
-  | .transcript node => "{\"op\":\"transcript\",\"node\":" ++ toString node ++ "}"
+def applyPublicationStep (read : Read) (state : State) : PublicationStep → State
+  | .requestEvent => requestEvent state
+  | .transcriptInvalidation => transcriptInvalidation state
+  | .replaceRequests => publish state read
+
+@[conformance_family]
+def publication : Family PublicationInput PublicationOutput where
+  inputs :=
+    [ ("uncached_request_event_fences_old_read", PublicationStep.requestEvent),
+      ("transcript_invalidation_preserves_read", .transcriptInvalidation),
+      ("newer_data_publication_rejects_old_read", .replaceRequests) ].map fun (name, step) =>
+      { name, actions := [step], initialRequestIds := ["old"], publishRequestIds := ["old"] }
+  model := fun i =>
+    let read := beginRead publicationStart
+    { accepted := accepts (i.actions.foldl (applyPublicationStep read) publicationStart) read }
+
+inductive NodeOp where
+  | merge
+  | request
+  | transcript
+  deriving ToJson
+
+structure NodeAction where
+  op : NodeOp
+  node : Nat
+  deriving ToJson
+
+structure NodePublicationInput where
+  name : String
+  merge : Bool
+  actions : List NodeAction
+  deriving ToJson
+
+structure NodeRow where
+  node : Nat
+  value : String
+  deriving ToJson
+
+structure NodePublicationOutput where
+  accepted : Bool
+  expected : List NodeRow
+  deriving ToJson
+
+def nodeStart : State :=
+  { dataEpoch := 1, provenanceEpoch := 1, requestEventEpoch := 1, transcriptEpoch := 0 }
+
+def applyNodeAction (state : Fleet × (Nat → String)) (action : NodeAction) :
+    Fleet × (Nat → String) :=
+  match action.op with
+  | .merge =>
+      (state.1.on action.node dataChange,
+        fun other => if other = action.node then "concurrent" else state.2 other)
+  | .request => (state.1.on action.node requestEvent, state.2)
+  | .transcript => (state.1.on action.node transcriptInvalidation, state.2)
 
 /-- Two nodes, each with its own store holding one session row. A read of node
 1 publishes `incoming` as a patch (`merge`) or a reload after `actions`. -/
-private def nodePublicationCaseJson (name : String) (merge : Bool)
-    (actions : List PublicationAction) : String := Id.run do
-  let initial : State :=
-    { dataEpoch := 1, provenanceEpoch := 1, requestEventEpoch := 1, transcriptEpoch := 0 }
-  let fleet : Fleet := fun _ => initial
-  let read := beginRead (fleet 1)
-  let (current, rows) := actions.foldl applyPublicationAction (fleet, fun _ => "initial")
-  let accepted := if merge then accepts (current 1) read else acceptsReload (current 1) read
-  let expected (node : Nat) : String :=
-    if node = 1 ∧ accepted = true then "incoming" else rows node
-  return "{\"name\":\"" ++ name ++ "\",\"merge\":" ++ toString merge ++
-    ",\"actions\":[" ++ String.intercalate "," (actions.map publicationActionJson) ++
-    "],\"accepted\":" ++ toString accepted ++
-    ",\"expected\":[{\"node\":1,\"value\":\"" ++ expected 1 ++
-    "\"},{\"node\":2,\"value\":\"" ++ expected 2 ++ "\"}]}"
+@[conformance_family]
+def nodePublication : Family NodePublicationInput NodePublicationOutput where
+  inputs :=
+    [ ("other_node_publication_preserves_reload", false, [⟨.merge, 2⟩]),
+      ("continuous_other_node_publications_preserve_reload", false, List.replicate 64 ⟨.merge, 2⟩),
+      ("same_node_publication_rejects_reload", false, [⟨.merge, 1⟩]),
+      ("same_node_request_event_preserves_reload", false, [⟨.request, 1⟩]),
+      ("sustained_request_events_preserve_reload", false, List.replicate 64 ⟨.request, 1⟩),
+      ("transcript_notice_preserves_reload", false, [⟨.transcript, 1⟩]),
+      ("same_node_request_event_rejects_patch", true, [⟨.request, 1⟩]),
+      ("same_node_publication_rejects_patch", true, [⟨.merge, 1⟩]),
+      ("other_node_request_event_preserves_patch", true, [⟨.request, 2⟩]),
+      ("other_node_publication_preserves_patch", true, [⟨.merge, 2⟩]) ].map
+      fun (name, merge, actions) => { name, merge, actions }
+  model := fun i =>
+    let fleet : Fleet := fun _ => nodeStart
+    let read := beginRead (fleet 1)
+    let (current, rows) := i.actions.foldl applyNodeAction (fleet, fun _ => "initial")
+    let accepted := if i.merge then accepts (current 1) read else acceptsReload (current 1) read
+    { accepted
+      expected := [1, 2].map fun node =>
+        { node, value := if node = 1 ∧ accepted = true then "incoming" else rows node } }
 
-private def nodePublicationCasesJson : String :=
-  "[" ++ String.intercalate "," [
-    nodePublicationCaseJson "other_node_publication_preserves_reload" false [.merge 2],
-    nodePublicationCaseJson "continuous_other_node_publications_preserve_reload" false (List.replicate 64 (.merge 2)),
-    nodePublicationCaseJson "same_node_publication_rejects_reload" false [.merge 1],
-    nodePublicationCaseJson "same_node_request_event_preserves_reload" false [.request 1],
-    nodePublicationCaseJson "sustained_request_events_preserve_reload" false (List.replicate 64 (.request 1)),
-    nodePublicationCaseJson "transcript_notice_preserves_reload" false [.transcript 1],
-    nodePublicationCaseJson "same_node_request_event_rejects_patch" true [.request 1],
-    nodePublicationCaseJson "same_node_publication_rejects_patch" true [.merge 1],
-    nodePublicationCaseJson "other_node_request_event_preserves_patch" true [.request 2],
-    nodePublicationCaseJson "other_node_publication_preserves_patch" true [.merge 2]
-  ] ++ "]"
+inductive RecoveryOp where
+  | requestScope
+  | takeBatch
+  | failBatch
+  | retryTimer
+  deriving ToJson
 
-private def requestScopeActions (scopes : List Nat) : List String :=
-  scopes.map fun scope => "{\"op\":\"request_scope\",\"scope\":" ++ toString scope ++ "}"
+structure RecoveryAction where
+  op : RecoveryOp
+  scope : Option Nat
+  scopes : List Nat
+  deriving ToJson
 
-private def recoveryActionsJson (setupScopes failedScopes externalScopes : List Nat)
-    (timerAdvanced : Bool) : String :=
-  let actions := requestScopeActions setupScopes ++
-    ["{\"op\":\"take_batch\"}", "{\"op\":\"fail_batch\",\"scopes\":" ++ natArrayJson failedScopes ++ "}"] ++
-    requestScopeActions externalScopes ++
-    (if timerAdvanced then ["{\"op\":\"retry_timer\"}"] else [])
-  "[" ++ String.intercalate "," actions ++ "]"
+structure RecoveryInput where
+  name : String
+  actions : List RecoveryAction
+  deriving ToJson
 
-private def recoveryJson (name : String) (initial recovery : Recovery)
-    (setupScopes failedScopes externalScopes : List Nat) (timerAdvanced : Bool) : String :=
-  "{\"name\":\"" ++ name ++ "\",\"pending_scopes\":[" ++ String.intercalate "," (recovery.pendingScopes.map toString) ++
-  "],\"generation\":" ++ toString recovery.generation ++
-  ",\"retry_scheduled\":" ++ toString recovery.retryScheduled ++
-  ",\"initial\":{\"pending_scopes\":" ++ natArrayJson initial.pendingScopes ++
-  ",\"generation\":" ++ toString initial.generation ++
-  ",\"retry_scheduled\":" ++ toString initial.retryScheduled ++ "},\"actions\":" ++
-  recoveryActionsJson setupScopes failedScopes externalScopes timerAdvanced ++ "}"
+structure RecoveryOutput where
+  initial : Recovery
+  pendingScopes : List Nat
+  generation : Nat
+  retryScheduled : Bool
+  deriving ToJson
 
-private def noticeJson (notice : ClientStoreNotice.Notice) : String :=
-  "{\"version\":" ++ toString notice.version ++
-  ",\"provenance\":" ++ toString notice.provenance ++
-  ",\"request_event\":" ++ toString notice.requestEvent ++ "}"
+def recoveryStart : Recovery :=
+  { pendingScopes := [], generation := 0, retryScheduled := false }
 
-private def noticeCasesJson : String := Id.run do
-  let initial : ClientStoreNotice.Notice := ⟨1, 1, 0⟩
-  let deliveries : List ClientStoreNotice.Notice :=
-    [⟨3, 2, 1⟩, ⟨2, 1, 1⟩, ⟨3, 2, 1⟩, ⟨5, 3, 2⟩, ⟨4, 2, 2⟩]
-  let (_, cases) := deliveries.foldl (fun (current, cases) incoming =>
-    let expected := ClientStoreNotice.deliver current incoming
-    (expected, cases ++ ["{\"incoming\":" ++ noticeJson incoming ++
-      ",\"expected\":" ++ noticeJson expected ++ "}"])) (initial, ([] : List String))
-  return "{\"initial\":" ++ noticeJson initial ++ ",\"deliveries\":[" ++
-    String.intercalate "," cases ++ "]}"
+def applyRecoveryAction (recovery : Recovery) (action : RecoveryAction) : Recovery :=
+  match action.op, action.scope with
+  | .requestScope, some scope => requestScope recovery scope
+  | .requestScope, none => recovery
+  | .takeBatch, _ => (takeBatch recovery).1
+  | .failBatch, _ => failBatch recovery action.scopes
+  | .retryTimer, _ => retryTimer recovery
 
-def casesJson : String := Id.run do
-  let initial : State :=
-    { dataEpoch := 4, provenanceEpoch := 7, requestEventEpoch := 3, transcriptEpoch := 2 }
-  let read := beginRead initial
-  let afterUnknownRequest := requestEvent initial
-  let afterTranscript := transcriptInvalidation initial
-  let afterNewerPublication := publish initial read
-  let publicationCases := "[" ++ String.intercalate "," [
-    caseJson "uncached_request_event_fences_old_read" initial afterUnknownRequest read "request_event",
-    caseJson "transcript_invalidation_preserves_read" initial afterTranscript read "transcript_invalidation",
-    caseJson "newer_data_publication_rejects_old_read" initial afterNewerPublication read "replace_requests"
-  ] ++ "]"
-  let recovery : Recovery :=
-    { pendingScopes := [], generation := 0, retryScheduled := false }
-  let setupScopes := [1, 2, 3]
-  let queued := setupScopes.foldl requestScope recovery
-  let (inFlight, _) := takeBatch queued
-  let failed := failBatch inFlight setupScopes
-  let externalDuringRetry := requestScope failed 4
-  let afterRetryTimer := retryTimer failed
-  let recoveryCases := "[" ++ String.intercalate "," [
-    recoveryJson "failed_batch_retains_failed_and_unprocessed_scopes" recovery failed setupScopes setupScopes [] false,
-    recoveryJson "new_scope_during_retry_is_retained" recovery externalDuringRetry setupScopes setupScopes [4] false,
-    recoveryJson "retry_timer_releases_gate_without_losing_scopes" recovery afterRetryTimer setupScopes setupScopes [] true
-  ] ++ "]"
-  return "{\"publication\":" ++ publicationCases ++ ",\"recovery\":" ++ recoveryCases ++
-    ",\"node_publication\":" ++ nodePublicationCasesJson ++
-    ",\"notice_delivery\":" ++ noticeCasesJson ++ "}"
+def recoveryActions (setupScopes failedScopes externalScopes : List Nat)
+    (timerAdvanced : Bool) : List RecoveryAction :=
+  setupScopes.map (fun scope => ⟨.requestScope, some scope, []⟩) ++
+    [⟨.takeBatch, none, []⟩, ⟨.failBatch, none, failedScopes⟩] ++
+    externalScopes.map (fun scope => ⟨.requestScope, some scope, []⟩) ++
+    (if timerAdvanced then [⟨.retryTimer, none, []⟩] else [])
+
+@[conformance_family]
+def recovery : Family RecoveryInput RecoveryOutput where
+  inputs :=
+    [ ("failed_batch_retains_failed_and_unprocessed_scopes", recoveryActions [1, 2, 3] [1, 2, 3] [] false),
+      ("new_scope_during_retry_is_retained", recoveryActions [1, 2, 3] [1, 2, 3] [4] false),
+      ("retry_timer_releases_gate_without_losing_scopes", recoveryActions [1, 2, 3] [1, 2, 3] [] true) ].map
+      fun (name, actions) => { name, actions }
+  model := fun i =>
+    let final := i.actions.foldl applyRecoveryAction recoveryStart
+    { initial := recoveryStart
+      pendingScopes := final.pendingScopes
+      generation := final.generation
+      retryScheduled := final.retryScheduled }
+
+structure NoticeTrace where
+  initial : ClientStoreNotice.Notice
+  deliveries : List ClientStoreNotice.Notice
+  deriving ToJson
+
+structure Delivered where
+  change : ClientStoreNotice.Notice
+  watchedVersion : Nat
+  deriving ToJson
+
+@[conformance_family]
+def noticeDelivery : Family NoticeTrace (List Delivered) where
+  inputs :=
+    [ { initial := ⟨1, 1, 0⟩
+        deliveries := [⟨3, 2, 1⟩, ⟨2, 1, 1⟩, ⟨3, 2, 1⟩, ⟨5, 3, 2⟩, ⟨4, 2, 2⟩] } ]
+  model := fun t =>
+    (t.deliveries.foldl (fun (current, delivered) incoming =>
+      let next := ClientStoreNotice.deliver current incoming
+      (next, delivered ++ [{ change := next, watchedVersion := next.version }]))
+      (t.initial, ([] : List Delivered))).2
 
 end Conformance.ClientDataPublication
