@@ -114,7 +114,9 @@ pub async fn repark_expired_resume(
                 let retry_at = escape_graphql_string(&now.to_rfc3339());
                 let wait = load_wait_metadata(txn, &request_doc_id).await?.context("resuming backend wait metadata is missing")?;
                 anyhow::ensure!(row.node_did.as_deref() == Some(wait.node_did.as_str()), "backend wait belongs to a different node");
-                let result = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "resumingBackend" }}, execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }}, input: {{ lifecycle_state: "waitingForBackend", execution_lease_expires_at: null }} ) {{ _docID }} }}"#)).await?;
+                let transition = State::ResumingBackend.transition_to(State::WaitingForBackend)?;
+                let (from, to) = (transition.from().as_str(), transition.to().as_str());
+                let result = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "{from}" }}, execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }}, input: {{ lifecycle_state: "{to}", execution_lease_expires_at: null }} ) {{ _docID }} }}"#)).await?;
                 if !result.data.as_ref().and_then(|data| data.get("update_AgentRequest")).is_some_and(response_has_documents) { return Ok(false); }
                 let wait_doc = escape_graphql_string(&wait.doc_id);
                 let result = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequestBackendWait(docID: "{wait_doc}", input: {{ retry_at: "{retry_at}" }} ) {{ _docID }} }}"#)).await?;
@@ -541,12 +543,14 @@ async fn park_in_txn(
     let retry_at = escape_graphql_string(&wake.to_rfc3339());
     let wait_started_at = escape_graphql_string(&now.to_rfc3339());
     let claim_cid = escape_graphql_string(claim_cid);
+    let transition = State::Processing.transition_to(State::WaitingForBackend)?;
+    let (from, to) = (transition.from().as_str(), transition.to().as_str());
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}",
-        filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "processing" }},
+        filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{from}" }},
         execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }},
         interrupt_requested_at: {{ _eq: {interrupt_filter} }} }},
-        input: {{ lifecycle_state: "waitingForBackend", execution_lease_expires_at: null }} ) {{ _docID }} }}"#
+        input: {{ lifecycle_state: "{to}", execution_lease_expires_at: null }} ) {{ _docID }} }}"#
     );
     let result = txn.execute_local_response(&mutation).await?;
     if !result
@@ -841,13 +845,15 @@ async fn wake_in_txn(
     let old_generation = escape_graphql_string(previous_generation);
     let generation_gql = escape_graphql_string(generation);
     let expiry = escape_graphql_string(&expiry.to_rfc3339());
+    let transition = State::WaitingForBackend.transition_to(State::ResumingBackend)?;
+    let (from, to) = (transition.from().as_str(), transition.to().as_str());
     let result = txn
         .execute_local_response(&format!(
             r#"mutation {{ update_AgentRequest(docID: "{doc_id}",
-        filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "waitingForBackend" }},
+        filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{from}" }},
         backend_id: {{ _eq: "{backend}" }}, execution_generation: {{ _eq: "{old_generation}" }},
         interrupt_requested_at: {{ _eq: {interrupt_filter} }} }},
-        input: {{ lifecycle_state: "resumingBackend", execution_generation: "{generation_gql}",
+        input: {{ lifecycle_state: "{to}", execution_generation: "{generation_gql}",
         execution_lease_expires_at: "{expiry}" }} ) {{ _docID }} }}"#
         ))
         .await?;

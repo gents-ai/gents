@@ -501,13 +501,15 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             if case.input.superseded_origins {
                 create.request_id = format!("source-{id}-replacement");
                 let replacement = write_request(&fixture, create).await;
-                let mutation = gents_session::request::lifecycle::queue::supersede_pending_mutation(
-                    row.doc_id.as_deref().unwrap(),
-                    fixture.db.node_identity.did(),
-                    &replacement.request_id,
-                    replacement.doc_id.as_deref().unwrap(),
-                    "modeled superseded origin",
-                );
+                let mutation =
+                    gents_session::request::lifecycle::queue::supersede_pending_mutation(
+                        row.doc_id.as_deref().unwrap(),
+                        fixture.db.node_identity.did(),
+                        &replacement.request_id,
+                        replacement.doc_id.as_deref().unwrap(),
+                        "modeled superseded origin",
+                    )
+                    .unwrap();
                 let result = access
                     .write("test.wake_scope_superseded_origin", &mutation)
                     .await

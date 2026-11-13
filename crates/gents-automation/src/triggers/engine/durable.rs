@@ -717,16 +717,21 @@ pub async fn supersede_trigger_requests_in_txn(
         Some(id) => scope.and(Filter::ne(fields::REQUEST_ID, id)),
         None => scope,
     };
+    let pending_sources = [
+        RequestLifecycleState::Pending,
+        RequestLifecycleState::WorkspaceBindingPending,
+    ]
+    .into_iter()
+    .map(|source| {
+        source
+            .transition_to(RequestLifecycleState::Superseded)
+            .map(|transition| transition.from().as_str())
+    })
+    .collect::<Result<Vec<_>, _>>()?;
     let mutation = Update::matching(
-        scope.clone().and(Filter::any_of(
-            fields::LIFECYCLE_STATE,
-            [
-                gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
-                gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
-            ]
-            .into_iter()
-            .map(gents_protocol::request_lifecycle::RequestLifecycleState::as_str),
-        )),
+        scope
+            .clone()
+            .and(Filter::any_of(fields::LIFECYCLE_STATE, pending_sources)),
         Input::new()
             .set(
                 fields::LIFECYCLE_STATE,

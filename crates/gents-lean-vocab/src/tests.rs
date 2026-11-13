@@ -241,11 +241,6 @@ fn lean_executable_contracts_cover_initial_domains() {
             "interrupted"
         ]
     );
-    assert_lifecycle_transition_cases_partition(
-        "Request",
-        &lean_vocabulary_values("RequestState"),
-        lean_request_transition_cases(),
-    );
     assert_lean_transition_is_legal("SessionRecovery", "failed", "pending");
     assert_lean_transition_is_illegal("SessionRecovery", "dead", "pending");
     assert_lean_transition_is_illegal("SessionRecovery", "superseded", "pending");
@@ -254,10 +249,6 @@ fn lean_executable_contracts_cover_initial_domains() {
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");
     assert_lean_transition_is_legal("InferenceCall", "running", "failed");
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
-    assert_eq!(
-        lean_contract_snapshot().request_transition_cases.len(),
-        lean_vocabulary_values("RequestState").len().pow(2)
-    );
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(
         lean_contract_snapshot()

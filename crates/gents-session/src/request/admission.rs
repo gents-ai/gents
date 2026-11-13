@@ -256,6 +256,8 @@ pub enum PendingRejectionError {
     InvalidAgent(#[source] anyhow::Error),
     #[error("pending request rejection failed: {0}")]
     Transaction(#[source] anyhow::Error),
+    #[error(transparent)]
+    Transition(#[from] gents_protocol::request_lifecycle::RequestTransitionError),
 }
 
 pub async fn terminalize_pending_request_rejection(
@@ -287,6 +289,7 @@ pub async fn terminalize_pending_request_rejection(
     let node_did = escape_graphql_string(node_did);
     let failure_reason = escape_graphql_string(reason);
     let terminalized_at = escape_graphql_string(&now);
+    let transition = RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Failed)?;
     let mutation = format!(
         r#"mutation($terminal_output: JSON) {{
             update_AgentRequest(
@@ -307,8 +310,8 @@ pub async fn terminalize_pending_request_rejection(
                  input created_at caused_by_parent_request_doc_id
                  workspace_id workspace_owner_node_did }}
         }}"#,
-        pending = RequestLifecycleState::Pending.as_str(),
-        failed = RequestLifecycleState::Failed.as_str()
+        pending = transition.from().as_str(),
+        failed = transition.to().as_str()
     );
     let mutation = &mutation;
     access.transact_idempotent(
@@ -333,7 +336,7 @@ pub async fn terminalize_pending_request_rejection(
                     crate::request::workspace_binding::release_terminal_writer_binding(txn, row).await?;
                     if let Some(request_id) = row["request_id"].as_str() {
                         crate::request::hooks::points::request_terminal(
-                            txn, owner, request_id, RequestLifecycleState::Failed, reason, now,
+                            txn, owner, request_id, transition.to(), reason, now,
                         )
                         .await?;
                     }
