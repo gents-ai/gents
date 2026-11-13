@@ -38,14 +38,10 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live GLM: set GENTS_CLI_E2E_MODEL_ENDPOINT and GENTS_CLI_E2E_MODEL_NAME"]
+#[ignore = "select GENTS_LIVE_TARGET and run the live enrollment target"]
 async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
     let (endpoint, model) = resolve_live_inference().await?;
-    anyhow::ensure!(
-        model == "GLM-5.3-Flash-NVFP4",
-        "select the live GLM 5.3 Flash model, got {model}"
-    );
     let temp = tempfile::Builder::new()
         .prefix("gents-live-user-goal-")
         .tempdir()?
@@ -87,7 +83,6 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
     let graphql = graphql_url(port);
     let (mut server, _) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &owner_env)?;
-    wait_for_port(port, &mut server)?;
 
     let result = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
@@ -95,7 +90,7 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
         let outcome: Result<()> = async {
-            let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+            let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
             let pending = core.request_status_enrollment_with_label(&status, Some("live Goal")).await?;
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
             run_cli_json_with_env(&home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home_arg], &owner_env)?;
@@ -117,14 +112,14 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
             profile.profile_id = "live-goal-profile".into();
             profile.execution_id = Some("live-goal-execution".into());
             profile.max_output_tokens = Some(1024);
-            let tools = Tools { node_did: node_did.clone(), tools_id: "live-goal-tools".into(), ..Default::default() };
+            let tools = Tools { node_did: node_did.clone(), tools_id: "live-goal-tools".into(), built_ins: Some(gents_documents::BuiltInTools { enable_goal_tools: Some(true), ..Default::default() }), ..Default::default() };
             context.context_id = "live-goal-context".into();
             context.tools_id = Some(tools.tools_id.clone());
             context.skill_ids.clear();
             context.compaction_id = None;
-            context.system_prompt = Some("Answer directly and briefly in one sentence. Do not use tools.".into());
+            context.system_prompt = Some("Answer ordinary requests briefly. On a resumed Goal request, fulfill its objective and call update_goal with status complete. Do not create another Goal.".into());
             publish(&access, vec![
-                (Collection::InferenceExecution, json!({"node_did":node_did,"execution_id":"live-goal-execution","max_turns":1,"max_total_tokens":8192})),
+                (Collection::InferenceExecution, json!({"node_did":node_did,"execution_id":"live-goal-execution","max_total_tokens":8192})),
                 (Collection::InferenceProfile, serde_json::to_value(&profile)?),
                 (Collection::Tools, serde_json::to_value(&tools)?),
                 (Collection::AgentContext, serde_json::to_value(&context)?),
@@ -178,23 +173,13 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
 
             let resumed = resume_goal_request(&access, core.node_identity(), &node_did, &session, &predecessor.request_id).await?;
             anyhow::ensure!(resumed.created && resumed.goal_id == goal.goal_id, "unexpected signed resume receipt: {resumed:?}");
-            let deadline = Instant::now() + Duration::from_secs(120);
-            let claimed = loop {
-                let response = access.execute(&format!(
+            let reply = wait_for_complete_agent_response_with_access(&access, &resumed.request_id, &session, Duration::from_secs(240)).await?;
+            let response = access.execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id node_did requester_did agent_did session_id session_doc_id agent_doc_id admission_kind admission_signer_did relationships_pending input caused_by_trigger_kind caused_by_trigger_id caused_by_parent_request_id caused_by_parent_request_doc_id lifecycle_state failure_reason }} }}"#,
                     escape_graphql_string(&resumed.doc_id),
                 )).await?;
                 let rows = response["data"]["AgentRequest"].as_array().context("User cannot read continuation")?;
-                if let [row] = rows.as_slice() {
-                    match row["lifecycle_state"].as_str() {
-                        Some("claimed" | "processing") => break row.clone(),
-                        Some("completed" | "failed" | "interrupted" | "superseded") => bail!("continuation became terminal before the Goal could be paused: {row}"),
-                        _ => {}
-                    }
-                }
-                anyhow::ensure!(Instant::now() < deadline, "User-signed Goal continuation was not claimed: {response}");
-                sleep(Duration::from_millis(50)).await;
-            };
+            let claimed = rows.first().context("completed continuation missing")?.clone();
             anyhow::ensure!(claimed["request_id"] == resumed.request_id && claimed["node_did"] == node_did
                 && claimed["requester_did"] == user_did && claimed["agent_did"] == binding.agent_did
                 && claimed["session_id"] == session && claimed["session_doc_id"] == session_doc && claimed["agent_doc_id"] == agent_doc
@@ -204,11 +189,6 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
                 && claimed["caused_by_parent_request_id"] == predecessor.request_id
                 && claimed["caused_by_parent_request_doc_id"] == parent_doc,
                 "claimed continuation lost its signed physical provenance: {claimed}");
-            let paused = gents_automation::operations::goal::set(&access, &node_did, &session,
-                &gents_protocol::operations::goal::GoalSetInput { status: Some(GoalStatus::Paused), ..Default::default() }).await?;
-            anyhow::ensure!(paused.status == "paused" && paused.assignment_root_request_doc_id.as_deref() == Some(resumed.doc_id.as_str()), "User pause lost its Goal assignment: {paused:?}");
-
-            let reply = wait_for_complete_agent_response_with_access(&access, &resumed.request_id, &session, Duration::from_secs(240)).await?;
             wait_for_client_complete_response(&core, &session, &node_did, &resumed.request_id, &reply).await?;
             let evidence = access.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state terminal_output }} goal_children: AgentRequest(filter: {{ session_id: {{ _eq: "{}" }}, caused_by_trigger_kind: {{ _eq: "goal" }} }}) {{ _docID }} InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID request_id agent_did model_name call_state }} AgentMessage(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_doc_id session_doc_id agent_did creator_did parent_linked }} Goal(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID status assignment_root_request_doc_id }} }}"#,
@@ -216,17 +196,17 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
                 escape_graphql_string(&reply.header_doc_id), escape_graphql_string(&goal.doc_id),
             )).await?;
             let calls = evidence["data"]["InferenceCall"].as_array().context("User cannot see provider evidence")?;
-            anyhow::ensure!(calls.iter().any(|call| call["request_id"] == resumed.request_id && call["agent_did"] == binding.agent_did && call["model_name"] == model && call["call_state"] == "completed"), "no completed selected GLM inference: {evidence}");
+            anyhow::ensure!(calls.iter().any(|call| call["request_id"] == resumed.request_id && call["agent_did"] == binding.agent_did && call["model_name"] == model && call["call_state"] == "completed"), "no completed selected-model inference: {evidence}");
             let rows = evidence["data"]["AgentRequest"].as_array().context("User cannot read completed continuation")?;
             let children = evidence["data"]["goal_children"].as_array().context("User cannot read Goal requests")?;
             let messages = evidence["data"]["AgentMessage"].as_array().context("User cannot read canonical response")?;
-            let goals = evidence["data"]["Goal"].as_array().context("User cannot read paused Goal")?;
+            let goals = evidence["data"]["Goal"].as_array().context("User cannot read completed Goal")?;
             anyhow::ensure!(rows.len() == 1 && rows[0]["lifecycle_state"] == "completed" && children.len() == 1 && children[0]["_docID"] == resumed.doc_id && messages.len() == 1
                 && messages[0]["request_doc_id"] == resumed.doc_id && messages[0]["session_doc_id"] == session_doc
                 && messages[0]["agent_did"] == binding.agent_did && messages[0]["creator_did"] == binding.agent_did
-                && messages[0]["parent_linked"] == true && goals.len() == 1 && goals[0]["status"] == "paused"
+                && messages[0]["parent_linked"] == true && goals.len() == 1 && goals[0]["status"] == "complete"
                 && goals[0]["assignment_root_request_doc_id"] == resumed.doc_id,
-                "claimed turn did not complete under its paused Goal: {evidence}");
+                "resumed Goal and its turn did not complete: {evidence}");
             let owner = access.transact_readonly("test.live_goal_continuation_owner", |txn| {
                 let doc = &resumed.doc_id;
                 Box::pin(async move { txn.document_owners("AgentRequest", std::slice::from_ref(doc)).await.map_err(anyhow::Error::from) })
@@ -246,13 +226,11 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
         .status()
         .await?;
     anyhow::ensure!(signal.success(), "could not signal live runtime shutdown");
-    let stopped = Instant::now() + Duration::from_secs(30);
-    while server.child.try_wait()?.is_none() {
-        anyhow::ensure!(
-            Instant::now() < stopped,
-            "live runtime did not stop after SIGTERM"
-        );
-        sleep(Duration::from_millis(50)).await;
-    }
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || server.child.wait()),
+    )
+    .await
+    .context("live runtime did not stop after SIGTERM")???;
     result
 }

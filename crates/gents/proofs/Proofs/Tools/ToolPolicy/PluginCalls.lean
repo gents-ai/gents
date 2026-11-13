@@ -176,4 +176,25 @@ theorem composed_child_waits_like_a_direct_call (interactive : Bool) :
 theorem interactive_composed_child_is_asked : consentRoute true true = .ask := by
   simp [consentRoute]
 
+/-- A bound path outside every allowed folder. A headless call never files a
+question; a refused bind names the command that allows the folder, and an
+interactive one says the operator declined it. -/
+structure UncoveredBind where
+  asked : Bool
+  bound : Bool
+  declinedNote : Bool
+  allowHint : Bool
+  deriving DecidableEq, Repr
+
+def uncoveredBind (interactive operatorAllows : Bool) : UncoveredBind :=
+  let asked := consentRoute interactive false == .ask
+  let bound := asked && operatorAllows
+  { asked, bound, declinedNote := !bound && interactive, allowHint := !bound }
+
+theorem a_headless_call_never_asks (operatorAllows : Bool) :
+    (uncoveredBind false operatorAllows).asked = false ∧
+      (uncoveredBind false operatorAllows).bound = false ∧
+      (uncoveredBind false operatorAllows).allowHint = true := by
+  cases operatorAllows <;> decide
+
 end ToolPolicy.PluginCalls

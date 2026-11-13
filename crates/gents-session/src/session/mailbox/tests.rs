@@ -646,68 +646,94 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
 }
 
 #[tokio::test]
-async fn poisoned_item_does_not_block_later_expiry() {
-    let node = test_node().await;
-    let now = Utc::now().to_rfc3339();
-    let hostile = format!(
-        r#"mutation {{ create_MailboxItem(input: {{
-            item_key: "session:hostile:gate:1", requester_did: "did:test:owner",
-            node_did: "did:test:agent", status: "open", kind: "gate",
-            action: "write_document", title: "hostile", source_kind: "session",
-            source_id: "hostile", target_node_did: "did:test:agent",
-            target_agent_did: "operator", created_at: "{now}", updated_at: "{now}"
-        }}) {{ _docID }} }}"#
-    );
-    let hostile = hostile
-        .replace("did:test:agent", root_identity().did())
-        .replace("operator", agent_identity().did());
-    agent_access(&node)
-        .write("test.mailbox.hostile", &hostile)
-        .await
-        .unwrap();
-    let undecodable = format!(
-        r#"mutation {{ create_MailboxItem(input: {{
-            item_key: "session:undecodable:gate:1", requester_did: "did:test:owner",
-            node_did: "did:test:agent", status: "open", kind: "gate",
-            action: "ack", source_kind: "session", source_id: "undecodable",
-            target_node_did: "did:test:agent", target_agent_did: "operator",
-            created_at: "{now}", updated_at: "{now}"
-        }}) {{ _docID }} }}"#
-    );
-    let undecodable = undecodable
-        .replace("did:test:agent", root_identity().did())
-        .replace("operator", agent_identity().did());
-    agent_access(&node)
-        .write("test.mailbox.undecodable", &undecodable)
-        .await
-        .unwrap();
+async fn poisoned_rows_follow_the_lean_sweep_model() {
+    use gents_lean_vocab::families::mailbox_sweep_contracts_poisoned_rows::PoisonOutput;
+    for case in gents_lean_vocab::families::mailbox_sweep_contracts_poisoned_rows::cases() {
+        let node = test_node().await;
+        let now = Utc::now().to_rfc3339();
+        let mut doc_ids = Vec::new();
+        for (index, row) in case.input.rows.iter().enumerate() {
+            let doc_id = if row.undecodable {
+                let undecodable = format!(
+                    r#"mutation {{ create_MailboxItem(input: {{
+                        item_key: "session:row-{index:02}:gate:1", requester_did: "did:test:owner",
+                        node_did: "did:test:agent", status: "open", kind: "gate",
+                        action: "ack", source_kind: "session", source_id: "row-{index:02}",
+                        target_node_did: "did:test:agent", target_agent_did: "operator",
+                        created_at: "{now}", updated_at: "{now}"
+                    }}) {{ _docID }} }}"#
+                )
+                .replace("did:test:agent", root_identity().did())
+                .replace("operator", agent_identity().did());
+                let response = agent_access(&node)
+                    .write("test.mailbox.undecodable", &undecodable)
+                    .await
+                    .unwrap();
+                gents_store::graphql::created_doc_id(&response, MAILBOX_COLLECTION).unwrap()
+            } else if row.hostile {
+                let hostile = format!(
+                    r#"mutation {{ create_MailboxItem(input: {{
+                        item_key: "session:row-{index:02}:gate:1", requester_did: "did:test:owner",
+                        node_did: "did:test:agent", status: "open", kind: "gate",
+                        action: "write_document", title: "hostile", source_kind: "session",
+                        source_id: "row-{index:02}", target_node_did: "did:test:agent",
+                        target_agent_did: "operator", created_at: "{now}", updated_at: "{now}"
+                    }}) {{ _docID }} }}"#
+                )
+                .replace("did:test:agent", root_identity().did())
+                .replace("operator", agent_identity().did());
+                let response = agent_access(&node)
+                    .write("test.mailbox.hostile", &hostile)
+                    .await
+                    .unwrap();
+                gents_store::graphql::created_doc_id(&response, MAILBOX_COLLECTION).unwrap()
+            } else {
+                let mut item = args(MailboxAction::Ack, &format!("row-{index:02}"));
+                if row.due {
+                    item.deadline_at =
+                        Some((Utc::now() - chrono::Duration::minutes(1)).to_rfc3339());
+                }
+                stamp_create(&node, &context("did:test:owner"), item)
+                    .await
+                    .unwrap()
+                    .doc_id
+            };
+            doc_ids.push(doc_id);
+        }
 
-    let mut expiring_args = args(MailboxAction::Ack, "wait-expiry");
-    expiring_args.deadline_at = Some((Utc::now() - chrono::Duration::minutes(1)).to_rfc3339());
-    let expiring = stamp_create(&node, &context("did:test:owner"), expiring_args)
+        let report = sweep_open_mailbox_items_with_close_collections(
+            &node,
+            root_identity().did(),
+            &[agent_identity()],
+            None,
+            FIXTURE_CLOSE,
+        )
         .await
-        .unwrap();
-
-    let report = sweep_open_mailbox_items_with_close_collections(
-        &node,
-        root_identity().did(),
-        &[agent_identity()],
-        None,
-        FIXTURE_CLOSE,
-    )
-    .await
-    .unwrap()
-    .report;
-    assert_eq!(report.skipped_errors, 2);
-    assert_eq!(report.expired, 1);
-    assert_eq!(
-        load_as_creator(&node, &expiring.doc_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        "expired"
-    );
+        .unwrap()
+        .report;
+        let mut open_rows = Vec::new();
+        let mut expired_rows = Vec::new();
+        for doc_id in &doc_ids {
+            let response = agent_access(&node)
+                .execute(&format!(
+                    "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ status }} }}",
+                    escape_graphql_string(doc_id)
+                ))
+                .await
+                .unwrap();
+            let status = response["data"]["MailboxItem"][0]["status"]
+                .as_str()
+                .unwrap();
+            open_rows.push(status == "open");
+            expired_rows.push(status == "expired");
+        }
+        case.check(PoisonOutput {
+            skipped_errors: report.skipped_errors as u64,
+            expired: report.expired as u64,
+            open_rows,
+            expired_rows,
+        });
+    }
 }
 
 #[tokio::test]
