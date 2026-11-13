@@ -6,7 +6,9 @@ use gents_store::config_client::{
     AgentSelfConfigPermission, AgentSelfConfigPermissionError, ConfigAccess,
 };
 
-use crate::desired_state::{find_node_doc_id, grant_agent_catalog, revoke_agent_catalog};
+use crate::desired_state::{
+    find_node_doc_id, grant_node_administration, revoke_node_administration,
+};
 
 fn passthrough(error: impl Into<anyhow::Error>) -> AgentPermissionError {
     AgentPermissionError::Passthrough(
@@ -42,20 +44,20 @@ pub async fn change_agent_permission(
                     error => passthrough(error),
                 })?;
         }
-        AgentPermission::Catalog => {
+        AgentPermission::NodeAdministration => {
             let change = input.change;
             let known: anyhow::Result<bool> = access
-                .transact_write("config.agent.catalog_permission", |txn| {
+                .transact_write("config.agent.node_administration", |txn| {
                     Box::pin(async move {
                         if find_node_doc_id(txn, node_did).await?.is_none() {
                             return Ok(false);
                         }
                         match change {
                             PermissionChange::Grant => {
-                                grant_agent_catalog(txn, node_did, agent_did).await?
+                                grant_node_administration(txn, node_did, agent_did).await?
                             }
                             PermissionChange::Revoke => {
-                                revoke_agent_catalog(txn, node_did, agent_did).await?
+                                revoke_node_administration(txn, node_did, agent_did).await?
                             }
                         }
                         Ok(true)
