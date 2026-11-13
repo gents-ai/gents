@@ -281,7 +281,7 @@ pub async fn desktop_pending_queue_edit(
     };
     crate::commands::edit_pending_queue(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -294,7 +294,7 @@ pub async fn desktop_pending_message_steer(
     };
     crate::commands::steer_pending_message(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]

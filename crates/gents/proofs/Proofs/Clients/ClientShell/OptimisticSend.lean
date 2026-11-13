@@ -7,7 +7,7 @@ The client picks the request identity when the person sends, shows the
 message as pending at once and keeps its payload. It sends one signed create.
 A reply confirms it; a refusal, or no reply by the client's deadline (the
 reply was lost, the runtime restarted, the app closed), shows it as failed
-with Retry. Retry resends the same payload under the same identity. The
+with Retry, unless the runtime denied this client (`view`). Retry resends the same payload under the same identity. The
 runtime treats a repeat of that identity as the same request, so a retry after
 a lost reply never makes a second turn. The payload is released only once the
 message is confirmed or the person discards it.
@@ -565,28 +565,45 @@ structure View where
   blocksComposer : Bool
   deriving DecidableEq, Repr
 
-/-- `mailbox` marks an answer to a mailbox question. -/
-def view (status : Status) (mailbox : Bool) : View :=
+/-- `mailbox` marks an answer to a mailbox question. `refused` marks a failure
+that a resend under the same identity meets again: the runtime denied this
+client the operation (the bridge's `permissionDenied`). Its view withholds
+Retry and keeps Discard; access is the node owner's to grant. Every other
+failure (a lost reply, the deadline, a full disk, an unclassified refusal)
+keeps Retry, which succeeds once its cause passes. The bridge's `retryable`
+flag does not decide this: it marks errors that retrying the same call may
+clear unattended, and a full disk is not one, yet Retry is how its recovery
+resends the message. -/
+def view (status : Status) (mailbox refused : Bool) : View :=
   match status with
   | .pending => ⟨.sending, false, false, mailbox⟩
   | .confirmed => ⟨.delivered, false, false, mailbox⟩
-  | .failed => ⟨.failed, true, true, mailbox⟩
+  | .failed => ⟨.failed, !refused, true, mailbox⟩
   | .discarded => ⟨.hidden, false, false, false⟩
 
 /-- Every view is progressing (sending), settled (delivered or hidden), or
-names its next action (Retry, Discard). -/
-theorem view_progresses_or_acts (status : Status) (mailbox : Bool) :
-    (view status mailbox).shown = .sending ∨ (view status mailbox).shown = .delivered ∨
-      (view status mailbox).shown = .hidden ∨
-      ((view status mailbox).retry = true ∧ (view status mailbox).discard = true) := by
-  cases status <;> simp [view]
+names its next action: Discard, and Retry unless the runtime refused this
+client. -/
+theorem view_progresses_or_acts (status : Status) (mailbox refused : Bool) :
+    (view status mailbox refused).shown = .sending ∨
+      (view status mailbox refused).shown = .delivered ∨
+      (view status mailbox refused).shown = .hidden ∨
+      ((view status mailbox refused).discard = true ∧
+        ((view status mailbox refused).retry = true ∨ refused = true)) := by
+  cases status <;> cases refused <;> simp [view]
+
+/-- Retry is offered exactly for a failed message the runtime did not refuse. -/
+theorem retry_offered_iff (status : Status) (mailbox refused : Bool) :
+    (view status mailbox refused).retry = true ↔ status = .failed ∧ refused = false := by
+  cases status <;> cases refused <;> simp [view]
 
 /-- A blocked composer is a mailbox answer that is sending, delivered, or
-offers Retry; a chat send never blocks the composer. -/
-theorem composer_blocks_only_mailbox (status : Status) (mailbox : Bool)
-    (blocks : (view status mailbox).blocksComposer = true) :
-    mailbox = true ∧ ((view status mailbox).shown = .sending ∨
-      (view status mailbox).shown = .delivered ∨ (view status mailbox).retry = true) := by
+failed with Discard offered; a chat send never blocks the composer. -/
+theorem composer_blocks_only_mailbox (status : Status) (mailbox refused : Bool)
+    (blocks : (view status mailbox refused).blocksComposer = true) :
+    mailbox = true ∧ ((view status mailbox refused).shown = .sending ∨
+      (view status mailbox refused).shown = .delivered ∨
+      (view status mailbox refused).discard = true) := by
   cases status <;> cases mailbox <;> simp_all [view]
 
 /-! ### Conformance cases -/
@@ -606,9 +623,11 @@ def viewTokenString : ViewToken → String
 def allStatuses : List Status := [.pending, .confirmed, .failed, .discarded]
 
 def viewCasesJson : Json :=
-  toJson (allStatuses.flatMap fun status => [false, true].map fun mailbox =>
-    let shown := view status mailbox
+  toJson (allStatuses.flatMap fun status => [false, true].flatMap fun mailbox =>
+    [false, true].map fun refused =>
+    let shown := view status mailbox refused
     Json.mkObj [("status", toJson (statusToken status)), ("mailbox", toJson mailbox),
+      ("refused", toJson refused),
       ("view", toJson (viewTokenString shown.shown)), ("retry", toJson shown.retry),
       ("discard", toJson shown.discard), ("blocksComposer", toJson shown.blocksComposer)])
 

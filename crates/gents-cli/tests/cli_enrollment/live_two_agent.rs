@@ -126,7 +126,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 agent.agent_did = worker.agent_did.clone();
                 agent.creation_nonce = worker.creation_nonce.clone();
                 agent.display_name = Some(label.into());
-                core.save_agent(&agent)
+                core.save_agent(&agent, None)
                     .await
                     .with_context(|| format!("publishing the {label} as the enrolled desktop User"))?;
                 workers.push(worker);

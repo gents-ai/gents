@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatSendRequest } from "@source-inc/gents-desktop-client";
 import { ChatDeliveryFeedback } from "../src/ui/screens/session/ChatDeliveryFeedback";
-import { retainChatDraft, saveChatDraft } from "../src/hooks/chatDrafts";
+import {
+  retainChatDraft,
+  saveChatDraft,
+  type ChatDraft,
+} from "../src/hooks/chatDrafts";
+
+type ChatDraftFailure = NonNullable<ChatDraft["failure"]>;
 import { acceptedChat } from "./chat-delivery-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { loadChatDrafts } from "../src/hooks/chatDrafts";
@@ -19,7 +25,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function fixture(sending = false) {
+const lost = { message: "The runtime connection was lost", error: null };
+
+function fixture(sending = false, failure: ChatDraftFailure = lost) {
   const nodeDid = node().nodeDid;
   const request: ChatSendRequest = {
     clientDid: "client",
@@ -50,10 +58,7 @@ function fixture(sending = false) {
     app.stores.chat,
     sending
       ? { ...retainChatDraft(request, null), pendingUntil: Date.now() + 60_000 }
-      : {
-          ...retainChatDraft(request, null),
-          failure: { message: "The runtime connection was lost", error: null },
-        },
+      : { ...retainChatDraft(request, null), failure },
   );
   const view = render(<ChatDeliveryFeedback />, { wrapper: withApp(app) });
   return { app, request, control, view };
@@ -83,6 +88,25 @@ it("shows a failed message with its cause, and Retry resends the original while 
   expect(f.control).toHaveBeenCalledWith(f.request);
   expect(loadChatDrafts().chatDrafts).toEqual([]);
   expect(f.app.drafts.getState().drafts.newer).toBe("Keep this newer draft");
+});
+
+it("offers no Retry for a send this account isn't allowed to make", async () => {
+  fixture(false, {
+    message:
+      "Access was denied. Check this client's permissions with the runtime owner.",
+    error: {
+      code: "permissionDenied",
+      message:
+        "Access was denied. Check this client's permissions with the runtime owner.",
+      retryable: false,
+      endpoint: null,
+    },
+  });
+  await screen.findByText("The message wasn't sent");
+  screen.getByText(/This account can't post in this session/);
+  expect(screen.queryByText(/Retry sends it again/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry message" })).toBeNull();
+  screen.getByRole("button", { name: "Discard message" });
 });
 
 it("discards a failed message without sending it", async () => {

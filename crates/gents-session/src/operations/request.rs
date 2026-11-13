@@ -14,10 +14,9 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
 
 use crate::request::lifecycle::{
-    build_signed_client_request, client_request_key, held_client_request,
-    queue_user_message_input, send_client_request,
-    ClientRequestScope, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
-    TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES,
+    build_signed_client_request, client_request_key, held_client_request, queue_user_message_input,
+    send_client_request, ClientRequestScope, ExecutionOrigin, RequestIdentity, RequestSigner,
+    RequestSpec, RetryLink, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES,
 };
 use crate::session::CanonicalRequestOutput;
 
@@ -125,10 +124,9 @@ pub async fn send(
     let session_id = target::nonblank(session_id).unwrap_or_else(fresh_id);
     let supplied_request_id = target::nonblank(request_id);
     let request_id = supplied_request_id.clone().unwrap_or_else(fresh_id);
-    let requester =
-        crate::session::client_requester_scope(access, &node_did, &session_id, &actor)
-            .await
-            .map_err(RequestOperationError::passthrough)?;
+    let requester = crate::session::client_requester_scope(access, &node_did, &session_id, &actor)
+        .await
+        .map_err(RequestOperationError::passthrough)?;
     if supplied_request_id.is_some() {
         let held = held_client_request(
             access,
@@ -262,12 +260,28 @@ pub async fn reissue(
     };
     match input.kind {
         ReissueKind::Retry => {
-            reissue::retry(access, signer, &actor, &parent, lineage, &mut facts, input.request_id)
-                .await
+            reissue::retry(
+                access,
+                signer,
+                &actor,
+                &parent,
+                lineage,
+                &mut facts,
+                input.request_id,
+            )
+            .await
         }
         ReissueKind::Resend => {
-            reissue::resend(access, signer, &actor, &parent, lineage, &facts, input.request_id)
-                .await
+            reissue::resend(
+                access,
+                signer,
+                &actor,
+                &parent,
+                lineage,
+                &facts,
+                input.request_id,
+            )
+            .await
         }
     }
 }
@@ -372,6 +386,10 @@ where
     }
 }
 
+pub fn interrupt_settled(terminal: bool, interrupted: bool) -> bool {
+    terminal || interrupted
+}
+
 pub async fn interrupt(
     access: &ConfigAccess,
     input: RequestInterruptInput,
@@ -386,14 +404,14 @@ pub async fn interrupt(
         interrupt_requested_at,
         already_interrupted,
     };
-    if let Some(at) = target::nonblank(target.interrupt_requested_at.clone()) {
-        return Ok(receipt(Some(at), true));
-    }
-    if let Some(state) = target.lifecycle_state.filter(|state| state.is_terminal()) {
-        return Err(RequestOperationError::InterruptTerminal {
-            request_id: target.request_id.clone(),
-            state: state.as_str(),
-        });
+    let interrupted_at = target::nonblank(target.interrupt_requested_at.clone());
+    if interrupt_settled(
+        target
+            .lifecycle_state
+            .is_some_and(|state| state.is_terminal()),
+        interrupted_at.is_some(),
+    ) {
+        return Ok(receipt(interrupted_at, true));
     }
     crate::request::interrupt::interrupt_request_by_doc_id_with_access(
         access,
@@ -413,10 +431,7 @@ pub async fn interrupt(
     match target::nonblank(observed.interrupt_requested_at.clone()) {
         Some(at) => Ok(receipt(Some(at), false)),
         None => match observed.lifecycle_state.filter(|state| state.is_terminal()) {
-            Some(state) => Err(RequestOperationError::InterruptTerminal {
-                request_id: target.request_id.clone(),
-                state: state.as_str(),
-            }),
+            Some(_) => Ok(receipt(None, true)),
             None => Err(RequestOperationError::InterruptNotLatched {
                 request_id: target.request_id.clone(),
             }),

@@ -334,3 +334,51 @@ pub fn normalize_root_path(path: &str) -> Result<String, WorkspaceRootError> {
         .expect("components of a str path are str")
         .to_owned())
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWorkspaceRoot {
+    pub root_path: String,
+    pub workspace_root_doc_id: String,
+    pub tools_id: String,
+}
+
+pub fn retarget_allowed(selecting_contexts: usize) -> bool {
+    selecting_contexts <= 1
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentWorkspaceRootError {
+    #[error("the agent has no Context document")]
+    ContextMissing,
+    #[error("the agent has no Tools document")]
+    ToolsMissing,
+    #[error("Tools {tools_id} is selected by {selecting_contexts} Contexts; changing its host root would change the other agents that use it. Give this agent its own Tools document first.")]
+    SharedTools {
+        tools_id: String,
+        selecting_contexts: usize,
+    },
+    #[error("{root_path} was published, but the agent still uses its previous folder. Choose the same folder again to finish.")]
+    Retarget {
+        root_path: String,
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
+    #[error(transparent)]
+    Publication(#[from] WorkspaceRootError),
+    #[error(transparent)]
+    Other(Box<dyn Error + Send + Sync>),
+}
+
+#[cfg(test)]
+mod selection_text_tests {
+    #[test]
+    fn a_failed_retarget_names_the_published_folder_and_the_retry() {
+        let error = super::AgentWorkspaceRootError::Retarget {
+            root_path: "/work/four".into(),
+            source: "write refused".into(),
+        };
+        assert_eq!(crate::error_chain::ErrorChain(&error).to_string(), "/work/four was published, but the agent still uses its previous folder. Choose the same folder again to finish.: write refused");
+    }
+}

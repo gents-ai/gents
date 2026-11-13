@@ -204,6 +204,12 @@ pub struct DefaultAgentSetRequest {
 #[serde(deny_unknown_fields)]
 pub struct AgentSaveRequest {
     pub document: gents_documents::Agent,
+    #[serde(default)]
+    #[ts(
+        optional,
+        type = "{ contextId: string; changes: Partial<Omit<import(\"./AgentContext.js\").AgentContext, \"node_did\" | \"context_id\">> }"
+    )]
+    pub context_patch: Option<gents_protocol::operations::agent::AgentContextPatch>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

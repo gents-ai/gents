@@ -37,7 +37,7 @@ where
 
     save_node_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -56,7 +56,7 @@ where
 
     set_default_agent(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -75,7 +75,7 @@ where
 
     save_agent_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -94,7 +94,7 @@ where
 
     save_skill_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -113,7 +113,7 @@ where
 
     delete_skill_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -132,7 +132,7 @@ where
 
     save_backend_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -151,7 +151,7 @@ where
 
     set_backend_rotation_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -170,7 +170,7 @@ where
 
     save_inference_profile_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -189,7 +189,7 @@ where
 
     save_tools_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -208,7 +208,7 @@ where
 
     save_tool_service_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -222,7 +222,7 @@ pub async fn desktop_tool_service_test(
 
     test_tool_service_config(request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -240,7 +240,7 @@ where
 
     delete_task_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -259,7 +259,7 @@ where
 
     delete_schedule_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -278,7 +278,7 @@ where
 
     delete_trigger_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -297,7 +297,7 @@ where
 
     delete_backend_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -316,7 +316,7 @@ where
 
     delete_inference_profile_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -335,7 +335,7 @@ where
 
     delete_tools_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -354,7 +354,7 @@ where
 
     delete_tool_service_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -373,7 +373,7 @@ where
 
     delete_agent_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -392,7 +392,7 @@ where
 
     delete_context_config(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -410,7 +410,7 @@ where
     };
     crate::commands::apply_config_components(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -428,7 +428,7 @@ where
     };
     crate::commands::patch_config_components(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -441,5 +441,5 @@ pub async fn desktop_agent_identity_provision(
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     core.provision_agent_identity(&node_did)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }

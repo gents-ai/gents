@@ -1337,9 +1337,10 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         }))?,
     )
     .await?;
-    core.save_agent(&serde_json::from_value(
-        runtime.agent_value(&agent, "profile"),
-    )?)
+    core.save_agent(
+        &serde_json::from_value(runtime.agent_value(&agent, "profile"))?,
+        None,
+    )
     .await?;
     let session_doc = runtime
         .agent_session(&agent, "terminal-page", core.node_identity.did())

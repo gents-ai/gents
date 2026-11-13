@@ -40,17 +40,24 @@ async fn observe_submitted_request(
     refresh: impl std::future::Future<Output = Result<super::StoreRefresh>>,
 ) -> SubmittedRequest {
     store.set_focused_request_id(Some(receipt.request_id.clone()));
+    observe_committed_write(&receipt.node_did, "submit request", refresh).await;
+    receipt
+}
+
+async fn observe_committed_write(
+    node_did: &str,
+    action: &str,
+    refresh: impl std::future::Future<Output = Result<super::StoreRefresh>>,
+) {
     if let Err(error) = refresh.await {
-        store.request_resync();
         tracing::warn!(
-            node_did = %receipt.node_did,
-            session_id = %receipt.session_id,
-            request_id = %receipt.request_id,
-            error = %error,
-            "submitted request awaits local projection refresh"
+            target: "gents_desktop_core::writes",
+            node_did = %node_did,
+            action = %action,
+            error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
+            "desktop write saved; its refresh failed and the observer owns the node's next read"
         );
     }
-    receipt
 }
 
 pub(super) fn find_request_in_scope(
@@ -230,10 +237,8 @@ impl ClientCore {
         self.node_identity.did().to_owned()
     }
 
-    /// A superseded node read is not read again here: the observer owns that
-    /// node's next load.
-    async fn refresh_config_source(&self, source_node_did: &str) -> Result<u64> {
-        Ok(self.refresh_node(source_node_did).await?.version())
+    async fn observe_committed_config(&self, node_did: &str, action: &str) {
+        observe_committed_write(node_did, action, self.refresh_node(node_did)).await;
     }
 
     #[cfg(test)]

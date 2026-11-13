@@ -1,5 +1,7 @@
 use crate::interrupt::interrupt_request;
-use crate::tests::support::{served_desktop, served_desktop_pair, submit_request};
+use crate::tests::support::{
+    reject_admission, served_desktop, served_desktop_pair, submit_request,
+};
 use crate::types::DesktopInterruptRequest;
 use gents_desktop_core::client::ClientCore;
 use gents_store::config_client::ConfigAccess;
@@ -65,6 +67,14 @@ async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
         .unwrap();
     assert!(second.already_interrupted);
     assert_eq!(second.interrupt_requested_at, first.interrupt_requested_at);
+    let done = submit_request(core, &served.runtime, &served.agent, "done-session", "done").await;
+    reject_admission(&served.runtime, &served.agent, &done, "fixture rejection").await;
+    let finished = interrupt_request(core, &user_cancel("done", Some(node)))
+        .await
+        .unwrap();
+    assert!(finished.accepted && finished.already_interrupted);
+    assert!(finished.interrupt_requested_at.is_none());
+    assert!(latch(core, node, "done").await.is_none());
     served.shutdown().await;
 }
 

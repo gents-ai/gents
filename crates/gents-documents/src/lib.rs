@@ -56,8 +56,8 @@ mod tools;
 pub use tool_modes::{BashMode, FileToolMode};
 mod trigger;
 mod unattended_admission;
-mod write_tool;
 pub mod views;
+mod write_tool;
 
 pub use principal::{
     load_default_agent_did, load_default_agent_did_in_txn, load_node, DefaultAgentSelection, Node,
@@ -153,8 +153,8 @@ pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
 };
 pub use surface_tool::{validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource};
-pub use tools::write_tools_document;
 pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
+pub use tools::{write_tools_document, write_tools_document_in_txn, ToolsWriteError};
 pub use tools::{
     AgentTools, BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools,
     IntegrationTools, LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools,

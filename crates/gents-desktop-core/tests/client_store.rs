@@ -43,9 +43,10 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     }))?)
     .await?;
     let agent = runtime.provision_agent().await;
-    core.save_agent(&serde_json::from_value(
-        runtime.agent_value(&agent, "profile"),
-    )?)
+    core.save_agent(
+        &serde_json::from_value(runtime.agent_value(&agent, "profile"))?,
+        None,
+    )
     .await?;
     let session_doc = runtime.agent_session(&agent, "session-1", &user).await;
     let agent_doc = runtime.agent_doc_id(&agent).await;

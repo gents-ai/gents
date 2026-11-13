@@ -1,69 +1,34 @@
-//! Desktop folder selection for an agent's host tool root.
-//!
-//! The Node owner publishes the WorkspaceRoot and grants the agent reader
-//! access, then the agent's Tools document names the folder in `host.root`.
-//! Both writes are signed by the operator, so they run through the owners the
-//! CLI uses. The caller restarts the runtime with the reviewed ceiling after
-//! this returns: `gents serve` refuses a configured root that is not published.
-
-use anyhow::{Context, Result};
-use gents_documents::views::config::ContextsUsingTools;
-use gents_documents::write_tools_document;
-use gents_documents::{load_agent_context_and_tools_in_txn, Tools};
+use anyhow::Result;
 use gents_protocol::operations::workspace_root::{
-    EnabledUpdate, WorkspaceRootError, WorkspaceRootPublish, WorkspaceRootVerb,
+    AgentWorkspaceRoot, AgentWorkspaceRootError, WorkspaceRootError, WorkspaceRootVerb,
 };
 use gents_protocol::operations::NextCall;
-use gents_protocol::operations::StringUpdate;
 use gents_store::config_client::ConfigAccess;
-use serde::Serialize;
-use ts_rs::TS;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentWorkspaceRoot {
-    pub root_path: String,
-    pub workspace_root_doc_id: String,
-    pub tools_id: String,
-}
-
-/// Publishes `root_path` for `node_did`, grants `agent_did` reader access, and
-/// points that agent's Tools `host.root` at it. Publication happens first so a
-/// later runtime start admits the root.
 pub async fn select_agent_workspace_root(
     access: &ConfigAccess,
     node_did: &str,
     agent_did: &str,
     root_path: &str,
 ) -> Result<AgentWorkspaceRoot> {
-    let published = gents_tools::surface::publish_workspace_root(
-        access,
-        &WorkspaceRootPublish {
-            node_did: node_did.to_owned(),
-            root_path: root_path.to_owned(),
-            display_name: StringUpdate::Omitted,
-            enabled: EnabledUpdate::Enable,
-            reader_agents: vec![agent_did.to_owned()],
-        },
+    gents_tools::surface::root_selection::select_agent_workspace_root(
+        access, node_did, agent_did, root_path,
     )
     .await
-    .map_err(refusal)?;
-    let root_path = published.root_path.as_str();
-    let mut tools = read_unshared_agent_tools(access, node_did, agent_did).await?;
-    let tools_id = tools.tools_id.clone();
-    if retarget_host_root(&mut tools, root_path) {
-        write_tools_document(
-            access,
-            &tools,
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await?;
+    .map_err(selection_failure)
+}
+
+fn selection_failure(error: AgentWorkspaceRootError) -> anyhow::Error {
+    match error {
+        AgentWorkspaceRootError::Publication(error) => refusal(error),
+        error @ AgentWorkspaceRootError::Retarget { .. } => {
+            let message = gents_protocol::error_chain::ErrorChain(&error).to_string();
+            let mut classified = crate::error::BridgeError::classify_transport_error(error.into());
+            classified.message = message;
+            classified.into()
+        }
+        error => error.into(),
     }
-    Ok(AgentWorkspaceRoot {
-        root_path: root_path.to_owned(),
-        workspace_root_doc_id: published.doc_id.clone(),
-        tools_id,
-    })
 }
 
 /// A refused publication as the message the UI shows: what happened, then
@@ -89,96 +54,147 @@ fn refusal(error: WorkspaceRootError) -> anyhow::Error {
     anyhow::Error::new(error).context(message)
 }
 
-async fn read_unshared_agent_tools(
-    access: &ConfigAccess,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<Tools> {
-    access
-        .transact_write("workspace_root.agent_tools", |txn| {
-            Box::pin(async move {
-                let (context, tools) =
-                    load_agent_context_and_tools_in_txn(txn, node_did, agent_did).await?;
-                context.context("the agent has no Context document")?;
-                let tools = tools.context("the agent has no Tools document")?;
-                let selecting = txn
-                    .read_view(&ContextsUsingTools {
-                        node_did: node_did.to_owned(),
-                        tools_id: tools.tools_id.clone(),
-                    })
-                    .await?
-                    .len();
-                ensure_unshared(&tools.tools_id, selecting)?;
-                Ok::<Tools, anyhow::Error>(tools)
-            })
-        })
-        .await
-}
-
-/// Editing `host.root` of a Tools document that another Context selects would
-/// change that other agent's workspace too, so such a document is refused.
-fn ensure_unshared(tools_id: &str, selecting_contexts: usize) -> Result<()> {
-    anyhow::ensure!(
-        selecting_contexts <= 1,
-        "Tools {tools_id} is selected by {selecting_contexts} Contexts; changing its host root would change the other agents that use it. Give this agent its own Tools document first."
-    );
-    Ok(())
-}
-
-/// Sets `host.root` and returns whether the document changed. Sibling host
-/// settings are preserved; a missing `host` group is created.
-pub(crate) fn retarget_host_root(tools: &mut Tools, root_path: &str) -> bool {
-    let host = tools.host.get_or_insert_with(Default::default);
-    if host.root.as_deref() == Some(root_path) {
-        return false;
-    }
-    host.root = Some(root_path.to_owned());
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
+    use gents_store::graphql::escape_graphql_string;
     use serde_json::json;
 
-    fn tools(host: serde_json::Value) -> Tools {
-        serde_json::from_value(json!({
-            "tools_id": "engineer-tools",
-            "node_did": "did:key:node",
-            "host": host,
-        }))
-        .expect("tools fixture")
-    }
-
     #[test]
-    fn retarget_sets_root_and_preserves_sibling_host_settings() {
-        let mut document = tools(json!({"files": {"mode": "ReadOnly"}}));
-        assert!(retarget_host_root(&mut document, "/work/one"));
-        let host = document.host.as_ref().expect("host group");
-        assert_eq!(host.root.as_deref(), Some("/work/one"));
-        assert!(host.files.is_some(), "files must survive the retarget");
-        assert!(!retarget_host_root(&mut document, "/work/one"));
-    }
-
-    #[test]
-    fn retarget_creates_the_host_group_when_absent() {
-        let mut document: Tools = serde_json::from_value(json!({
-            "tools_id": "engineer-tools",
-            "node_did": "did:key:node",
-        }))
-        .expect("tools fixture");
-        assert!(retarget_host_root(&mut document, "/work/two"));
+    fn a_failed_retarget_keeps_the_published_folder_message_and_permission_code() {
+        let error = selection_failure(AgentWorkspaceRootError::Retarget {
+            root_path: "/work/four".into(),
+            source: Box::new(crate::error::BridgeError::new(
+                crate::error::BridgeErrorCode::PermissionDenied,
+                "access denied",
+            )),
+        });
+        let classified = crate::error::BridgeError::classify_transport_error(error);
         assert_eq!(
-            document.host.and_then(|host| host.root).as_deref(),
-            Some("/work/two")
+            classified.code,
+            crate::error::BridgeErrorCode::PermissionDenied
         );
+        assert!(classified.message.starts_with("/work/four was published, but the agent still uses its previous folder. Choose the same folder again to finish."));
+        assert!(classified.message.ends_with("access denied"));
     }
 
-    #[test]
-    fn a_tools_document_shared_by_another_context_is_refused() {
-        assert!(ensure_unshared("engineer-tools", 0).is_ok());
-        assert!(ensure_unshared("engineer-tools", 1).is_ok());
-        let error = ensure_unshared("engineer-tools", 2).expect_err("shared tools refused");
-        assert!(error.to_string().contains("2 Contexts"), "{error}");
+    #[tokio::test]
+    async fn a_refused_retarget_publishes_nothing_and_a_retry_finishes_a_partial_selection(
+    ) -> Result<()> {
+        use gents_documents::read_desired_state_record_in_txn;
+        use gents_store::collection::Collection;
+
+        let runtime = crate::test_fixtures::ServedRuntimeHome::start().await;
+        let access = runtime.user_access();
+        let node_did = runtime.node_did();
+        let agent = runtime.provision_agent().await;
+        let mut agent_value = runtime.agent_value(&agent, "profile");
+        agent_value["context_id"] = json!("context");
+        let context = |context_id: &str, tools_id: &str| json!({"node_did": node_did, "context_id": context_id, "tools_id": tools_id});
+        runtime
+            .apply_as_user(
+                "test.workspace_root.seed",
+                vec![
+                    (
+                        Collection::InferenceBackend,
+                        json!({"node_did": node_did, "backend_id": "backend", "name": "Fixture",
+                            "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
+                            "auth": {"kind": "unauthenticated"}}),
+                    ),
+                    (
+                        Collection::InferenceProfile,
+                        json!({"node_did": node_did, "profile_id": "profile",
+                            "backend_id": "backend", "model_name": "model"}),
+                    ),
+                    (
+                        Collection::Tools,
+                        json!({"node_did": node_did, "tools_id": "shared-tools"}),
+                    ),
+                    (
+                        Collection::Tools,
+                        json!({"node_did": node_did, "tools_id": "other-tools"}),
+                    ),
+                    (Collection::AgentContext, context("context", "shared-tools")),
+                    (
+                        Collection::AgentContext,
+                        context("other-context", "shared-tools"),
+                    ),
+                    (Collection::Agent, agent_value),
+                ],
+            )
+            .await;
+        let folder = tempfile::tempdir()?;
+        let root_path = std::fs::canonicalize(folder.path())?
+            .to_string_lossy()
+            .into_owned();
+        let published_roots = || async {
+            let response = access
+                .execute(&format!(
+                    "{{ WorkspaceRoot(filter: {{root_path: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
+                    escape_graphql_string(&root_path)
+                ))
+                .await?;
+            anyhow::Ok(
+                response["data"]["WorkspaceRoot"]
+                    .as_array()
+                    .map_or(0, Vec::len),
+            )
+        };
+        let host_root = || {
+            access.transact_readonly("test.workspace_root.tools", |txn| {
+                Box::pin(async move {
+                    let (_, tools) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::Tools,
+                        node_did,
+                        "shared-tools",
+                    )
+                    .await?
+                    .context("shared Tools missing")?;
+                    anyhow::Ok(tools["host"]["root"].clone())
+                })
+            })
+        };
+
+        let error = select_agent_workspace_root(&access, node_did, &agent.agent_did, &root_path)
+            .await
+            .expect_err("a Tools document shared by another Context is refused");
+        assert!(format!("{error:#}").contains("2 Contexts"), "{error:#}");
+        assert_eq!(published_roots().await?, 0, "a refusal publishes nothing");
+        assert_eq!(host_root().await?, serde_json::Value::Null);
+
+        let partial = gents_tools::surface::set_workspace_root_with_readers(
+            &access,
+            node_did,
+            &root_path,
+            None,
+            true,
+            std::slice::from_ref(&agent.agent_did),
+        )
+        .await?;
+        assert_eq!(published_roots().await?, 1);
+        assert_eq!(host_root().await?, serde_json::Value::Null);
+
+        runtime
+            .apply_as_user(
+                "test.workspace_root.unshare",
+                vec![(
+                    Collection::AgentContext,
+                    context("other-context", "other-tools"),
+                )],
+            )
+            .await;
+        for _ in 0..2 {
+            let selected =
+                select_agent_workspace_root(&access, node_did, &agent.agent_did, &root_path)
+                    .await?;
+            assert_eq!(selected.workspace_root_doc_id, partial);
+            assert_eq!(selected.tools_id, "shared-tools");
+            assert_eq!(published_roots().await?, 1);
+            assert_eq!(host_root().await?, json!(root_path));
+        }
+        runtime.shutdown().await;
+        Ok(())
     }
 }

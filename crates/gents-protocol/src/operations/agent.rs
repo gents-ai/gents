@@ -121,6 +121,13 @@ pub struct AgentReceipt<A> {
     pub make_default: bool,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextPatch {
+    pub context_id: String,
+    pub changes: serde_json::Map<String, serde_json::Value>,
+}
+
 /// Lean `SelfConfig.AgentRefusal`: the admission check that refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -225,6 +232,8 @@ pub enum AgentOperationError {
     },
     #[error("{0} object required")]
     ObjectRequired(&'static str),
+    #[error("the context patch must name the context selected by the saved Agent")]
+    ContextPatchMismatch,
     #[error("agent has no context; create and select a context first")]
     AgentHasNoContext,
     #[error("system_prompt edit requires an unshared context")]
@@ -273,6 +282,7 @@ impl AgentOperationError {
             | Self::UnknownPreset
             | Self::CloneSourceGrantNotHeld { .. }
             | Self::ObjectRequired(_)
+            | Self::ContextPatchMismatch
             | Self::AgentHasNoContext
             | Self::SystemPromptContextShared
             | Self::CandidateIdentityMissing

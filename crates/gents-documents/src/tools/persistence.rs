@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use super::Tools;
 use crate::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::collection::Collection;
-use gents_store::config_client::ConfigAccess;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 /// Replace a complete Tools document; omitted groups revoke their capabilities.
 pub async fn write_tools_document(
@@ -11,17 +11,10 @@ pub async fn write_tools_document(
     tools: &Tools,
     policy: &dyn crate::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<String> {
-    tools.validate()?;
     access
         .transact_write("config.tools.write", |txn| {
             Box::pin(async move {
-                let value = serde_json::to_value(tools)?;
-                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: Collection::Tools,
-                    add: value.clone(),
-                    update: value,
-                }])?;
-                crate::apply_desired_state_plan(txn, &plan, policy).await?;
+                write_tools_document_in_txn(txn, tools, policy).await?;
                 crate::read_desired_state_record_in_txn(
                     txn,
                     Collection::Tools,
@@ -34,6 +27,34 @@ pub async fn write_tools_document(
             })
         })
         .await
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ToolsWriteError {
+    #[error(transparent)]
+    Invalid(anyhow::Error),
+    #[error(transparent)]
+    Publication(anyhow::Error),
+}
+
+pub async fn write_tools_document_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    tools: &Tools,
+    policy: &dyn crate::inference_backend::AdvertisedProfilePolicy,
+) -> std::result::Result<(), ToolsWriteError> {
+    tools.validate().map_err(ToolsWriteError::Invalid)?;
+    let value =
+        serde_json::to_value(tools).map_err(|error| ToolsWriteError::Invalid(error.into()))?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Tools,
+        add: value.clone(),
+        update: value,
+    }])
+    .map_err(ToolsWriteError::Invalid)?;
+    crate::apply_desired_state_plan(txn, &plan, policy)
+        .await
+        .map_err(ToolsWriteError::Publication)?;
+    Ok(())
 }
 
 #[cfg(test)]

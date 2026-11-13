@@ -21,7 +21,8 @@ impl ClientCore {
             .map_err(crate::error::mailbox_operation_failure);
         match result {
             Ok(item) => {
-                self.refresh_node(node_did).await?;
+                self.observe_committed_config(node_did, "dismiss mailbox item")
+                    .await;
                 self.clear_mutation_error();
                 Ok(item)
             }
@@ -90,7 +91,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(receipt) => {
-                self.refresh_node(node_did).await?;
+                self.observe_committed_config(node_did, "set session archived")
+                    .await;
                 self.clear_mutation_error();
                 Ok(receipt)
             }
@@ -125,7 +127,8 @@ impl ClientCore {
         .await;
         match result {
             Ok(_) => {
-                self.refresh_node(node_did).await?;
+                self.observe_committed_config(node_did, "rename session")
+                    .await;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
