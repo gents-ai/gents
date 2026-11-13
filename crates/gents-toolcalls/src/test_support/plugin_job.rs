@@ -178,6 +178,70 @@ pub fn row(r: &LeanPluginJobRow) -> StepRow {
     }
 }
 
+/// A production row in the Lean `jobJson` spelling, the inverse of [`row`].
+pub fn row_json(r: &StepRow) -> serde_json::Value {
+    serde_json::json!({
+        "root": r.root,
+        "row_doc_id": r.row_doc_id,
+        "caller_session": r.caller_session,
+        "caller_cwd": r.caller_cwd,
+        "handle": r.handle,
+        "caller_hop": r.caller_hop,
+        "call": {
+            "argv": r.call.argv,
+            "args": r.call.args,
+            "script": r.call.script,
+            "agent_budget": r.call.agent_budget,
+        },
+        "root_call": r.root_call.as_ref().map(|c| serde_json::json!({
+            "argv": c.argv,
+            "args": c.args,
+            "agent_budget": c.agent_budget,
+        })),
+        "resume": r.resume.as_ref().map(|resume| serde_json::json!({
+            "row_doc_id": resume.row_doc_id,
+            "engine_current": resume.engine == Some(JobResumeEngine::Current),
+            "answer": resume.answer,
+            "budget": resume.budget,
+        })),
+        "pin": r.pin.as_ref().map(|p| serde_json::json!({
+            "script_id": p.script_id,
+            "source_digest": p.source_digest,
+            "engine_digest": p.engine_digest,
+            "plugin_ref": p.plugin_ref,
+            "handle": p.handle,
+            "cwd": p.cwd,
+            "args_digest": p.args_digest,
+            "chain_root": p.chain_root_doc_id,
+            "origin": p.origin,
+            "agent_budget": p.agent_budget,
+            "adopted_at": p.adopted_at,
+            "resume_of": p.resume_of,
+            "replayed_from": p.replayed_from,
+            "ceiling_at_pin": {
+                "targets": p.ceiling_at_pin.targets,
+                "max_live": p.ceiling_at_pin.max_live,
+                "max_spawns": p.ceiling_at_pin.max_spawns,
+                "max_messages_per_slot": p.ceiling_at_pin.max_messages_per_slot,
+                "result_bytes": p.ceiling_at_pin.result_bytes,
+                "max_wall_secs": p.ceiling_at_pin.max_wall_secs,
+            },
+        })),
+        "children": r.children.iter().map(|c| serde_json::json!({
+            "retry_key": c.retry_key,
+            "slot": c.slot,
+            "attempt": c.attempt,
+            "target": { "node": c.target.0, "agent": c.target.1 },
+            "state": c.state,
+            "messages": c.messages,
+        })).collect::<Vec<_>>(),
+        "spent": r.spent,
+        "observed_terminal": r.observed_terminal,
+        "consecutive_failures": r.consecutive_failures,
+        "state": r.state,
+    })
+}
+
 /// Lean's `Extras` count a rider's presence; the protocol rider's body is not
 /// modeled.
 pub fn writes(x: &LeanPluginJobExtras) -> Vec<DataWrite> {

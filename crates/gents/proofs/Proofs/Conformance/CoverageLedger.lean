@@ -519,9 +519,22 @@ def caseCoverage : List CoverageEntry :=
       "hooks_contracts_owed_prune"
       "Production prunable decides every record. The deletion of pruned rows is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_request_signed_targets")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_goal_command_signed_targets")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "cross_actor_authorization_signed_client_claim")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "cross_actor_authorization_cases" "CrossActorAuthorization"
-      "Native transaction-bound requester document and node authorization is unavailable; cross-actor execution remains blocked. Bind these cases to native transaction and claim owners when supported.")
+      "family"
+      "cross_actor_authorization_unreached"
+      "model-production-gap: the served claim fixture cannot present an unsupported or disabled native check, a transient or hidden observation, a foreign or missing native owner or authenticated author, a mismatched request document, physical target or executor, or a permission change or commit failure between the claim transaction's check and its commit.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family" "goal_links_user_owned"
@@ -1038,10 +1051,22 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_goal_decision")
       "durable-goals" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "runtime_reconcile_cases"
-      "RuntimeReconcileCases"
-      "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_status")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_router")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_runtime_reconcile_supervisor")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_runtime_reconcile_unreached"
+      "model-production-gap: no production scenario drives a request finish releasing its generation, a replayed accept, retiring an unobserved generation, a resolve over a snapshot with a missing dependency, an unknown or demoted explicit selection, or an explicit request before the router observes the published generation; the served runtime fixtures cannot seed these pre-states.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2257,9 +2282,17 @@ def caseCoverage : List CoverageEntry :=
       "plugin_resources_consents")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_job_admission_cases"
-      "PluginJobAdmissionCases")
-      "plugin-jobs" [Surface.agentFacing, Surface.runtimeInternal]
+      "family"
+      "plugin_job_admission")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_source_boundary_dispatch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_dispatch_refusal")
+      "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_job_adoption_cases"
       "PluginJobAdoptionCases")
@@ -2591,8 +2624,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalClientStartCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_client_receipt_cases"
-      "GoalClientReceiptCases")
+      "family"
+      "goal_client_mutation_contracts_local_receipt")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2631,8 +2664,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_operator_resume_contracts_resume_transaction")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "goal_operator_resume_on_cases"
-      "GoalOperatorResumeOnCases")
+      "family"
+      "goal_operator_resume_contracts_resume_on_target")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -3297,8 +3330,7 @@ def caseCoverage : List CoverageEntry :=
       "contracts_callback_denial")
       "isolated-workspaces" [Surface.runtimeInternal]
 
-  , tagged (consumerWithFollowUp "runtime_reconcile_cases" "RuntimeReconcileCases"
-      "Pending the L3 test rename. Exercises explicit request/session agent binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
+  , tagged (consumerCoverage "family" "contracts_runtime_reconcile_selection")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
       "Canonical input serde only. Signed canonical_input_fields/bytes, context whitelist, title materialization and verified goal receipt checks need the migrated admission/signing owners.")

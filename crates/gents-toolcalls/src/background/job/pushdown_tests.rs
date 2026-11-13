@@ -8,10 +8,9 @@ use crate::background::job::recovery::{
 };
 use crate::plugin::job_calls;
 use crate::test_support::plugin_job::*;
-use gents_lean_vocab::{
-    lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases, LeanPluginJobAdoptionCase,
-};
-use gents_lean_vocab::{lean_recovery_sweep_cases, LeanPluginJobRecoveryRow};
+use gents_lean_vocab::families::plugin_job_recoveries::PluginJobRow;
+use gents_lean_vocab::lean_recovery_sweep_cases;
+use gents_lean_vocab::{lean_plugin_job_adoption_cases, LeanPluginJobAdoptionCase};
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobResume, JobState, JobStepOutput};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,106 +21,68 @@ const PLUGIN_JOB_SWEEP_ID: &str = "tool_call_lifecycle_recover_plugin_job_rows";
 /// into, and the children the kill reaches.
 #[test]
 fn generated_plugin_job_admission_cases_drive_admit_step() {
-    let cases = lean_plugin_job_admission_cases();
-    assert_eq!(
-        cases.len(),
-        222,
-        "Lean supplies 30 admission regressions and 192 interrupted wire-to-recovery traces"
-    );
     let mut names = BTreeSet::new();
-    for case in cases {
-        assert!(names.insert(case.name.as_str()), "duplicate {}", case.name);
-        let expected = &case.expected;
-        let expected_job = expected.job.as_ref().map(row);
-        let context = context(&case.context, &case.job, &case.output);
-        let job = row(&case.job);
-        let mut output = output(&case.output);
-        if let Some(trace) = &case.wire_trace {
+    for case in gents_lean_vocab::families::plugin_job_admission::cases() {
+        let name = case.input.name.clone();
+        assert!(names.insert(name.clone()), "duplicate {name}");
+        let decoded_context: gents_lean_vocab::LeanPluginJobContext =
+            serde_json::from_value(case.input.context.0.clone()).unwrap();
+        let decoded_job: gents_lean_vocab::LeanPluginJobRow =
+            serde_json::from_value(case.input.job.0.clone()).unwrap();
+        let decoded_output: gents_lean_vocab::LeanPluginJobOutput =
+            serde_json::from_value(case.input.output.0.clone()).unwrap();
+        let context = context(&decoded_context, &decoded_job, &decoded_output);
+        let job = row(&decoded_job);
+        let mut output = output(&decoded_output);
+        if let Some(trace) = &case.input.trace {
             let JobStepOutput::Effects { effects } = &mut output else {
-                panic!("{}: wire trace requires spawn effects", case.name);
+                panic!("{name}: wire trace requires spawn effects");
             };
-            assert_eq!(
-                effects.spawn.len(),
-                trace.spawn_wires.len(),
-                "{}",
-                case.name
-            );
+            assert_eq!(effects.spawn.len(), trace.spawn_wires.len(), "{name}");
             for (spawn, wire) in effects.spawn.iter_mut().zip(&trace.spawn_wires) {
                 spawn.target.clone_from(wire);
             }
         }
-        let expected_state: JobState = spelled(&expected.row_state);
-        let mut expected_kills: Vec<&str> = expected
-            .kill
-            .iter()
-            .map(|kill| kill.retry_key.as_str())
-            .collect();
-        expected_kills.sort_unstable();
-        let settled = match crate::background::job::admit::admit_step(&context, &job, &output) {
-            Ok(admitted) => {
-                assert!(expected.admitted, "{}: admitted a refused step", case.name);
-                assert!(!expected.dynamic_code_disabled, "{}", case.name);
-                assert_eq!(expected.code, None, "{}", case.name);
-                assert_eq!(
-                    Some(&admitted),
-                    expected_job.as_ref(),
-                    "{}: admitted row",
-                    case.name
-                );
-                assert_eq!(admitted.state, expected_state, "{}", case.name);
-                assert!(expected_kills.is_empty(), "{}: kill", case.name);
-                admitted
-            }
-            Err(refusal) => {
-                assert!(
-                    !expected.admitted,
-                    "{}: refused an admitted step",
-                    case.name
-                );
-                assert_eq!(
-                    refusal.code(),
-                    expected.code.as_deref(),
-                    "{}: refusal code",
-                    case.name
-                );
-                use crate::background::job::admit::PolicyDenialDetail;
-                match case.name.as_str() {
-                    "dynamic_check_spawn_refused" => assert_eq!(
-                        refusal.detail,
-                        Some(PolicyDenialDetail::DynamicCheck),
-                        "{}",
-                        case.name
-                    ),
-                    "caller_target_unconfigured_refused" => assert_eq!(
-                        refusal.detail,
-                        Some(PolicyDenialDetail::TargetUnavailable),
-                        "{}",
-                        case.name
-                    ),
-                    _ => {}
+        let (admitted, code, dynamic_code_disabled, admitted_job, mut killed, settled) =
+            match crate::background::job::admit::admit_step(&context, &job, &output) {
+                Ok(admitted) => (
+                    true,
+                    None,
+                    false,
+                    Some(gents_lean_vocab::family::Json(row_json(&admitted))),
+                    Vec::new(),
+                    admitted,
+                ),
+                Err(refusal) => {
+                    use crate::background::job::admit::PolicyDenialDetail;
+                    match name.as_str() {
+                        "dynamic_check_spawn_refused" => assert_eq!(
+                            refusal.detail,
+                            Some(PolicyDenialDetail::DynamicCheck),
+                            "{name}"
+                        ),
+                        "caller_target_unconfigured_refused" => assert_eq!(
+                            refusal.detail,
+                            Some(PolicyDenialDetail::TargetUnavailable),
+                            "{name}"
+                        ),
+                        _ => {}
+                    }
+                    (
+                        false,
+                        refusal.code().map(str::to_owned),
+                        refusal.refusal
+                            == crate::background::job::admit::Refusal::DynamicCodeDisabled,
+                        None,
+                        refusal.kills().to_vec(),
+                        refusal.closed_row().clone(),
+                    )
                 }
-                assert_eq!(
-                    refusal.refusal == crate::background::job::admit::Refusal::DynamicCodeDisabled,
-                    expected.dynamic_code_disabled,
-                    "{}: dynamic-source refusal detail",
-                    case.name
-                );
-                assert!(expected.job.is_none(), "{}", case.name);
-                assert_eq!(
-                    refusal.closed_row().state,
-                    expected_state,
-                    "{}: row state",
-                    case.name
-                );
-                let mut kills: Vec<&str> = refusal.kills().iter().map(String::as_str).collect();
-                kills.sort_unstable();
-                assert_eq!(kills, expected_kills, "{}: killed children", case.name);
-                refusal.closed_row().clone()
-            }
-        };
-        if let Some(trace) = &case.wire_trace {
+            };
+        killed.sort_unstable();
+        let recovery = case.input.trace.as_ref().map(|trace| {
             let durable = match trace.interruption.as_str() {
-                "before_kill" if !expected.admitted => &job,
+                "before_kill" if !admitted => &job,
                 "before_kill" | "after_kill" => &settled,
                 other => panic!("unknown interruption {other}"),
             };
@@ -141,30 +102,28 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                     in_flight: trace.read.step_in_flight,
                 },
             );
-            let before = gents_lean_vocab::LeanPluginJobRecoveryRow {
-                running: facts.running,
-                terminal_children: facts.terminal_children,
-                observed: facts.observed,
-                live: facts.live,
-                session_stopped: facts.session_stopped,
-                deadline_expired: facts.deadline_expired,
-                available: facts.available.is_ok(),
-                stepped: facts.stepped,
-                step_in_flight: facts.in_flight,
-                step_new: facts.step_new,
-            };
-            assert_eq!(
-                before, trace.before,
-                "{}: settlement-to-recovery projection",
-                case.name
-            );
-            let (_, after) = tick_row(before);
-            assert_eq!(
-                after, trace.after,
-                "{}: recovery of the actual settled row",
-                case.name
-            );
-        }
+            let before = facts;
+            let (_, after) = tick_row(before.clone());
+            gents_lean_vocab::families::plugin_job_admission::TraceRows {
+                before: gents_lean_vocab::family::recode(&observed_row(&before)),
+                after: gents_lean_vocab::family::recode(&observed_row(&after)),
+            }
+        });
+        case.check(
+            gents_lean_vocab::families::plugin_job_admission::AdmissionOutput {
+                admitted,
+                code,
+                dynamic_code_disabled,
+                job: admitted_job,
+                row_state: serde_json::to_value(settled.state)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                killed_retry_keys: killed,
+                recovery,
+            },
+        );
     }
 }
 
@@ -522,34 +481,18 @@ fn plugin_job_step_failures_follow_the_lean_control_model() {
 /// Lean's `pluginJobRecover`; a `Step` receives every terminal, and the stall
 /// rule over that step's output (`is_stalled`, the admission owner) is the
 /// second. Returns the owner action and the row after it.
-pub(super) fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecoveryRow) {
-    let facts = RecoveryFacts {
-        running: row.running,
-        session_stopped: row.session_stopped,
-        terminal_children: row.terminal_children,
-        observed: row.observed,
-        live: row.live,
-        step_new: row.step_new,
-        deadline_expired: row.deadline_expired,
-        available: if row.available {
-            Ok(())
-        } else {
-            Err(Refusal::NotAvailable)
-        },
-        stepped: row.stepped,
-        in_flight: row.step_in_flight,
-    };
-    let action = tick_action(&facts);
+pub(super) fn tick_row(row: RecoveryFacts) -> (TickAction, RecoveryFacts) {
+    let action = tick_action(&row);
     let after = match action {
         TickAction::Untouched => row,
-        TickAction::Kill(_) => LeanPluginJobRecoveryRow {
+        TickAction::Kill(_) => RecoveryFacts {
             running: false,
             ..row
         },
         TickAction::Step => {
             let observed = row.terminal_children;
             let stalled = is_stalled(row.live, observed, row.terminal_children, row.step_new);
-            LeanPluginJobRecoveryRow {
+            RecoveryFacts {
                 running: !stalled,
                 observed,
                 stepped: true,
@@ -560,10 +503,27 @@ pub(super) fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPlugin
     (action, after)
 }
 
-fn observed_row(
-    row: &LeanPluginJobRecoveryRow,
-) -> gents_lean_vocab::families::plugin_job_recoveries::PluginJobRow {
-    gents_lean_vocab::families::plugin_job_recoveries::PluginJobRow {
+fn facts_of(row: &PluginJobRow) -> RecoveryFacts {
+    RecoveryFacts {
+        running: row.running,
+        session_stopped: row.session_stopped,
+        terminal_children: u32::try_from(row.terminal_children).unwrap(),
+        observed: u32::try_from(row.observed).unwrap(),
+        live: u32::try_from(row.live).unwrap(),
+        step_new: u32::try_from(row.step_new).unwrap(),
+        deadline_expired: row.deadline_expired,
+        available: if row.available {
+            Ok(())
+        } else {
+            Err(Refusal::NotAvailable)
+        },
+        stepped: row.stepped,
+        in_flight: row.step_in_flight,
+    }
+}
+
+fn observed_row(row: &RecoveryFacts) -> PluginJobRow {
+    PluginJobRow {
         running: row.running,
         session_stopped: row.session_stopped,
         terminal_children: u64::from(row.terminal_children),
@@ -571,9 +531,9 @@ fn observed_row(
         live: u64::from(row.live),
         step_new: u64::from(row.step_new),
         deadline_expired: row.deadline_expired,
-        available: row.available,
+        available: row.available.is_ok(),
         stepped: row.stepped,
-        step_in_flight: row.step_in_flight,
+        step_in_flight: row.in_flight,
     }
 }
 
@@ -588,8 +548,8 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
     let mut names = Vec::new();
     for case in gents_lean_vocab::families::plugin_job_recoveries::cases() {
         let name = case.input.name.clone();
-        let before: LeanPluginJobRecoveryRow = gents_lean_vocab::family::recode(&case.input.before);
-        let (action, after) = tick_row(before);
+        let before = facts_of(&case.input.before);
+        let (action, after) = tick_row(before.clone());
         if before.session_stopped {
             assert_eq!(
                 action,

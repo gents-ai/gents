@@ -87,17 +87,12 @@ async fn resolve_agent_rejects_missing_or_blank_explicit_selection() {
 
 #[tokio::test]
 async fn explicit_agent_resolution_matches_lean_binding_cases() {
-    for name in [
-        "default-A-explicit-B-binds-B",
-        "existing-A-requested-B-rejected",
-        "existing-A-requested-A-accepted",
-    ] {
-        let case = gents_lean_vocab::lean_runtime_reconcile_case(name);
+    for case in gents_lean_vocab::families::contracts_runtime_reconcile_selection::cases() {
+        let input = &case.input;
         let fixture = PrivateSessionFixture::new().await;
-        let bound = if case.pre_session_agent.is_some() && !case.legal {
-            fixture.other.did()
-        } else {
-            fixture.selected.did()
+        let bound = match input.pre_session_agent {
+            Some(agent) if Some(agent) != input.requested_agent => fixture.other.did(),
+            _ => fixture.selected.did(),
         };
         fixture.create_session("session-binding", bound, true).await;
         let resolved = resolve_agent_for_request(
@@ -107,9 +102,13 @@ async fn explicit_agent_resolution_matches_lean_binding_cases() {
         .await
         .unwrap()
         .expect("the agent can read the session");
-        assert_eq!(resolved.agent_did, fixture.selected.did(), "{name}");
-        assert_eq!(resolved.rejection_reason.is_none(), case.legal, "{name}");
+        assert_eq!(resolved.agent_did, fixture.selected.did(), "{}", input.name);
         fixture.db.node.shutdown().await.unwrap();
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_reconcile_selection::ReconcileSelectionOutput {
+                legal: resolved.rejection_reason.is_none(),
+            },
+        );
     }
 }
 

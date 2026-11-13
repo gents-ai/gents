@@ -195,9 +195,40 @@ def requestJson (x : Request) : String :=
 theorem historical_receipt_can_report_paused :
   receiptStatus (resume later request true) = some .paused := by decide
 
-def resumeOnCasesJson : String := jsonArray (resumeOnCases.map fun c =>
-  "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ snapshotJson c.before ++
-  ",\"target_available\":" ++ b c.targetAvailable ++
-  ",\"expected\":" ++ snapshotJson c.expected ++
-  ",\"outcome\":" ++ jsonString (outcome c.outcome) ++ "}")
+/-- The snapshot an account resume starts from: the goal before any resume, or
+the goal after one resume already published its canonical child. -/
+def resumeOnBefore (priorReceipt : Bool) : Snapshot :=
+  if priorReceipt then (resume initial request true).1 else initial
+
+example : ∀ c ∈ resumeOnCases, resumeOnBefore (!c.before.children.isEmpty) = c.before := by
+  decide
+
+example : ∀ c ∈ resumeOnCases, c.expected = c.before := by decide
+
+structure ResumeOnInput where
+  name : String
+  priorReceipt : Bool
+  targetAvailable : Bool
+  deriving Lean.ToJson
+
+structure ResumeOnOutput where
+  outcome : String
+  snapshotUnchanged : Bool
+  receiptIsExistingChild : Option Bool
+  deriving Lean.ToJson
+
+/-- One account resume on a served goal whose target account may be disabled,
+either before any child exists or after an earlier resume published one. -/
+@[conformance_family]
+def resumeOnTarget : Family ResumeOnInput ResumeOnOutput where
+  inputs := resumeOnCases.map fun c =>
+    { name := c.name, priorReceipt := !c.before.children.isEmpty,
+      targetAvailable := c.targetAvailable }
+  model := fun i =>
+    let before := resumeOnBefore i.priorReceipt
+    let result := resumeOn before request i.targetAvailable true
+    { outcome := outcome result.2
+      snapshotUnchanged := result.1 == before
+      receiptIsExistingChild := (receiptStatus result).map fun _ =>
+        before.children.any fun child => child.child == result.1.latestRequest }
 end Conformance.GoalOperatorResumeContracts

@@ -296,6 +296,7 @@ import Proofs.Conformance.Identity.Conformance
 import Proofs.Store.Identity.SessionChild
 import Proofs.Session.Request.RemoteDelivery
 import Proofs.Session.Request.CrossActorAuthorization
+import Proofs.Conformance.CrossActorAuthorization
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.TriggerDelivery
 import Proofs.Conformance.GoalOperatorResume
@@ -388,11 +389,8 @@ def snapshotGoalCasesJson : String :=
 def snapshotGoalMutationCasesJson : String :=
   ""
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
-    ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
     ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
-    ++ "\"goal_operator_resume_on_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
 
 def snapshotRequestCasesJson : String :=
   ""
@@ -420,8 +418,6 @@ def snapshotIdentityCasesJson : String :=
 def snapshotClientCasesJson : String :=
   ""
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
-    ++ "\"runtime_reconcile_cases\":"
-      ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
 
 def snapshotRuntimeCasesJson : String :=
   ""
@@ -432,7 +428,6 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
-    ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
 
 def snapshotRecoveryCasesJson : String :=
   ""
@@ -450,7 +445,6 @@ def snapshotRecoveryCasesJson : String :=
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
     ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
       ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","

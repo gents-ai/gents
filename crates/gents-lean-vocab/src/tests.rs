@@ -42,7 +42,6 @@ fn lean_executable_contracts_cover_initial_domains() {
         &request_states,
         lean_request_transition_cases(),
     );
-    assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert_eq!(
         lean_contract_snapshot().request_transition_cases.len(),
         request_states.len().pow(2)
