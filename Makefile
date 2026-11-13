@@ -46,6 +46,9 @@ help:
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
 	@echo "  make lint                  Check the product build, then clippy all targets (-D warnings)"
 	@echo "  make proofs                Build Lean proofs"
+	@echo "  make gate [BASE=origin/main]  Run the pull request gate for this change (what CI runs)"
+	@echo "  make gate-plan             Show the jobs the gate selects for this change"
+	@echo "  make gate-run JOB=<job>    Run one gate job (fmt, lint, contract, ts-unit, test:<group>, ...)"
 	@echo
 	@echo "Tests:"
 	@echo "  make test                  Run core Rust and CLI tests"
@@ -220,6 +223,27 @@ lint:
 
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
+
+# ---- Pull request gate ----
+# scripts/ci/gate.py owns the selection (changed crates and their reverse
+# dependents from cargo metadata) and every command; .github/workflows/ci.yml
+# runs these same recipes, passing its plan in GATE_PLAN.
+BASE ?= origin/main
+GATE := python3 scripts/ci/gate.py
+
+.PHONY: gate gate-plan gate-run gate-selftest
+gate:
+	$(GATE) all --base $(BASE)
+
+gate-plan:
+	@$(GATE) plan --base $(BASE)
+
+gate-run:
+	@test -n "$(JOB)" || { echo "usage: make gate-run JOB=<job> [BASE=<ref>]" >&2; exit 2; }
+	$(GATE) run "$(JOB)" --base $(BASE)
+
+gate-selftest:
+	python3 scripts/ci/test_gate.py
 
 .PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-eval-drivers test-evals live-configurator-eval
 test: test-agent test-cli test-eval-drivers
