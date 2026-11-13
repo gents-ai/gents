@@ -173,6 +173,9 @@ pub(super) fn request_origin_view(
             },
             RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion {
                 notification: false,
+                tool_call_doc_id: None,
+                tool_name: None,
+                status_kind: None,
             },
         },
     )
@@ -182,6 +185,7 @@ pub(super) fn message_origin(
     store: &ClientStore,
     message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
+    tool_calls: &[&AgentToolCallRow],
 ) -> Option<RequestOriginView> {
     if message.role != gents_protocol::output::MessageRole::User
         || gents_protocol::output::authored::is_output_obligation(
@@ -195,7 +199,24 @@ pub(super) fn message_origin(
     if gents_protocol::background_completion::is_background_completion_notification_message_key(
         &message.message_key,
     ) {
-        return Some(RequestOriginView::BackgroundCompletion { notification: true });
+        let tool_call_doc_id = match &message.publication {
+            gents_protocol::output::MessagePublication::ToolDelivery { tool_call_doc_id } => {
+                Some(tool_call_doc_id.clone())
+            }
+            _ => None,
+        };
+        let owning_tool = tool_call_doc_id.as_deref().and_then(|doc_id| {
+            tool_calls
+                .iter()
+                .find(|row| row.doc_id.as_deref() == Some(doc_id))
+        });
+        return Some(RequestOriginView::BackgroundCompletion {
+            notification: true,
+            tool_call_doc_id,
+            tool_name: owning_tool.and_then(|row| normalize_optional(row.tool_name.as_deref())),
+            status_kind: owning_tool
+                .map(|row| super::timeline::tool_status_kind(row.lifecycle_state.as_deref())),
+        });
     }
     input_request.and_then(|request| request_origin_view(store, request))
 }

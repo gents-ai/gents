@@ -15,7 +15,7 @@ pub(super) fn normalize_timeline_text(value: Option<&str>) -> String {
     value.map(str::trim).unwrap_or_default().to_string()
 }
 
-fn tool_status_kind(status: Option<&str>) -> String {
+pub(super) fn tool_status_kind(status: Option<&str>) -> String {
     match status.unwrap_or_default().to_ascii_lowercase().as_str() {
         "completed" | "complete" | "success" => "success".to_string(),
         "failed" | "error" | "cancelled" | "timedout" => "error".to_string(),
@@ -486,7 +486,7 @@ mod tests {
         ] {
             let message = MessageView {
                 runtime_control: true,
-                origin: Some(crate::types::RequestOriginView::BackgroundCompletion { notification: false }),
+                origin: Some(crate::types::RequestOriginView::BackgroundCompletion { notification: false, tool_call_doc_id: None, tool_name: None, status_kind: None }),
                 input_text: Some(text.into()),
                 ..user_message("internal-completion", 1, text)
             };

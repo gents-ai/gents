@@ -2065,7 +2065,12 @@ pub(super) fn project_transcript_rows(
                 origin: if runtime_context {
                     None
                 } else {
-                    message_origin(store, origin_message, source_request)
+                    message_origin(
+                        store,
+                        origin_message,
+                        source_request,
+                        &transcript.tool_calls,
+                    )
                 },
                 input_text,
                 timestamp: Some(row.message.created_at.clone()),
@@ -2258,3 +2263,7 @@ mod fork_input_tests;
 #[cfg(test)]
 #[path = "background_origin_tests.rs"]
 mod background_origin_tests;
+
+#[cfg(test)]
+#[path = "background_completion_live_tests.rs"]
+mod background_completion_live_tests;
