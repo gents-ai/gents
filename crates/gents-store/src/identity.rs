@@ -21,6 +21,7 @@ pub use agent::{
     derive_agent_identity, observe_agent_admission, provision_agent_identity,
     provision_agent_identity_authorized, provision_agent_identity_for_agent,
     resolve_agent_identity, AgentAdmissionObservationError, AgentProvisionError,
+    RuntimeAgentProof,
 };
 pub use enrollment_approval::{
     approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep, EnrollmentApproval,
@@ -116,6 +117,9 @@ pub struct AgentDerivationRoot {
 #[derive(Clone)]
 pub struct ManagedAgentSigner {
     node_did: String,
+    /// The proof of the runtime key this signer was derived from, so a local
+    /// access the host builds for the Agent carries it (`hostAccess`).
+    runtime_proof: Option<agent::RuntimeAgentProof>,
     signer: defra_node::EmbeddedSigner,
     identity: Arc<KeyIdentity>,
 }
@@ -154,6 +158,10 @@ impl ManagedAgentSigner {
 
     pub fn node_did(&self) -> &str {
         &self.node_did
+    }
+
+    pub(crate) fn runtime_proof(&self) -> Option<&agent::RuntimeAgentProof> {
+        self.runtime_proof.as_ref()
     }
 
     pub fn native(&self) -> &defra_node::EmbeddedSigner {

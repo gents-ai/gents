@@ -1632,16 +1632,17 @@ async fn callback_result_visibility_and_repair_match_the_executable_cursor_contr
         let linked = case["linked"].as_bool().unwrap();
         if linked {
             if !interrupted_after_grant {
-                access
-                    .add_resource_relationship(
-                        "CallbackResult",
-                        &doc_id,
-                        "parent",
-                        "agents",
-                        parent,
-                    )
-                    .await
-                    .unwrap();
+                gents_store::test_support::relationships::resource_in_txn(
+                    &access,
+                    "CallbackResult",
+                    &doc_id,
+                    "parent",
+                    "agents",
+                    parent,
+                    false,
+                )
+                .await
+                .unwrap();
                 assert!(
                     !crate::triggers::engine::event_delivery::callback_result_ready(
                         &node,
@@ -2498,15 +2499,16 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
             .is_empty(),
         expected("commit", "user_read")
     );
-    agent
-        .delete_resource_relationship(
-            "CallbackInvocation",
-            pending_doc,
-            "parent",
-            "agents",
-            parent,
-        )
-        .await?;
+    gents_store::test_support::relationships::resource_in_txn(
+        &agent,
+        "CallbackInvocation",
+        pending_doc,
+        "parent",
+        "agents",
+        parent,
+        true,
+    )
+    .await?;
     super::documents::create_pending_invocation(&node, &agent, &invocation).await?;
     assert_eq!(
         !reader.execute(pending_query).await?["data"]["CallbackInvocation"]
@@ -2541,9 +2543,16 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
             .is_empty(),
         expected("commit", "user_read")
     );
-    agent
-        .delete_resource_relationship("CallbackResult", doc, "parent", "agents", parent)
-        .await?;
+    gents_store::test_support::relationships::resource_in_txn(
+        &agent,
+        "CallbackResult",
+        doc,
+        "parent",
+        "agents",
+        parent,
+        true,
+    )
+    .await?;
     super::documents::create_callback_result(&node, &agent, &result).await?;
     assert_eq!(
         !reader.execute(query).await?["data"]["CallbackResult"]
@@ -3378,11 +3387,41 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
             assert_eq!(step.authenticated_creator.as_deref(), Some("agent"));
             if step.grant_ok && !step.mark_ok {
                 // The grant has committed when the process stops before its marker write.
-                access
+                // Outside a transaction the Agent creator is refused: it holds
+                // no `get-collection`.
+                assert!(access
                     .add_resource_relationship("CallbackResult", &doc, "parent", "agents", parent)
                     .await
-                    .unwrap();
+                    .is_err());
+                gents_store::test_support::relationships::resource_in_txn(
+                    &access,
+                    "CallbackResult",
+                    &doc,
+                    "parent",
+                    "agents",
+                    parent,
+                    false,
+                )
+                .await
+                .unwrap();
             } else if step.mark_ok {
+                // Only the authenticated Agent creator repairs an unlinked parent.
+                let linked = access.execute(&query).await.unwrap()["data"]["CallbackResult"][0]
+                    ["parent_linked"]
+                    == true;
+                assert!(
+                    linked
+                        || super::documents::ensure_callback_parent(
+                            &node,
+                            &user_access,
+                            "CallbackResult",
+                            &invocation,
+                            owner,
+                            &agent,
+                        )
+                        .await
+                        .is_err()
+                );
                 super::documents::ensure_callback_parent(
                     &node,
                     &access,
@@ -3395,16 +3434,17 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
                 .unwrap();
             }
             if step.revoke_parent {
-                access
-                    .delete_resource_relationship(
-                        "CallbackResult",
-                        &doc,
-                        "parent",
-                        "agents",
-                        parent,
-                    )
-                    .await
-                    .unwrap();
+                gents_store::test_support::relationships::resource_in_txn(
+                    &access,
+                    "CallbackResult",
+                    &doc,
+                    "parent",
+                    "agents",
+                    parent,
+                    true,
+                )
+                .await
+                .unwrap();
                 super::documents::ensure_callback_parent(
                     &node,
                     &access,

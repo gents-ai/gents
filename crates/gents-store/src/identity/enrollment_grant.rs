@@ -337,16 +337,19 @@ async fn issue(
 ) -> Result<(), EnrollmentGrantError> {
     for tuple in tuples {
         let result = match tuple {
-            EnrollmentGrantTuple::NodeAdministrator => {
-                owner
-                    .add_actor_relationship(
-                        "Node",
-                        node_doc_id,
-                        NODE_ADMINISTRATOR_RELATION,
-                        member,
-                    )
-                    .await
-            }
+            EnrollmentGrantTuple::NodeAdministrator => owner
+                .transact_write("enrollment_grant.issue_administrator", |txn| {
+                    Box::pin(async move {
+                        txn.add_actor_relationship(
+                            "Node",
+                            node_doc_id,
+                            NODE_ADMINISTRATOR_RELATION,
+                            member,
+                        )
+                        .await
+                    })
+                })
+                .await,
             EnrollmentGrantTuple::Permission(permission) => {
                 runtime.grant_node_permission(member, *permission).await
             }

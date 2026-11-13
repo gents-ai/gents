@@ -676,6 +676,11 @@ async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
                     contends_with_request_siblings: std::sync::atomic::AtomicBool::new(false),
                     client_signed_write_dispatched: std::sync::atomic::AtomicBool::new(false),
                     relationship_grants: std::sync::Mutex::new(Vec::new()),
+                    owner_staged_revocations: std::sync::Mutex::new(
+                        crate::config_client::txn::OwnerStagedRevocations::Send,
+                    ),
+                    agent_proof: None,
+                    planned_replay_authorized: std::sync::atomic::AtomicBool::new(false),
                     publication_observer: None,
                     pack_approval: None,
                     loopback_node: None,

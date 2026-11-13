@@ -9,7 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Default)]
 pub(super) struct Capture(BTreeMap<(String, String), BTreeSet<(String, String)>>);
 
-fn selected_agents(owner: &str, callback: &Value) -> Result<BTreeSet<String>> {
+pub(crate) fn selected_agents(
+    owner: &str,
+    callback: &Value,
+) -> Result<BTreeSet<String>> {
     Ok(references_of(Collection::Callback, callback, owner)?
         .into_iter()
         .filter(|reference| reference.collection == Collection::Agent)
@@ -81,24 +84,22 @@ pub(super) async fn apply(txn: &ConfigApplyTxn<'_>, before: Capture) -> Result<(
     for ((owner, id), old) in before.0 {
         let new = links(txn, &owner, &id, true).await?;
         for (agent, callback) in old.difference(&new) {
-            txn.delete_entity_set_relationship(
-                "Agent",
-                agent,
-                "workspace_selected_by",
-                "configuration",
-                callback,
-                "reader",
+            txn.request_owner_staged(
+                &gents_protocol::owner_staged::OwnerStagedChange::WorkspaceSelection {
+                    agent_doc_id: agent.clone(),
+                    callback_doc_id: callback.clone(),
+                },
+                false,
             )
             .await?;
         }
         for (agent, callback) in new.difference(&old) {
-            txn.add_entity_set_relationship(
-                "Agent",
-                agent,
-                "workspace_selected_by",
-                "configuration",
-                callback,
-                "reader",
+            txn.request_owner_staged(
+                &gents_protocol::owner_staged::OwnerStagedChange::WorkspaceSelection {
+                    agent_doc_id: agent.clone(),
+                    callback_doc_id: callback.clone(),
+                },
+                true,
             )
             .await?;
         }
@@ -189,29 +190,39 @@ mod tests {
             directory.path().join("user"),
             None,
         )?;
-        let runtime = gents_store::identity::KeyIdentity::load_or_create(
+        let runtime = Arc::new(gents_store::identity::KeyIdentity::load_or_create(
             directory.path().join("runtime"),
             None,
-        )?;
+        )?);
         let other = gents_store::identity::KeyIdentity::load_or_create(
             directory.path().join("other"),
             None,
         )?;
-        let creator_binding = gents_store::identity::provision_agent_identity(&runtime)?;
-        let target_binding = gents_store::identity::provision_agent_identity(&runtime)?;
-        let creator = gents_store::identity::resolve_agent_identity(&runtime, &creator_binding)?;
+        let creator_binding = gents_store::identity::provision_agent_identity(runtime.as_ref())?;
+        let target_binding = gents_store::identity::provision_agent_identity(runtime.as_ref())?;
+        let creator =
+            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &creator_binding)?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
+        let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
         let node = Arc::new(
             defra_node::Node::builder()
                 .enable_signing()
                 .with_node_identity_did(runtime.did())
                 .with_node_acp_owner(user.did().to_owned())
-                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .with_http(
+                    defra_node::HttpConfig::with_listener(listener)?
+                        .with_extra_routes(owner_staged.router()),
+                )
                 .build()
                 .await?,
         );
         gents_store::schema::ensure_runtime_schemas(&node).await?;
+        owner_staged.serve(&node, runtime.clone());
+        gents_store::test_support::attach_node_extensions(
+            &node,
+            &gents_store::node_extension::Extensions::of(Arc::new(super::super::callback_agent_selection())),
+        );
         let context =
             defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
         for key in [creator.as_ref(), &other as &dyn NodeIdentity] {
@@ -224,6 +235,18 @@ mod tests {
                     .await?;
             }
         }
+        // The route consumes each command's nonce as the runtime and links it
+        // to the runtime's Node once the runtime reads that Node.
+        for permission in [
+            acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::DocumentUpdate,
+            acp::nac::NodePermission::DocumentDelete,
+            acp::nac::NodePermission::DacRelationAdd,
+            acp::nac::NodePermission::CollectionGet,
+        ] {
+            node.add_nac_actor_relationship_as(&context, permission.as_str(), runtime.did())
+                .await?;
+        }
         let url = format!("http://{address}/api/v0/graphql");
         let access = client(&url, &user)?;
         let node_response = access.transact_write("test.workspace_selection.node", |txn| Box::pin(async {
@@ -231,6 +254,15 @@ mod tests {
                 &json!({"input":{"node_did":runtime.did()}}), gents_protocol::schemas::NODE).await
         })).await?;
         let node_doc = gents_store::graphql::created_doc_id(&node_response, "Node")?;
+        gents_store::test_support::relationships::actor_in_txn(
+            &access,
+            "Node",
+            &node_doc,
+            "runtime_reader",
+            &identity::Did::new(runtime.did())?,
+            false,
+        )
+        .await?;
         let target_response = access.transact_write("test.workspace_selection.target", |txn| Box::pin(async {
             let response = txn.execute_client_signed_create("mutation($input: AgentMutationInputArg!) { create_Agent(input:$input) {_docID} }",
                 &json!({"input":{"node_did":runtime.did(),"agent_did":target_binding.agent_did,"creation_nonce":target_binding.creation_nonce,"inference_profile_id":format!("{}:inference",target_binding.agent_did),"enabled":true}}), gents_protocol::schemas::AGENT).await?;

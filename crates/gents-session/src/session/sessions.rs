@@ -1214,10 +1214,16 @@ mod relationship_publication_tests {
             node_identity.did(), creator.did(), creator.did(),
         )).await.unwrap();
         let session_doc = gents_store::graphql::created_doc_id(&session, "AgentSession").unwrap();
-        owner
-            .add_actor_relationship("AgentSession", &session_doc, "reader", &collaborator_did)
-            .await
-            .unwrap();
+        gents_store::test_support::relationships::actor_in_txn(
+            &owner,
+            "AgentSession",
+            &session_doc,
+            "reader",
+            &collaborator_did,
+            false,
+        )
+        .await
+        .unwrap();
 
         grant_created_session_relationships(&other, &session_doc, &agent_doc, creator.did())
             .await

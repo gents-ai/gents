@@ -194,6 +194,8 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         gents_protocol::schemas::ENROLLMENT_RENEWAL_POLICY,
         gents_protocol::schemas::NETWORK_ADMIN_PIN,
         gents_protocol::schemas::OWED_DELIVERY,
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_INTENT,
+        gents_protocol::schemas::ENROLLMENT_RENEWAL_OFFER,
     ] {
         node.add_collection(schema).await?;
     }
@@ -210,6 +212,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
                 .await?;
         }
     }
+    runtime_access
+        .grant_node_permission(&identity::Did::new(user.did())?, NodePermission::CollectionGet)
+        .await?;
     let http = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
@@ -297,7 +302,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     let sibling_access = http(&sibling)?;
     let outsider_access = http(&outsider)?;
     assert!(outsider_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Applied,
             &doc,
             PairingReadReason::RouteAdmission,
@@ -311,7 +316,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
             let doc = &doc;
             let agent_did = &agent_did;
             Box::pin(async move {
-                txn.set_pairing_reader(
+                txn.set_native_pairing_reader(
                     PairingObservation::Applied,
                     doc,
                     PairingReadReason::RouteAdmission,
@@ -331,7 +336,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         reader_expected("aborted-grant")
     );
     user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Applied,
             &doc,
             PairingReadReason::RouteAdmission,
@@ -380,7 +385,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     );
 
     user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Applied,
             &doc,
             PairingReadReason::ToolView,
@@ -389,7 +394,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         )
         .await?;
     user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Applied,
             &doc,
             PairingReadReason::ToolView,
@@ -402,7 +407,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         policy_expected("tool-revoked", "read")
     );
     user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Applied,
             &doc,
             PairingReadReason::RouteAdmission,
@@ -415,7 +420,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         reader_expected("explicit-revocation")
     );
     user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Applied,
             &doc,
             PairingReadReason::ToolView,
@@ -428,7 +433,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         policy_expected("tool-only", "read")
     );
     user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Applied,
             &doc,
             PairingReadReason::ToolView,
@@ -469,7 +474,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     )
     .is_empty());
     user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Desired,
             &desired_doc,
             PairingReadReason::RouteAdmission,
@@ -491,7 +496,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     )
     .is_empty());
     user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Desired,
             &desired_doc,
             PairingReadReason::RouteAdmission,
@@ -582,7 +587,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     gents_store::config_client::recover_deferred_node_operations(&node, runtime.did()).await?;
     assert!(!policy_expected("manager-revoked", "manage_reader"));
     assert!(user_access
-        .set_pairing_reader(
+        .set_native_pairing_reader(
             PairingObservation::Applied,
             &doc,
             PairingReadReason::ToolView,
@@ -647,4 +652,71 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     assert!(!visible_to_agent(&agent_access.execute(&query).await?));
     reopened.shutdown().await?;
     Ok(())
+}
+
+trait NativePairingReader {
+    async fn native_reader(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        relation: &str,
+        agent: &identity::Did,
+        grant: bool,
+    ) -> Result<(), gents_store::config_client::ConfigClientError>;
+
+    async fn set_native_pairing_reader(
+        &self,
+        observation: gents_store::config_client::PairingObservation,
+        doc_id: &str,
+        reason: gents_store::config_client::PairingReadReason,
+        agent: &identity::Did,
+        grant: bool,
+    ) -> Result<(), gents_store::config_client::ConfigClientError> {
+        let relation = match reason {
+            gents_store::config_client::PairingReadReason::RouteAdmission => "route_reader",
+            gents_store::config_client::PairingReadReason::ToolView => "tool_reader",
+        };
+        self.native_reader(observation.collection(), doc_id, relation, agent, grant)
+            .await
+    }
+}
+
+impl NativePairingReader for gents_store::config_client::ConfigAccess {
+    async fn native_reader(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        relation: &str,
+        agent: &identity::Did,
+        grant: bool,
+    ) -> Result<(), gents_store::config_client::ConfigClientError> {
+        gents_store::test_support::relationships::actor_in_txn(
+            self,
+            collection,
+            doc_id,
+            relation,
+            agent,
+            !grant,
+        )
+        .await
+    }
+}
+
+impl NativePairingReader for gents_store::config_client::ConfigApplyTxn<'_> {
+    async fn native_reader(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        relation: &str,
+        agent: &identity::Did,
+        grant: bool,
+    ) -> Result<(), gents_store::config_client::ConfigClientError> {
+        if grant {
+            self.add_actor_relationship(collection, doc_id, relation, agent)
+                .await
+        } else {
+            self.delete_actor_relationship(collection, doc_id, relation, agent)
+                .await
+        }
+    }
 }

@@ -25,5 +25,13 @@ pub fn bundled() -> Arc<Registry> {
 /// client endpoint it builds; tests at this layer and above start their nodes
 /// with it.
 pub fn composition() -> gents_store::node_extension::Extensions {
-    gents_store::node_extension::Extensions::of(bundled())
+    static SELECTION: OnceLock<Arc<gents_store::config_client::CallbackAgentSelection>> =
+        OnceLock::new();
+    let mut extensions = gents_store::node_extension::Extensions::of(bundled());
+    extensions
+        .attach(Arc::clone(SELECTION.get_or_init(|| {
+            Arc::new(gents_documents::callback_agent_selection())
+        })))
+        .expect("a fresh composition holds no callback selection");
+    extensions
 }

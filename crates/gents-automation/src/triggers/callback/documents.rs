@@ -907,26 +907,30 @@ pub(super) async fn ensure_callback_parent(
         access.actor_did().as_deref() == Some(agent_did),
         "callback parent actor mismatch"
     );
-    let expected = access
-        .transact_readonly("callback.validate_parent", |txn| {
-            Box::pin(async move { callback_agent_parent_in_txn(txn, owner, agent_did).await })
-        })
-        .await?;
-    anyhow::ensure!(parent == expected, "callback Agent parent changed");
+    // The Agent creator grants and marks in one native transaction; outside a
+    // transaction native relationship changes also require `get-collection`,
+    // which an Agent does not hold (`Identity.Household.recoverParent`).
     access
-        .add_resource_relationship(collection, doc_id, "parent", "agents", parent)
-        .await?;
-    let marked = access.write("callback.mark_parent_linked", &format!(
-        "mutation {{ update_{collection}(docID: \"{}\", input: {{parent_linked: true}}) {{ _docID }} }}",
-        escape_graphql_string(doc_id),
-    )).await?;
-    anyhow::ensure!(
-        marked["data"][format!("update_{collection}")]
-            .as_array()
-            .is_some_and(|rows| rows.len() == 1),
-        "callback child disappeared before parent repair was recorded"
-    );
-    Ok(())
+        .transact_write("callback.publish_parent", |txn| {
+            Box::pin(async move {
+                let expected = callback_agent_parent_in_txn(txn, owner, agent_did).await?;
+                anyhow::ensure!(parent == expected, "callback Agent parent changed");
+                txn.add_resource_relationship(collection, doc_id, "parent", "agents", parent)
+                    .await?;
+                let marked = txn.execute(&format!(
+                    "mutation {{ update_{collection}(docID: \"{}\", input: {{parent_linked: true}}) {{ _docID }} }}",
+                    escape_graphql_string(doc_id),
+                )).await?;
+                anyhow::ensure!(
+                    marked["data"][format!("update_{collection}")]
+                        .as_array()
+                        .is_some_and(|rows| rows.len() == 1),
+                    "callback child disappeared before parent repair was recorded"
+                );
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
 }
 
 pub(super) fn update_invocation_mutation(

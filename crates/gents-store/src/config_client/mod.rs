@@ -8,7 +8,7 @@
 //!
 //! Write conventions (load-bearing — see `AGENTS.md`):
 //! - every interpolated value goes through
-//!   [`crate::store::graphql::escape_graphql_string`];
+//!   [`crate::graphql::escape_graphql_string`];
 //! - list fields never render `[]` (typed as `JsonArray`, corrupts nillable
 //!   array columns) — the shared field encoders emit `null` instead;
 //! - `Option` fields omitted from an `update:` clause preserve the stored
@@ -53,6 +53,7 @@ mod node_document_publication;
 mod node_permissions;
 pub mod node_readiness;
 mod owed_delivery;
+mod owner_staged_route;
 mod pack_effect;
 mod pairing_reader;
 #[cfg(test)]
@@ -110,6 +111,9 @@ pub use node_deferred_operation::{
     maybe_link_deferred_operation_in_txn, require_node_update_in_txn, DeferredOperationError,
 };
 pub use node_document_publication::publish_node_managers_in_txn;
+pub use owner_staged_route::{
+    consume_signed_command_nonce, OwnerStagedRoute, SignedCommandNonceError,
+};
 pub use pairing_reader::{PairingObservation, PairingReadReason};
 pub use schema_contract::collection_schema_contract_digest;
 pub use schema_contract::{SchemaContractError, SchemaFieldDelta};
@@ -123,7 +127,7 @@ pub use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use txn::NativeOperationObservation;
 pub use txn::{
-    ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
+    CallbackAgentSelection, ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
     NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite, TransactionFinalityError,
 };
 
@@ -294,17 +298,17 @@ impl GraphqlEndpoint {
         self.extensions.get::<T>()
     }
 
+    pub(crate) fn replays_pack(&self) -> bool {
+        self.pack_replay.is_some()
+    }
+
     pub fn is_anonymous(&self) -> bool {
         self.principal_did.is_none() && self.delegated_authorization.is_none()
     }
 
-    pub fn authorization(&self) -> Result<Option<String>> {
-        if let Some(value) = &self.delegated_authorization {
-            return Ok(Some(value.to_str()?.to_owned()));
-        }
-        let Some(did) = self.principal_did.as_deref() else {
-            return Ok(None);
-        };
+    /// The endpoint authority a request to it carries in `Host`: DefraDB's
+    /// token audience, with the port only when it is not the scheme default.
+    pub(crate) fn audience(&self) -> Result<String> {
         let url = reqwest::Url::parse(self.url.trim()).map_err(|source| {
             ConfigClientError::ParseEndpoint {
                 url: self.url.clone(),
@@ -316,11 +320,20 @@ impl GraphqlEndpoint {
             .ok_or_else(|| ConfigClientError::EndpointHost {
                 url: self.url.clone(),
             })?;
-        // The DefraDB token audience is the `Host` header, which carries the port only when it is not the scheme default.
-        let audience = match url.port() {
+        Ok(match url.port() {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
+        })
+    }
+
+    pub fn authorization(&self) -> Result<Option<String>> {
+        if let Some(value) = &self.delegated_authorization {
+            return Ok(Some(value.to_str()?.to_owned()));
+        }
+        let Some(did) = self.principal_did.as_deref() else {
+            return Ok(None);
         };
+        let audience = self.audience()?;
         let authorization = if let Some(capability) = &self.client_signing_capability {
             crate::identity::defradb_bearer_authorization_with_config(
                 did,
@@ -452,6 +465,14 @@ impl ConfigAccess {
         ))
     }
 
+    /// The runtime host's own access as its node: it holds the runtime key,
+    /// so it carries the key's proof (`Identity.OwnerStaged.KeyCarrier.hostAccess`).
+    pub fn local_runtime(node: Arc<Node>, runtime: Arc<dyn crate::identity::NodeIdentity>) -> Result<Self> {
+        let actor = identity::Did::new(runtime.did()).map_err(ConfigClientError::RelationshipTargetIdentity)?;
+        let access = Self::local_as(node, actor);
+        Ok(access.with_runtime_agent_proof(crate::identity::RuntimeAgentProof::new(runtime)))
+    }
+
     pub fn local_managed_agent(
         node: Arc<Node>,
         actor: identity::Did,
@@ -478,6 +499,33 @@ impl ConfigAccess {
             .with_identity(actor)
             .with_agent_signer(signer);
         Ok(Self::Local(Box::new(local)))
+    }
+
+    /// Hand this local access the runtime key's derivation proof, so the
+    /// owner-staged decision may stage as an Agent the runtime controls
+    /// (`Identity.OwnerStaged.derivedAgents`). A proof for another node's
+    /// key is not attached.
+    pub fn with_runtime_agent_proof(
+        self,
+        proof: Option<crate::identity::RuntimeAgentProof>,
+    ) -> Self {
+        let Some(proof) = proof else {
+            return self;
+        };
+        match self {
+            Self::Local(mut local) => {
+                let proof_did = proof.runtime_did().to_owned();
+                if !local.attach_agent_proof(proof) {
+                    tracing::warn!(
+                        proof_did,
+                        node_did = local.node().node_identity_did(),
+                        "runtime agent proof does not match the node; not attached"
+                    );
+                }
+                Self::Local(local)
+            }
+            other => other,
+        }
     }
 
     pub fn local_with_optional_agent_signer(

@@ -1,4 +1,12 @@
 pub mod acp_policies;
+pub mod relationships;
+
+pub fn attach_node_extensions(
+    node: &std::sync::Arc<defra_node::Node>,
+    extensions: &crate::node_extension::Extensions,
+) {
+    crate::node_extension::attach_all(node, extensions).expect("fixture extensions attach once");
+}
 
 const PIN_FIXED_KEY_HEX: &str = "4cbf8c1186d2fcb70559342fd142650a5ec5938d26a187d87e2c061b530d7be46edb79d5f548207182f7911b55709c9e4b9961c709486e5ce920e306470fe6d6";
 pub const PIN_FIXED_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
@@ -45,13 +53,25 @@ pub fn runtime_handle() -> tokio::runtime::Handle {
 
 /// Fixtures that reopen a store must retain its original signing identity.
 pub fn node_builder() -> defra_node::NodeBuilder {
+    keyed_node_builder().0
+}
+
+/// [`node_builder`] with the runtime key it names, for a fixture that builds
+/// the host's own access (`ConfigAccess::local_runtime`).
+pub fn keyed_node_builder() -> (
+    defra_node::NodeBuilder,
+    std::sync::Arc<crate::identity::KeyIdentity>,
+) {
     use crate::identity::NodeIdentity as _;
 
     let directory = tempfile::tempdir().unwrap();
     let identity =
         crate::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
             .unwrap();
-    defra_node::Node::builder().with_node_identity_did(identity.did())
+    (
+        defra_node::Node::builder().with_node_identity_did(identity.did()),
+        std::sync::Arc::new(identity),
+    )
 }
 
 pub struct EnvVarGuard {

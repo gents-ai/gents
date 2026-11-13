@@ -1370,6 +1370,14 @@ mod tests {
                     .await?;
             }
         }
+        // Public relationship routes require `get-collection`, which production
+        // Users hold (`GrantSets.operatorUser`).
+        runtime_access
+            .grant_node_permission(
+                &identity::Did::new(user.did())?,
+                NodePermission::CollectionGet,
+            )
+            .await?;
         let parent = user_access
             .write(
                 "test.health.node",

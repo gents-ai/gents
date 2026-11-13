@@ -8,6 +8,7 @@ mod fault_injection;
 mod finalize;
 mod gate;
 mod native;
+mod owner_staged;
 mod pack_interpreter;
 mod rollback;
 mod runtime_hop_cap;
@@ -32,6 +33,9 @@ pub use gate::LocalConfigAccess;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use fault_injection::NativeOperationObservation;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
+pub use owner_staged::CallbackAgentSelection;
+pub(super) use owner_staged::OwnerStagedRevocations;
+pub(super) use owner_staged::StagedRelation;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub(super) use transact::client_signed_write_may_retry;
 pub use transact::{IdempotentTransactionRetry, TransactionFinalityError};

@@ -254,8 +254,24 @@ pub async fn submit_prepared_session_goal_control(
         .with_context(|| format!("Goal control {} was saved and is waiting for the runtime; its outcome is not yet confirmed.", command.command_id))?
 }
 
+/// The command's author links it to its session and Agent in one transaction
+/// (`Background.ProcessControl.ClientIntent`): outside a transaction a native
+/// relationship change also requires `get-collection`, which a collaborating
+/// User need not hold. Linking an already linked command is a no-op.
 pub(super) async fn grant_command_relationships(
     access: &ConfigAccess,
+    command: &SessionGoalControl,
+    document: &str,
+) -> Result<()> {
+    access
+        .transact_write("goal.link_session_control", |txn| {
+            Box::pin(async move { stage_command_relationships(txn, command, document).await })
+        })
+        .await
+}
+
+async fn stage_command_relationships(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     command: &SessionGoalControl,
     document: &str,
 ) -> Result<()> {
@@ -263,23 +279,21 @@ pub(super) async fn grant_command_relationships(
         .session_doc_id
         .as_deref()
         .context("goal command has no session document")?;
-    access
-        .add_resource_relationship(
-            "AgentSessionGoalControl",
-            document,
-            "parent",
-            "sessions",
-            session,
-        )
-        .await?;
-    access
-        .add_actor_relationship(
-            "AgentSessionGoalControl",
-            document,
-            "working_agent",
-            &::identity::Did::new(&command.agent_did)?,
-        )
-        .await?;
+    txn.add_resource_relationship(
+        "AgentSessionGoalControl",
+        document,
+        "parent",
+        "sessions",
+        session,
+    )
+    .await?;
+    txn.add_actor_relationship(
+        "AgentSessionGoalControl",
+        document,
+        "working_agent",
+        &::identity::Did::new(&command.agent_did)?,
+    )
+    .await?;
     Ok(())
 }
 
@@ -308,15 +322,15 @@ pub(super) async fn publish(access: &ConfigAccess, command: &SessionGoalControl)
     let response = access.transact_write("goal.submit_session_control", |txn| {
         let input = input.clone();
         Box::pin(async move {
-            txn.execute_client_signed_create(
+            let response = txn.execute_client_signed_create(
                 "mutation($input: AgentSessionGoalControlMutationInputArg!) { create_AgentSessionGoalControl(input: $input) { _docID } }",
                 &serde_json::json!({"input": input}),
                 gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL,
-            ).await.map_err(anyhow::Error::from)
+            ).await?;
+            let document = gents_store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?;
+            stage_command_relationships(txn, command, &document).await?;
+            Ok::<_, anyhow::Error>(document)
         })
     }).await?;
-    Ok(gents_store::graphql::created_doc_id(
-        &response,
-        "AgentSessionGoalControl",
-    )?)
+    Ok(response)
 }

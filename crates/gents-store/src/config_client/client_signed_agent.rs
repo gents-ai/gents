@@ -104,6 +104,28 @@ impl ClientSigningCapability {
     pub fn did(&self) -> &str {
         &self.did
     }
+
+    /// Sign `payload` with this held key, off the runtime workers.
+    pub(crate) async fn sign(&self, payload: Vec<u8>) -> Result<Vec<u8>> {
+        use identity::FullIdentity as _;
+        let actor = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let identity = identity::RawIdentity::from_bytes(
+                crypto::KeyType::Ed25519,
+                &actor.config.private_key_bytes,
+            )
+            .map_err(crate::identity::IdentityError::LoadNodeSigning)?;
+            identity.sign(&payload).map_err(|source| {
+                crate::identity::IdentityError::SignPayload {
+                    did: actor.did().to_owned(),
+                    source,
+                }
+                .into()
+            })
+        })
+        .await
+        .map_err(ConfigClientError::ClientAgentGraphJoin)?
+    }
 }
 
 impl std::fmt::Debug for ClientSigningCapability {

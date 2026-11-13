@@ -506,7 +506,7 @@ pub async fn seed_owned_agent(
     runtime_did: &str,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let (node, agent_doc) = access.transact_write("test.client.owned_agent", |txn| Box::pin(async move {
+    access.transact_write("test.client.owned_agent", |txn| Box::pin(async move {
         let node = txn.execute_client_signed_create(
             "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
             &serde_json::json!({"input":{"node_did":runtime_did}}),
@@ -519,30 +519,11 @@ pub async fn seed_owned_agent(
             gents_protocol::schemas::AGENT,
         ).await?;
         let agent_doc = gents_store::graphql::created_doc_id(&created, "Agent")?;
-        Ok::<_, anyhow::Error>((node, agent_doc))
+        txn.add_actor_relationship("Node", &node, "runtime_reader", &identity::Did::new(runtime_did)?).await?;
+        txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node).await?;
+        txn.add_actor_relationship("Agent", &agent_doc, "executor", &identity::Did::new(&agent.agent_did)?).await?;
+        Ok::<_, anyhow::Error>(())
     })).await.unwrap();
-    access
-        .add_actor_relationship(
-            "Node",
-            &node,
-            "runtime_reader",
-            &identity::Did::new(runtime_did).unwrap(),
-        )
-        .await
-        .unwrap();
-    access
-        .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node)
-        .await
-        .unwrap();
-    access
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "executor",
-            &identity::Did::new(&agent.agent_did).unwrap(),
-        )
-        .await
-        .unwrap();
 }
 
 /// A node served over HTTP through the protected start, with the runtime

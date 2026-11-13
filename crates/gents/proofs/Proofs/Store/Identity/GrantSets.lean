@@ -62,7 +62,18 @@ bypass. It carries no permission list because admin implies every one.
 `policyDelegate` is the relationship-management authority: an Agent holding
 it can hand out only the permissions it already holds. It also holds the
 read-only `get-nac-status`, so it can explain any identity's node grants; that
-permission is not admin-class and confers no change authority. -/
+permission is not admin-class and confers no change authority.
+
+Decision: `policyDelegate` holds the read-only `get-collection` because native
+document relationship changes outside a transaction require it (external
+premise: the pinned DefraDB revision, defradb.rs #2770), and the Engineer's
+policy tool grants and revokes the document relations it manages. It is the
+read half of `schemaPermissions` only and confers no schema change authority:
+the set holds none of `schemaChangePermissions`
+(`policy_delegate_holds_no_schema_change`), so the held-bounded rule refuses
+every schema change the Engineer would grant
+(`engineer_policy_refuses_schema_change`). Holding it, the Engineer may hand
+`get-collection` on (`engineer_policy_grants_get_collection`). -/
 def GrantSet.permissions : GrantSet → List String
   | .agentBaseline => NodeProvisioning.requiredPermissions
   | .operatorUser =>
@@ -70,8 +81,8 @@ def GrantSet.permissions : GrantSet → List String
        "add-dac-relation", "delete-dac-relation", "add-nac-relation", "delete-nac-relation"]
   | .householdOwner => []
   | .policyDelegate =>
-      ["add-nac-relation", "delete-nac-relation", "add-dac-relation", "delete-dac-relation",
-       "get-nac-status"]
+      ["get-collection", "add-nac-relation", "delete-nac-relation", "add-dac-relation",
+       "delete-dac-relation", "get-nac-status"]
 
 def GrantSet.nativeAdmin : GrantSet → Bool
   | .householdOwner => true
@@ -208,13 +219,21 @@ theorem only_init_user_is_admin :
     [Recipient.initUser, .enrolledUser, .defaultAgent, .agent].map
       (fun r => (holderOf (receives r)).admin) = [true, false, false, false] := by decide
 
-def schemaPermissions : List String :=
-  ["get-collection", "patch-collection", "truncate-collection", "set-migration", "add-view"]
+/-- The schema change permissions. `get-collection` is the read half of
+`schemaPermissions` and is deliberately not among them: it reads collection
+definitions and, natively, admits relationship changes outside a transaction,
+but changes no schema. -/
+def schemaChangePermissions : List String :=
+  ["patch-collection", "truncate-collection", "set-migration", "add-view"]
 
-/-- An enrolled User may project any permission it holds and no schema
-authority; the household owner may project schema authority. -/
+def schemaPermissions : List String :=
+  "get-collection" :: schemaChangePermissions
+
+/-- An enrolled User may project any permission it holds and no schema change
+authority; it holds and may project the read-only `get-collection`. The
+household owner may project schema authority. -/
 theorem enrolled_user_cannot_grant_schema :
-    ["patch-collection", "truncate-collection", "set-migration", "add-view"].all (fun p =>
+    schemaChangePermissions.all (fun p =>
       admits (holderOf (receives .enrolledUser)) ⟨.permission p, false, true, false⟩) = false := by
   decide
 
@@ -515,6 +534,32 @@ theorem engineer_policy_refuses_unheld :
     policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
       ⟨.permission "patch-collection", false, true, false⟩ = false := by decide
 
+/-! ### Read-only schema access
+
+The policy delegate holds `get-collection` and no schema change permission, so
+the Engineer can change document relationships natively and hand the read on,
+but neither change a schema nor grant or revoke a schema change. -/
+
+theorem policy_delegate_holds_no_schema_change :
+    schemaChangePermissions.all (fun p => !GrantSet.policyDelegate.permissions.contains p) = true := by
+  decide
+
+theorem policy_delegate_holds_get_collection :
+    GrantSet.policyDelegate.permissions.contains "get-collection" = true := by decide
+
+theorem engineer_holds_no_schema_change :
+    schemaChangePermissions.all (fun p => !(holderOf (receives .defaultAgent)).holds p) = true := by
+  decide
+
+theorem engineer_policy_refuses_schema_change :
+    (schemaChangePermissions.all fun p => [false, true].all fun d =>
+      !policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
+        ⟨.permission p, d, true, false⟩) = true := by decide
+
+theorem engineer_policy_grants_get_collection :
+    policyToolAdmits [policyCategory] (holderOf (receives .defaultAgent))
+      ⟨.permission "get-collection", false, true, false⟩ = true := by decide
+
 /-! ### Explaining other identities' node grants
 
 `get-nac-status` lets its holder read any subject's node permissions through
@@ -585,6 +630,13 @@ theorem engineer_cannot_revoke_own_baseline :
 theorem engineer_can_revoke_own_grant_without_no_lockout :
     policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) false true
       ⟨.permission "read-document", true, true, false⟩ = true := by decide
+
+/-- Under no-lockout the Engineer keeps `get-collection`: without it, native
+document relationship changes outside a transaction are refused, and the policy
+tool could no longer manage relations. -/
+theorem engineer_cannot_revoke_own_get_collection :
+    policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) true true
+      ⟨.permission "get-collection", true, true, false⟩ = false := by decide
 
 theorem engineer_can_revoke_baseline_from_others_under_no_lockout :
     policyToolAdmitsSelf [policyCategory] (holderOf (receives .defaultAgent)) true false

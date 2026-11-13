@@ -203,6 +203,9 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
     semantics: &dyn DesiredStateSemantics,
     policy: &dyn crate::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<DesiredStateApplyCounts> {
+    // The apply re-reads every input in its transaction and has no effects
+    // outside it; each attempt signs afresh.
+    txn.authorize_planned_replay();
     ensure_expectations_hold(txn, plan).await?;
     let event_grants = semantics.capture_event_grants(txn, plan).await?;
     let workspace_selection = workspace_selection::capture(txn, plan).await?;

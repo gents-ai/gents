@@ -1,50 +1,37 @@
 use super::{ConfigAccess, ConfigApplyTxn, ConfigClientError};
+use gents_protocol::owner_staged::OwnerStagedChange;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingObservation {
-    Desired,
-    Applied,
-}
+pub use gents_protocol::pairing_reader::{PairingObservation, PairingReadReason};
 
-impl PairingObservation {
-    pub fn collection(self) -> &'static str {
-        match self {
-            Self::Desired => "PeerPairingDesired",
-            Self::Applied => "PeerPairingApplied",
-        }
+/// The native relation that records `reason`'s reader grant.
+pub(super) fn reader_relation(reason: PairingReadReason) -> &'static str {
+    match reason {
+        PairingReadReason::RouteAdmission => "route_reader",
+        PairingReadReason::ToolView => "tool_reader",
     }
 }
 
-/// An explicit native grant for one physical pairing observation. Enabling a
-/// tool or choosing an Agent does not itself publish or revoke this grant.
-/// Either reason grants native read access to the complete document; the
-/// relation records independent revocation reasons, not field-level access.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingReadReason {
-    RouteAdmission,
-    ToolView,
-}
-
-impl PairingReadReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::RouteAdmission => "route-admission",
-            Self::ToolView => "tool-view",
-        }
-    }
-
-    fn relation(self) -> &'static str {
-        match self {
-            Self::RouteAdmission => "route_reader",
-            Self::ToolView => "tool_reader",
-        }
+fn change(
+    observation: PairingObservation,
+    doc_id: &str,
+    reason: PairingReadReason,
+    agent: &identity::Did,
+) -> OwnerStagedChange {
+    OwnerStagedChange::PairingReader {
+        observation,
+        doc_id: doc_id.to_owned(),
+        reason,
+        reader_did: agent.as_str().to_owned(),
     }
 }
 
 impl ConfigApplyTxn<'_> {
-    /// Stage a reader change with other authorized configuration writes.
-    /// Native ACP authorizes the caller against the exact document; this does
-    /// not authorize enrollment or permit writing the pairing observation.
+    /// Stage a reader change with other authorized configuration writes
+    /// (`Identity.OwnerStaged`, pairing readers). The runtime that owns the
+    /// observation stages it for a caller that may update the runtime's own
+    /// Node, on either transport (`outcome_is_transport_independent`). This
+    /// does not authorize enrollment or permit writing the pairing
+    /// observation.
     pub async fn set_pairing_reader(
         &self,
         observation: PairingObservation,
@@ -53,24 +40,13 @@ impl ConfigApplyTxn<'_> {
         agent: &identity::Did,
         grant: bool,
     ) -> Result<(), ConfigClientError> {
-        if grant {
-            self.add_actor_relationship(observation.collection(), doc_id, reason.relation(), agent)
-                .await
-        } else {
-            self.delete_actor_relationship(
-                observation.collection(),
-                doc_id,
-                reason.relation(),
-                agent,
-            )
+        self.request_owner_staged(&change(observation, doc_id, reason, agent), grant)
             .await
-        }
     }
 }
 
 impl ConfigAccess {
-    /// Apply an explicit native grant or revocation in the caller's transaction.
-    /// The native owner or a reader manager is responsible for this operation.
+    /// Apply an explicit native grant or revocation as this access's actor.
     pub async fn set_pairing_reader(
         &self,
         observation: PairingObservation,
@@ -79,12 +55,7 @@ impl ConfigAccess {
         agent: &identity::Did,
         grant: bool,
     ) -> Result<(), ConfigClientError> {
-        self.transact_write("p2p.set_pairing_reader", |txn| {
-            Box::pin(async move {
-                txn.set_pairing_reader(observation, doc_id, reason, agent, grant)
-                    .await
-            })
-        })
-        .await
+        self.request_owner_staged(&change(observation, doc_id, reason, agent), grant)
+            .await
     }
 }

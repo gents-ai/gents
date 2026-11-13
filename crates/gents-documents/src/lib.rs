@@ -220,3 +220,9 @@ mod claude_platform_tests;
 mod config_model_tests;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
+
+/// The workspace-selection owner's reading of a Callback's selected Agents,
+/// for the composition root to attach to every node.
+pub fn callback_agent_selection() -> gents_store::config_client::CallbackAgentSelection {
+    desired_state::callback_agent_selection()
+}

@@ -86,6 +86,7 @@ import Proofs.Conformance.AccountResolver
 import Proofs.Conformance.Identity.NetworkProtocol
 import Proofs.Conformance.ClaudePromptAssembly
 import Proofs.Conformance.Identity.WorkspaceCallbackSelection
+import Proofs.Conformance.Identity.OwnerStaged
 import Proofs.Conformance.Identity.DirectoryPublication
 import Proofs.Conformance.Identity.ClientAgentJournal
 import Proofs.Conformance.Identity.ClientAgentCreation

@@ -44,45 +44,52 @@ pub fn equality_filter(field: impl Into<String>, value: impl Into<String>) -> Fi
     FilterPredicate::eq(field, Value::String(value.into()))
 }
 
-pub fn combine_filters(left: FilterPredicate, right: FilterPredicate) -> FilterPredicate {
-    let mut filters = Vec::new();
-    match left {
-        FilterPredicate::All(nested) => filters.extend(nested),
-        predicate => filters.push(predicate),
-    }
-    match right {
-        FilterPredicate::All(nested) => filters.extend(nested),
-        predicate => filters.push(predicate),
-    }
-    let mut unique = Vec::with_capacity(filters.len());
-    for filter in filters {
-        if !unique.contains(&filter) {
-            unique.push(filter);
+/// The conjunction of two predicates as one `_and` condition map, flattening
+/// nested conjunctions and dropping repeated conjuncts. Native replication
+/// filters have no conjunction variant, and an ACP filter has no condition
+/// map, so a conjunction involving one is `None`.
+pub fn combine_filters(left: FilterPredicate, right: FilterPredicate) -> Option<FilterPredicate> {
+    let mut unique: Vec<Map<String, Value>> = Vec::new();
+    for filter in [left, right] {
+        let FilterPredicate::Predicate(conditions) = filter else {
+            return None;
+        };
+        for conjunct in conjuncts(conditions) {
+            if !unique.contains(&conjunct) {
+                unique.push(conjunct);
+            }
         }
     }
-    if unique.len() == 1 {
-        unique.pop().expect("one filter")
+    Some(if unique.len() == 1 {
+        FilterPredicate::Predicate(unique.pop().expect("one filter"))
     } else {
-        FilterPredicate::All(unique)
+        let mut conditions = Map::new();
+        conditions.insert(
+            "_and".to_string(),
+            Value::Array(unique.into_iter().map(Value::Object).collect()),
+        );
+        FilterPredicate::Predicate(conditions)
+    })
+}
+
+fn conjuncts(conditions: Map<String, Value>) -> Vec<Map<String, Value>> {
+    if conditions.len() == 1 {
+        if let Some(Value::Array(items)) = conditions.get("_and") {
+            if let Some(objects) = items
+                .iter()
+                .map(|item| item.as_object().cloned())
+                .collect::<Option<Vec<_>>>()
+            {
+                return objects;
+            }
+        }
     }
+    vec![conditions]
 }
 
 pub fn filter_conditions(filter: &FilterPredicate) -> Option<Map<String, Value>> {
     match filter {
         FilterPredicate::Predicate(conditions) => Some(conditions.clone()),
-        FilterPredicate::All(filters) => {
-            let mut conditions = Map::new();
-            conditions.insert(
-                "_and".to_string(),
-                Value::Array(
-                    filters
-                        .iter()
-                        .map(|filter| filter_conditions(filter).map(Value::Object))
-                        .collect::<Option<Vec<_>>>()?,
-                ),
-            );
-            Some(conditions)
-        }
         FilterPredicate::Acp { .. } => None,
     }
 }

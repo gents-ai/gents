@@ -1004,7 +1004,6 @@ fn mailbox_item_cursor(raw_item: &Value) -> Result<String> {
     Ok(cursor::Cursor {
         doc_id: doc_id.to_owned(),
         keys,
-        direction: String::new(),
     }
     .encode())
 }

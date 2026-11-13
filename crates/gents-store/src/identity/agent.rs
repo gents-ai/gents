@@ -4,6 +4,7 @@ use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use identity::{Identity as _, RawIdentity};
 use zeroize::Zeroizing;
 
+use super::AgentDerivationRoot;
 use super::{IdentityError, KeyIdentity, ManagedAgentSigner, NodeIdentity, Result, ServiceAccount};
 
 /// The creation nonce is public, immutable, and independent of labels and
@@ -329,6 +330,52 @@ pub async fn provision_agent_identity_for_agent(
     provision_agent_identity(runtime).map_err(Into::into)
 }
 
+/// Proof of which Agent identities a runtime controls: the one thing a store
+/// owner may ask of the runtime key it is handed explicitly
+/// (`Identity.OwnerStaged.proofFrom`): the same fact whether the signed route
+/// or a host-built local access carries it. It never signs.
+#[derive(Clone)]
+pub struct RuntimeAgentProof {
+    runtime_did: String,
+    root: AgentDerivationRoot,
+}
+
+impl std::fmt::Debug for RuntimeAgentProof {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("RuntimeAgentProof")
+            .field(&self.runtime_did)
+            .finish()
+    }
+}
+
+impl RuntimeAgentProof {
+    /// The proof of a held runtime key; a key whose root cannot derive Agents
+    /// proves none (`foreignAccess`).
+    pub fn new(runtime: Arc<dyn NodeIdentity>) -> Option<Self> {
+        Self::of(runtime.as_ref())
+    }
+
+    pub(crate) fn of(runtime: &dyn NodeIdentity) -> Option<Self> {
+        Some(Self {
+            runtime_did: runtime.did().to_owned(),
+            root: runtime.agent_derivation_root()?,
+        })
+    }
+
+    /// The DID of the runtime key this proof derives from.
+    pub fn runtime_did(&self) -> &str {
+        &self.runtime_did
+    }
+
+    /// Whether `binding`'s DID derives from this runtime key and its creation
+    /// nonce. Only the derived DID is compared; no signer is built.
+    pub fn derives(&self, binding: &AgentIdentityBinding) -> bool {
+        derive_from_root(&self.root, &self.runtime_did, &binding.creation_nonce)
+            .is_ok_and(|derived| derived.did() == binding.agent_did)
+    }
+}
+
 pub fn resolve_agent_identity(
     node: &dyn NodeIdentity,
     binding: &AgentIdentityBinding,
@@ -365,6 +412,7 @@ pub fn resolve_agent_identity(
         identity: identity.clone(),
         signer: ManagedAgentSigner {
             node_did: node.did().to_owned(),
+            runtime_proof: RuntimeAgentProof::of(node),
             signer,
             identity,
         },
@@ -425,17 +473,32 @@ fn derive_agent_key(node: &dyn NodeIdentity, creation_nonce: &str) -> Result<Key
             .ok_or_else(|| IdentityError::AgentDerivationUnavailable {
                 node_did: node.did().to_owned(),
             })?;
+    derive_from_root(&held, node.did(), creation_nonce)
+}
+
+fn derive_from_root(
+    held: &AgentDerivationRoot,
+    node_did: &str,
+    creation_nonce: &str,
+) -> Result<KeyIdentity> {
+    if creation_nonce.len() != 64
+        || !creation_nonce
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(IdentityError::InvalidAgentCreationNonce);
+    }
     let root = &held.identity;
     let derived_did = root.did()?.to_string();
-    if derived_did != node.did() {
+    if derived_did != node_did {
         return Err(IdentityError::RegisteredDidMismatch {
-            did: node.did().to_owned(),
+            did: node_did.to_owned(),
             derived_did,
         });
     }
     let root_bytes = Zeroizing::new(root.private_key_bytes());
-    let mut context = Vec::with_capacity(16 + node.did().len() + creation_nonce.len());
-    for component in [node.did(), creation_nonce] {
+    let mut context = Vec::with_capacity(16 + node_did.len() + creation_nonce.len());
+    for component in [node_did, creation_nonce] {
         context.extend_from_slice(&(component.len() as u64).to_be_bytes());
         context.extend_from_slice(component.as_bytes());
     }

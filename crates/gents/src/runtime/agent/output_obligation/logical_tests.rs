@@ -59,10 +59,16 @@ async fn persist_request(
             escape_graphql_string(&create.requester_did), escape_graphql_string(&create.agent_did),
         )).await.unwrap();
         let doc = gents_store::graphql::created_doc_id(&created, "AgentSession").unwrap();
-        access
-            .add_actor_relationship("AgentSession", &doc, "working_agent", &actor)
-            .await
-            .unwrap();
+        gents_store::test_support::relationships::actor_in_txn(
+            &access,
+            "AgentSession",
+            &doc,
+            "working_agent",
+            &actor,
+            false,
+        )
+        .await
+        .unwrap();
         doc
     } else {
         assert_eq!(rows.len(), 1);
@@ -76,20 +82,27 @@ async fn persist_request(
         .await
         .unwrap();
     let request_doc = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    access
-        .add_actor_relationship("AgentRequest", &request_doc, "working_agent", &actor)
-        .await
-        .unwrap();
-    access
-        .add_resource_relationship(
-            "AgentRequest",
-            &request_doc,
-            "session",
-            "sessions",
-            &session_doc,
-        )
-        .await
-        .unwrap();
+    gents_store::test_support::relationships::actor_in_txn(
+        &access,
+        "AgentRequest",
+        &request_doc,
+        "working_agent",
+        &actor,
+        false,
+    )
+    .await
+    .unwrap();
+    gents_store::test_support::relationships::resource_in_txn(
+        &access,
+        "AgentRequest",
+        &request_doc,
+        "session",
+        "sessions",
+        &session_doc,
+        false,
+    )
+    .await
+    .unwrap();
     let data = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,

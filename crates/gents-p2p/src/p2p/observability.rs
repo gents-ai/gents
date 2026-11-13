@@ -38,6 +38,8 @@ pub struct P2pSyncStatusSnapshot {
     pub single_flight_suppressed: u64,
     pub already_merged_fast_path: u64,
     pub pending_dag_capacity_shed: u64,
+    pub gossip_heads_deferred: u64,
+    pub gossip_heads_shed: u64,
     pub pending_dag_retry_dispatched: u64,
     pub pending_dag_retry_suppressed: u64,
     pub pending_dag_fetch_deferred_unavailable: u64,
@@ -143,6 +145,7 @@ pub struct P2pRequestDispatchSnapshot {
     pub admission_saturated_total: u64,
     pub recovery_saturated_total: u64,
     pub rejection_dropped_total: u64,
+    pub gossip_refusals_dropped_total: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -329,6 +332,7 @@ mod tests {
                 admission_saturated_total: 81,
                 recovery_saturated_total: 17,
                 rejection_dropped_total: 19,
+                gossip_refusals_dropped_total: 23,
             },
             inbound_budget: vec![
                 InboundClassSnapshot {
@@ -411,6 +415,8 @@ mod tests {
             single_flight_suppressed: 37,
             already_merged_fast_path: 53,
             pending_dag_capacity_shed: 59,
+            gossip_heads_deferred: 83,
+            gossip_heads_shed: 89,
             pending_dag_retry_dispatched: 61,
             pending_dag_retry_suppressed: 67,
             pending_dag_fetch_deferred_unavailable: 69,
@@ -533,6 +539,7 @@ mod tests {
                     admission_saturated_total: 81,
                     recovery_saturated_total: 17,
                     rejection_dropped_total: 19,
+                    gossip_refusals_dropped_total: 23,
                 },
                 inbound_budget: vec![
                     P2pInboundClassSnapshot {
@@ -615,6 +622,8 @@ mod tests {
                 single_flight_suppressed: 37,
                 already_merged_fast_path: 53,
                 pending_dag_capacity_shed: 59,
+                gossip_heads_deferred: 83,
+                gossip_heads_shed: 89,
                 pending_dag_retry_dispatched: 61,
                 pending_dag_retry_suppressed: 67,
                 pending_dag_fetch_deferred_unavailable: 69,

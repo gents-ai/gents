@@ -252,30 +252,32 @@ async fn link_fork_children(
             rows[0]["parent_linked"] == false,
             "fork relationship marker is missing"
         );
-        access
-            .add_resource_relationship(collection, doc_id, "parent", "sessions", session_doc_id)
-            .await?;
-        access
-            .add_actor_relationship(
-                collection,
-                doc_id,
-                "working_agent",
-                &identity::Did::new(agent_did)?,
-            )
-            .await?;
+        let agent = identity::Did::new(agent_did)?;
         let update = format!("update_{collection}");
-        let response = access.transact_write("session.mark_fork_parent_linked", |txn| {
-            let mutation = format!(r#"mutation($input: {collection}MutationInputArg!) {{ {update}(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: $input) {{ _docID }} }}"#);
-            Box::pin(async move { txn.execute_client_signed_update(
-                &mutation, &json!({"input": {"parent_linked": true}}), schema,
-            ).await })
+        // The creator grants and marks in one native transaction
+        // (`Identity.SessionChild.recoverSessionChild`); outside a transaction
+        // native relationship changes also require `get-collection`, which an
+        // Agent creator does not hold.
+        access.transact_write("session.mark_fork_parent_linked", |txn| {
+            let (agent, update, doc, creator) = (&agent, &update, &doc, &creator);
+            Box::pin(async move {
+                txn.add_resource_relationship(collection, doc_id, "parent", "sessions", session_doc_id)
+                    .await?;
+                txn.add_actor_relationship(collection, doc_id, "working_agent", agent)
+                    .await?;
+                let mutation = format!(r#"mutation($input: {collection}MutationInputArg!) {{ {update}(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: $input) {{ _docID }} }}"#);
+                let response = txn.execute_client_signed_update(
+                    &mutation, &json!({"input": {"parent_linked": true}}), schema,
+                ).await?;
+                let rows = gents_store::graphql::mutation_documents(&response, update)?
+                    .context("fork relationship marker omitted mutation result")?;
+                anyhow::ensure!(
+                    rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()),
+                    "fork relationship marker lost its creation binding"
+                );
+                Ok::<_, anyhow::Error>(())
+            })
         }).await?;
-        let rows = gents_store::graphql::mutation_documents(&response, &update)?
-            .context("fork relationship marker omitted mutation result")?;
-        anyhow::ensure!(
-            rows.len() == 1 && rows[0]["_docID"].as_str() == Some(doc_id.as_str()),
-            "fork relationship marker lost its creation binding"
-        );
         doc_ids.pop();
     }
     Ok(())

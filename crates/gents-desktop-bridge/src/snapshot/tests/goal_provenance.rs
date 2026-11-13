@@ -185,7 +185,19 @@ async fn goal_provenance_cases() -> GoalProvenance {
             let goal_doc = gents_store::graphql::created_doc_id(&goal, "Goal").unwrap();
             // A Goal is a session child, as the Goal owner links it.
             agent_access
-                .add_resource_relationship("Goal", &goal_doc, "parent", "sessions", &session_doc)
+                .transact_write("goal_provenance.goal_parent", |txn| {
+                    let (goal_doc, session_doc) = (&goal_doc, &session_doc);
+                    Box::pin(async move {
+                        txn.add_resource_relationship(
+                            "Goal",
+                            goal_doc,
+                            "parent",
+                            "sessions",
+                            session_doc,
+                        )
+                        .await
+                    })
+                })
                 .await
                 .unwrap();
             Some(goal_doc)
@@ -299,33 +311,32 @@ async fn goal_provenance_cases() -> GoalProvenance {
             .await
             .unwrap();
         if !omit_receipt {
-            let receipt_doc = agent_access.transact_write("goal_provenance.receipt", |txn| Box::pin(async {
+            // The receipt's links are staged with it, as its owner publishes
+            // them; an Agent holds no `get-collection` outside a transaction.
+            agent_access.transact_write("goal_provenance.receipt", |txn| Box::pin(async {
                 let result = txn.execute_with_variables(
                     "mutation($input: AgentSessionGoalReceiptMutationInputArg!) { create_AgentSessionGoalReceipt(input: $input) { _docID } }",
                     &serde_json::json!({"input": {"command_doc_id": control_doc, "command_id": command.command_id,
                         "receipt_json": serde_json::to_string(&receipt)?}}),
                 ).await?;
-                gents_store::graphql::created_doc_id(&result, "AgentSessionGoalReceipt")
-            })).await.unwrap();
-            agent_access
-                .add_resource_relationship(
+                let receipt_doc = gents_store::graphql::created_doc_id(&result, "AgentSessionGoalReceipt")?;
+                txn.add_resource_relationship(
                     "AgentSessionGoalReceipt",
                     &receipt_doc,
                     "parent",
                     "goal_controls",
                     &control_doc,
                 )
-                .await
-                .unwrap();
-            agent_access
-                .add_actor_relationship(
+                .await?;
+                txn.add_actor_relationship(
                     "AgentSessionGoalReceipt",
                     &receipt_doc,
                     "reader",
-                    &::identity::Did::new(author.did()).unwrap(),
+                    &::identity::Did::new(author.did())?,
                 )
-                .await
-                .unwrap();
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })).await.unwrap();
         }
         let response = access
             .execute(&format!(

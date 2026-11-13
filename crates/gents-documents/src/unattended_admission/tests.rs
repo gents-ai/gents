@@ -125,22 +125,24 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
             ),
         )
         .await?;
-    owner_access
-        .add_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "reader",
-            &identity::Did::new(selected.did())?,
-        )
-        .await?;
-    owner_access
-        .delete_actor_relationship(
-            "Agent",
-            &agent_doc,
-            "executor",
-            &identity::Did::new(selected.did())?,
-        )
-        .await?;
+    gents_store::test_support::relationships::actor_in_txn(
+        &owner_access,
+        "Agent",
+        &agent_doc,
+        "reader",
+        &identity::Did::new(selected.did())?,
+        false,
+    )
+    .await?;
+    gents_store::test_support::relationships::actor_in_txn(
+        &owner_access,
+        "Agent",
+        &agent_doc,
+        "executor",
+        &identity::Did::new(selected.did())?,
+        true,
+    )
+    .await?;
     assert!(
         !agent_access.execute("{Agent {_docID}} ").await?["data"]["Agent"]
             .as_array()

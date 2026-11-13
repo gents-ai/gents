@@ -245,23 +245,7 @@ async fn sign_client_payload(
     actor: &ClientSigningCapability,
     payload: Vec<u8>,
 ) -> Result<Vec<u8>, PackEvidenceError> {
-    use identity::FullIdentity as _;
-    let actor = actor.clone();
-    tokio::task::spawn_blocking(move || {
-        let identity = identity::RawIdentity::from_bytes(
-            crypto::KeyType::Ed25519,
-            &actor.config.private_key_bytes,
-        )
-        .map_err(crate::identity::IdentityError::LoadNodeSigning)?;
-        identity.sign(&payload).map_err(|source| {
-            crate::identity::IdentityError::SignPayload {
-                did: actor.did().to_owned(),
-                source,
-            }
-            .into()
-        })
-    })
-    .await?
+    Ok(actor.sign(payload).await?)
 }
 
 pub(super) fn verify_pack_relationship(

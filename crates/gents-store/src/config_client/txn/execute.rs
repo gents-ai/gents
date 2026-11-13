@@ -529,7 +529,7 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
-    async fn change_document_relationship(
+    pub(super) async fn change_document_relationship(
         &self,
         collection: &str,
         doc_id: &str,
@@ -869,10 +869,9 @@ impl ConfigApplyTxn<'_> {
                     async move {
                         match agent_signer {
                             Some(signer) => {
-                                node.execute_request_in_txn_with_signer(
-                                    request,
+                                node.execute_request_in_txn(
+                                    signer.native().attach(request),
                                     &handle,
-                                    signer.native(),
                                 )
                                 .await
                             }
@@ -1222,7 +1221,7 @@ impl ConfigApplyTxn<'_> {
             .await
     }
 
-    async fn execute_local_response_with_actor(
+    pub(super) async fn execute_local_response_with_actor(
         &self,
         document: &str,
         variables: Option<Value>,
@@ -1249,7 +1248,7 @@ impl ConfigApplyTxn<'_> {
             async move {
                 match agent_signer {
                     Some(signer) => {
-                        node.execute_request_in_txn_with_signer(request, &handle, signer.native())
+                        node.execute_request_in_txn(signer.native().attach(request), &handle)
                             .await
                     }
                     None => node.execute_request_in_txn(request, &handle).await,

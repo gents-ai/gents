@@ -55,6 +55,12 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                     .await?;
             }
         }
+        admin
+            .grant_node_permission(
+                &::identity::Did::new(user.did())?,
+                NodePermission::CollectionGet,
+            )
+            .await?;
         let access = db.client_access(&user);
         let (node_doc, agent_doc) = access.transact_write("test.edit.seed", |txn| {
             let root = &root;

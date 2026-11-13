@@ -101,15 +101,15 @@ async fn an_agent_revokes_the_share_it_granted() {
                     "sibling" => &sibling_access,
                     other => panic!("unmodeled actor {other}"),
                 };
-                let result = if action == "grant" {
-                    access
-                        .add_actor_relationship("AgentSession", &session, "reader", &grantee_did)
-                        .await
-                } else {
-                    access
-                        .delete_actor_relationship("AgentSession", &session, "reader", &grantee_did)
-                        .await
-                };
+                let result = gents_store::test_support::relationships::actor_in_txn(
+                    access,
+                    "AgentSession",
+                    &session,
+                    "reader",
+                    &grantee_did,
+                    action == "revoke",
+                )
+                .await;
                 if let Err(error) = &result {
                     // A client-signed relationship change reports the
                     // native refusal as the endpoint's client-error status.

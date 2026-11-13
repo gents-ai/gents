@@ -58,6 +58,7 @@ impl ConfigAccess {
             agent_signer: None,
             client_signed_writes: false,
             client_endpoint: None,
+            agent_proof: None,
         })))
     }
 
@@ -455,10 +456,7 @@ impl ConfigAccess {
                     request = request.with_variables(variables);
                 }
                 let result = match signer {
-                    Some(signer) => {
-                        node.execute_request_with_signer(request, signer.native())
-                            .await
-                    }
+                    Some(signer) => node.execute_request(signer.native().attach(request)).await,
                     None => node.execute_request(request).await,
                 };
                 let elapsed = started.elapsed();
