@@ -202,7 +202,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
                 size="sm"
                 variant="outline"
                 disabled={busy !== null}
-                onClick={() => void remove(pack.pack)}
+                onClick={() => void remove(pack.pack, deployment)}
               >
                 Remove
               </Button>

@@ -506,7 +506,7 @@ function PacksHome({
                             : []),
                           {
                             label: "Remove",
-                            run: () => void remove(p.pack),
+                            run: () => void remove(p.pack, node),
                             destructive: true,
                           },
                         ]}

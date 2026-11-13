@@ -500,7 +500,7 @@ export function PackPage({
                   label: "Remove",
                   destructive: true,
                   run: () =>
-                    void remove(pack).then(
+                    void remove(pack, node).then(
                       (removed) => removed && navigate({ name: "packs" }),
                     ),
                 },
