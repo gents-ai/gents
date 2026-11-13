@@ -69,20 +69,6 @@ fn operator_path_protection_follows_the_lean_model() {
     });
 }
 
-#[test]
-fn a_mount_rejects_nested_operator_aliases_and_reserved_names() {
-    let world = world();
-    let guarded = file(&world.gents);
-    std::fs::write(&guarded, "operator state").unwrap();
-    let work = world.root.join("work");
-    let paths = [guarded];
-    std::fs::hard_link(work.join("a.txt"), work.join("sub/ordinary-alias")).unwrap();
-    assert!(!protected::mount_contains_protected(&paths, &work).unwrap());
-    std::fs::hard_link(&paths[0], work.join("sub/operator-alias")).unwrap();
-    assert!(protected::mount_contains_protected(&paths, &work).unwrap());
-    assert!(protected::mount_contains_protected(&[work.join("future-state")], &work).unwrap());
-}
-
 #[cfg(unix)]
 #[test]
 fn a_mount_does_not_follow_directory_links_or_cycles() {
@@ -97,13 +83,39 @@ fn a_mount_does_not_follow_directory_links_or_cycles() {
 }
 
 #[test]
-fn a_mount_fails_when_operator_objects_cannot_be_inspected() {
-    let world = world();
-    let work = world.root.join("work");
-    assert!(
-        protected::mount_contains_protected(&[world.gents.join("invalid\0path")], &work).is_err()
-    );
-    assert!(protected::mount_contains_protected(&[], &work.join("missing")).is_err());
+fn operator_mounts_conform_to_the_model() {
+    gents_lean_vocab::families::operator_protection_mount::replay::<String, String, String>(|input| {
+        let world = world();
+        let guarded = file(&world.gents);
+        std::fs::write(&guarded, "operator state").unwrap();
+        let work = world.root.join("work");
+        let root = if input.root_exists {
+            work.clone()
+        } else {
+            work.join("missing")
+        };
+        let paths = match input.guard.as_str() {
+            "unguarded" => Vec::new(),
+            "outside" => vec![guarded.clone()],
+            "named_within" => vec![work.join("future-state")],
+            "uninspectable" => vec![world.gents.join("invalid\0path")],
+            other => panic!("unknown mount guard: {other}"),
+        };
+        for (index, entry) in input.entries.iter().enumerate() {
+            let link = work.join(format!("sub/mount-entry-{index}"));
+            match entry.as_str() {
+                "ordinary" => std::fs::hard_link(work.join("a.txt"), link).unwrap(),
+                "shares_operator_object" => std::fs::hard_link(&guarded, link).unwrap(),
+                other => panic!("unknown mount entry: {other}"),
+            }
+        }
+        let verdict = match protected::mount_contains_protected(&paths, &root) {
+            Ok(false) => "clear",
+            Ok(true) => "reserved",
+            Err(_) => "unreadable",
+        };
+        verdict.to_owned()
+    });
 }
 
 #[test]
@@ -143,17 +155,47 @@ fn world() -> World {
 
 #[cfg(unix)]
 #[test]
-fn command_protection_rejects_existing_and_late_aliases() {
-    let world = world();
-    let state = file(&world.gents);
-    std::fs::write(&state, "permissions").unwrap();
-    let protection = CommandProtection::capture(&world.gents, true).unwrap();
-    let alias = world.root.join("work/command-alias");
-    std::fs::hard_link(&state, &alias).unwrap();
-    assert!(protection.revalidate().is_err());
-    assert!(CommandProtection::capture(&world.gents, true).is_err());
-    std::fs::remove_file(alias).unwrap();
-    assert!(protection.revalidate().is_ok());
+fn command_protection_conforms_to_the_model() {
+    gents_lean_vocab::families::operator_protection_command::replay::<String, String>(|trace| {
+        let world = world();
+        let state = file(&world.gents);
+        std::fs::write(&state, "permissions").unwrap();
+        let alias = world.root.join("work/command-alias");
+        let mut held: Option<CommandProtection> = None;
+        let mut outcomes = Vec::new();
+        for step in &trace.steps {
+            let outcome = match step.as_str() {
+                "capture" => match CommandProtection::capture(&world.gents, true) {
+                    Ok(protection) => {
+                        held = Some(protection);
+                        "allowed"
+                    }
+                    Err(_) => "refused",
+                },
+                "revalidate" => {
+                    match held
+                        .as_ref()
+                        .expect("a revalidation follows a granted capture")
+                        .revalidate()
+                    {
+                        Ok(()) => "allowed",
+                        Err(_) => "refused",
+                    }
+                }
+                "add_alias" => {
+                    std::fs::hard_link(&state, &alias).unwrap();
+                    "applied"
+                }
+                "remove_alias" => {
+                    std::fs::remove_file(&alias).unwrap();
+                    "applied"
+                }
+                other => panic!("unknown protection step: {other}"),
+            };
+            outcomes.push(outcome.to_owned());
+        }
+        outcomes
+    });
 }
 
 #[test]

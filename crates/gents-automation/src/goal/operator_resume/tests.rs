@@ -54,8 +54,22 @@ impl Limited {
         .await
     }
 
-    async fn compacts_on_a(&self) {
-        self.f.compacts_on(&self.access, &self.a).await;
+    fn backend(&self, label: &str) -> &str {
+        match label {
+            "a" => &self.a,
+            "b" => &self.b,
+            other => panic!("unknown account label {other:?}"),
+        }
+    }
+
+    fn label(&self, backend: &str) -> String {
+        if backend == self.a {
+            "a".to_owned()
+        } else if backend == self.b {
+            "b".to_owned()
+        } else {
+            panic!("backend {backend:?} is neither account")
+        }
     }
 
     async fn profile_backend(&self) -> String {
@@ -125,29 +139,50 @@ async fn resume_on_moves_the_profile_and_publishes_one_child() {
 }
 
 #[tokio::test]
-async fn completed_resume_retry_does_not_switch_a_profile_moved_again() {
-    let limited = Limited::new(&usage_limit()).await;
-    let first = limited.resume_on(&limited.b).await.unwrap();
-    gents_inference::profile_switch::switch_profile_account(
-        &limited.access,
-        limited.f.identity.did(),
-        PROFILE,
-        &limited.a,
-        false,
-        &[],
-    )
-    .await
-    .unwrap();
-
-    let retry = limited.resume_on(&limited.b).await.unwrap();
-    assert!(
-        retry.switch.is_none(),
-        "a canonical receipt needs no new switch"
-    );
-    assert!(!retry.resume.created);
-    assert_eq!(retry.resume.request_id, first.resume.request_id);
-    assert_eq!(limited.profile_backend().await, limited.a);
-    assert_eq!(limited.children().await, [first.resume.request_id]);
+async fn resume_on_retry_matches_the_lean_profile_model() {
+    for case in gents_lean_vocab::families::goal_operator_resume_profiles_resume_on_retry::cases()
+    {
+        let limited = Limited::new(&usage_limit()).await;
+        if let Some(label) = &case.input.compaction {
+            limited
+                .f
+                .compacts_on(&limited.access, limited.backend(label))
+                .await;
+        }
+        let first = limited.resume_on(&limited.b).await.unwrap();
+        let first_profile = limited.label(&limited.profile_backend().await);
+        if let Some(label) = &case.input.operator_move_to {
+            gents_inference::profile_switch::switch_profile_account(
+                &limited.access,
+                limited.f.identity.did(),
+                PROFILE,
+                limited.backend(label),
+                false,
+                &[],
+            )
+            .await
+            .unwrap();
+        }
+        let retry = limited.resume_on(&limited.b).await.unwrap();
+        let children = limited.children().await;
+        let profile = limited.label(&limited.profile_backend().await);
+        let compaction = if case.input.compaction.is_some() {
+            Some(limited.label(&limited.backend_of("summ").await))
+        } else {
+            None
+        };
+        case.check(
+            gents_lean_vocab::families::goal_operator_resume_profiles_resume_on_retry::RetryOutput {
+                first_profile,
+                retry_switched: retry.switch.is_some(),
+                retry_created: retry.resume.created,
+                same_request: retry.resume.request_id == first.resume.request_id,
+                child_is_first: children == [first.resume.request_id.clone()],
+                profile,
+                compaction,
+            },
+        );
+    }
 }
 
 #[tokio::test]
@@ -267,22 +302,6 @@ async fn moved_profile_retry_rejects_a_removed_target_account() {
     assert_eq!(limited.profile_backend().await, limited.b);
     assert_eq!(limited.goal_status().await, "usage_limited");
     assert!(limited.children().await.is_empty());
-}
-
-#[tokio::test]
-async fn resume_on_retry_leaves_the_compaction_profile() {
-    let limited = Limited::new(&usage_limit()).await;
-    limited.compacts_on_a().await;
-    let first = limited.resume_on(&limited.b).await.unwrap();
-    assert_eq!(limited.profile_backend().await, limited.b);
-    let retry = limited.resume_on(&limited.b).await.unwrap();
-    assert!(
-        retry.switch.is_none(),
-        "no second switch write: {:?}",
-        retry.switch
-    );
-    assert_eq!(retry.resume.request_id, first.resume.request_id);
-    assert_eq!(limited.backend_of("summ").await, limited.a, "summ stays");
 }
 
 #[tokio::test]

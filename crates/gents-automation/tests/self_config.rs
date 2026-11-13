@@ -1,4 +1,3 @@
-use anyhow::Context;
 use gents_documents::patch::{SelfConfigPatch, SelfConfigTarget};
 use gents_loop::tool::{Tool, ToolDyn};
 use gents_protocol::operations::StringUpdate;

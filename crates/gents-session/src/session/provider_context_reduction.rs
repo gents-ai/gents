@@ -1776,62 +1776,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_boundary_pins_bounded_canonical_high_water() {
-        let node_db = gents_inference::test_support::test_db(
-            "source-boundary-pins-bounded-canonical-h",
-            crate::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = node_db.node.clone();
-        for sequence in [2, 1] {
-            let mutation = format!(
-                r#"mutation {{ create_AgentMessage(input: {{
-                    message_key: "session-boundary:{sequence}"
-                    node_did: "did:test:boundary-owner"
-                    requester_did: null
-                    session_id: "session-boundary"
-                    sequence: {sequence}
-                    role: "user"
-                }}) {{ _docID }} }}"#
-            );
-            let response = node.execute(&mutation).await;
-            assert!(
-                !response.has_errors(),
-                "message seed failed: {:?}",
-                response.errors
-            );
-        }
-        let other_principal = node
-            .execute(
-                r#"mutation { create_AgentMessage(input: {
-                message_key: "other-boundary:3"
-                node_did: "did:test:other-owner"
-                requester_did: null
-                session_id: "session-boundary"
-                sequence: 3
-                role: "user"
-            }) { _docID } }"#,
+    async fn source_boundary_high_water_matches_the_lean_model() {
+        for case in gents_lean_vocab::families::source_boundary_high_water::cases() {
+            let node_db = gents_inference::test_support::test_db(
+                "source-boundary-high-water-matches-the-l",
+                crate::test_support::no_lifecycle_plugins(),
             )
             .await;
-        assert!(
-            !other_principal.has_errors(),
-            "{:?}",
-            other_principal.errors
-        );
-        let boundary = capture_source_boundary(
-            &gents_store::config_client::ConfigAccess::local(node.clone()),
-            "session-boundary",
-            "did:test:boundary-owner",
-            None,
-            "request-doc",
-            "request-cid",
-        )
-        .await
-        .unwrap();
-        let high_water = boundary.canonical_through.expect("canonical high-water");
-        assert_eq!(high_water.sequence, 2);
-        assert!(!high_water.doc_id.is_empty());
-        assert!(!high_water.commit_cid.is_empty());
+            let node = node_db.node.clone();
+            for (index, message) in case.input.messages.iter().enumerate() {
+                let requester = message
+                    .requester
+                    .map_or("null".to_owned(), |n| format!("\"did:test:requester-{n}\""));
+                let response = node
+                    .execute(&format!(
+                        r#"mutation {{ create_AgentMessage(input: {{
+                            message_key: "boundary:{index}"
+                            node_did: "did:test:node-{}"
+                            requester_did: {requester}
+                            session_id: "session-{}"
+                            sequence: {}
+                            role: "user"
+                        }}) {{ _docID }} }}"#,
+                        message.node, message.session, message.sequence,
+                    ))
+                    .await;
+                assert!(
+                    !response.has_errors(),
+                    "message seed failed: {:?}",
+                    response.errors
+                );
+            }
+            let requester = case
+                .input
+                .requester
+                .map(|n| format!("did:test:requester-{n}"));
+            let boundary = capture_source_boundary(
+                &gents_store::config_client::ConfigAccess::local(node.clone()),
+                &format!("session-{}", case.input.session),
+                &format!("did:test:node-{}", case.input.node),
+                requester.as_deref(),
+                "request-doc",
+                "request-cid",
+            )
+            .await
+            .unwrap();
+            let sequence = boundary.canonical_through.map(|high_water| {
+                assert!(!high_water.doc_id.is_empty() && !high_water.commit_cid.is_empty());
+                high_water.sequence
+            });
+            case.check(sequence);
+        }
     }
 
     #[tokio::test]

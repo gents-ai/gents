@@ -136,8 +136,7 @@ fn allow_list_entries_parse_and_unservable_grants_are_refused() {
     );
 }
 
-#[test]
-fn a_pack_cannot_declare_a_network_grant_the_host_cannot_serve() {
+fn declaring(manifold: &Manifold) -> crate::pack::PackPlugin {
     let mut plugin: crate::pack::PackPlugin = serde_json::from_value(json!({
         "name": "fetcher",
         "description": "Fetches",
@@ -146,24 +145,8 @@ fn a_pack_cannot_declare_a_network_grant_the_host_cannot_serve() {
         "input_schema": {"type": "object"},
     }))
     .unwrap();
-    for (net, timeout) in [
-        (json!({"OutboundFull": null}), Value::Null),
-        (json!({"OutboundHttp": ["*.10.0.0.1"]}), Value::Null),
-        (json!({"OutboundHttp": ["api.example.com"]}), json!(0)),
-    ] {
-        plugin.manifold = Some(
-            json!({"fs": "None", "net": net, "env": "None", "crypto": false, "child_process": false, "http_timeout_ms": timeout}),
-        );
-        let error = plugin.validate().unwrap_err();
-        assert!(
-            format!("{error:#}").contains("network grant the host cannot serve"),
-            "{error:#}"
-        );
-    }
-    plugin.manifold = Some(
-        json!({"fs": "None", "net": {"OutboundHttp": ["api.example.com"]}, "env": "None", "crypto": false, "child_process": false}),
-    );
-    plugin.validate().unwrap();
+    plugin.manifold = Some(serde_json::to_value(manifold).unwrap());
+    plugin
 }
 
 #[test]
@@ -192,7 +175,16 @@ fn declared_network_grants_are_servable_exactly_when_the_model_says() {
             http_timeout_ms: input.http_timeout_ms,
             ..Manifold::sealed()
         };
-        validate_declared(&manifold).is_ok()
+        match declaring(&manifold).validate() {
+            Ok(()) => true,
+            Err(error) => {
+                assert!(
+                    format!("{error:#}").contains("network grant the host cannot serve"),
+                    "{error:#}"
+                );
+                false
+            }
+        }
     });
 }
 

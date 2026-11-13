@@ -52,28 +52,21 @@ fn session_target_fixture(
 
 #[test]
 fn session_target_authority_matches_lean_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().causal_hop_session_target_cases;
-    assert_eq!(cases.len(), 16);
-    for case in cases {
+    gents_lean_vocab::families::causal_hop_contracts_session_target::replay(|case| {
         let (session, tools) = session_target_fixture(
             case.same_requester,
             case.same_node,
             case.caused,
             case.allowed_target,
         );
-        assert_eq!(
-            session_target_allowed(&session, "caller", "caller", &tools),
-            case.expected_allowed,
-            "{case:?}"
-        );
-    }
+        session_target_allowed(&session, "caller", "caller", &tools)
+    });
 }
 
 #[test]
 fn session_list_entries_match_lean_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().causal_hop_session_list_cases;
-    assert_eq!(cases.len(), 64);
-    for case in cases {
+    use gents_lean_vocab::families::causal_hop_contracts_session_list::SessionListOutput;
+    gents_lean_vocab::families::causal_hop_contracts_session_list::replay(|case| {
         let (session, tools) = session_target_fixture(
             case.same_requester,
             case.same_node,
@@ -85,16 +78,10 @@ fn session_list_entries_match_lean_owner() {
             case.verified_starter_receipt,
             case.interrupt_allowed,
         );
-        assert_eq!(entry.is_some(), case.expected_listed, "{case:?}");
-        assert_eq!(
-            entry.is_some_and(|entry| entry.can_message),
-            case.expected_can_message,
-            "{case:?}"
-        );
-        assert_eq!(
-            entry.is_some_and(|entry| entry.can_interrupt),
-            case.expected_can_interrupt,
-            "{case:?}"
-        );
-    }
+        SessionListOutput {
+            listed: entry.is_some(),
+            can_message: entry.is_some_and(|entry| entry.can_message),
+            can_interrupt: entry.is_some_and(|entry| entry.can_interrupt),
+        }
+    });
 }

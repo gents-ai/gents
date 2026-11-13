@@ -709,27 +709,28 @@ mod tests {
     }
 
     #[test]
-    fn write_authoring_requires_readwrite_and_verify_only_read() {
-        use gents_documents::FileToolMode;
-        assert!(ensure_mode(FileToolMode::ReadWrite, true, "scaffold").is_ok());
-        for (mode, expected) in [
-            (FileToolMode::Off, "file permission"),
-            (FileToolMode::ReadOnly, "readwrite"),
-        ] {
-            let error =
-                ensure_mode(mode, true, "scaffold").expect_err("a write-refusing mode refuses");
-            let message = format!("{error:#}");
-            assert!(
-                message.contains(expected),
-                "{message} should name {expected}"
-            );
-        }
-        for operation in ["check", "verify"] {
-            let error = ensure_mode(FileToolMode::Off, false, operation).unwrap_err();
-            let message = format!("{error:#}");
-            assert!(message.contains("file permission"), "{message}");
-            assert!(ensure_mode(FileToolMode::ReadOnly, false, operation).is_ok());
-        }
+    fn authoring_file_mode_admission_matches_the_lean_model() {
+        gents_lean_vocab::families::authoring_file_mode_admission::replay(
+            |i| {
+                let mode = gents_documents::FileToolMode::parse(&i.mode)
+                    .expect("the family emits production file tool mode names");
+                let result = ensure_mode(mode, i.write, &i.operation);
+                let refusal = result.as_ref().err().map(|error| {
+                    let message = format!("{error:#}");
+                    if message.contains("file permission") {
+                        "file_permission".to_owned()
+                    } else if message.contains("readwrite") {
+                        "readwrite".to_owned()
+                    } else {
+                        format!("unnamed: {message}")
+                    }
+                });
+                gents_lean_vocab::families::authoring_file_mode_admission::AdmissionOutput {
+                    admitted: result.is_ok(),
+                    refusal,
+                }
+            },
+        );
     }
 
     #[test]

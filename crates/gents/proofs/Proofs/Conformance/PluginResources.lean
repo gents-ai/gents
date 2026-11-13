@@ -549,3 +549,53 @@ def pluginResourceScratchCasesJson : String :=
   scratchJson.compress
 
 end Conformance.PluginResources
+
+namespace Conformance.PluginScratch
+
+open Lean ToolPolicy
+
+structure Write where
+  toolCallId : String
+  name : String
+  size : Nat
+  deriving ToJson
+
+structure Trace where
+  cwd : String
+  writes : List Write
+  deriving ToJson
+
+structure WrittenFile where
+  path : String
+  write : Nat
+  deriving ToJson
+
+structure Outcome where
+  written : List Bool
+  files : List WrittenFile
+  deriving ToJson
+
+private def at6 (toolCallId name : String) : Write := { toolCallId, name, size := 6 }
+
+/-- Scratch writes in order on one cwd, each one call of the row's scratch
+writer; the files are listed in path order. -/
+@[conformance_family]
+def writes : Family Trace Outcome where
+  inputs :=
+    [ { cwd := "/work/repo", writes := [at6 "call-1" "notes.md", at6 "call-2" "notes.md"] }
+    , { cwd := "/work/repo", writes := [at6 "call-1" "notes.md", at6 "call-1" "notes.md"] }
+    , { cwd := "/work/repo"
+        writes := [at6 "call-1" "notes.md", at6 "call-1" "other.md", at6 "call-1" "..",
+          at6 ".." "notes.md", at6 "call-2" "a/b"] }
+    , { cwd := "/work/repo"
+        writes := [at6 "call-1" "notes.md",
+          { toolCallId := "call-1", name := "big.bin", size := scratchMaxBytes + 1 },
+          { toolCallId := "call-1", name := "edge.bin", size := scratchMaxBytes }] } ]
+  model := fun t =>
+    let (written, files) := scratchWritesFrom t.cwd (fun _ => true) 0 []
+      (t.writes.map fun w => (w.toolCallId, w.name, w.size))
+    { written
+      files := (files.mergeSort fun a b => !(decide (b.path < a.path))).map fun f =>
+        { path := f.path, write := f.write } }
+
+end Conformance.PluginScratch
