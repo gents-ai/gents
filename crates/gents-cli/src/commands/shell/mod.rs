@@ -18,6 +18,8 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
+pub(crate) use setup::connect_first_sign_in;
+
 use anyhow::Context;
 use gents_shell::source::Intent;
 use tokio::runtime::Handle;

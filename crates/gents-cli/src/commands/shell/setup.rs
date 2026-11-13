@@ -22,6 +22,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
+use crate::cli::args::BackendPresetArg;
 use crate::commands::accounts::AccountRow;
 use crate::commands::claude_login::{run_claude_login, ClaudeLoginOptions};
 use crate::commands::codex_login::{run_codex_login, CodexLoginOptions};
@@ -219,9 +220,9 @@ pub(super) fn backend_id(provider: &str, existing: &[String]) -> String {
 
 /// What `save` wrote: its notice, and the profile an agent runs the model on.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Saved {
-    pub(super) notice: String,
-    pub(super) profile: String,
+pub(crate) struct Saved {
+    pub(crate) notice: String,
+    pub(crate) profile: String,
 }
 
 fn profile_id(backend_id: &str) -> String {
@@ -257,6 +258,60 @@ pub(super) async fn save(
     let profile = saved.as_deref().map(profile_id).unwrap_or_default();
     let notice = saved_answer(saved, model, connection)?;
     Ok(Saved { notice, profile })
+}
+
+/// A sign-in on a node with no backend of its provider's kind gets the backend and profile
+/// `save` writes for the provider's default model with its recommended settings. Any backend of
+/// that kind leaves the node as it is: further accounts join it through a pool or a profile.
+pub(crate) async fn connect_first_sign_in(
+    access: &ConfigAccess,
+    node_did: &str,
+    credential: &gents_inference::auth::credential::OAuthCredential,
+) -> anyhow::Result<Option<Saved>> {
+    let options = inference_setup_catalog().providers.into_iter();
+    let options = options.flat_map(|provider| {
+        let methods = provider.auth_options.into_iter();
+        methods.map(move |option| (provider.id, option.method))
+    });
+    let signed_in = options
+        .filter_map(|(provider, method)| {
+            let spec = connection_spec(provider, method, "").ok()?;
+            (spec.oauth_provider == Some(credential.provider.as_str()))
+                .then_some((provider, method, spec))
+        })
+        .next();
+    let Some((provider, method, spec)) = signed_in else {
+        return Ok(None);
+    };
+    let preset = match method {
+        InferenceAuthMethod::ChatGptOauth => BackendPresetArg::ChatGptCodex,
+        InferenceAuthMethod::ClaudeOauth => BackendPresetArg::ClaudeCliSubscription,
+        InferenceAuthMethod::GrokOauth => BackendPresetArg::XaiGrokOAuth,
+        InferenceAuthMethod::ApiKey | InferenceAuthMethod::OptionalApiKey => return Ok(None),
+    };
+    let Some(model) = preset.default_model_name() else {
+        return Ok(None);
+    };
+    let state = load_inference_setup_state(access, node_did).await?;
+    let kind = spec.provider_kind.as_str();
+    let served = |backend: &gents_desktop_core::inference::InferenceBackendView| {
+        backend.provider_kind.as_deref() == Some(kind)
+    };
+    if state.inference_backends.iter().any(served) {
+        return Ok(None);
+    }
+    let connection = SetupConnection {
+        provider: name(provider),
+        method: name(method),
+        endpoint: String::new(),
+        key: None,
+        account: credential.account_ref.clone(),
+    };
+    let model = recommend(&connection, model).map_err(anyhow::Error::msg)?;
+    let settings = model.settings.into_iter();
+    let settings: Vec<_> = settings.map(|setting| (setting.key, setting.value)).collect();
+    let saved = save(access, node_did, &connection, &model.id, &settings).await;
+    saved.map(Some).map_err(anyhow::Error::msg)
 }
 
 /// A save's notice, or why it failed, which never carries the key.
@@ -726,6 +781,41 @@ mod tests {
         );
         let values = [&sampling["temperature"], &sampling["top_p"]];
         assert_eq!(values, [&json!(0.7), &json!(0.95)]);
+        assert_eq!(stored(&access, Collection::Agent).await, agents);
+
+        let signed_in = gents_inference::auth::claude::credential_from_login_tokens(
+            OWNER,
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &gents_inference::auth::claude::ClaudeLoginTokens {
+                access_token: "access".into(),
+                refresh_token: "refresh".into(),
+                expires_in: Some(3600),
+                scope: None,
+                account_id: None,
+                organization_uuid: None,
+                account_uuid: None,
+            },
+            chrono::Utc::now(),
+        );
+        let model = gents_inference::clients::claude_subscription::default_model_name();
+        let first = connect_first_sign_in(&access, OWNER, &signed_in).await;
+        let again = connect_first_sign_in(&access, OWNER, &signed_in).await;
+
+        let expected = Saved {
+            notice: format!("saved anthropic-3: {model}"),
+            profile: "profile-anthropic-3".to_string(),
+        };
+        assert_eq!(first.unwrap(), Some(expected));
+        assert_eq!(again.unwrap(), None);
+        let backends_now = stored(&access, Collection::InferenceBackend).await;
+        let subscription = by(&backends_now, "backend_id", "anthropic-3");
+        let reads = [&subscription["provider_kind"], &subscription["auth"]];
+        let node_oauth = json!({ "kind": "node_oauth" });
+        assert_eq!(reads, [&json!("ClaudeCliSubscription"), &node_oauth]);
+        let profiles_now = stored(&access, Collection::InferenceProfile).await;
+        let profile = by(&profiles_now, "profile_id", "profile-anthropic-3");
+        let bound = [&profile["model_name"], &profile["backend_id"]];
+        assert_eq!(bound, [&json!(model), &json!("anthropic-3")]);
         assert_eq!(stored(&access, Collection::Agent).await, agents);
         served.node.shutdown().await.expect("node shutdown");
     }
