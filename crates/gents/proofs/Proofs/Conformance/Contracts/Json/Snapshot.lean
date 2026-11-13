@@ -451,8 +451,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"client_publication_protected_collection\":"
-      ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
     ++ "\"identity_parent_publication_cases\":"
       ++ Identity.PublicationConformance.parentCasesJson ++ ","
     ++ "\"identity_readiness_preflight_cases\":"

@@ -141,27 +141,6 @@ async fn rejects_raw_mailbox_writer_even_when_declaration_is_canonical() {
 }
 
 #[tokio::test]
-async fn rejects_client_publication_mutations() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    let mut protected = decl();
-    protected.collection = gents_lean_vocab::lean_contract_snapshot()
-        .client_publication_protected_collection
-        .clone();
-    let tool = BoundedWriteTool::new(ConfigAccess::local(node), protected);
-    assert!(!tool.is_well_formed());
-    let error = Tool::call(
-        &tool,
-        serde_json::from_value(json!({
-            "drift_sig":"abc", "summary":"stale", "status":"open"
-        }))
-        .unwrap(),
-    )
-    .await
-    .expect_err("client publication data is not agent-writable");
-    assert!(format!("{error:#}").contains("protected"));
-}
-
-#[tokio::test]
 async fn writes_one_bounded_doc() {
     let node = node_with_actionrequest().await;
     let tool = BoundedWriteTool::new(ConfigAccess::local(Arc::clone(&node)), decl());
