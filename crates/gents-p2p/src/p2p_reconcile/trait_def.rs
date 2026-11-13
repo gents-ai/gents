@@ -25,6 +25,14 @@ pub enum RemoteP2pAdminError {
     LocalError(String),
 }
 
+impl RemoteP2pAdminError {
+    /// `anyhow`'s own downcast, which also sees context values, not only the
+    /// source chain.
+    pub fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+}
+
 pub type RemoteP2pAdminResult<T> = Result<T, RemoteP2pAdminError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
