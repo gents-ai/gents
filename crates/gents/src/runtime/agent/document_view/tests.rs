@@ -2295,6 +2295,7 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
         gents_inference::backends::health::BackendHealthMap::new(),
     );
     let original = load_document_runtime_view(&node, root.did()).await.unwrap();
+    let skipped_cases = gents_lean_vocab::families::watcher_actors_skipped::cases();
     for case in gents_lean_vocab::families::watcher_actors_scanned::cases() {
         let name = case.input.name.as_str();
         let [candidate] = case.input.candidates.as_slice() else {
@@ -2302,7 +2303,7 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
         };
         let mut view = original.clone();
         let agent = &mut view.agents.get_mut(&did).unwrap().value;
-        agent.enabled = candidate.available;
+        agent.enabled = !candidate.disabled;
         if !candidate.identity_resolved {
             agent.creation_nonce = "invalid".into();
         }
@@ -2324,6 +2325,19 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
             })
             .collect::<Vec<_>>();
         case.check(scanned);
+        let skipped = active
+            .disabled_watcher_agents()
+            .into_iter()
+            .map(|skipped| {
+                assert_eq!(skipped, did, "{name}: a foreign Agent is skipped");
+                candidate.did.clone()
+            })
+            .collect::<Vec<_>>();
+        skipped_cases
+            .iter()
+            .find(|skipped| skipped.input.name == name)
+            .unwrap_or_else(|| panic!("{name}: no skipped case"))
+            .check(skipped);
     }
     node.shutdown().await.unwrap();
 }

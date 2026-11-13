@@ -335,6 +335,36 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             .unwrap();
     }
     set_agent_enabled(&owner, &agent_doc, false).await;
+    let disabled = [second.agent_did.clone()]
+        .into_iter()
+        .collect::<rapidhash::RapidHashSet<_>>();
+    watcher.set_disabled_agents(disabled.clone());
+    let skipped = watcher.scan_pending_requests().await.unwrap();
+    assert_eq!(
+        skipped
+            .requests
+            .iter()
+            .map(|request| request.agent_did.as_str())
+            .collect::<Vec<_>>(),
+        [first.agent_did.as_str()]
+    );
+    assert!(
+        skipped.failures.is_empty(),
+        "a disabled Agent is not a scan failure: {:?}",
+        skipped.failures
+    );
+    assert!(!skipped.needs_rescan());
+    watcher
+        .set_agent_identities(vec![second_signer.clone()])
+        .unwrap();
+    assert!(
+        watcher.pending_requests().await.unwrap().is_empty(),
+        "a node whose only Agent is disabled has an empty queue, not an error"
+    );
+    watcher.set_disabled_agents(Default::default());
+    watcher
+        .set_agent_identities(vec![first_signer.clone(), second_signer.clone()])
+        .unwrap();
     let partial = watcher.scan_pending_requests().await.unwrap();
     assert_eq!(
         partial
@@ -350,7 +380,8 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             .iter()
             .map(|failure| failure.actor())
             .collect::<Vec<_>>(),
-        [second.agent_did.as_str()]
+        [second.agent_did.as_str()],
+        "an Agent the watcher was not told is disabled still fails its scan"
     );
     assert!(partial.needs_rescan());
     watcher
@@ -364,7 +395,9 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         error.to_string().contains(&second.agent_did),
         "the failed actor is reported: {error:#}"
     );
+    watcher.set_disabled_agents(disabled);
     set_agent_enabled(&owner, &agent_doc, true).await;
+    watcher.set_disabled_agents(Default::default());
     watcher
         .set_agent_identities(vec![first_signer.clone(), second_signer])
         .unwrap();
