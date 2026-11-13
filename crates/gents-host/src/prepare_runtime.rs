@@ -41,12 +41,7 @@ fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
     {
         RuntimePreparationRefusal::KeyAccess
     } else {
-        gents_protocol::error_chain::find_map_source(error.as_ref(), |source| {
-            source
-                .downcast_ref::<ControlFailure>()
-                .and_then(ControlFailure::reason)
-        })
-        .unwrap_or(RuntimePreparationRefusal::Failed)
+        ControlFailure::reason_in(error.as_ref()).unwrap_or(RuntimePreparationRefusal::Failed)
     }
 }
 
