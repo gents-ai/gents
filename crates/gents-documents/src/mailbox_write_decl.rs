@@ -220,7 +220,22 @@ pub fn validate_mailbox_write_decl(decl: &WriteToolDecl) -> Result<()> {
 
 #[cfg(test)]
 mod conformance {
-    use super::{MailboxAction, MailboxKind};
+    use super::{MailboxAction, MailboxKind, MailboxWriteOutcome, NotificationIdentity};
+
+    #[test]
+    fn notification_outcomes_follow_lean_cases() {
+        gents_lean_vocab::families::mailbox_notification_decide_write::replay::<
+            String,
+            MailboxWriteOutcome,
+        >(|case| {
+            let mode = match case.mode.as_str() {
+                "event" => NotificationIdentity::Event,
+                "condition" => NotificationIdentity::Condition { key: "disk".into() },
+                other => panic!("unmapped notification mode {other}"),
+            };
+            mode.write_outcome(case.open_exists, case.same_content)
+        });
+    }
 
     #[test]
     fn mailbox_kinds_are_the_lean_mailbox_kinds() {

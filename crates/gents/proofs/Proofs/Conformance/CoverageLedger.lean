@@ -965,10 +965,14 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "causal_hop_contracts_session_list")
       "request-lifecycle" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "family"
+      "contracts_title_admission_fresh_verifier"
+      "The fresh verifier replays signed title and access-review admission through native signing and the pending-disposition owner. Watcher admission, pending rejection and crash rediscovery owners are not bound.")
+      "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "title_request_admission_cases"
-      "TitleRequestAdmissionCases"
-      "Model-derived signed title-purpose admission and pending-disposition inputs cover exact runtime-local-control parent-only provenance, forbidden request controls, unavailable observation retry, authoritative denial, and unchanged Pending on admit. Bind the generated rows to native signing, watcher admission, pending rejection and crash rediscovery owners before claiming native coverage.")
+      "family" "contracts_title_admission_fresh_verifier_unreached"
+      "model-production-gap: the native fresh-verifier fixture signs the parent and title request through native signing and admission records and cannot represent these eight modeled inputs.")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1134,12 +1138,20 @@ def caseCoverage : List CoverageEntry :=
       "inference_slot_accounting_reconstruction")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "mailbox_notification_cases"
-      "MailboxNotificationCases")
-      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+      "family"
+      "mailbox_notification_decide_write")
+      "mailbox" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_notification_contracts_stamp")
+      "mailbox" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_sweep_contracts_progress")
+      "mailbox" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "mailbox_reply_cases"
-      "MailboxReplyCases"
+      "family"
+      "mailbox_reply_contracts_claim"
       "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
       "mailbox" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1167,9 +1179,13 @@ def caseCoverage : List CoverageEntry :=
       "mailbox_question_contracts_runtimes")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "mailbox_handoff_cases"
-      "MailboxHandoffCases"
-      "Only the fresh-linked positive case drives the stamped mailbox write, signed producer terminal owner, and linked reply admission in native storage. The other eleven generated handoff cases remain model-only; this consumer does not exercise AgentToolCall result publication, the owned completion loop, or atomic crash recovery across the separate mailbox and request transactions.")
+      "family"
+      "mailbox_handoff_contracts_linked"
+      "The fresh-linked case drives the stamped mailbox write, signed producer terminal owner, and linked reply admission in native storage; this consumer does not exercise AgentToolCall result publication, the owned completion loop, or atomic crash recovery across the separate mailbox and request transactions.")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "mailbox_handoff_contracts_linked_unreached"
+      "model-production-gap: the stamped mailbox write takes the question's request, session and owner from the filing request, so production cannot file a mismatched question, and no scenario replays the reply-side mismatches through the signed reply claim after a linked handoff.")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "count_carrier_cases"
@@ -1618,8 +1634,8 @@ def caseCoverage : List CoverageEntry :=
       "External binaries must obey their declared effects and the host kernel must enforce the selected sandbox.")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "operator_base_freeze_cases"
-      "OperatorBaseFreezeCases")
+      "family"
+      "operator_base_freeze_contracts_freeze")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_path_capability_cases"
@@ -2023,18 +2039,13 @@ def caseCoverage : List CoverageEntry :=
       "plugin_job_wire_cases"
       "PluginJobWireCases")
       "plugin-jobs" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "plugin_job_lineage_cases"
-      "PluginJobLineageCases"
-      "Rows decode strictly against DurableLineage.openingRequest. The client consumers that drive the native opening-request owner are pending.")
-      "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_lineage_cases"
-      "PluginJobLineageCases")
-      "plugin-jobs" [Surface.operatorCli]
+      "family"
+      "plugin_job_lineage_starting")
+      "plugin-jobs" [Surface.runtimeInternal, Surface.operatorCli]
   , tagged (consumerCoverage
-      "plugin_job_lineage_cases"
-      "PluginJobLineageCases")
+      "family"
+      "plugin_job_lineage_opening")
       "plugin-jobs" [Surface.operatorUi]
   , tagged (consumerCoverage
       "family"
@@ -2477,9 +2488,13 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalDispatchObservationCases")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "title_text_cases"
-      "TitleTextCases")
-      "canonical-output" [Surface.operatorUi, Surface.runtimeInternal]
+      "family"
+      "title_text_generation")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "title_text_summary")
+      "canonical-output" [Surface.operatorUi]
   , tagged (boundaryCoverage
       "family"
       "title_admission_join_unreached"
@@ -2701,8 +2716,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_routing_affinity_dispatches")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "current_input_cases"
-      "CurrentInputCases"
+      "family"
+      "contracts_current_input_selection"
       "Binds canonical header classification and selection to CurrentInput. Full reconstructed-history regression additionally covers retaining a current-request tool result; arbitrary imported-seed reachability is not claimed.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2903,10 +2918,13 @@ def caseCoverage : List CoverageEntry :=
       "state_machine"
       "Request")
       "interrupt-and-cancel" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_workspace_quickstart_transition")
+      "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "workspace_cases"
-      "WorkspaceCases"
-      "Replay these cases through the production Workspace lifecycle owner after its canonical node fields migrate; the deleted test-local state table was not implementation coverage.")
+      "family" "contracts_workspace_transition_unreached"
+      "model-production-gap: production has no lifecycle-transition owner; host executor plans write each transition inline and no scenario replays these transitions through them, and the illegal transitions have no production path.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "workspace_binding_cases"

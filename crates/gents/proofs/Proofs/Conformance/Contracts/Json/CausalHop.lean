@@ -140,14 +140,13 @@ def creationCases : List CreationCase :=
   , ⟨"recreated_session", true, true, false, true⟩
   , ⟨"wrong_cause", true, true, true, false⟩ ]
 
-def creationCaseJson (c : CreationCase) : String :=
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"signature_valid\":" ++ toString c.signatureValid
-    ++ ",\"scope_matches\":" ++ toString c.scopeMatches
-    ++ ",\"physical_matches\":" ++ toString c.physicalMatches
-    ++ ",\"cause_matches\":" ++ toString c.causeMatches
-    ++ ",\"expected\":" ++ toString (DurableLineage.verifiedCreation
-      c.signatureValid (c.scopeMatches && c.physicalMatches) true c.causeMatches) ++ "}"
+deriving instance Lean.ToJson for CreationCase
+
+@[conformance_family]
+def creation : Family CreationCase Bool where
+  inputs := creationCases
+  model := fun c => DurableLineage.verifiedCreation
+    c.signatureValid (c.scopeMatches && c.physicalMatches) true c.causeMatches
 
 def creationSignerCases : List (Bool × Bool × String) :=
   [(true, true, "creator"), (true, true, "worker"), (true, true, "other"),
@@ -265,9 +264,6 @@ def chainCasesJson : String :=
 
 def callCasesJson : String :=
   jsonArray (callCases.map callCaseJson)
-
-def creationCasesJson : String :=
-  jsonArray (creationCases.map creationCaseJson)
 
 def writeCasesJson : String :=
   jsonArray (writeCases.map writeCaseJson)

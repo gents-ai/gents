@@ -483,9 +483,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
-    ++ "\"title_request_admission_cases\":"
-      ++ titleRequestAdmissionCasesJson ++ ","
-    ++ "\"title_text_cases\":" ++ Conformance.TitleText.casesJson ++ ","
     ++ "\"title_usage_cases\":"
       ++ Conformance.TitleUsage.casesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
@@ -649,14 +646,6 @@ def snapshotRecoveryCasesJson : String :=
       ++ jsonArray
         (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
     ++ "\"count_carrier_cases\":" ++ Conformance.CountCarrier.casesJson ++ ","
-    ++ "\"mailbox_notification_cases\":"
-      ++ Conformance.MailboxNotificationContracts.casesJson ++ ","
-    ++ "\"mailbox_reply_cases\":"
-      ++ Conformance.MailboxReplyContracts.casesJson ++ ","
-    ++ "\"mailbox_handoff_cases\":"
-      ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
-    ++ "\"mailbox_sweep_cases\":"
-      ++ Conformance.MailboxSweepContracts.casesJson ++ ","
     ++ "\"schema_argument_repair_cases\":"
       ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
@@ -675,7 +664,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
     ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
     ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","
-    ++ "\"plugin_job_lineage_cases\":" ++ Conformance.PluginJob.lineageCasesJson ++ ","
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
     ++ "\"causal_hop_default_max_request_hop\":"
@@ -686,12 +674,8 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.CausalHopContracts.chainCasesJson ++ ","
     ++ "\"causal_hop_call_cases\":"
       ++ Conformance.CausalHopContracts.callCasesJson ++ ","
-    ++ "\"causal_hop_creation_cases\":"
-      ++ Conformance.CausalHopContracts.creationCasesJson ++ ","
     ++ "\"causal_hop_write_cases\":"
       ++ Conformance.CausalHopContracts.writeCasesJson ++ ","
-    ++ "\"operator_base_freeze_cases\":"
-      ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
     ++ "\"file_inventory_direct_reader_cases\":"
@@ -707,8 +691,6 @@ def snapshotPluginCasesJson : String :=
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"workspace_cases\":"
-      ++ workspaceCasesJson ++ ","
     ++ "\"workspace_binding_cases\":"
       ++ workspaceBindingCasesJson ++ ","
     ++ "\"callback_transition_case_count\":" ++ toString callbackTransitionCaseCount ++ ","
@@ -725,7 +707,6 @@ def snapshotFileCasesJson : String :=
       (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
     ++ "\"auxiliary_output_cases\":" ++ jsonArray
       (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
-    ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
 
 
 def snapshotJson : String :=

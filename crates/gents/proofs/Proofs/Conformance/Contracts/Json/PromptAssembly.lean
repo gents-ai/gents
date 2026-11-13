@@ -139,14 +139,12 @@ def retryEntryCapture : Family RetryEntryInput RetryEntryCaptureOutput where
       toolResults := (retryEntryMessages i).count 3
       publish := PromptAssembly.CurrentInput.publishesAuthoredInput i.resume }
 
-def currentInputCaseJson (witness : CurrentInputCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-  ",\"current_request\":" ++ jsonString witness.currentRequest ++
-  ",\"headers\":" ++ jsonArray (witness.headers.map fun row =>
-    "{\"request\":" ++ jsonString row.request ++ ",\"kind\":" ++ jsonString row.kind ++ "}") ++
-  ",\"retained_indices\":" ++ jsonArray (witness.retainedIndices.map toString) ++ "}"
+deriving instance Lean.ToJson for CurrentInputHeaderCase, CurrentInputCase
 
-def currentInputCasesJson : String := jsonArray (currentInputCases.map currentInputCaseJson)
+@[conformance_family]
+def currentInputSelection : Family CurrentInputCase (List Nat) where
+  inputs := currentInputCases
+  model := CurrentInputCase.retainedIndices
 
 deriving instance Lean.ToJson for WakeInputRow
 

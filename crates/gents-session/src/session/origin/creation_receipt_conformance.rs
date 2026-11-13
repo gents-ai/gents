@@ -76,17 +76,17 @@ async fn receipt_verification_matches_executable_creation_model() {
     assert_ne!(node.did(), agent.did());
     assert_ne!(node.did(), user.did());
     assert_ne!(agent.did(), user.did());
-    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_creation_cases {
+    for case in gents_lean_vocab::families::causal_hop_contracts_creation::cases() {
         let mut receipt = SessionCreationReceipt {
             node_did: node.did().into(),
-            session_id: if case.scope_matches {
+            session_id: if case.input.scope_matches {
                 "session"
             } else {
                 "different"
             }
             .into(),
             requester_did: Some(user.did().into()),
-            session_doc_id: if case.physical_matches {
+            session_doc_id: if case.input.physical_matches {
                 "physical"
             } else {
                 "recreated"
@@ -94,7 +94,7 @@ async fn receipt_verification_matches_executable_creation_model() {
             .into(),
             agent_did: agent.did().into(),
             opening_request_doc_id: "opening".into(),
-            cause: if case.cause_matches {
+            cause: if case.input.cause_matches {
                 SessionCreationCause::AgentNew
             } else {
                 SessionCreationCause::TaskTrigger
@@ -104,7 +104,7 @@ async fn receipt_verification_matches_executable_creation_model() {
             signature: Vec::new(),
         };
         receipt.signature = user.sign(&receipt.signing_payload()).await.unwrap();
-        if !case.signature_valid {
+        if !case.input.signature_valid {
             receipt.signature[0] ^= 1;
         }
         let session: AgentSession = serde_json::from_value(serde_json::json!({
@@ -113,14 +113,10 @@ async fn receipt_verification_matches_executable_creation_model() {
             "provenance": {"creation_receipt": receipt}
         }))
         .unwrap();
-        assert_eq!(
+        let verified =
             verified_creation_receipt(&session, "physical", SessionCreationCause::AgentNew)
-                .is_some(),
-            case.expected,
-            "{}",
-            case.name
-        );
-        if !case.signature_valid {
+                .is_some();
+        if !case.input.signature_valid {
             for signer in [&node, &agent] {
                 let mut forged = session.clone();
                 let receipt = forged
@@ -134,14 +130,14 @@ async fn receipt_verification_matches_executable_creation_model() {
                 assert_eq!(
                     verified_creation_receipt(&forged, "physical", SessionCreationCause::AgentNew)
                         .is_some(),
-                    case.expected,
+                    verified,
                     "{} signed by {}",
-                    case.name,
+                    case.input.name,
                     signer.did()
                 );
             }
         }
-        if !case.scope_matches {
+        if !case.input.scope_matches {
             for field in ["node", "requester", "agent"] {
                 let mut foreign = session.clone();
                 foreign.session_id = "different".into();
@@ -154,12 +150,13 @@ async fn receipt_verification_matches_executable_creation_model() {
                 assert_eq!(
                     verified_creation_receipt(&foreign, "physical", SessionCreationCause::AgentNew)
                         .is_some(),
-                    case.expected,
+                    verified,
                     "{} mismatched {field}",
-                    case.name
+                    case.input.name
                 );
             }
         }
+        case.check(verified);
     }
 }
 

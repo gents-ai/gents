@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 GROUPS = {
-    "current_input_cases": "LeanCurrentInputCase",
     "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_dispatch_observation_cases": "LeanDispatchObservationCase",
     "canonical_spawned_target_rejection_cases": "LeanSpawnedTargetRejectionCase",
@@ -19,7 +18,6 @@ GROUPS = {
     "reasoning_audit_cases": "LeanReasoningAuditCase",
     "reasoning_signature_cases": "LeanReasoningSignatureCase",
     "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
-    "title_request_admission_cases": "LeanTitleRequestAdmissionCase",
     "title_usage_cases": "LeanTitleUsageCase",
     "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
     "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",

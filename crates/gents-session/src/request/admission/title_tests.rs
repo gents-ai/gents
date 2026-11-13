@@ -7,14 +7,13 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::RequestInput;
 
 use super::{AgentRequestAdmissionError, AgentRequestAdmissionVerifier};
-use gents_lean_vocab::{
-    lean_title_request_admission_cases, LeanRequestPurpose, LeanTitleRequestAdmissionCase,
-};
+type LeanTitleRequestAdmissionCase =
+    gents_lean_vocab::families::contracts_title_admission_fresh_verifier::TitleAdmissionInput;
 use gents_p2p::p2p_reconcile::enrollment_authority_channel;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 
-fn native_purpose(purpose: LeanRequestPurpose) -> RequestPurpose {
-    purpose.into()
+fn native_purpose(purpose: &str) -> RequestPurpose {
+    RequestPurpose::try_from(purpose).expect("modeled purpose has a native representation")
 }
 
 fn model_text_fields(hex_fields: &[String]) -> Vec<String> {
@@ -151,7 +150,7 @@ fn modeled_agent_did(label: &str) -> String {
     modeled_agent(label).did().to_owned()
 }
 
-async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
+async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) -> String {
     let temp = tempfile::tempdir().expect("temporary identity directory");
     crate::request::lifecycle::test_support::pin_fixed_signing_identity(temp.path());
     let node_db = gents_inference::test_support::test_db_as(
@@ -265,7 +264,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         other => panic!("unsupported generated admission branch: {other:?}"),
     };
     let mut create = AgentRequestCreate::base(
-        native_purpose(case.request.purpose),
+        native_purpose(&case.request.purpose),
         &case.request.request_id,
         target,
         requester,
@@ -278,7 +277,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     );
     create.max_retries = 0;
     create.input = native_input(case);
-    create.request_hop = case.request.hop;
+    create.request_hop = u32::try_from(case.request.hop).unwrap();
     create.caused_by_parent_request_id = Some(parent_fields[1].clone());
     create.caused_by_parent_request_doc_id = Some(parent_doc_id);
     if parent_fields[4] == "some" {
@@ -333,61 +332,19 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         Err(AgentRequestAdmissionError::Denied(_)) => "deny",
         Err(AgentRequestAdmissionError::Unavailable(_)) => "retry",
     };
-    assert_eq!(
-        actual_disposition, case.expected_disposition,
-        "{}: native verifier result {result:?}",
-        case.name
-    );
-    if let Ok(admitted) = result {
+    if let Ok(admitted) = &result {
         assert_eq!(admitted.doc_id, doc_id);
         assert_eq!(admitted.request_id, case.request.request_id);
-        assert_eq!(admitted.purpose, native_purpose(case.request.purpose));
+        assert_eq!(admitted.purpose, native_purpose(&case.request.purpose));
     }
     node.shutdown().await.expect("shut down test node");
+    actual_disposition.to_owned()
 }
 
 #[tokio::test]
 async fn generated_title_admission_cases_bind_representable_fresh_verifier_subset() {
-    let mut covered = 0;
-    let mut unbound = 0;
-    for case in lean_title_request_admission_cases() {
-        match case.name.as_str() {
-            "ordinary-signed-control-preserved"
-            | "pending-title-observation-unavailable"
-            | "foreign-admission-branch-fields"
-            | "forged-physical-parent"
-            | "tool-linked-parent"
-            | "signed-purpose-mutation"
-            | "missing-parent-evidence"
-            | "access-review-observation-unavailable" => unbound += 1,
-            "valid-access-review-parent-processing"
-            | "access-review-purpose-signature-replay"
-            | "access-review-stale-parent-document"
-            | "access-review-parent-session-mismatch"
-            | "access-review-queue-control-forbidden"
-            | "access-review-local-self-forbidden"
-            | "valid-title-parent-completed"
-            | "valid-title-parent-processing"
-            | "present-preclaim-deadline"
-            | "forged-requester"
-            | "queue-control-input"
-            | "skill-control-input"
-            | "cwd-control-input"
-            | "goal-control-input"
-            | "caller-title-control-input"
-            | "retry-control-input"
-            | "trigger-control-input"
-            | "parent-session-mismatch"
-            | "stale-parent-document"
-            | "unsigned-title"
-            | "title-local-self-forbidden"
-            | "title-cross-source-forbidden" => {
-                verify_generated_case(case).await;
-                covered += 1;
-            }
-            other => panic!("unclassified generated title admission case: {other}"),
-        }
+    for case in gents_lean_vocab::families::contracts_title_admission_fresh_verifier::cases() {
+        let disposition = verify_generated_case(&case.input).await;
+        case.check(disposition);
     }
-    assert_eq!(covered, 22, "all representable generated cases must run");
-    assert_eq!(unbound, 8, "unbound cases must remain explicit");
 }

@@ -432,42 +432,4 @@ fn pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried() {
     assert!(case.convergence_retried);
 }
 
-/// The `OpeningRequest` rows decode strictly; L3 consumes them to drive
-/// `opening_request`.
-#[test]
-fn generated_plugin_job_lineage_cases_decode_strictly() {
-    let cases = lean_plugin_job_lineage_cases();
-    assert_eq!(
-        cases.len(),
-        7,
-        "Lean pins seven lineage rows in `lineage_regressions`"
-    );
-    let mut names = BTreeSet::new();
-    for case in cases {
-        assert!(names.insert(case.name.as_str()), "duplicate {}", case.name);
-        let docs: BTreeSet<&str> = case.rows.iter().map(|r| r.doc_id.as_str()).collect();
-        assert_eq!(
-            docs.len(),
-            case.rows.len(),
-            "{}: duplicate _docID",
-            case.name
-        );
-        assert!(!case.queries.is_empty(), "{}: no query", case.name);
-        for query in &case.queries {
-            if let Some(opening) = &query.expected_opening_doc_id {
-                assert!(
-                    docs.contains(opening.as_str()),
-                    "{}: opening request {opening} is not a row",
-                    case.name
-                );
-            }
-            assert!(
-                !query.listed_start || query.expected_opening_doc_id.is_some(),
-                "{}: a listed start has an opening request",
-                case.name
-            );
-        }
-    }
-}
-
 #[test]

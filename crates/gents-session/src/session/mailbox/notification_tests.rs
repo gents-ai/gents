@@ -12,23 +12,6 @@ pub(super) fn stored_value(item: &MailboxItem) -> Value {
 }
 
 #[test]
-fn notification_outcomes_follow_lean_cases() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_notification_cases;
-    assert_eq!(cases.len(), 8);
-    for case in cases {
-        let mode = if case.mode == "event" {
-            NotificationIdentity::Event
-        } else {
-            NotificationIdentity::Condition { key: "disk".into() }
-        };
-        assert_eq!(
-            serde_json::to_value(mode.write_outcome(case.open_exists, case.same_content)).unwrap(),
-            serde_json::Value::String(case.outcome.clone())
-        );
-    }
-}
-
-#[test]
 fn notification_identity_is_configuration_and_runtime_owned() {
     let condition = NotificationIdentity::Condition { key: "disk".into() };
     assert_ne!(
@@ -84,17 +67,19 @@ async fn generated_notification_cases_drive_durable_writes() {
     let node = tests::test_node().await;
     let access = tests::agent_access(&node);
     let context = tests::context("did:test:owner");
-    for (index, case) in gents_lean_vocab::lean_contract_snapshot()
-        .mailbox_notification_cases
-        .iter()
-        .enumerate()
+    for (index, case) in gents_lean_vocab::families::mailbox_notification_contracts_stamp::cases::<
+        String,
+        MailboxWriteOutcome,
+    >()
+    .into_iter()
+    .enumerate()
     {
-        let identity = if case.mode == "event" {
-            NotificationIdentity::Event
-        } else {
-            NotificationIdentity::Condition {
+        let identity = match case.input.mode.as_str() {
+            "event" => NotificationIdentity::Event,
+            "condition" => NotificationIdentity::Condition {
                 key: format!("condition-{index}"),
-            }
+            },
+            other => panic!("unmapped notification mode {other}"),
         };
         let source = identity
             .source_id(
@@ -105,7 +90,7 @@ async fn generated_notification_cases_drive_durable_writes() {
             )
             .unwrap();
         let mut args = tests::args(MailboxAction::Ack, &source);
-        let initial = if case.open_exists {
+        let initial = if case.input.open_exists {
             Some(
                 stamp_notification(
                     &node,
@@ -122,7 +107,7 @@ async fn generated_notification_cases_drive_durable_writes() {
         } else {
             None
         };
-        if !case.same_content {
+        if !case.input.same_content {
             args.title = "Updated reading: \"disk\"\n82%".into();
         }
         let receipt = stamp_notification(
@@ -135,10 +120,6 @@ async fn generated_notification_cases_drive_durable_writes() {
         )
         .await
         .unwrap();
-        assert_eq!(
-            serde_json::to_value(receipt.outcome).unwrap(),
-            serde_json::Value::String(case.outcome.clone())
-        );
         let persisted = tests::load_as_creator(&node, &receipt.item.doc_id)
             .await
             .unwrap()
@@ -175,7 +156,6 @@ async fn generated_notification_cases_drive_durable_writes() {
         )
         .await
         .unwrap();
-        assert_eq!(next.outcome, MailboxWriteOutcome::Created);
         assert_ne!(next.item.doc_id, terminal.doc_id);
         assert_eq!(
             serde_json::to_value(
@@ -185,6 +165,12 @@ async fn generated_notification_cases_drive_durable_writes() {
             )
             .unwrap(),
             serde_json::to_value(Some(terminal)).unwrap()
+        );
+        case.check(
+            gents_lean_vocab::families::mailbox_notification_contracts_stamp::StampOutput {
+                outcome: receipt.outcome,
+                after_dismiss: next.outcome,
+            },
         );
     }
     node.shutdown().await.expect("shut down test node");
