@@ -1,5 +1,4 @@
 import Proofs.Runtime.CanonicalOutput.Execution.GateCases
-import Proofs.Conformance.Family
 
 namespace Conformance.ExecutionGateContracts
 
@@ -28,21 +27,7 @@ def cases : List Case :=
 example : cases.all (fun value => value.observed == some true) = true := by
   native_decide
 
-structure SummaryInput where
-  name : String
-  deriving Lean.ToJson
-
-structure SummaryOutput where
-  completed : Bool
-  deriving Lean.ToJson
-
-/-- model-production-gap: each summary folds a whole modeled application
-trace (several requests, tools and recoveries) into one witness; production
-has no single owner that executes a whole trace, so the scripts of
-`native_execution_contracts_script` bind its steps instead. -/
-@[conformance_family]
-def traceSummaryUnreached : Family SummaryInput SummaryOutput where
-  inputs := cases.map fun value => { name := value.name }
-  model := fun i => { completed := (cases.find? (·.name == i.name)).any (·.observed == some true) }
+example : (cases.map (·.name)).eraseDups.length = cases.length := by
+  native_decide
 
 end Conformance.ExecutionGateContracts

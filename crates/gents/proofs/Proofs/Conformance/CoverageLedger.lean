@@ -2926,9 +2926,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "native_execution_contracts_title_crash_recovery")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
-  , tagged (followUpCoverage "family" "execution_gate_contracts_trace_summary_unreached"
-      "model-production-gap: each summary folds a whole modeled application trace into one witness; production has no single owner that executes a whole trace, so native_execution_contracts_script binds its steps.")
-      "canonical-output" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "native_execution_contracts_script_unreached"
       "model-production-gap: these scripts need a product transaction production lacks: the resume-to-active recovery primitive, a split tool close and delivery, a bridge background receipt with a late result, a candidate spawned-child document, or unmaterialized tool and header inputs on a title request; each names its premise in native_gap.")
       "canonical-output" [Surface.runtimeInternal]
