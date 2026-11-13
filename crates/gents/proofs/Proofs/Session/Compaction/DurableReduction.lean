@@ -321,4 +321,57 @@ def sendPermitted (scenario : Scenario) : Bool :=
 
 end Scenario
 
+/-- A canonical transcript message as the source boundary reads it: its
+principal scope and its signed `sequence`. -/
+structure TranscriptMessage where
+  node : NodeDid
+  session : SessionId
+  requester : Option Nat
+  sequence : Int
+  deriving DecidableEq, Repr
+
+def TranscriptMessage.inScope (m : TranscriptMessage) (node : NodeDid) (session : SessionId)
+    (requester : Option Nat) : Bool :=
+  m.node == node && m.session == session && m.requester == requester
+
+/-- The bounded canonical high-water a source boundary pins: the greatest
+`sequence` among the owner's messages in the session; messages of another
+principal never raise it, and an empty owner transcript pins none. -/
+def canonicalHighWater (node : NodeDid) (session : SessionId) (requester : Option Nat) :
+    List TranscriptMessage → Option Int
+  | [] => none
+  | m :: rest =>
+      let below := canonicalHighWater node session requester rest
+      if m.inScope node session requester then
+        some (match below with
+          | none => m.sequence
+          | some high => max m.sequence high)
+      else below
+
+theorem canonicalHighWater_bounds (node : NodeDid) (session : SessionId)
+    (requester : Option Nat) (messages : List TranscriptMessage) (m : TranscriptMessage)
+    (hm : m ∈ messages) (hs : m.inScope node session requester = true) :
+    ∃ high, canonicalHighWater node session requester messages = some high ∧
+      m.sequence ≤ high := by
+  induction messages with
+  | nil => cases hm
+  | cons x rest ih =>
+    simp only [canonicalHighWater]
+    rcases List.mem_cons.mp hm with h | h
+    · subst h
+      rw [if_pos hs]
+      cases canonicalHighWater node session requester rest with
+      | none => refine ⟨_, rfl, ?_⟩; (try dsimp only); omega
+      | some high => refine ⟨_, rfl, ?_⟩; (try dsimp only); omega
+    · obtain ⟨high, hhigh, hle⟩ := ih h
+      rw [hhigh]
+      split
+      · refine ⟨_, rfl, ?_⟩; (try dsimp only); omega
+      · exact ⟨high, rfl, hle⟩
+
+theorem source_boundary_pins_bounded_canonical_high_water :
+    canonicalHighWater 1 1 none
+      [⟨1, 1, none, 2⟩, ⟨1, 1, none, 1⟩, ⟨2, 1, none, 3⟩] = some 2 := by
+  decide
+
 end Compaction.DurableReduction

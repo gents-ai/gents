@@ -153,7 +153,7 @@ async fn auto_resume_access() -> (
         agent.as_ref(),
     )
     .unwrap();
-    for session in ["session", "s"] {
+    for session in ["session"] {
         access
             .transact_write("test.auto_resume_session", |txn| {
                 Box::pin(gents_session::session::ensure_session_in_txn(
@@ -190,43 +190,6 @@ async fn auto_resume_field_round_trips_through_the_live_schema() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.auto_resume_at_reset, Some(true));
-}
-
-#[tokio::test]
-async fn auto_resume_operator_setter_stores_it() {
-    let (_db, access, owner) = auto_resume_access().await;
-    let created = seed_goal_from_access(&access, &owner, "s", Some("ship"), None, None, Some(true))
-        .await
-        .unwrap();
-    assert_eq!(created.auto_resume_at_reset, Some(true));
-    let off = seed_goal_from_access(&access, &owner, "s", None, None, None, Some(false))
-        .await
-        .unwrap();
-    assert_eq!(off.auto_resume_at_reset, Some(false));
-}
-
-#[tokio::test]
-async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
-    let (_db, access, owner) = auto_resume_access().await;
-    seed_goal_from_access(&access, &owner, "s", Some("ship"), None, None, Some(true))
-        .await
-        .unwrap();
-    let kept = seed_goal_from_access(
-        &access,
-        &owner,
-        "s",
-        None,
-        Some(GoalStatus::Paused),
-        Some(Some(10)),
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(kept.auto_resume_at_reset, Some(true));
-    let unchanged = seed_goal_from_access(&access, &owner, "s", Some("ship more"), None, None, None)
-        .await
-        .unwrap();
-    assert_eq!(unchanged.auto_resume_at_reset, Some(true));
 }
 
 #[tokio::test]

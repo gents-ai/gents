@@ -3,8 +3,6 @@
 pub mod fs;
 pub(crate) use gents_pack::pack::authoring::export::document_handle;
 pub mod graphql;
-#[path = "../../../gents/tests/support/inference_target.rs"]
-pub mod inference_target;
 pub mod mocks;
 pub mod pack_preview;
 pub mod ports;
@@ -37,9 +35,8 @@ pub use process::{
 };
 pub use waits::{
     canonical_tool_result_text, wait_for_completed_inference_agents, wait_for_completed_tool_calls,
-    wait_for_connected_peer, wait_for_request, wait_for_request_lifecycle_state,
-    wait_for_runtime_quiescence, wait_for_runtime_ready, wait_for_runtime_state_graphql,
-    wait_for_tool_call,
+    wait_for_request, wait_for_request_lifecycle_state, wait_for_runtime_quiescence,
+    wait_for_runtime_ready, wait_for_runtime_state_graphql, wait_for_tool_call,
 };
 
 pub fn fixture_pack_dir(name: &str) -> std::path::PathBuf {

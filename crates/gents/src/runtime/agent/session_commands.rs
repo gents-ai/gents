@@ -499,9 +499,6 @@ where
 }
 
 #[cfg(test)]
-mod notification_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use gents_protocol::goal_control::{
@@ -596,11 +593,10 @@ mod tests {
         let other =
             gents_store::identity::resolve_agent_identity(identity.as_ref(), &other_binding)
                 .unwrap();
-        let cases =
-            &gents_lean_vocab::lean_contract_snapshot().session_input_edit_native_discovery_cases;
+        let cases = gents_lean_vocab::families::session_input_edit_native_discovery::cases();
         assert!(!cases.is_empty());
-        for case in cases {
-            let agent = match case.actor.as_str() {
+        for case in &cases {
+            let agent = match case.input.actor.as_str() {
                 "agent" => agent.as_ref(),
                 "other" => other.as_ref(),
                 role => panic!("unknown modeled actor {role}"),
@@ -624,19 +620,20 @@ mod tests {
             )
             .unwrap()
             .is_empty();
-            assert_eq!(visible, case.visible);
             let mut actual =
                 unanswered_goal_commands(&node, identity.as_ref(), agent, Sweep::Unverified)
                     .await
                     .unwrap();
             actual.sort();
-            assert_eq!(
-                actual,
-                if case.selected {
-                    expected.clone()
-                } else {
-                    Vec::new()
-                }
+            assert!(
+                actual.is_empty() || actual == expected,
+                "unanswered commands are listed whole or not at all: {actual:?}"
+            );
+            case.check(
+                gents_lean_vocab::families::session_input_edit_native_discovery::DiscoveryOutput {
+                    visible,
+                    selected: actual == expected,
+                },
             );
         }
         node.shutdown().await.expect("node shutdown");

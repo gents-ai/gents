@@ -288,4 +288,161 @@ theorem disabled_consumer_checkpoints_only_receipts (consumer : Consumer)
   exact acknowledge_preserves_delivered_prefix initialSeed cursor committed journal
     through consumer.mode busy _ commit hmode hprior
 
+/-- One arrival on one callback binding across engine crashes. `admit`: an
+engine admits the arrival with a binding it read earlier, then stops before its
+checkpoint; admission rereads the binding and refuses once it is disabled.
+`edit`: the source document gains a version. `disable`: the binding is
+disabled. `restart`: a new engine delivers the pending arrivals of its enabled
+bindings, admitting each and checkpointing the admitted prefix; a disabled
+binding is not delivered and its cursor stays. -/
+inductive CallbackStep where
+  | admit | edit | disable | restart
+  deriving DecidableEq, Repr
+
+structure CallbackWorld where
+  enabled : Bool := true
+  version : Nat := 0
+  committed : State := {}
+  cursor : Cursor := { seeded := true, after := 0 }
+  deriving DecidableEq, Repr
+
+def callbackArrival : Arrival := ⟨1, ⟨"owner", "binding", "BacklogWork", "pending"⟩⟩
+
+def callbackJournal : Journal := ⟨1, [callbackArrival]⟩
+
+def CallbackWorld.admission (w : CallbackWorld) (entry : Arrival) : CallbackAdmission :=
+  ⟨entry.identity, toString w.version⟩
+
+def CallbackWorld.consumer (w : CallbackWorld) : Consumer := .callbackBinding w.enabled true
+
+def callbackAdmit (w : CallbackWorld) : CallbackWorld × Bool :=
+  if w.enabled then
+    ({ w with committed := admitCallback w.committed (w.admission callbackArrival) }, true)
+  else (w, false)
+
+def callbackRestart (w : CallbackWorld) : CallbackWorld :=
+  if !w.enabled then w
+  else
+    let committed := (pending w.cursor callbackJournal.entries w.enabled).foldl
+      (fun state entry => admitCallback state (w.admission entry)) w.committed
+    let cursor := acknowledge w.cursor committed callbackJournal callbackJournal.head
+      w.consumer.mode false (w.consumer.eligible fun _ => true) true
+    { w with committed, cursor }
+
+def callbackStep (w : CallbackWorld) : CallbackStep → CallbackWorld × Option Bool
+  | .admit => let (next, published) := callbackAdmit w; (next, some published)
+  | .edit => ({ w with version := w.version + 1 }, none)
+  | .disable => ({ w with enabled := false }, none)
+  | .restart => (callbackRestart w, none)
+
+/-- `admitted` is the admission result of an `admit` step. `invocations` counts
+the binding's admitted invocations; `checkpointed` says the cursor passed the
+arrival. -/
+structure CallbackObservation where
+  admitted : Option Bool
+  invocations : Nat
+  checkpointed : Bool
+  deriving DecidableEq, Repr
+
+def callbackRun : CallbackWorld → List CallbackStep → List CallbackObservation
+  | _, [] => []
+  | w, step :: rest =>
+    let (next, published) := callbackStep w step
+    { admitted := published, invocations := next.committed.receipts.length,
+      checkpointed := decide (callbackArrival.position ≤ next.cursor.after) } ::
+      callbackRun next rest
+
+theorem edited_document_admitted_before_a_crash_is_not_readmitted :
+    callbackRun {} [.admit, .edit, .restart] =
+      [⟨some true, 1, false⟩, ⟨none, 1, false⟩, ⟨none, 1, true⟩] := by
+  decide
+
+theorem admission_refuses_a_binding_disabled_after_its_snapshot (w : CallbackWorld)
+    (h : w.enabled = false) : callbackAdmit w = (w, false) := by
+  simp [callbackAdmit, h]
+
+/-- One arrival on one queued-serial event trigger whose source has no filter,
+under persisted enable and disable. `admit` writes the trigger's delivery: an
+existing receipt is returned as a duplicate even after a disable; otherwise the
+persisted disable refuses it. `checkpoint` asks to move the cursor past the
+arrival, as exclusion and acknowledgement both do; with no filter the arrival
+is eligible, so only its committed receipt certifies it. -/
+inductive TriggerStep where
+  | disable | enable | admit | checkpoint
+  deriving DecidableEq, Repr
+
+inductive TriggerAdmission where
+  | refused | admitted | duplicate
+  deriving DecidableEq, Repr
+
+structure TriggerWorld where
+  enabled : Bool := true
+  committed : State := {}
+  cursor : Cursor := { seeded := true, after := 0 }
+  deriving DecidableEq, Repr
+
+def triggerArrival : Arrival := ⟨1, ⟨"owner", "trigger", "WorkA", "held"⟩⟩
+
+def triggerJournal : Journal := ⟨1, [triggerArrival]⟩
+
+def triggerFire : Fire :=
+  { identity := triggerArrival.identity, session := "trigger-session", serial := true,
+    emitOutcome := false, goalBacked := false }
+
+def triggerAdmit (w : TriggerWorld) : TriggerWorld × TriggerAdmission :=
+  if admitted w.committed triggerFire.identity then (w, .duplicate)
+  else if !w.enabled then (w, .refused)
+  else ({ w with committed := admit w.committed triggerFire }, .admitted)
+
+def triggerCheckpoint (w : TriggerWorld) : TriggerWorld × Bool :=
+  let consumer := Consumer.trigger .queuedSerial w.enabled
+  let accepted := checkpointAccepted w.cursor w.committed triggerJournal triggerArrival.position
+    consumer.mode false (consumer.eligible fun _ => true) true
+  let cursor := acknowledge w.cursor w.committed triggerJournal triggerArrival.position
+    consumer.mode false (consumer.eligible fun _ => true) true
+  ({ w with cursor }, accepted)
+
+/-- `admission` and `checkpointed` are the results of `admit` and `checkpoint`
+steps. `fires` and `requests` count the committed receipts and their requests;
+`cursor` is the consumer's checkpoint. -/
+structure TriggerObservation where
+  admission : Option TriggerAdmission
+  checkpointed : Option Bool
+  fires : Nat
+  requests : Nat
+  cursor : Nat
+  deriving DecidableEq, Repr
+
+def triggerStep (w : TriggerWorld) :
+    TriggerStep → TriggerWorld × Option TriggerAdmission × Option Bool
+  | .disable => ({ w with enabled := false }, none, none)
+  | .enable => ({ w with enabled := true }, none, none)
+  | .admit => let (next, result) := triggerAdmit w; (next, some result, none)
+  | .checkpoint => let (next, accepted) := triggerCheckpoint w; (next, none, some accepted)
+
+def triggerRun : TriggerWorld → List TriggerStep → List TriggerObservation
+  | _, [] => []
+  | w, step :: rest =>
+    let (next, admission, checkpointed) := triggerStep w step
+    { admission, checkpointed, fires := next.committed.receipts.length,
+      requests := next.committed.requests.length, cursor := next.cursor.after } ::
+      triggerRun next rest
+
+theorem persisted_disable_blocks_stale_admission_and_exclusion_but_not_committed_ack :
+    triggerRun {} [.disable, .admit, .checkpoint, .enable, .admit, .disable, .admit, .checkpoint] =
+      [ ⟨none, none, 0, 0, 0⟩, ⟨some .refused, none, 0, 0, 0⟩, ⟨none, some false, 0, 0, 0⟩
+      , ⟨none, none, 0, 0, 0⟩, ⟨some .admitted, none, 1, 1, 0⟩, ⟨none, none, 1, 1, 0⟩
+      , ⟨some .duplicate, none, 1, 1, 0⟩, ⟨none, some true, 1, 1, 1⟩ ] := by
+  decide
+
+theorem disabled_trigger_refuses_a_new_admission (w : TriggerWorld) (h : w.enabled = false)
+    (fresh : admitted w.committed triggerFire.identity = false) :
+    triggerAdmit w = (w, .refused) := by
+  simp [triggerAdmit, h, fresh]
+
+theorem committed_receipt_is_a_duplicate (w : TriggerWorld)
+    (h : admitted w.committed triggerFire.identity = true) :
+    triggerAdmit w = (w, .duplicate) := by
+  simp [triggerAdmit, h]
+
 end EventDelivery.Durable

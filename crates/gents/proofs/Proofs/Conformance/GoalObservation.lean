@@ -85,4 +85,43 @@ example : (cases.filter recoverable).length = 2 := by native_decide
 
 example : cases.length = 504 := by native_decide
 
+structure RetainedRootInput where
+  retainedKeepsRoot : Bool
+  substituteRoot : Bool
+  deriving Lean.ToJson
+
+structure RetainedRootOutput where
+  retainedLoad : Option String
+  refreshWrites : Bool
+  refreshedRoot : Option String
+  revisionKept : Bool
+  rewroteOnRepeat : Bool
+  finalLoaded : Bool
+  deriving Lean.ToJson
+
+def rootView : Option String → String
+  | none => "absent"
+  | some root => if root == "goal-root" then "goal_root" else "other"
+
+/-- A retained observation signed by the selected Agent, optionally without its
+assignment root, is projected again for a Goal whose revision is unchanged;
+optionally a root is then substituted without signing. -/
+@[conformance_family]
+def retainedRoot : Conformance.Family RetainedRootInput RetainedRootOutput where
+  inputs := [true, false].flatMap fun retainedKeepsRoot =>
+    [false, true].map fun substituteRoot => { retainedKeepsRoot, substituteRoot }
+  model := fun i =>
+    let current : SignedGoal := ⟨"goal-revision", some "goal-root"⟩
+    let retained : SignedGoal :=
+      { current with root := if i.retainedKeepsRoot then current.root else none }
+    let (refreshed, writes) := reproject (some retained) current
+    let substituted := if i.substituteRoot then { refreshed with root := some "another-root" }
+      else refreshed
+    { retainedLoad := (loadRetained retained retained).map (rootView ·.root)
+      refreshWrites := writes
+      refreshedRoot := (loadRetained refreshed refreshed).map (rootView ·.root)
+      revisionKept := refreshed.revision == retained.revision
+      rewroteOnRepeat := (reproject (some refreshed) current).2
+      finalLoaded := (loadRetained refreshed substituted).isSome }
+
 end Conformance.GoalObservationContracts

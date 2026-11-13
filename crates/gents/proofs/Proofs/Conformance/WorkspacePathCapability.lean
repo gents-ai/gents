@@ -1,5 +1,6 @@
 import Proofs.Session.Workspace.PathCapability
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.WorkspacePathCapabilityContracts
 open Workspace.PathCapability Conformance.Contracts
@@ -11,7 +12,7 @@ private def workspace : IsolatedWorkspace :=
    ownerNodeDid := "host-1", sealHash := none, state := .ready, pathCapability := cap}
 private def ready : Snapshot := ⟨workspace,none,none,0⟩
 private def bind : Binding := binding workspace "tree-1"
-private def evidence : Evidence := ⟨bind,[⟨"src/main.rs",.regular,true⟩],true,true,false,true,true⟩
+private def evidence : Evidence := ⟨bind,[⟨"src/main.rs",.regular,true⟩],true,true,false,true,true,[]⟩
 private def sealed : Snapshot :=
   {ready with workspace := {workspace with state := .sealed, sealHash := some "tree-1"}, writer := some bind}
 private def integrated : Snapshot := {sealed with integrator := some bind, trunkEffects := 1}
@@ -160,18 +161,36 @@ theorem alias_cases_replay : ∀ c ∈ aliasCases,
     (changedAliasesCanonical c.changedPrefixes c.basePrefixes &&
      changedAliasesCanonical c.changedPrefixes c.treePrefixes) = c.expected := by decide
 
-private def pathsJson (paths : List String) := jsonArray (paths.map jsonString)
-private def prefixesJson (prefixes : List (String × String)) :=
-  jsonArray (prefixes.map fun p => jsonArray [jsonString p.1, jsonString p.2])
-private def aliasCaseJson (c : AliasCase) :=
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"changed_paths\":" ++ pathsJson c.changedPaths ++
-  ",\"base_paths\":" ++ pathsJson c.basePaths ++
-  ",\"tree_paths\":" ++ pathsJson c.treePaths ++
-  ",\"changed_prefixes\":" ++ prefixesJson c.changedPrefixes ++
-  ",\"base_prefixes\":" ++ prefixesJson c.basePrefixes ++
-  ",\"tree_prefixes\":" ++ prefixesJson c.treePrefixes ++
-  ",\"expected\":" ++ boolString c.expected ++ "}"
-def aliasCasesJson := jsonArray (aliasCases.map aliasCaseJson)
-
 end Conformance.WorkspacePathCapabilityContracts
+
+namespace Conformance.WorkspacePathAlias
+
+open Lean Workspace.PathCapability
+
+structure AliasInput where
+  name : String
+  changedPaths : List String
+  basePaths : List String
+  treePaths : List String
+  changedPrefixes : List (List String)
+  basePrefixes : List (List String)
+  treePrefixes : List (List String)
+  deriving ToJson
+
+private def toPair (p : String × String) : List String := [p.1, p.2]
+private def pairs (prefixes : List (List String)) : List (String × String) :=
+  prefixes.map fun p => (p.headD "", p.getD 1 "")
+
+def admitted (i : AliasInput) : Bool :=
+  changedAliasesCanonical (pairs i.changedPrefixes) (pairs i.basePrefixes) &&
+    changedAliasesCanonical (pairs i.changedPrefixes) (pairs i.treePrefixes)
+
+@[conformance_family]
+def admission : Family AliasInput Bool where
+  inputs := Conformance.WorkspacePathCapabilityContracts.aliasCases.map fun c =>
+    { name := c.name, changedPaths := c.changedPaths, basePaths := c.basePaths,
+      treePaths := c.treePaths, changedPrefixes := c.changedPrefixes.map toPair,
+      basePrefixes := c.basePrefixes.map toPair, treePrefixes := c.treePrefixes.map toPair }
+  model := admitted
+
+end Conformance.WorkspacePathAlias

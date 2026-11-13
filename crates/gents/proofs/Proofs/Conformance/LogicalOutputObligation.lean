@@ -1,9 +1,17 @@
 import Proofs.Runtime.CompletionRetry.LogicalOutputObligation
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
+
+namespace CompletionRetry.OutputObligation
+deriving instance Lean.ToJson for Decision
+end CompletionRetry.OutputObligation
+
+namespace CompletionRetry.OutputObligation.Logical
+deriving instance Lean.ToJson for Write
+end CompletionRetry.OutputObligation.Logical
 
 namespace Conformance.LogicalOutputObligationContracts
-open CompletionRetry.OutputObligation CompletionRetry.OutputObligation.Logical
-open GoalAutomation.RequestAncestry Conformance.Contracts
+open Lean CompletionRetry.OutputObligation CompletionRetry.OutputObligation.Logical
+open GoalAutomation.RequestAncestry
 
 structure Case where
   name : String
@@ -17,12 +25,28 @@ structure Case where
   expectedDecision : Decision
   deriving Repr
 
+structure GateInput where
+  name : String
+  automatedRoot : Bool
+  requestScope : Bool
+  authenticatedChild : Bool
+  minimum : Nat
+  expectedCount : Option Nat
+  countValid : Bool
+  writes : List Write
+  deriving ToJson
+
 private def rows : List Attempt :=
   [⟨10,true,some .failed⟩,⟨20,false,none⟩,⟨30,false,some .completed⟩]
-private def evaluate (c : Case) :=
+private def evaluateInput (c : GateInput) :=
   decision rows [⟨10,20,c.authenticatedChild⟩] 10 20 1
     (if c.requestScope then .request else .trigger) ⟨false,c.automatedRoot⟩
     ⟨c.minimum,0,c.expectedCount,c.countValid⟩ c.writes
+private def Case.input (c : Case) : GateInput :=
+  { name := c.name, automatedRoot := c.automatedRoot, requestScope := c.requestScope
+    authenticatedChild := c.authenticatedChild, minimum := c.minimum
+    expectedCount := c.expectedCount, countValid := c.countValid, writes := c.writes }
+private def evaluate (c : Case) := evaluateInput c.input
 private def parentWrite : Write := ⟨100,10,1,true⟩
 private def childWrite : Write := ⟨200,20,1,true⟩
 def cases : List Case :=
@@ -40,20 +64,9 @@ def cases : List Case :=
 
 theorem cases_replay : ∀ c ∈ cases, evaluate c = c.expectedDecision := by decide
 
-private def boolJson (v : Bool) := if v then "true" else "false"
-private def decisionString : Decision → String
-  | .continue => "continue" | .complete => "complete" | .reject => "reject"
-private def writeJson (w : Write) :=
-  "{\"call_doc\":" ++ toString w.callDoc ++ ",\"request_doc\":" ++ toString w.requestDoc ++
-  ",\"tool\":" ++ toString w.tool ++ ",\"completed\":" ++ boolJson w.completed ++ "}"
-private def caseJson (c : Case) :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"automated_root\":" ++ boolJson c.automatedRoot ++
-  ",\"request_scope\":" ++ boolJson c.requestScope ++
-  ",\"authenticated_child\":" ++ boolJson c.authenticatedChild ++
-  ",\"minimum\":" ++ toString c.minimum ++
-  ",\"expected_count\":" ++ (c.expectedCount.map toString).getD "null" ++
-  ",\"count_valid\":" ++ boolJson c.countValid ++
-  ",\"writes\":" ++ jsonArray (c.writes.map writeJson) ++
-  ",\"expected_decision\":" ++ jsonString (decisionString c.expectedDecision) ++ "}"
-def casesJson := jsonArray (cases.map caseJson)
+@[conformance_family]
+def gate : Family GateInput Decision where
+  inputs := cases.map Case.input
+  model := evaluateInput
+
 end Conformance.LogicalOutputObligationContracts

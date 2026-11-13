@@ -255,6 +255,24 @@ impl MockStreamingBackend {
         self.state.request_count(marker)
     }
 
+    pub async fn wait_for_request(&self, marker: &str, timeout: Duration) {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let changed = self.state.notify.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if self.observed_requests(marker) > 0 {
+                    return;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!("request for {marker} did not reach the provider before its deadline")
+        });
+    }
+
     pub fn enable_dynamic_followups(&self, marker: &str) {
         let mut inner = self
             .state

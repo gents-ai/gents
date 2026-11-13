@@ -311,4 +311,87 @@ theorem different_owner_is_not_suppressed_by_other_owner_marker
     simp [MarkerState.has, hNot]
   exact eligible_unmarked_materializes state candidate hEligible hAbsent
 
+/-- A materialized request as the group-marker read sees it. A goal-backed Task
+request carries no fire key column: its deterministic id embeds the owner, the
+Task and the fire key, so it still names the delivery after a Task rename or a
+switch into goal mode, but only for the owner its id embeds. -/
+structure MarkerRequest where
+  owner : String
+  trigger : String
+  key : String
+  goalTask : Option String := none
+  deriving DecidableEq, Repr
+
+/-- The group-delivery key a request marks for a query by `owner`. The fire key
+embeds the group's membership generation, so another generation is another key. -/
+def MarkerRequest.markedKey (request : MarkerRequest) (owner : String) : Option String :=
+  match request.goalTask with
+  | none => some request.key
+  | some _ => if request.owner == owner then some request.key else none
+
+def hasMaterializedGroupRequest (requests : List MarkerRequest)
+    (owner trigger key : String) : Bool :=
+  requests.any fun request =>
+    request.owner == owner && request.trigger == trigger &&
+      request.markedKey owner == some key
+
+theorem durable_group_marker_preserves_generation_owner_and_goal_mode
+    (owner trigger key task : String) (requests : List MarkerRequest) :
+    hasMaterializedGroupRequest
+      ({ owner, trigger, key, goalTask := some task } :: requests) owner trigger key = true ∧
+    hasMaterializedGroupRequest [{ owner, trigger, key }] owner trigger key = true := by
+  simp [hasMaterializedGroupRequest, MarkerRequest.markedKey]
+
+theorem another_generation_is_unmarked (owner trigger key other : String)
+    (h : other ≠ key) :
+    hasMaterializedGroupRequest [{ owner, trigger, key }] owner trigger other = false := by
+  simp [hasMaterializedGroupRequest, MarkerRequest.markedKey, Ne.symm h]
+
+/-- A request the trigger-wide gate sees. Its source kind is recorded but not
+part of the gate: a trigger whose source changes kind still gates on its
+earlier requests. -/
+structure GateRequest where
+  id : String
+  owner : String
+  trigger : String
+  active : Bool
+  deriving DecidableEq, Repr
+
+def GateRequest.competes (request : GateRequest) (owner trigger : String)
+    (excluded : Option String) : Bool :=
+  request.owner == owner && request.trigger == trigger && request.active &&
+    excluded != some request.id
+
+def triggerWideGated (requests : List GateRequest) (owner trigger : String)
+    (excluded : Option String) : Bool :=
+  requests.any fun request => request.competes owner trigger excluded
+
+def supersedeTriggerWide (requests : List GateRequest) (owner trigger : String)
+    (excluded : Option String) : List GateRequest × Nat :=
+  (requests.map fun request =>
+      if request.competes owner trigger excluded then { request with active := false }
+      else request,
+    (requests.filter fun request => request.competes owner trigger excluded).length)
+
+theorem supersede_clears_the_gate (requests : List GateRequest) (owner trigger : String)
+    (excluded : Option String) :
+    triggerWideGated (supersedeTriggerWide requests owner trigger excluded).1
+      owner trigger excluded = false := by
+  unfold triggerWideGated supersedeTriggerWide
+  rw [List.any_map, List.any_eq_false]
+  intro request _
+  by_cases h : request.competes owner trigger excluded
+  · simp only [Function.comp, if_pos h]
+    simp [GateRequest.competes]
+  · simp only [Function.comp, if_neg h]
+    simpa using h
+
+theorem trigger_wide_gate_and_supersede_survive_kind_change_and_preserve_exclusion
+    (requests : List GateRequest) (owner trigger : String) (excluded : String)
+    (own : GateRequest) (hown : own ∈ requests) (hid : own.id = excluded) :
+    own ∈ (supersedeTriggerWide requests owner trigger (some excluded)).1 := by
+  simp only [supersedeTriggerWide, List.mem_map]
+  refine ⟨own, hown, ?_⟩
+  simp [GateRequest.competes, hid]
+
 end Triggers.Groups
