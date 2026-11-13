@@ -132,7 +132,6 @@ export const APP_NAV_ROWS: readonly NavRow[] = [
     active: (route) => route.name === "packs",
     placement: "primary",
     own: true,
-    flag: "packs",
   },
   {
     id: "automations",
