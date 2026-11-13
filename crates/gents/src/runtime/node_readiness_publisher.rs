@@ -845,18 +845,17 @@ async fn persist_candidate(
 }
 
 fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
-    if gents_store::graphql::is_storage_full(error.as_ref()) {
-        return true;
-    }
-    #[cfg(test)]
-    {
-        error.downcast_ref::<FatalNodeReadinessWrite>().is_some()
-    }
-    #[cfg(not(test))]
-    {
-        let _ = error;
-        false
-    }
+    gents_store::graphql::is_storage_full(error.as_ref()) || injected_fatal_write(error)
+}
+
+#[cfg(test)]
+fn injected_fatal_write(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<FatalNodeReadinessWrite>().is_some()
+}
+
+#[cfg(not(test))]
+fn injected_fatal_write(_error: &anyhow::Error) -> bool {
+    false
 }
 
 pub(crate) async fn claim_node_readiness_for_new_process(

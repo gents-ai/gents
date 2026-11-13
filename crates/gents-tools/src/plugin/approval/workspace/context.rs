@@ -91,7 +91,8 @@ pub(super) async fn resolve_review(
         return Ok(decision.route);
     }
     let _gate = context.review_gate.lock().await;
-    let settings = super::validate_binding(home, &decision.binding)?;
+    let settings = super::validate_binding(home, &decision.binding)
+        .map_err(super::BindingError::into_anyhow)?;
     if context
         .review_history
         .lock()
@@ -124,7 +125,7 @@ pub(super) async fn resolve_review(
         }
         _ => Review::Unavailable,
     };
-    super::validate_binding(home, &decision.binding)?;
+    super::validate_binding(home, &decision.binding).map_err(super::BindingError::into_anyhow)?;
     Ok(review_route(&decision.input, verdict, &decision.binding))
 }
 
@@ -184,13 +185,16 @@ pub(super) fn within_workspace(path: &Path) -> bool {
 }
 
 pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
+    request_settings(home).map_err(super::BindingError::into_anyhow)
+}
+
+fn request_settings(home: &Path) -> Result<Option<super::Settings>, super::BindingError> {
     let Some(context) = CURRENT.try_with(Clone::clone).ok().flatten() else {
         return Ok(None);
     };
-    anyhow::ensure!(
-        home.canonicalize().context("resolving the approval home")? == context.home,
-        "the plugin and request have different approval homes"
-    );
+    if home.canonicalize().context("resolving the approval home")? != context.home {
+        return Err(anyhow::anyhow!("the plugin and request have different approval homes").into());
+    }
     let settings = super::resolve(
         &context.home,
         &context.workspace,
@@ -205,14 +209,14 @@ pub(super) fn settings(home: &Path) -> Result<Option<super::Settings>> {
 pub(super) fn governing_settings(
     home: &Path,
     key: &WorkspaceKey,
-) -> Result<Option<super::Settings>> {
+) -> Result<Option<super::Settings>, super::BindingError> {
     if CURRENT
         .try_with(|context| context.is_some())
         .unwrap_or(false)
     {
-        return settings(home);
+        return request_settings(home);
     }
-    super::entry(home, key)
+    Ok(super::entry(home, key)?)
 }
 
 #[cfg(test)]

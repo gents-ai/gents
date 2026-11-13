@@ -1989,7 +1989,6 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 /// boundary, which then asks the owner enum it finds.
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-cli/src/commands/eval/manage.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
@@ -2007,20 +2006,15 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
     ("crates/gents-session/src/request/seam_error.rs", 1),
     ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
-    ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
-    ("crates/gents/src/runtime/agent/reconcile.rs", 1),
-    ("crates/gents-toolcalls/src/plugin/application_write/mod.rs", 1),
     ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
     ("crates/gents-documents/src/desired_state/plan.rs", 1),
     ("crates/gents-store/src/config_client/retry.rs", 3),
     ("crates/gents-store/src/config_client/schema_install.rs", 2),
-    ("crates/gents-tools/src/builtin/defra_query/mod.rs", 1),
     ("crates/gents/src/eval/documents.rs", 3),
     ("crates/gents-eval/src/report/mod.rs", 1),
     ("crates/gents-eval/src/report/store.rs", 1),
     ("crates/gents-eval/src/runner/freeze.rs", 1),
     ("crates/gents-eval/src/runner/mod.rs", 1),
-    ("crates/gents-automation/src/goal/creation.rs", 2),
     ("crates/gents-store/src/graphql.rs", 1),
     ("crates/gents-store/src/local/home.rs", 3),
     ("crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", 1),
@@ -2029,42 +2023,30 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-session/src/request/lifecycle.rs", 1),
     ("crates/gents-session/src/request/lifecycle/canonical_recovery.rs", 2),
     ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
-    ("crates/gents-session/src/request/lifecycle/execution_renewal.rs", 1),
-    ("crates/gents-session/src/request/lifecycle/queue/position.rs", 1),
-    ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
-    ("crates/gents-eval/src/optimization/driver.rs", 2),
+    ("crates/gents-eval/src/optimization/driver.rs", 1),
     ("crates/gents-eval/src/optimization/job.rs", 1),
     ("crates/gents-eval/src/optimization/promote.rs", 2),
     ("crates/gents-tools/src/builtin/p2p.rs", 1),
     ("crates/gents-pack/src/pack/core_packs.rs", 1),
     ("crates/gents-pack/src/pack/resolve.rs", 1),
-    ("crates/gents-pack/src/plugin/allowed.rs", 2),
-    ("crates/gents-tools/src/plugin/approval.rs", 2),
     ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
     ("crates/gents-pack/src/plugin/http_calls.rs", 1),
-    ("crates/gents-pack/src/plugin/install.rs", 1),
     ("crates/gents-pack/src/plugin/store.rs", 1),
-    ("crates/gents-toolcalls/src/background/job/driver.rs", 1),
     ("crates/gents-toolcalls/src/background/job/driver/step.rs", 1),
     ("crates/gents/src/turn/provider_input/replay.rs", 1),
     // rmcp erases transport errors behind DynamicTransportError; the pool's
     // McpAuthRefusal is then asked for on its erased source chain
     ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", 2),
-    ("crates/gents-inference/src/rendered_request/mod.rs", 2),
-    ("crates/gents-session/src/request/admission.rs", 2),
-    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 2),
+    ("crates/gents-session/src/request/admission.rs", 1),
     ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
     ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
-    ("crates/gents-session/src/session/fork.rs", 1),
     ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
-    ("crates/gents-session/src/session/output/replay_capture.rs", 1),
     ("crates/gents-session/src/session/output/replay_request.rs", 1),
     ("crates/gents-session/src/session/request_output.rs", 1),
     ("crates/gents-store/src/local/storage_backend.rs", 9),
     ("crates/gents-store/src/local/store_key.rs", 2),
     ("crates/gents-session/src/request/streaming.rs", 1),
     ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
-    ("crates/gents-automation/src/triggers/engine/mod.rs", 2),
 ];
 
 #[derive(Default)]
@@ -2212,7 +2194,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // persisted AgentRequest failure_reason
     ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
-    ("crates/gents-tools/src/mcp/health.rs", 8),
+    ("crates/gents-tools/src/mcp/health.rs", 7),
     // display only: appends a next-call hint when absent
     ("crates/gents-tools/src/builtin/p2p.rs", 1),
     // DefraDB SDL parser messages (help page choice)
@@ -2222,7 +2204,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // display only: appends a next-call hint when absent
     ("crates/gents-tools/src/native/session_history.rs", 1),
     // persisted AgentRequest failure_reason
-    ("crates/gents-observe/src/observe/trace_export.rs", 6),
+    ("crates/gents-observe/src/observe/trace_export.rs", 5),
     // serde `unknown variant` message
     ("crates/gents-session/src/workspace/action_plan.rs", 1),
     // git show stderr

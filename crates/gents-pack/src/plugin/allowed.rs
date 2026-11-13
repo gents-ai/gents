@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use super::bound::BindFileError;
 use super::BoundDir;
 use crate::pack::BindAccess;
 
@@ -103,7 +104,7 @@ pub struct PathChanged(pub PathBuf);
 
 /// Consent records hold canonical targets; a later alias cannot select a
 /// different target under an existing grant.
-pub fn canonical_target(path: &Path, directory: Option<bool>) -> Result<PathBuf> {
+pub fn canonical_target(path: &Path, directory: Option<bool>) -> Result<PathBuf, PathChanged> {
     let current = path
         .canonicalize()
         .map_err(|_| PathChanged(path.to_owned()))?;
@@ -116,7 +117,7 @@ pub fn canonical_target(path: &Path, directory: Option<bool>) -> Result<PathBuf>
             }
         })
     {
-        return Err(PathChanged(path.to_owned()).into());
+        return Err(PathChanged(path.to_owned()));
     }
     Ok(current)
 }
@@ -295,18 +296,15 @@ pub fn bind(
         ));
     }
     match BoundDir::for_file(&resolved.target, access) {
-        Err(error)
-            if folder_allowed
-                && access == BindAccess::Read
-                && error.is::<super::bound::NotLinkable>() =>
-        {
+        Err(BindFileError::NotLinkable(_)) if folder_allowed && access == BindAccess::Read => {
             BoundDir::beside(&resolved.target, access).map_err(failed)
         }
-        Err(error) if error.is::<super::bound::NotLinkable>() => Err(format!(
+        Err(error @ BindFileError::NotLinkable(_)) => Err(format!(
             "{error:#}; allow its folder with `gents config pack plugin dirs add {}`",
             resolved.folder().display()
         )),
-        other => other.map_err(failed),
+        Err(BindFileError::Other(error)) => Err(failed(error)),
+        Ok(bound) => Ok(bound),
     }
 }
 

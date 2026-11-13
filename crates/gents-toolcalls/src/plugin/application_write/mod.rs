@@ -1,4 +1,4 @@
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -62,7 +62,54 @@ struct WriteRecovery {
     message: String,
     recovery: Value,
 }
-fn recovery(message: impl Into<String>, tool: &str, args: Value) -> anyhow::Error {
+
+#[derive(Debug, thiserror::Error)]
+enum WriteFailure {
+    #[error(transparent)]
+    Recovery(#[from] WriteRecovery),
+    #[error(transparent)]
+    Access(#[from] gents_store::config_client::ConfigClientError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl WriteFailure {
+    /// A transparent variant hides the error it wraps from `source()`, so the
+    /// erased form is the wrapped error itself.
+    fn erased(self) -> anyhow::Error {
+        match self {
+            Self::Recovery(error) => error.into(),
+            Self::Access(error) => error.into(),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+impl gents_store::config_client::TransactionFailure for WriteFailure {
+    fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Recovery(_) => None,
+        }
+    }
+
+    fn rerun_requested(&self) -> Option<&gents_store::config_client::RerunNote> {
+        match self {
+            Self::Access(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::Recovery(_) => None,
+        }
+    }
+}
+
+fn recovery(message: impl Into<String>, tool: &str, args: Value) -> WriteFailure {
     WriteRecovery {
         message: message.into(),
         recovery: json!({"tool":tool,"args":args}),
@@ -107,25 +154,28 @@ impl WriteTool {
         }
     }
     pub async fn execute(&self, args: &WriteParams) -> Result<Value> {
+        self.run(args).await.map_err(WriteFailure::erased)
+    }
+
+    async fn run(&self, args: &WriteParams) -> std::result::Result<Value, WriteFailure> {
         if args.argv.first().is_some_and(|v| v == "help")
             || args.argv.last().is_some_and(|v| v == "--help")
         {
-            ensure!(
-                args.collection.is_none() && args.options.is_empty(),
-                "help accepts argv only"
-            );
+            if !(args.collection.is_none() && args.options.is_empty()) {
+                return Err(anyhow!("help accepts argv only").into());
+            }
             let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
             let command = match words.as_slice() {
                 ["help"] => "help",
                 ["help", command] | [command, "--help"] => *command,
-                _ => anyhow::bail!("help accepts [help] or [help, command]"),
+                _ => return Err(anyhow!("help accepts [help] or [help, command]").into()),
             };
             let help = match command {
                 "help" => "Write application documents within exact configured collection grants. Commands: preview create, preview update, preview delete; apply the returned next_call after checking its effect. Call [help, create], [help, update], or [help, delete] for syntax. Configuration uses config; definitions use schema.",
                 "create" => "Preview with {argv:[preview,create],collection:Shipment,options:{input:{reference:S1,status:queued}}}. Inspect effect and apply next_call. Input fields must exist in the native schema. Empty nillable lists become null; JSON scalar arrays remain JSON.",
                 "update" => "Preview with {argv:[preview,update],collection:Shipment,options:{filter:{reference:{_eq:S1}},max_targets:1,input:{status:delivered}}}. A nonempty filter and max_targets 1–100 are required. Inspect targets, then apply next_call. Its digest binds input, schema and observed document versions; changed state requires a fresh preview.",
                 "delete" => "Preview with {argv:[preview,delete],collection:Shipment,options:{filter:{reference:{_eq:S1}},max_targets:1}}. A nonempty filter and max_targets 1–100 are required. Inspect targets, then apply next_call. Zero matches or too many matches are refused. Changed state requires a fresh preview.",
-                _ => anyhow::bail!("unknown write help command; call [help]"),
+                _ => return Err(anyhow!("unknown write help command; call [help]").into()),
             };
             return Ok(json!({"help":help}));
         }
@@ -134,22 +184,27 @@ impl WriteTool {
         let operation = match words.as_slice() {
             ["preview", op @ ("create" | "update" | "delete")] if preview => *op,
             [op @ ("create" | "update" | "delete")] => *op,
-            _ => anyhow::bail!("unknown write command; call write with {{\"argv\":[\"help\"]}}"),
+            _ => {
+                return Err(anyhow!(
+                    "unknown write command; call write with {{\"argv\":[\"help\"]}}"
+                )
+                .into())
+            }
         };
         let collection = args
             .collection
             .as_deref()
             .context("collection is required; discover fields with query argv:[fields]")?;
-        gents_store::graphql::validate_collection_identifier(collection)?;
+        gents_store::graphql::validate_collection_identifier(collection)
+            .map_err(anyhow::Error::from)?;
         let managed = gents_store::schema::migration::DEFAULT_REGISTRY
             .managed_names()
             .any(|name| name == collection);
         let protected = gents_documents::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection);
         let credential = gents_protocol::schemas::is_credential_collection(collection);
-        ensure!(
-            !protected,
-            "{collection} is protected and cannot be mutated"
-        );
+        if protected {
+            return Err(anyhow!("{collection} is protected and cannot be mutated").into());
+        }
         if credential {
             return Err(recovery(
                 format!("{collection} contains credentials; use its credential/config owner"),
@@ -174,10 +229,11 @@ impl WriteTool {
             _ => unreachable!(),
         };
         for key in args.options.keys() {
-            ensure!(
-                allowed.contains(&key.as_str()),
-                "unknown option {key:?}; accepted options: {allowed:?}"
-            );
+            if !allowed.contains(&key.as_str()) {
+                return Err(
+                    anyhow!("unknown option {key:?}; accepted options: {allowed:?}").into(),
+                );
+            }
         }
         let limit = if operation == "create" {
             1
@@ -187,7 +243,9 @@ impl WriteTool {
                 .and_then(Value::as_u64)
                 .context("max_targets is required and must be 1–100")? as usize
         };
-        ensure!(limit > 0 && limit <= 100, "max_targets must be 1–100");
+        if !(limit > 0 && limit <= 100) {
+            return Err(anyhow!("max_targets must be 1–100").into());
+        }
         let filter = if operation == "create" {
             None
         } else {
@@ -207,10 +265,9 @@ impl WriteTool {
                     .clone(),
             )
         };
-        ensure!(
-            !preview || !args.options.contains_key("digest"),
-            "preview returns a digest; omit digest while previewing"
-        );
+        if preview && args.options.contains_key("digest") {
+            return Err(anyhow!("preview returns a digest; omit digest while previewing").into());
+        }
         let plan = WritePlan {
             operation,
             preview,
@@ -220,10 +277,9 @@ impl WriteTool {
             input,
         };
         if let Some(actor) = &self.actor {
-            ensure!(
-                self.access.actor_did().as_deref() == Some(actor.as_str()),
-                "application write actor mismatch"
-            );
+            if self.access.actor_did().as_deref() != Some(actor.as_str()) {
+                return Err(anyhow!("application write actor mismatch").into());
+            }
         }
         if preview {
             self.access
@@ -245,7 +301,7 @@ impl WriteTool {
         txn: &ConfigApplyTxn<'_>,
         args: &WriteParams,
         plan: WritePlan<'_>,
-    ) -> Result<Value> {
+    ) -> std::result::Result<Value, WriteFailure> {
         let WritePlan {
             operation,
             preview,
@@ -261,15 +317,15 @@ impl WriteTool {
                 json!({"argv":["collection","list"]}),
             )
         })?;
-        let version: ::schema::CollectionVersion = serde_json::from_value(schema.clone())?;
+        let version: ::schema::CollectionVersion =
+            serde_json::from_value(schema.clone()).map_err(anyhow::Error::from)?;
         let mut input = input;
         if let Some(input) = &mut input {
             for (name, value) in input.iter_mut() {
-                gents_store::graphql::validate_graphql_name(name)?;
-                ensure!(
-                    !name.starts_with('_'),
-                    "internal field {name:?} cannot be written"
-                );
+                gents_store::graphql::validate_graphql_name(name).map_err(anyhow::Error::from)?;
+                if name.starts_with('_') {
+                    return Err(anyhow!("internal field {name:?} cannot be written").into());
+                }
                 let field = version
                     .fields
                     .iter()
@@ -308,7 +364,9 @@ impl WriteTool {
             )?
             .replace("{ _docID }", "{ _docID _version { cid height fieldName } }");
             let rows = txn.execute(&query).await?["data"][collection].clone();
-            ensure!(rows.is_array(), "DefraDB returned no target rows");
+            if !rows.is_array() {
+                return Err(anyhow!("DefraDB returned no target rows").into());
+            }
             rows
         };
         let targets = if operation == "create" {
@@ -321,9 +379,10 @@ impl WriteTool {
         intent.argv = vec![operation.into()];
         let digest = format!(
             "sha256:{:x}",
-            Sha256::digest(serde_json::to_vec(
-                &json!({"intent":intent,"schema":schema,"before":before})
-            )?)
+            Sha256::digest(
+                serde_json::to_vec(&json!({"intent":intent,"schema":schema,"before":before}))
+                    .map_err(anyhow::Error::from)?
+            )
         );
         let observation = Observation {
             operation: operation.into(),
@@ -339,7 +398,7 @@ impl WriteTool {
                 == Some(digest.as_str()),
         };
         if !observation.admitted() {
-            return Err(recovery(format!("selected {targets} targets; expected 1–{limit}. Narrow the filter before previewing"), WRITE_TOOL_NAME, serde_json::to_value(preview_call(args))?));
+            return Err(recovery(format!("selected {targets} targets; expected 1–{limit}. Narrow the filter before previewing"), WRITE_TOOL_NAME, serde_json::to_value(preview_call(args)).map_err(anyhow::Error::from)?));
         }
         let mut next = intent.clone();
         next.options.insert("digest".into(), json!(digest));
@@ -352,7 +411,7 @@ impl WriteTool {
             return Err(recovery(
                 "missing or stale digest; inspect a fresh preview before applying its next_call",
                 WRITE_TOOL_NAME,
-                serde_json::to_value(preview_call(args))?,
+                serde_json::to_value(preview_call(args)).map_err(anyhow::Error::from)?,
             ));
         }
         let target_filter = if operation == "create" {
@@ -392,12 +451,15 @@ impl WriteTool {
         } else {
             native_receipts
         };
-        ensure!(
-            receipts
-                .as_array()
-                .is_some_and(|rows| rows.len() == targets),
-            "mutation receipt differs from observed target count; transaction rolled back: {response}"
-        );
+        if !receipts
+            .as_array()
+            .is_some_and(|rows| rows.len() == targets)
+        {
+            return Err(anyhow!(
+                "mutation receipt differs from observed target count; transaction rolled back: {response}"
+            )
+            .into());
+        }
         Ok(
             json!({"effect":{"operation":operation,"collection":collection,"affected_count":targets,"documents":receipts},"committed":true}),
         )
@@ -413,7 +475,7 @@ impl Tool for WriteTool {
         ToolDefinition{name:Self::NAME.into(),description:"Create, update or delete application documents within your exact collection grant. Call [help] for syntax. Mutations require [preview,VERB], then apply its observed-state-bound next_call. Configuration uses config; schemas use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string"},"options":{"type":"object"}}})}
     }
     async fn call(&self, args: WriteParams) -> std::result::Result<String, WriteError> {
-        match self.execute(&args).await {
+        match self.run(&args).await {
             Ok(value) => serde_json::to_string(
                 &gents_session::session::output_render::Ordered::reading_order(
                     value,
@@ -422,10 +484,11 @@ impl Tool for WriteTool {
             )
             .map_err(|e| WriteError(e.to_string())),
             Err(error) => {
-                let next = error
-                    .downcast_ref::<WriteRecovery>()
-                    .map(|v| v.recovery.clone())
-                    .unwrap_or_else(|| json!({"tool":"write","args":{"argv":["help"]}}));
+                let next = match &error {
+                    WriteFailure::Recovery(v) => v.recovery.clone(),
+                    _ => json!({"tool":"write","args":{"argv":["help"]}}),
+                };
+                let error = error.erased();
                 Err(WriteError(
                     json!({"error":format!("{error:#}"),"recovery":next}).to_string(),
                 ))

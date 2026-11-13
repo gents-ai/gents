@@ -97,12 +97,32 @@ pub enum SchemaIdentityError {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("missing or stale digest: run the returned preview call, inspect the effect, then use its next_call. options.digest binds the command and observed schema")]
-struct SchemaDigestMismatch;
+enum SchemaCommandError {
+    #[error("missing or stale digest: run the returned preview call, inspect the effect, then use its next_call. options.digest binds the command and observed schema")]
+    DigestMismatch,
+    #[error("SDL definition is invalid")]
+    Sdl(#[source] anyhow::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
 
-#[derive(Debug, thiserror::Error)]
-#[error("SDL definition is invalid")]
-struct SchemaSdlFailure;
+impl SchemaCommandError {
+    /// The error whose `source()` chain holds every cause. `Other` is
+    /// transparent, so its own chain starts past the error it wraps.
+    fn chain(&self) -> &(dyn std::error::Error + 'static) {
+        match self {
+            Self::Other(error) => error.as_ref(),
+            Self::DigestMismatch | Self::Sdl(_) => self,
+        }
+    }
+
+    fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Other(error) => error,
+            Self::DigestMismatch | Self::Sdl(_) => anyhow::Error::new(self),
+        }
+    }
+}
 
 /// Why an application collection cannot be emptied or removed yet.
 #[derive(Debug, thiserror::Error)]
@@ -287,7 +307,15 @@ impl SchemaTool {
         &self,
         command: &SchemaCommand,
         refused: &mut Option<CleanupRefusal>,
-    ) -> Result<Value> {
+    ) -> std::result::Result<Value, SchemaCommandError> {
+        self.execute_command(command, refused).await?
+    }
+
+    async fn execute_command(
+        &self,
+        command: &SchemaCommand,
+        refused: &mut Option<CleanupRefusal>,
+    ) -> Result<std::result::Result<Value, SchemaCommandError>> {
         let args = &command.args;
         let access = &self.access;
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
@@ -334,12 +362,12 @@ impl SchemaTool {
         );
         match words.as_slice() {
             ["collection", "list"] => {
-                return Ok(json!({"collections":access.collection_names().await?}))
+                return Ok(Ok(json!({"collections":access.collection_names().await?})))
             }
             ["collection", "get"] => {
-                return Ok(
+                return Ok(Ok(
                     json!({"collection":access.collection_version(target()?).await?.context("collection not found; use collection list")?}),
-                )
+                ))
             }
             ["version", "list"] => {
                 let versions = access.collection_versions().await?;
@@ -352,10 +380,12 @@ impl SchemaTool {
                     })
                     .map(|v| json!({"Name":v["Name"],"VersionID":v["VersionID"],"IsActive":v["IsActive"],"PreviousVersion":v["PreviousVersion"]}))
                     .collect();
-                return Ok(json!({"versions":values}));
+                return Ok(Ok(json!({"versions":values})));
             }
             ["version", "get"] => {
-                return Ok(json!({"version":find_version(access, target()?).await?}))
+                return Ok(Ok(
+                    json!({"version":find_version(access, target()?).await?}),
+                ))
             }
             _ => {}
         }
@@ -369,8 +399,10 @@ impl SchemaTool {
                 if words[0] == "view" {
                     text("query")?;
                 }
-                let parsed = query::sdl_parse::parse_sdl_with_warnings(text("sdl")?)
-                    .context(SchemaSdlFailure)?;
+                let parsed = match query::sdl_parse::parse_sdl_with_warnings(text("sdl")?) {
+                    Ok(parsed) => parsed,
+                    Err(error) => return Ok(Err(SchemaCommandError::Sdl(error.into()))),
+                };
                 sdl_warnings = parsed
                     .warnings
                     .into_iter()
@@ -470,10 +502,10 @@ impl SchemaTool {
             {
                 preview["loss"] = loss;
             }
-            return Ok(preview);
+            return Ok(Ok(preview));
         }
         if command.digest.as_deref() != Some(digest.as_str()) {
-            return Err(SchemaDigestMismatch.into());
+            return Ok(Err(SchemaCommandError::DigestMismatch));
         }
         let result = match words.as_slice() {
             ["collection", "create"] => {
@@ -538,7 +570,7 @@ impl SchemaTool {
         if !sdl_warnings.is_empty() {
             response["warnings"] = json!(sdl_warnings);
         }
-        Ok(response)
+        Ok(Ok(response))
     }
 }
 
@@ -727,28 +759,31 @@ impl SchemaTool {
                 };
                 encoded.map_err(|error| SchemaError(error.to_string()))
             }
-            Err(error) => {
+            Err(failure) => {
                 let recovery = if let Some(refusal) = &refused {
                     refusal.recovery(args)
-                } else if error.is::<SchemaDigestMismatch>() {
+                } else if let SchemaCommandError::DigestMismatch = failure {
                     json!({"tool":"schema","args":preview_call(args)})
                 } else if let Some(mismatch) =
-                    gents_store::config_client::schema_install_mismatch(error.as_ref())
+                    gents_store::config_client::schema_install_mismatch(failure.chain())
                 {
                     json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
                 } else if let Some(gents_protocol::operations::NextCall::VerbHelp {
                     resource,
                     verb,
-                }) = gents_store::config_client::schema_install_refusal(error.as_ref())
+                }) = gents_store::config_client::schema_install_refusal(failure.chain())
                     .and_then(|refusal| refusal.recovery())
                 {
                     json!({"tool":"schema","args":{"argv":["help",resource,verb]}})
-                } else if error.is::<SchemaSdlFailure>() {
-                    sdl_help_call(args, &format!("{error:#}"))
+                } else if let SchemaCommandError::Sdl(_) = failure {
+                    sdl_help_call(
+                        args,
+                        &gents_protocol::error_chain::ErrorChain(&failure).to_string(),
+                    )
                 } else {
                     help_call(args)
                 };
-                Err(schema_error(error, recovery))
+                Err(schema_error(failure.into_anyhow(), recovery))
             }
         }
     }

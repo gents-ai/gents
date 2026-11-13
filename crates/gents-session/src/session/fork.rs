@@ -21,7 +21,9 @@ use gents_protocol::session::SessionScope;
 use gents_store::config_client::agent_session::{
     load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
 };
-use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::config_client::{
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, RerunNote, TransactionFailure,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditForkBinding {
@@ -131,10 +133,41 @@ pub enum ForkError {
     ForkCopyFailed(#[from] anyhow::Error),
 }
 
-fn fork_error(error: anyhow::Error) -> ForkError {
-    match error.downcast::<ForkError>() {
-        Ok(error) => error,
-        Err(error) => ForkError::ForkCopyFailed(error),
+impl From<ConfigClientError> for ForkError {
+    fn from(error: ConfigClientError) -> Self {
+        Self::ForkCopyFailed(error.into())
+    }
+}
+
+impl TransactionFailure for ForkError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::ForkCopyFailed(error) => error.config_client_error(),
+            Self::ForkRelationshipIncomplete { source, .. } => source.config_client_error(),
+            Self::ForkSourceNotFound(_)
+            | Self::ForkNotSameAgent
+            | Self::ForkSourceBusy
+            | Self::ForkAtUserTurnOutOfRange(..)
+            | Self::ForkMessageNotEditable(_)
+            | Self::ForkAgentNotFound(_)
+            | Self::CrossAgentForkUnavailable
+            | Self::ForkRecoveryIntentRequired(_) => None,
+        }
+    }
+
+    fn rerun_requested(&self) -> Option<&RerunNote> {
+        match self {
+            Self::ForkCopyFailed(error) => error.rerun_requested(),
+            Self::ForkRelationshipIncomplete { source, .. } => source.rerun_requested(),
+            Self::ForkSourceNotFound(_)
+            | Self::ForkNotSameAgent
+            | Self::ForkSourceBusy
+            | Self::ForkAtUserTurnOutOfRange(..)
+            | Self::ForkMessageNotEditable(_)
+            | Self::ForkAgentNotFound(_)
+            | Self::CrossAgentForkUnavailable
+            | Self::ForkRecoveryIntentRequired(_) => None,
+        }
     }
 }
 
@@ -165,7 +198,6 @@ pub(super) async fn commit_fork(
             Box::pin(async move { fork_in_txn(txn, &params, &child, None).await })
         })
         .await
-        .map_err(fork_error)
 }
 
 /// Retry only an intent returned by the committed fork creation or an earlier
@@ -293,13 +325,13 @@ pub async fn fork_edit_on(
     client_did: &str,
 ) -> Result<String, ForkError> {
     let ForkBoundary::BeforeMessageKey(message_key) = params.boundary else {
-        return Err(fork_error(anyhow::anyhow!(
+        return Err(ForkError::ForkCopyFailed(anyhow::anyhow!(
             "an edit fork requires a canonical message key"
         )));
     };
     if child.trim().is_empty() || client_did.trim().is_empty() || params.target_agent_did.is_some()
     {
-        return Err(fork_error(anyhow::anyhow!(
+        return Err(ForkError::ForkCopyFailed(anyhow::anyhow!(
             "an edit fork requires a retained destination and the source agent"
         )));
     }
@@ -319,7 +351,7 @@ pub async fn fork_edit_on(
         message_key: message_key.to_owned(),
     };
     let publication = access
-        .transact_write("session.edit_fork", |txn| {
+        .transact_write::<_, ForkError, _>("session.edit_fork", |txn| {
             let requested = requested.clone();
             let params = params.clone();
             let child = child.clone();
@@ -413,34 +445,34 @@ pub async fn fork_edit_on(
                                     .render(),
                             )
                             .await?;
-                        anyhow::ensure!(
-                            rows["data"]["AgentMessage"]
-                                .as_array()
-                                .is_some_and(Vec::is_empty),
-                            ForkError::ForkRecoveryIntentRequired(child)
-                        );
-                        anyhow::ensure!(
-                            rows["data"]["AgentOutputSegment"]
-                                .as_array()
-                                .is_some_and(Vec::is_empty),
-                            ForkError::ForkRecoveryIntentRequired(child)
-                        );
-                        anyhow::ensure!(
-                            rows["data"]["AgentSession"]
-                                .as_array()
-                                .is_some_and(Vec::is_empty),
-                            ForkError::ForkRecoveryIntentRequired(child)
-                        );
+                        if !rows["data"]["AgentMessage"]
+                            .as_array()
+                            .is_some_and(Vec::is_empty)
+                        {
+                            return Err(ForkError::ForkRecoveryIntentRequired(child));
+                        }
+                        if !rows["data"]["AgentOutputSegment"]
+                            .as_array()
+                            .is_some_and(Vec::is_empty)
+                        {
+                            return Err(ForkError::ForkRecoveryIntentRequired(child));
+                        }
+                        if !rows["data"]["AgentSession"]
+                            .as_array()
+                            .is_some_and(Vec::is_empty)
+                        {
+                            return Err(ForkError::ForkRecoveryIntentRequired(child));
+                        }
                         Ok(None)
                     }
-                    EditForkDecision::Refuse => {
-                        anyhow::bail!("the retained fork destination has another source binding")
-                    }
+                    EditForkDecision::Refuse => Err(anyhow::anyhow!(
+                        "the retained fork destination has another source binding"
+                    )
+                    .into()),
                 }
             })
         })
-        .await
-        .map_err(fork_error)?;
+        .await?;
     if let Some(publication) = publication {
         let child = publication.outcome.session_id;
         publish_fork_relationships(access, publication.intent).await?;
@@ -761,7 +793,7 @@ async fn fork_in_txn(
     params: &ForkParams<'_>,
     child: &str,
     edit_client_did: Option<&str>,
-) -> Result<ForkPublication> {
+) -> Result<ForkPublication, ForkError> {
     let parent_row = load_agent_session_row_in_txn(
         txn,
         params.caller_node_did,
@@ -772,11 +804,11 @@ async fn fork_in_txn(
     .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_owned()))?;
     let parent_session_doc_id = parent_row.doc_id;
     let parent = parent_row.session;
-    anyhow::ensure!(
-        parent.node_did == params.caller_node_did
-            && parent.requester_did.as_deref() == params.caller_requester_did,
-        ForkError::ForkNotSameAgent
-    );
+    if parent.node_did != params.caller_node_did
+        || parent.requester_did.as_deref() != params.caller_requester_did
+    {
+        return Err(ForkError::ForkNotSameAgent);
+    }
     let agent = params.target_agent_did.unwrap_or(&parent.agent_did);
     let (agent_doc_id, agent_document) = gents_documents::read_desired_state_record_in_txn(
         txn,
@@ -786,14 +818,12 @@ async fn fork_in_txn(
     )
     .await?
     .ok_or_else(|| ForkError::ForkAgentNotFound(agent.to_owned()))?;
-    anyhow::ensure!(
-        agent_document["enabled"] == true,
-        "fork target agent is disabled"
-    );
-    anyhow::ensure!(
-        may_reuse_source_fragments(&parent.agent_did, agent),
-        ForkError::CrossAgentForkUnavailable
-    );
+    if agent_document["enabled"] != true {
+        return Err(anyhow::anyhow!("fork target agent is disabled").into());
+    }
+    if !may_reuse_source_fragments(&parent.agent_did, agent) {
+        return Err(ForkError::CrossAgentForkUnavailable);
+    }
 
     use gents_protocol::document_query::{
         fields::{agent_message, agent_request, compaction_entry},
@@ -859,8 +889,11 @@ async fn fork_in_txn(
         if purpose.is_auxiliary() {
             continue;
         }
-        if RequestLifecycleState::parse(text(&request, "lifecycle_state")?)?.is_active_runtime() {
-            return Err(ForkError::ForkSourceBusy.into());
+        if RequestLifecycleState::parse(text(&request, "lifecycle_state")?)
+            .map_err(anyhow::Error::from)?
+            .is_active_runtime()
+        {
+            return Err(ForkError::ForkSourceBusy);
         }
     }
     let headers = rows(&snapshot, "AgentMessage")?
@@ -869,23 +902,22 @@ async fn fork_in_txn(
         .collect::<Result<Vec<_>>>()?;
     let mut sequences = BTreeSet::new();
     for header in &headers {
-        anyhow::ensure!(
-            header.message.session_id == params.source_session_id
-                && header.message.node_did == params.caller_node_did
-                && header.message.requester_did.as_deref() == params.caller_requester_did,
-            "fork header crossed exact source scope"
-        );
-        anyhow::ensure!(
-            sequences.insert(header.message.sequence),
-            "fork source has duplicate sequence"
-        );
+        if header.message.session_id != params.source_session_id
+            || header.message.node_did != params.caller_node_did
+            || header.message.requester_did.as_deref() != params.caller_requester_did
+        {
+            return Err(anyhow::anyhow!("fork header crossed exact source scope").into());
+        }
+        if !sequences.insert(header.message.sequence) {
+            return Err(anyhow::anyhow!("fork source has duplicate sequence").into());
+        }
     }
     let turns = headers
         .iter()
         .filter(|header| is_user_message(&header.message))
         .map(|header| header.message.sequence)
         .collect::<Vec<_>>();
-    let total = u32::try_from(turns.len())?;
+    let total = u32::try_from(turns.len()).map_err(anyhow::Error::from)?;
     let at_user_turn = match params.boundary {
         ForkBoundary::UserTurn(turn) => turn,
         ForkBoundary::BeforeMessageKey(key) => {
@@ -896,11 +928,12 @@ async fn fork_in_txn(
                     .iter()
                     .position(|sequence| *sequence == cut)
                     .context("the edit anchor is not a source user turn")?,
-            )?
+            )
+            .map_err(anyhow::Error::from)?
         }
     };
     if at_user_turn > total {
-        return Err(ForkError::ForkAtUserTurnOutOfRange(at_user_turn, total).into());
+        return Err(ForkError::ForkAtUserTurnOutOfRange(at_user_turn, total));
     }
     let cut = turns
         .get(at_user_turn as usize)
@@ -926,7 +959,8 @@ async fn fork_in_txn(
         .iter()
         .cloned()
         .map(serde_json::from_value::<CompactionGenerationRow>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::from)?;
     validate_compaction_chain(
         params.caller_node_did,
         params.source_session_id,
@@ -941,39 +975,41 @@ async fn fork_in_txn(
         reader.observe_headers(&headers);
         for origin in &retained {
             let (resolved, segments) = reader.load_message_segments(&origin.doc_id).await?;
-            anyhow::ensure!(
-                resolved == origin.message,
-                "fork origin header changed or conflicts during dependency validation"
-            );
+            if resolved != origin.message {
+                return Err(anyhow::anyhow!(
+                    "fork origin header changed or conflicts during dependency validation"
+                )
+                .into());
+            }
             retained_segments.push(segments);
         }
     }
 
-    anyhow::ensure!(
-        ensure_session_in_txn(
-            txn,
-            child,
-            params.caller_node_did,
-            agent,
-            params.caller_requester_did,
-            None,
-            Some(gents_protocol::session::SessionProvenance {
-                fork: Some(gents_protocol::session::SessionFork {
-                    source_session_id: params.source_session_id.to_owned(),
-                    at_user_turn,
-                    before_message_key: match params.boundary {
-                        ForkBoundary::BeforeMessageKey(key) => Some(key.to_owned()),
-                        ForkBoundary::UserTurn(_) => None,
-                    },
-                    edit_client_did: edit_client_did.map(str::to_owned),
-                }),
-                ..Default::default()
+    let created = ensure_session_in_txn(
+        txn,
+        child,
+        params.caller_node_did,
+        agent,
+        params.caller_requester_did,
+        None,
+        Some(gents_protocol::session::SessionProvenance {
+            fork: Some(gents_protocol::session::SessionFork {
+                source_session_id: params.source_session_id.to_owned(),
+                at_user_turn,
+                before_message_key: match params.boundary {
+                    ForkBoundary::BeforeMessageKey(key) => Some(key.to_owned()),
+                    ForkBoundary::UserTurn(_) => None,
+                },
+                edit_client_did: edit_client_did.map(str::to_owned),
             }),
-            &chrono::Utc::now().to_rfc3339(),
-        )
-        .await?,
-        "fork child session already exists"
-    );
+            ..Default::default()
+        }),
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await?;
+    if !created {
+        return Err(anyhow::anyhow!("fork child session already exists").into());
+    }
 
     let session_doc_id = load_agent_session_owner_in_txn(txn, params.caller_node_did, child)
         .await?
@@ -1012,10 +1048,10 @@ async fn fork_in_txn(
                 gents_protocol::schemas::AGENT_MESSAGE,
             )
             .await?;
-        message_doc_ids.push(gents_store::graphql::created_doc_id(
-            &response,
-            "AgentMessage",
-        )?);
+        message_doc_ids.push(
+            gents_store::graphql::created_doc_id(&response, "AgentMessage")
+                .map_err(anyhow::Error::from)?,
+        );
         for reference in origin.message.payload_references() {
             let logical = &reference.close_doc_id;
             if !copied_closures.insert(logical.clone()) {
@@ -1040,10 +1076,10 @@ async fn fork_in_txn(
                         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
                     )
                     .await?;
-                segment_doc_ids.push(gents_store::graphql::created_doc_id(
-                    &response,
-                    "AgentOutputSegment",
-                )?);
+                segment_doc_ids.push(
+                    gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")
+                        .map_err(anyhow::Error::from)?,
+                );
             }
         }
     }
@@ -1066,10 +1102,12 @@ async fn fork_in_txn(
     for origin in compactions {
         let through = ordinal(&origin, "compacted_through_sequence")?;
         if u64::from(through) < cut {
-            anyhow::ensure!(
-                retained_sequences.contains(&through),
-                "fork compaction cursor does not name a retained child header"
-            );
+            if !retained_sequences.contains(&through) {
+                return Err(anyhow::anyhow!(
+                    "fork compaction cursor does not name a retained child header"
+                )
+                .into());
+            }
             child_compactions.push(fork_compaction(&origin, child, params)?);
         }
     }
@@ -1077,7 +1115,8 @@ async fn fork_in_txn(
         .iter()
         .cloned()
         .map(serde_json::from_value::<CompactionGenerationRow>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::from)?;
     validate_compaction_chain(
         params.caller_node_did,
         child,
@@ -1090,7 +1129,7 @@ async fn fork_in_txn(
     }
     let outcome = ForkOutcome {
         session_id: child.to_owned(),
-        copied_messages: u32::try_from(retained.len())?,
+        copied_messages: u32::try_from(retained.len()).map_err(anyhow::Error::from)?,
         copied_tool_calls: 0,
         copied_tool_results: 0,
         copied_compaction_entries: copied_compactions,
