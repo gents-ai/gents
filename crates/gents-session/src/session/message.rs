@@ -30,7 +30,7 @@ pub use interrupt::{
 };
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use plan::plan;
-pub use plan::{plan_with_delivery, Plan};
+pub use plan::{plan_with_delivery, MessageContent, Plan};
 pub use target::{
     agent_list, load_caller_session_tools, resolve_send_target, target_agent_exists, target_scope,
 };

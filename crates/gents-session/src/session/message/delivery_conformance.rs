@@ -1,3 +1,4 @@
+use super::plan::MessageContent;
 use super::*;
 
 #[test]
@@ -56,13 +57,13 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
         &NoSessionMessageGoals,
         &cause,
         &target,
-        (
-            RenderedBody {
+        MessageContent {
+            rendered: RenderedBody {
                 content: "message".into(),
                 goal: None,
             },
-            None,
-        ),
+            title: None,
+        },
         AgentMessageDelivery::Queue,
         &signer,
     )
