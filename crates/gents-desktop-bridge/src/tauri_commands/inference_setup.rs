@@ -1072,6 +1072,7 @@ mod provider_account_tests {
             Ok(gents_store::config_client::ConfigAccess::Graphql(_))
         ));
 
+        let mut publications = core.stores().subscribe();
         let pending = PendingOAuthCredentials::default();
         let (a, b) = two_accounts(node_did, true);
         for account in [a, b] {
@@ -1088,6 +1089,16 @@ mod provider_account_tests {
             .expect("mock app");
         notify_config_changed(app.handle(), &core, node_did).await;
 
+        loop {
+            let snapshot = core.stores().snapshot(node_did);
+            if snapshot.inference_backends.iter().any(|backend| {
+                backend.node_did == node_did
+                    && backend.backend_id.starts_with("claude-subscription-")
+            }) {
+                break;
+            }
+            publications.changed().await.expect("observer alive");
+        }
         let snapshot = core.stores().snapshot(node_did);
         let backends: Vec<_> = snapshot
             .inference_backends
