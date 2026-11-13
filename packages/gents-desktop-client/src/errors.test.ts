@@ -15,6 +15,8 @@ describe("confirmed Goal-control rejection", () => {
         message: "Native recovery is required.",
         retryable: false,
         endpoint: null,
+        operationCode: null,
+        nextCall: null,
       };
       for (const wire of [payload, { message: payload }]) {
         const error = normalizeInvokeError(wire);
@@ -29,6 +31,8 @@ describe("confirmed Goal-control rejection", () => {
       message: "wait for this session to finish before starting a goal",
       retryable: false,
       endpoint: null,
+      operationCode: null,
+      nextCall: null,
     };
     for (const wire of [payload, { message: payload }]) {
       const error = normalizeInvokeError(wire);
@@ -48,6 +52,8 @@ describe("confirmed Goal-control rejection", () => {
       message,
       retryable: true,
       endpoint: "http://127.0.0.1:1",
+      operationCode: null,
+      nextCall: null,
     });
     expect(asBridgeErrorPayload(transport)?.code).toBe("endpointUnreachable");
   });
