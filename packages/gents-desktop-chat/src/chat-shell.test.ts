@@ -438,6 +438,7 @@ describe("projectChatShell", () => {
         LeanFrontendInput,
         LeanFrontendOutput
       >("families::client_shell_contracts_frontend::cases()");
+      expect(contractCases.length).toBeGreaterThan(0);
 
       for (const { input, expected } of contractCases) {
         const projection = projectChatShell({
