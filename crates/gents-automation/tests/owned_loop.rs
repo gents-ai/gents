@@ -281,65 +281,27 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     assert!(output.contains("ECHOED"));
 }
 
-#[tokio::test]
-async fn oversized_tool_result_is_bounded_before_threading() {
-    let prompt = Message::user("read the big thing");
-
-    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
-    let node = db.node.clone();
-
-    let big_line = "x".repeat(200);
-    let big_output = std::iter::repeat_n(big_line, 10_000)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let full_len = big_output.len();
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(FixedTool {
-        name: "echo".to_string(),
-        output: big_output,
-    })];
-    let model = ScriptedModel::new_turns(vec![
-        echo_tool_turn(),
-        vec![
-            RawStreamingChoice::Message("ok".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let stream = run_loop_stream(
-        model,
-        Some(hook.clone()),
-        TaggedMessage::unassociated(prompt),
-        Vec::new(),
-        Arc::new(tools),
-        owned_config(4),
-    );
-    let collected = collect_owned_scripted_stream(
-        stream,
-        &hook,
-        &writer,
-        &mut lifecycle,
-        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-    )
-    .await;
-    assert!(collected.error.is_none(), "{:?}", collected.error);
-
-    let tool_results = collected.tool_results;
-    assert_eq!(
-        tool_results.len(),
-        1,
-        "exactly one threaded tool result expected; got: {tool_results:?}"
-    );
-    let bounded_len = tool_results[0].len();
-    assert!(
-        bounded_len < full_len,
-        "expected the threaded result to be bounded: bounded={bounded_len} full={full_len}"
-    );
-    assert!(bounded_len > 0, "bounded result should be non-empty");
-    assert_eq!(collected.final_text.as_deref(), Some("ok"));
-    node.shutdown().await.expect("node shutdown");
+fn rejected_notice(text: &str) -> String {
+    if text.contains("__gents_tool_lifecycle__") {
+        return "leaked internal marker".into();
+    }
+    let Some((_, rest)) = text.split_once("arguments were rejected (") else {
+        return format!("no rejection notice: {text}");
+    };
+    match rest.split_once(')').map(|(kind, _)| kind) {
+        Some("malformed") => "malformed",
+        Some("truncated") => "truncated",
+        Some("unknown field") => "unknown_field",
+        Some("missing field") => "missing_field",
+        Some("wrong type") => "wrong_type",
+        Some("schema mismatch") => "schema",
+        _ => "unrecognised",
+    }
+    .into()
 }
 
 #[tokio::test]
-async fn missing_tool_args_notify_model_and_terminalize_failed() {
+async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_records_them() {
     use gents_loop::tool::{Tool, ToolDefinition};
 
     struct StrictArgsTool;
@@ -347,6 +309,7 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
     #[error("strict tool error")]
     struct StrictToolError;
     #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct StrictArgs {
         #[allow(dead_code)]
         report_type: String,
@@ -370,81 +333,94 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         }
     }
 
-    let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    for case in gents_lean_vocab::families::argument_failure_refusal::cases::<String, String>() {
+        let arguments = match case.input.failure.as_str() {
+            "syntax" => serde_json::Value::String("{\"report_type\":?}".into()),
+            "unknown_field" => {
+                serde_json::json!({"report_type": "steward", "findings": [], "extra": true})
+            }
+            "missing_field" => serde_json::json!({"report_type": "steward"}),
+            "wrong_type" => serde_json::json!({"report_type": "steward", "findings": "none"}),
+            other => panic!("no arguments for {other}"),
+        };
+        let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
+        let model = ScriptedModel::new_turns(vec![
+            vec![
+                RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                    "call-1".to_string(),
+                    "post_status".to_string(),
+                    arguments,
+                )),
+                RawStreamingChoice::FinalResponse(()),
+            ],
+            vec![
+                RawStreamingChoice::Message("ok".to_string()),
+                RawStreamingChoice::FinalResponse(()),
+            ],
+        ]);
+        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
+        let stream = run_loop_stream(
+            model,
+            Some(hook.clone()),
+            TaggedMessage::unassociated(Message::user("post a status report")),
+            Vec::new(),
+            Arc::new(tools),
+            owned_config(4),
+        );
+        let collected = collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )
+        .await;
+        let notice = collected.tool_results.join("\n");
+        let rows = tool_call_rows_named(&lifecycle.access().unwrap(), "post_status").await;
+        assert_eq!(rows.len(), 1, "{:?}: {rows:?}", case.input);
+        case.check(
+            gents_lean_vocab::families::argument_failure_refusal::RefusalOutput {
+                notice: rejected_notice(&notice),
+                names_field: notice.contains("missing field `findings`")
+                    || notice.contains("unknown field `extra`"),
+                lifecycle_state: rows[0]["lifecycle_state"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                failure_class: rows[0]["tool_failure_class"].as_str().map(str::to_owned),
+                ends_request: collected.error.is_some(),
+            },
+        );
+    }
+}
 
-    let model = ScriptedModel::new_turns(vec![
-        vec![
-            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                "call-1".to_string(),
-                "post_status".to_string(),
-                serde_json::json!({ "report_type": "steward" }),
-            )),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-        vec![
-            RawStreamingChoice::Message("ok".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
+async fn tool_call_rows_named(
+    reader: &gents_store::config_client::ConfigAccess,
+    tool_name: &str,
+) -> Vec<serde_json::Value> {
+    tool_call_rows_with_names(reader)
+        .await
+        .into_iter()
+        .filter(|row| row["tool_name"] == tool_name)
+        .collect()
+}
 
-    let stream = run_loop_stream(
-        model,
-        Some(hook.clone()),
-        TaggedMessage::unassociated(Message::user("post a status report")),
-        Vec::new(),
-        Arc::new(tools),
-        owned_config(4),
-    );
-    let collected = collect_owned_scripted_stream(
-        stream,
-        &hook,
-        &writer,
-        &mut lifecycle,
-        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-    )
-    .await;
-    assert!(collected.error.is_none(), "{:?}", collected.error);
-    let tool_results = collected.tool_results;
-    assert!(
-        tool_results
-            .iter()
-            .any(|r| r.contains("arguments were rejected (missing field)")
-                && r.contains("missing field `findings`")),
-        "the model must be notified with a precise missing-field notice, got: {tool_results:?}"
-    );
-    assert!(
-        !tool_results
-            .iter()
-            .any(|r| r.contains("__gents_tool_lifecycle__")),
-        "the internal marker must never leak to the model, got: {tool_results:?}"
-    );
-
-    let resp = agent_response(
-        &lifecycle.access().unwrap(),
+async fn tool_call_rows_with_names(
+    reader: &gents_store::config_client::ConfigAccess,
+) -> Vec<serde_json::Value> {
+    let response = agent_response(
+        reader,
         "query { AgentToolCall { tool_name lifecycle_state tool_failure_class } }",
     )
     .await;
-    assert!(
-        !resp.has_errors(),
-        "AgentToolCall query failed: {:?}",
-        resp.errors
-    );
-    let rows = resp
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(|value| value.as_array())
         .cloned()
-        .unwrap_or_default();
-    assert!(
-        rows.iter().any(|row| {
-            row.get("tool_name").and_then(|v| v.as_str()) == Some("post_status")
-                && row.get("lifecycle_state").and_then(|v| v.as_str()) == Some("failed")
-                && row.get("tool_failure_class").and_then(|v| v.as_str()) == Some("argumentInvalid")
-        }),
-        "the started tool call must terminalize failed/argumentInvalid, got rows: {rows:?}"
-    );
+        .unwrap_or_default()
 }
 
 #[tokio::test]

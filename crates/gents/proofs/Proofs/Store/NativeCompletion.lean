@@ -174,4 +174,42 @@ theorem abandoned_registry_releases_gate_only_after_full_drain :
       s.rollbackReturned = false ∧ s.gateHeld = false := by
   decide
 
+/-- What a caller can observe of one owner between two steps. -/
+structure Observation where
+  caller : Caller
+  nativeOutstanding : Nat
+  registryAbandoned : Bool
+  gateHeld : Bool
+  retryStarted : Bool
+  deriving DecidableEq, Repr
+
+def observation (s : State) : Observation :=
+  { caller := s.caller
+    nativeOutstanding := s.nativeOutstanding
+    registryAbandoned := s.registryAbandoned
+    gateHeld := s.gateHeld
+    retryStarted := s.retryStarted }
+
+def observeSteps (s : State) : List (List Event) → List Observation
+  | [] => []
+  | events :: rest =>
+      let next := run s events
+      observation next :: observeSteps next rest
+
+/-- Dropping the caller abandons the registered transaction before the gate is
+asked to release it, so the drop leaves nothing held. -/
+theorem cancellation_after_embedded_begin_abandons_before_releasing_the_gate :
+    observeSteps transaction [[.callerCancelled, .registryAbandoned, .gateReleaseRequested]] =
+      [⟨.cancelled, 0, true, false, false⟩] ∧
+    (run transaction [.callerCancelled, .gateReleaseRequested]).gateHeld = true := by
+  decide
+
+theorem abandoned_signed_statement_abandons_registry_but_holds_gate_until_drained :
+    observeSteps transaction
+      [ [.nativeStarted, .callerTimedOut, .registryAbandoned, .retryRequested,
+          .gateReleaseRequested]
+      , [.nativeReturned, .gateReleaseRequested] ] =
+      [⟨.timedOut, 1, true, true, false⟩, ⟨.timedOut, 0, true, false, false⟩] := by
+  decide
+
 end NativeCompletion

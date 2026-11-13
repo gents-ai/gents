@@ -82,4 +82,38 @@ theorem ambiguous_session_cannot_project (actor : String) (scope : Scope)
     (goal : Option GoalReference) : project? actor scope false goal = none := by
   simp [project?]
 
+/-- The Goal facts an observation's signed payload binds: the Goal revision and
+the physical request that roots its current assignment. -/
+structure SignedGoal where
+  revision : String
+  root : Option String
+  deriving DecidableEq, Repr
+
+/-- The signature covers the whole payload, so a root altered after signing
+fails verification like any other altered field. -/
+def signatureValid (signed observed : SignedGoal) : Bool := signed == observed
+
+/-- Projection publishes the current Goal facts. A retained row with the same
+revision keeps that revision and takes the Goal's current root; a row already
+equal to the projection is not rewritten. -/
+def reproject (retained : Option SignedGoal) (current : SignedGoal) : SignedGoal × Bool :=
+  (current, retained != some current)
+
+def loadRetained (signed observed : SignedGoal) : Option SignedGoal :=
+  if signatureValid signed observed then some observed else none
+
+theorem retained_signed_observation_refreshes_its_root_without_changing_goal_revision
+    (current : SignedGoal) (root : Option String) :
+    let retained : SignedGoal := { current with root }
+    (reproject (some retained) current).1.revision = retained.revision ∧
+      (reproject (some retained) current).1.root = current.root ∧
+      (reproject (some (reproject (some retained) current).1) current).2 = false := by
+  simp [reproject]
+
+theorem substituted_root_is_rejected (signed : SignedGoal) (root : Option String)
+    (h : root ≠ signed.root) : loadRetained signed { signed with root } = none := by
+  have : signed ≠ { signed with root } := by
+    intro e; exact h (congrArg SignedGoal.root e).symm
+  simp [loadRetained, signatureValid, this]
+
 end GoalAutomation.Observation

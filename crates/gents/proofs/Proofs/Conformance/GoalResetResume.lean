@@ -11,7 +11,7 @@ def limited : Snapshot :=
 def request : Request := ⟨.usageLimited, 0, true, true, true, true, parentBinding⟩
 def resumed : Snapshot :=
   ⟨⟨.active, 0, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
-def due : ResetFacts := ⟨true, some 3600, 0, 3600, true, true, true⟩
+def due : ResetFacts := ⟨true, some 3600, 0, 3600, true, true, true, true⟩
 def paused : Snapshot := { limited with goal := { limited.goal with status := .paused } }
 
 def limitedAgain : Snapshot :=
@@ -49,7 +49,7 @@ def resetCases : List ResetCase :=
   , ⟨"paused_goal_is_not_timer_resumed", paused, due, {request with expectedStatus := .paused},
        true, paused, .illegal⟩
   , ⟨"repeat_limit_resumes_at_its_new_reset", limitedAgain,
-       ⟨true, some 7200, 3600, 7200, true, true, true⟩, requestAgain, true, resumedAgain, .created⟩
+       ⟨true, some 7200, 3600, 7200, true, true, true, true⟩, requestAgain, true, resumedAgain, .created⟩
   ]
 
 theorem cases_replay_explicit_expectations :

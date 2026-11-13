@@ -239,4 +239,87 @@ theorem boundary_cases_preserve_renewal_limits :
        false, false, false, false, false, true, false] := by
   rfl
 
+structure WakeClock where
+  lastWake : Option Nat := none
+  lastSweep : Option Nat := none
+  sweepInterval : Nat := 60000
+  deriving DecidableEq, Repr
+
+def wakePeriodMillis : Nat := 1000
+
+def idleSweepMillis : Nat := 60000
+
+def clockSweepDue (clock : WakeClock) (now : Nat) : Bool :=
+  match clock.lastSweep with
+  | some last => decide (clock.sweepInterval ≤ now - last)
+  | none => true
+
+def clockDue (clock : WakeClock) (now : Nat) : Bool × WakeClock :=
+  if clockSweepDue clock now then (true, { clock with lastSweep := some now })
+  else (false, clock)
+
+def clockWait (clock : WakeClock) (now : Nat) : Nat :=
+  match clock.lastSweep with
+  | some last => clock.sweepInterval - (now - last)
+  | none => idleSweepMillis
+
+/-- A wake is rate-limited to one per second. The first wake, or one a full
+second after the last, makes the member due at once. A wake inside that second
+shortens a pending sweep to the rest of it, and only when that is sooner. -/
+def clockWake (clock : WakeClock) (now : Nat) : WakeClock :=
+  match clock.lastWake with
+  | some last =>
+    let delay := wakePeriodMillis - (now - last)
+    if delay = 0 then { clock with lastWake := some now, lastSweep := none }
+    else if clockWait clock now > delay then
+      { clock with lastSweep := some now, sweepInterval := delay }
+    else clock
+  | none => { clock with lastWake := some now, lastSweep := none }
+
+inductive WakeAction where
+  | due
+  | wake
+  deriving DecidableEq, Repr
+
+structure WakeStep where
+  action : WakeAction
+  atMillis : Nat
+  deriving DecidableEq, Repr
+
+structure WakeTrace where
+  steps : List WakeStep
+  deriving Repr
+
+structure WakeObservation where
+  answer : Option Bool
+  waitMillis : Nat
+  deriving DecidableEq, Repr
+
+def runClock (clock : WakeClock) : List WakeStep → List WakeObservation
+  | [] => []
+  | step :: rest =>
+    match step.action with
+    | .due =>
+      let (answer, next) := clockDue clock step.atMillis
+      { answer := some answer, waitMillis := clockWait next step.atMillis } ::
+        runClock next rest
+    | .wake =>
+      let next := clockWake clock step.atMillis
+      { answer := none, waitMillis := clockWait next step.atMillis } ::
+        runClock next rest
+
+def offerScenario : List WakeStep :=
+  [ { action := .due, atMillis := 0 }, { action := .due, atMillis := 0 },
+    { action := .wake, atMillis := 0 }, { action := .due, atMillis := 0 },
+    { action := .wake, atMillis := 0 } ]
+
+theorem a_received_offer_wakes_the_member_without_waiting_for_the_timer :
+    runClock ({} : WakeClock) offerScenario =
+      [ { answer := some true, waitMillis := 60000 },
+        { answer := some false, waitMillis := 60000 },
+        { answer := none, waitMillis := 60000 },
+        { answer := some true, waitMillis := 60000 },
+        { answer := none, waitMillis := 1000 } ] := by
+  decide
+
 end Enrollment.AutoRenewal

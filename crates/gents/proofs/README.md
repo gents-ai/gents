@@ -713,12 +713,11 @@ Provider-input assembly for Claude: the body's `system[]` blocks (attribution, i
 | `Proofs/Runtime/Properties/SchedulingLiveness.lean` | Scheduler/fleet liveness properties |
 | `Proofs/Runtime/Properties/Decidable.lean` | Finite-state exhaustive checks |
 | `Proofs/Conformance/Gents.lean` | Mapping from Lean state to Rust/DefraDB state |
-| `Proofs/Conformance/Boundaries.lean` | Intentional product policies and external assumptions at the Rust/Lean boundary |
 | `Proofs/Conformance/Deviations.lean` | Active unresolved Rust/spec mismatches |
 | `Proofs/Conformance/RuntimeConnectionObservation.lean` | Desktop runtime connection status (`ClientShell.ObservationOrdering` `RuntimeConnectionObservation`): transitions including planned renewal and missing endpoint, the presentation tone and reason each status shows, stream-end and snapshot-outcome classification (an omitted root is an empty view; the runtime's own refusal is shown as `refused` while the source reconnects), the armed notice and armed state, the renewal cadence and the snapshot retry delay; replayed by `gents-desktop-core` `client::observe` and the desktop's operational-state projection. TLA `RuntimeConnectionTransport` models the source, observer and reconcile interleavings |
 | `Proofs/Conformance/RuntimeConnectionBackoff.lean` | Reconnect backoff (`reconnects` by origin: a snapshot that failed for a transport reason keeps the source armed; `reconnectDelayMs`: five 250 ms reconnects, then doubling to 30 s; `reconnectAttempt`, reset only after the source stayed connected for `reconnectStableMs`) replayed by `client::observe::remote`, the one delay of every reconnect path |
 | `Proofs/Conformance/ClientWindowScope.lean` | Desktop window scope (`ClientShell.ObservationScope` `ClientWindowScope`): executes serialized register/select/destroy traces and reports each window's command node, with and without a named node, and the nodes a delivery reaches it for; replayed against `DesktopBridge` by `gents-desktop-bridge` `state::window_selection_tests` |
-| `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up |
+| `Proofs/Conformance/CoverageLedger.lean` | Checked ledger mapping every emitted conformance domain to a Rust consumer, accepted boundary, or accepted follow-up; `externalPremiseCoverage` holds the premise rows for facts about external systems (`coverage_entries_have_evidence`) |
 | `Proofs/Conformance/Contracts.lean` | Test-time JSON extraction surface for Rust vocabularies, finite state counts, transition tables, legal/illegal transition pairs, witness rows, ClientShell cases, and the coverage ledger |
 | `Proofs/Conformance/ObserverResync.lean` | Executes `ObserverResync` and `ClientDataPublication` on observer traces the desktop's replay test serializes, one store per node; reports the slot after every step, each load's settlement and patch decision, and the final slots and each node's store rows. |
 | `Proofs/Conformance/ClientShell/Contracts.lean` | Generated finite ClientShell step/projection cases for frontend and desktop shell tests |
@@ -845,7 +844,8 @@ that ties advertised MCP metadata to the widened retry rule.
 Future executable `ToolExecution` or other contracts should extend
 `Proofs.Conformance.Contracts` and add matching coverage-ledger entries in the
 same PR. If the runtime side is intentionally not executable yet, the entry must
-point to `Proofs.Conformance.Boundaries` or to an accepted follow-up rather than
+name an external premise row in `Proofs.Conformance.CoverageLedger` or an
+accepted follow-up rather than
 leaving the Lean contract advisory-only.
 
 ## Core Model
@@ -1354,8 +1354,8 @@ representable; provider-input sanitation owns the stricter boundary.
 
 A selected-session read is a direct runtime read (`directSessionRead`): an
 absent or hidden session is an ordinary empty result, and only a duplicate or
-out-of-scope row is an integrity fault. `client_direct_session_read_cases`
-emits it for the desktop-core selected-session reader.
+out-of-scope row is an integrity fault. `Conformance.ClientSessionDelivery.directRead`
+replays it for the desktop-core selected-session reader.
 
 `client-state-machine.md` and external fixtures still need migration to this
 target contract.
@@ -1761,7 +1761,7 @@ completion is gated by that same observed decision before the existing Goal
 status/sequence CAS; explicit operator controls are unchanged.
 
 The model proves outsider exclusion and duplicate observation stability, with
-11 generated `logical_output_obligation_cases` covering inherited eligibility,
+11 generated `logical_output_obligation_contracts_gate` cases covering inherited eligibility,
 combined writes, invalid edges, failed/duplicate observations, scopes and dynamic
 counts. The generated consumer uses signed requests and durable tool-call rows;
 a hook regression also checks actual model Goal completion. Existing expected
