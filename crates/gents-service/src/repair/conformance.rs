@@ -37,7 +37,7 @@ fn install_repair_refusals_match_lean() {
 fn install_repair_service_plans_match_lean() {
     use super::port::{PortObservation, ServedIdentity};
     use gents_protocol::operations::install_repair::{RepairOperation, ServiceMove};
-    use service::{NodeVersion, ServiceAction, ServiceFacts};
+    use service::{NodeVersion, ServiceFacts};
     use std::path::PathBuf;
     for case in families::install_repair_service_plans::cases::<String, String, String, String>() {
         let input = &case.input;
@@ -95,19 +95,161 @@ fn install_repair_service_plans_match_lean() {
             served_home_present: input.served_home_present,
             operation: serde_json::from_value::<RepairOperation>(json!(input.operation)).unwrap(),
         };
-        let actual: Vec<_> = service::plan_service(&facts, &home).into_iter().map(|action| {
+        let actual = wire(service::plan_service(&facts, &home));
+        case.check(serde_json::from_value(json!(actual)).unwrap());
+    }
+}
+
+pub(super) struct Steps(pub(super) Vec<gents_protocol::operations::install_repair::RepairStep>);
+
+impl super::Progress for Steps {
+    fn finding(&mut self, _: &gents_protocol::operations::install_repair::Finding) {}
+    fn step(
+        &mut self,
+        _: usize,
+        _: usize,
+        step: gents_protocol::operations::install_repair::RepairStep,
+    ) {
+        self.0.push(step);
+    }
+}
+
+fn wire(actions: Vec<service::ServiceAction>) -> Vec<serde_json::Value> {
+    use service::ServiceAction;
+    actions
+        .into_iter()
+        .map(|action| {
             let (action, start_after, replace_program, answered) = match action {
-                ServiceAction::MoveFrom { start_after, replace_program, .. } => ("move",start_after,replace_program,false),
-                ServiceAction::StopStale => ("stop",false,false,false),
-                ServiceAction::Reinstall { start_after } => ("reinstall",start_after,false,false),
-                ServiceAction::SwitchProgram { start_after, answered, .. } => ("switch",start_after,false,answered),
-                ServiceAction::RefreshLog { restart } => ("refresh_log",restart,false,false),
-                ServiceAction::Restart => ("restart",false,false,false),
-                ServiceAction::RewriteDefinition => ("rewrite_definition",false,false,false),
+                ServiceAction::MoveFrom {
+                    start_after,
+                    replace_program,
+                    ..
+                } => ("move", start_after, replace_program, false),
+                ServiceAction::StopStale => ("stop", false, false, false),
+                ServiceAction::Reinstall { start_after } => {
+                    ("reinstall", start_after, false, false)
+                }
+                ServiceAction::SwitchProgram {
+                    start_after,
+                    answered,
+                    ..
+                } => ("switch", start_after, false, answered),
+                ServiceAction::RefreshLog { restart } => ("refresh_log", restart, false, false),
+                ServiceAction::Restart => ("restart", false, false, false),
+                ServiceAction::RewriteDefinition => ("rewrite_definition", false, false, false),
             };
             json!({"action":action,"start_after":start_after,"replace_program":replace_program,"answered":answered})
-        }).collect();
-        case.check(serde_json::from_value(json!(actual)).unwrap());
+        })
+        .collect()
+}
+
+/// Runs the repair itself on each case, with no service manager: the first
+/// service step it takes is recorded before it finds it has none, and a
+/// repair that takes no service step finishes.
+#[tokio::test]
+async fn install_repair_settle_plans_match_lean() {
+    use super::port::{PortObservation, ServedIdentity};
+    use gents_protocol::operations::install_repair::{HomeChoice, RepairStep, ServiceMove};
+    use service::{NodeVersion, ServiceFacts};
+    let program = super::ServiceProgram::new(super::current_program);
+    for case in families::install_repair_settle_plans::cases::<
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let input = serde_json::to_value(&case.input).unwrap();
+        let repair: RepairObservation = serde_json::from_value(input["repair"].clone()).unwrap();
+        let observed = &input["service"];
+        let bit = |field: &str| observed[field].as_bool().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("chosen");
+        std::fs::create_dir_all(home.join("data")).unwrap();
+        let facts = ServiceFacts {
+            definition_home: bit("definition_present").then(|| {
+                if bit("same_home") {
+                    home.clone()
+                } else {
+                    temp.path().join("served")
+                }
+            }),
+            executable_present: bit("executable_present"),
+            log_current: bit("log_current"),
+            job_loaded: bit("loaded"),
+            job_running: bit("running"),
+            job_failed: bit("failed"),
+            was_serving: bit("was_serving"),
+            home: repair.home,
+            service_move: if bit("before_setup") {
+                ServiceMove::BeforeSetup
+            } else {
+                ServiceMove::AfterSetup
+            },
+            node_version: Some(NodeVersion::Same),
+            foreign_program: bit("foreign_program"),
+            managed_update: bit("managed_update"),
+            drain_supported: false,
+            previous_version: None,
+            port: match observed["serving"].as_str().unwrap() {
+                "none" => PortObservation::NotListening,
+                "same" => PortObservation::Gents {
+                    identity: ServedIdentity::Matches,
+                    payload: json!({}),
+                },
+                other => panic!("unexpected serving identity {other}"),
+            },
+            served_home_present: bit("served_home_present"),
+            operation: repair.operation,
+        };
+        assert_eq!(observed["version"], "same");
+        assert_eq!(bit("home_complete"), repair.home.is_complete());
+        let choice = HomeChoice {
+            home,
+            explicit: true,
+        };
+        let asked = super::Asked {
+            interactive: repair.interactive,
+            answer: repair.answer,
+        };
+        assert_eq!(
+            serde_json::to_value(super::observe(&choice, &facts, repair.busy, asked)).unwrap(),
+            input["repair"],
+            "the case's two observations are of one machine"
+        );
+        let actions = super::service_actions(&planning::plan(&repair), &facts, &choice.home);
+        let mut steps = Steps(Vec::new());
+        let settled = super::settle(
+            &choice,
+            &facts,
+            repair.busy,
+            asked,
+            None,
+            None,
+            None,
+            &program,
+            &mut steps,
+        )
+        .await;
+        match actions.first() {
+            None => {
+                settled.unwrap();
+                assert!(
+                    steps
+                        .0
+                        .iter()
+                        .all(|step| *step == RepairStep::SetAsideFolder),
+                    "{:?}",
+                    steps.0
+                );
+            }
+            Some(first) => {
+                assert!(settled.is_err(), "{input}");
+                assert_eq!(steps.0, [super::step_for(first)], "{input}");
+            }
+        }
+        case.check(serde_json::from_value(json!(wire(actions))).unwrap());
     }
 }
 

@@ -184,6 +184,19 @@ pub fn plan_service(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
     actions
 }
 
+/// `InstallRepair.setupServicePlan`
+pub fn plan_before_setup(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
+    let could_open_chosen = facts
+        .definition_home
+        .as_deref()
+        .is_none_or(|home| home == chosen);
+    if (facts.job_loaded || facts.job_running) && could_open_chosen {
+        vec![ServiceAction::StopStale]
+    } else {
+        Vec::new()
+    }
+}
+
 pub async fn gather_facts(
     manager: &NativeServiceManager,
     chosen: &Path,
