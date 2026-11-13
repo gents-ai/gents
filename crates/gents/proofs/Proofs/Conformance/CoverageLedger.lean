@@ -1208,8 +1208,40 @@ def caseCoverage : List CoverageEntry :=
       "model-production-gap: the stamped mailbox write takes the question's request, session and owner from the filing request, so production cannot file a mismatched question, and no scenario replays the reply-side mismatches through the signed reply claim after a linked handoff.")
       "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "count_carrier_cases"
-      "CountCarrierCases")
+      "family"
+      "admission_handoff_drive_admissions")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "admission_handoff_owned_loop")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "admission_handoff_hook_effect")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family" "admission_handoff_unreached"
+      "model-production-gap: production's typed oneshot admission handoff has no dispatch linearization, lease or generation fence, duplicate or misaddressed reply, unpublished header, invocation without a reply or effect observed after a stop to stage, so no production scenario replays these cases.")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_value")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_admission")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_storage")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_obligation_field")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "count_carrier_event_source_field")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2035,8 +2067,12 @@ def caseCoverage : List CoverageEntry :=
       "Refines source projection scope, terminal coverage, path coherence, authenticated native owners and unsigned bounded pages. Remaining canonical admission, fork and publication refinements stay separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "schema_argument_repair_cases"
-      "SchemaArgumentRepairCases")
+      "family"
+      "schema_argument_repair_tool_arguments")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "schema_argument_repair_owned_loop")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2612,9 +2648,9 @@ def caseCoverage : List CoverageEntry :=
       "R6BackgroundingCases")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "composed_invariant_witnesses"
-      "ComposedInvariantWitnesses"
-      "Covers four persisted tool recovery/cancellation outcomes through canonical accepted admission and physical request/tool rows. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
+      "family"
+      "composed_termination_linked"
+      "Covers four persisted tool recovery/cancellation outcomes of ComposedState.linkedTermination (justified by linkedTermination_reachable_from_initial over the ToolTermination theorems) through canonical accepted admission and physical request/tool rows: ToolCallLifecycle::cancel_before_dispatch, ToolCallLifecycle::cancel_during_run and the ToolCallLifecycle::recover_all deadline sweep. Full composed request, admission and clock traces still need their runtime owners.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -3358,6 +3394,8 @@ def externalPremiseCoverage : List CoverageEntry :=
       "The WASM guest supplies its step function, output schema and resume bookkeeping; core proofs do not establish guest determinism.") "tool-call" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.plugin-job.single-step-driver"
       "One active runtime per node is an operating premise. Host-local job control and in-memory step coalescing do not enforce that premise across processes.") "tool-call" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.count-carrier.non-null-id"
+      "DefraDB refuses a non-null ID field declaration (NonNull variant for type ID is not supported), so no count carrier of that schema is ever stored.") "completion-retry" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.plugin-data.transaction"
       "DefraDB provides transaction serializability and its unique index as a backstop for read-then-insert plugin data writes.") "tool-policy" [Surface.runtimeInternal]
   ]

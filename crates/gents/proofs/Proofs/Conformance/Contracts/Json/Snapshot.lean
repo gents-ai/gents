@@ -131,7 +131,7 @@ import Proofs.Conformance.StorageWriteGateStreamWaiter
 import Proofs.Conformance.NativeCompletion
 import Proofs.Conformance.NativeClaimLifetime
 import Proofs.Conformance.UpdateHandoff
-import Proofs.Runtime.CanonicalOutput.Execution.AdmissionHandoffCases
+import Proofs.Conformance.AdmissionHandoff
 import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
@@ -385,8 +385,6 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"tool_admission_handoff_cases\":"
-      ++ CanonicalOutput.Execution.AdmissionHandoff.Cases.casesJson ++ ","
     ++ "\"delegated_publication_cases\":"
       ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
 
@@ -429,8 +427,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.PublicationConformance.casesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"client_publication_protected_collection\":"
-      ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
     ++ "\"identity_parent_publication_cases\":"
       ++ Identity.PublicationConformance.parentCasesJson ++ ","
 
@@ -476,12 +472,6 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
-    ++ "\"composed_invariant_witnesses\":"
-      ++ jsonArray
-        (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
-    ++ "\"count_carrier_cases\":" ++ Conformance.CountCarrier.casesJson ++ ","
-    ++ "\"schema_argument_repair_cases\":"
-      ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
 
 def snapshotPluginCasesJson : String :=
   ""

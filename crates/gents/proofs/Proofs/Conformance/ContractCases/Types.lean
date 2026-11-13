@@ -530,30 +530,6 @@ structure R6BackgroundingCase where
   operation : Option String := none
   deriving Repr
 
-structure ComposedInvariantWitness where
-  theoremName : String
-  witnessKind : String
-  scenario : String
-  rustPath : String
-  traceStepCount : Nat
-  transitionPath : List String
-  preRequestState : String
-  preRequestAdmission : String
-  toolPreState : String
-  toolPostState : String
-  requestId : Nat
-  toolRequestId : Nat
-  toolCallId : Nat
-  requestDeadline : Nat
-  requestCurrentTime : Nat
-  toolDeadline : Nat
-  toolCurrentTime : Nat
-  deadlineExceeded : Bool
-  wellFormedSource : String
-  preToolPersisted : Bool
-  cancelCause : Option String
-  deriving Repr
-
 namespace R4cWitnesses
 
 /-- One executable canonical-tool-source projection input and the result

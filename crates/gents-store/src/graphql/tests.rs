@@ -2,6 +2,17 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn canonical_counts_follow_the_count_carrier_model() {
+    gents_lean_vocab::families::count_carrier_value::replay(|case| {
+        let wire = match case.value.kind.as_str() {
+            "text" => Value::String(case.value.spelling.clone()),
+            _ => serde_json::from_str(&case.value.spelling).unwrap(),
+        };
+        canonical_positive_count(&wire, case.maximum as usize).map(|count| count as u64)
+    });
+}
+
+#[test]
 fn mutation_documents_preserves_missing_null_alias_and_error_handling() {
     let missing = serde_json::json!({"data": {}});
     assert!(mutation_documents(&missing, "create_AgentRequest")

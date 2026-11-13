@@ -553,12 +553,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         },
     ))
@@ -692,12 +687,8 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .transact_write("test.default.preview", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    validate_desired_state_plan(
-                        txn,
-                        plan,
-                        &crate::test_support::AdmitAllProfiles,
-                    )
-                    .await
+                    validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                        .await
                 })
             })
             .await;
@@ -705,12 +696,8 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .transact_write("test.default.publish", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &crate::test_support::AdmitAllProfiles,
-                    )
-                    .await
+                    apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                        .await
                 })
             })
             .await;
@@ -799,12 +786,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.preview.replacement", |txn| {
             let plan = &preview_plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -818,12 +800,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.preview.removal", |txn| {
             let plan = &preview_removal;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -834,12 +811,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.preview.addition", |txn| {
             let plan = &preview_addition;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await?;
@@ -865,12 +837,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.reject.removal", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -900,12 +867,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.remove.cycle", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await?;
@@ -1071,12 +1033,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
         .transact_write("test.cas.stale", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1105,12 +1062,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         .transact_write("test.cas.absent_ok", |txn| {
             let plan = &must_be_absent;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await?;
@@ -1121,12 +1073,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         .transact_write("test.cas.absent_stale", |txn| {
             let plan = &wrongly_absent;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1141,12 +1088,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         .transact_write("test.cas.present_stale", |txn| {
             let plan = &wrongly_present;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1200,14 +1142,16 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                 .transact_write("test.cas.read", |txn| {
                     let id = id.clone();
                     Box::pin(async move {
-                        anyhow::Ok(read_desired_state_document_in_txn(
-                            txn,
-                            Collection::InferenceBackend,
-                            owner,
-                            &id,
+                        anyhow::Ok(
+                            read_desired_state_document_in_txn(
+                                txn,
+                                Collection::InferenceBackend,
+                                owner,
+                                &id,
+                            )
+                            .await?
+                            .map(|live| live["name"].as_str().expect("backend name").to_owned()),
                         )
-                        .await?
-                        .map(|live| live["name"].as_str().expect("backend name").to_owned()))
                     })
                 })
                 .await?;
@@ -1353,39 +1297,38 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
     let access = runtime_access(&node)?;
     let owner = "did:key:obligation-owner";
 
-    for (count_field, reported_type) in [
-        ("flag", "Boolean"),
-        ("tags", "LIST"),
-        ("required_tags", "LIST"),
-        ("observed_at", "DateTime"),
-        ("required_observed_at", "DateTime!"),
-        ("marker", "ID"),
-    ] {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases["fields"];
-        let case = cases
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["schema"] == reported_type)
-            .unwrap();
-        assert_eq!(
-            case["accepted"], false,
-            "rejection agrees with the count model"
+    for case in gents_lean_vocab::families::count_carrier_obligation_field::cases() {
+        let reported_type = case.input.schema.as_str();
+        let count_fields: &[&str] = match reported_type {
+            "Boolean" => &["flag"],
+            "LIST" => &["tags", "required_tags"],
+            "DateTime" => &["observed_at"],
+            "DateTime!" => &["required_observed_at"],
+            "ID" => &["marker"],
+            other => panic!("the obligation fixture declares no {other} field"),
+        };
+        let mut refusals = Vec::new();
+        for count_field in count_fields {
+            let outcome = apply(
+                &access,
+                vec![obligation_surface(
+                    owner,
+                    "outcomes",
+                    "ObligationOutcome",
+                    count_field,
+                )],
+            )
+            .await;
+            refusals.push(outcome.is_err_and(|refused| {
+                let diagnostic = format!("{refused:#}");
+                diagnostic.contains("expected_count_field") && diagnostic.contains(reported_type)
+            }));
+        }
+        assert!(
+            refusals.windows(2).all(|pair| pair[0] == pair[1]),
+            "{reported_type}: {refusals:?}"
         );
-        let refused = apply(
-            &access,
-            vec![obligation_surface(
-                owner,
-                "outcomes",
-                "ObligationOutcome",
-                count_field,
-            )],
-        )
-        .await
-        .expect_err("the field can never carry the expected count");
-        let diagnostic = format!("{refused:#}");
-        assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
-        assert!(diagnostic.contains(reported_type), "{diagnostic}");
+        case.check(refusals[0]);
     }
 
     let absent_field = apply(
@@ -1414,12 +1357,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         .transact_write("test.obligation.preview", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1509,25 +1447,17 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
     let access = runtime_access(&node)?;
     let owner = "did:key:event-source-owner";
 
-    for (count_field, reported_type) in [
-        ("flag", "Boolean"),
-        ("tags", "LIST"),
-        ("observed_at", "DateTime"),
-        ("required_observed_at", "DateTime!"),
-        ("marker", "ID"),
-    ] {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases["fields"];
-        let case = cases
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["schema"] == reported_type)
-            .unwrap();
-        assert_eq!(
-            case["accepted"], false,
-            "rejection agrees with the count model"
-        );
-        let refused = apply(
+    for case in gents_lean_vocab::families::count_carrier_event_source_field::cases() {
+        let reported_type = case.input.schema.as_str();
+        let count_field = match reported_type {
+            "Boolean" => "flag",
+            "LIST" => "tags",
+            "DateTime" => "observed_at",
+            "DateTime!" => "required_observed_at",
+            "ID" => "marker",
+            other => panic!("the event source fixture declares no {other} field"),
+        };
+        let outcome = apply(
             &access,
             vec![grouped_event_source(
                 owner,
@@ -1536,11 +1466,11 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
                 count_field,
             )],
         )
-        .await
-        .expect_err("the field can never carry the expected count");
-        let diagnostic = format!("{refused:#}");
-        assert!(diagnostic.contains("expected_count_field"), "{diagnostic}");
-        assert!(diagnostic.contains(reported_type), "{diagnostic}");
+        .await;
+        case.check(outcome.is_err_and(|refused| {
+            let diagnostic = format!("{refused:#}");
+            diagnostic.contains("expected_count_field") && diagnostic.contains(reported_type)
+        }));
     }
 
     let absent_field = apply(
@@ -1569,12 +1499,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         .transact_write("test.event_source.preview", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -2050,12 +1975,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         .transact_write("test.native_route.preview", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await?;
@@ -2294,13 +2214,9 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
         .transact_write("test.projection.create", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
-                .map(|_| ())
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                    .await
+                    .map(|_| ())
             })
         })
         .await?;
