@@ -1,0 +1,76 @@
+name: Prepare a self-hosted Rust runner
+description: Pinned toolchain, native build tools, the host compiler cache and, on request, Lean and the Afterburner toolchains.
+
+inputs:
+  lean:
+    description: Install elan and link the persistent Lake cache (tests load the generated Lean contract).
+    default: "false"
+  afterburner:
+    description: Install the Afterburner compiler test prerequisites (the gents-cli suite).
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # The default macOS SDK can be newer than either linker on the runner
+    # understands; pin SDKROOT to the SDK of the linker's developer directory.
+    - name: Select a matching macOS SDK for the linker
+      if: runner.os == 'macOS'
+      shell: bash
+      run: .github/scripts/setup-macos-rust-toolchain.sh
+
+    # gents-migration's build script compiles the fixture lens for WASM and
+    # the callback fixture and pack tests need WASI.
+    - name: Install pinned Rust toolchain and WASM targets
+      shell: bash
+      run: .github/scripts/setup-rust.sh wasm32-wasip1
+
+    - name: Install elan
+      if: inputs.lean == 'true'
+      shell: bash
+      run: |
+        .github/scripts/setup-elan.sh
+        cargo_dir="$(dirname "$(rustup which cargo)")"
+        echo "${cargo_dir}" >> "$GITHUB_PATH"
+        "${cargo_dir}/cargo" --version
+
+    - name: Install protobuf compiler
+      shell: bash
+      run: .github/scripts/setup-protoc.sh
+
+    - name: Install CMake for native dependencies
+      shell: bash
+      run: bash .github/scripts/setup-cmake.sh
+
+    - name: Prepare disk-backed Rust build cache
+      shell: bash
+      run: .github/scripts/setup-rust-build-cache.sh
+
+    - name: Install Go for Afterburner compiler tests
+      if: inputs.afterburner == 'true'
+      uses: actions/setup-go@v6
+      with:
+        go-version: "1.25.1"
+        cache: false
+
+    - name: Install Afterburner compiler test prerequisites
+      if: inputs.afterburner == 'true'
+      shell: bash
+      run: .github/scripts/setup-afterburner-toolchains.sh
+
+    # Mathlib publishes matching precompiled artifacts; without this cache Lake
+    # recompiles the dependency graph in every clean checkout.
+    - name: Prepare persistent Lean build cache
+      if: inputs.lean == 'true'
+      shell: bash
+      run: .github/scripts/setup-lean-build-cache.sh
+
+    # Lean 4.18's LLVM 15 linker emits a native cache executable that macOS 26
+    # rejects; the interpreter runs the same checked-in entry point.
+    - name: Download precompiled Mathlib artifacts
+      if: inputs.lean == 'true'
+      shell: bash
+      working-directory: crates/gents/proofs
+      run: |
+        lake build Cache.Main
+        lake env lean --run .lake/packages/mathlib/Cache/Main.lean get

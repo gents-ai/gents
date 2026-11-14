@@ -13,3 +13,7 @@ self-hosted-runner:
     - X64
     - spark
     - workstation-1
+paths:
+  .github/workflows/release-macos.yml:
+    ignore:
+      - 'SC2129'
