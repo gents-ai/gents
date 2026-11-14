@@ -120,6 +120,17 @@ jobs:
       - name: Run build attribution parser self-test
         run: scripts/measure-gents-build-attribution.sh self-test
 
+      - name: Report jobs a fork pull request skips
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
+        run: |
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (rust-and-cli, lean-proofs, desktop-ui-bombadil, core-packs, adapter-interop) are skipped; hosted jobs still run. A maintainer reruns the change from a branch of this repository to test it on the Studios."
+          echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
+          printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Check runner build-space reclamation
         run: python3 .github/scripts/test-rust-build-space.py
 
@@ -154,11 +165,16 @@ jobs:
 
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
+    # Fork pull requests never run on a self-hosted runner: its account shares
+    # the Cargo home, the compiler cache and the kept target trees with every
+    # other runner on the host (test-rust-build-space.py checks every job).
     if: >-
-      github.event_name != 'pull_request' ||
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&
       (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
     needs: repository-guard
     runs-on:
       [
@@ -492,6 +508,8 @@ jobs:
 
   lean-proofs:
     if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
       (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&
@@ -730,6 +748,8 @@ jobs:
 
   desktop-ui-bombadil:
     if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
       (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&

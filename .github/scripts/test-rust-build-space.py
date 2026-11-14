@@ -250,6 +250,29 @@ class BuildSpaceTests(unittest.TestCase):
         self.clean.assert_not_called()
 
 
+def loosely_equal(left, right):
+    """GitHub expression equality: strings compare case-insensitively, and
+    values of different types compare as numbers (null and '' are 0)."""
+    if isinstance(left, str) and isinstance(right, str):
+        return left.lower() == right.lower()
+    if type(left) is type(right):
+        return left == right
+
+    def number(value):
+        if value is None:
+            return 0.0
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip() or 0)
+            except ValueError:
+                return float("nan")
+        return float(value) if isinstance(value, (int, float)) else float("nan")
+
+    return number(left) == number(right)
+
+
 def evaluate(expression, context):
     """Evaluate the subset of GitHub expression syntax the trust condition uses."""
     tokens = re.findall(r"\(|\)|&&|\|\||==|!=|'[^']*'|[A-Za-z_][A-Za-z0-9_.-]*", expression)
@@ -285,9 +308,7 @@ def evaluate(expression, context):
         left = operand()
         while peek() in ("==", "!="):
             operator, right = take(), operand()
-            # GitHub compares strings case-insensitively.
-            fold = [v.lower() if isinstance(v, str) else v for v in (left, right)]
-            left = (fold[0] == fold[1]) == (operator == "==")
+            left = loosely_equal(left, right) == (operator == "==")
         return left
 
     def conjunction():
@@ -322,6 +343,106 @@ def keep_condition():
     if inner is None:
         raise AssertionError("GENTS_CI_KEEP_TARGET_TREE must be one expression")
     return inner.group(1)
+
+
+def top_level_block(text, key):
+    match = re.search(rf"^{key}:[^\n]*\n((?:(?:[ #].*)?\n)*)", text, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def job_field(block, field):
+    match = re.search(rf"^    {field}:(.*\n(?:(?:      .*| *)\n)*)", block, re.MULTILINE)
+    if match is None:
+        return None
+    lines = [line.strip() for line in match.group(1).splitlines()]
+    value = " ".join(line for line in lines if line and not line.startswith("#"))
+    return value[2:].strip() if value.startswith(">-") else value
+
+
+def pull_request_jobs():
+    """(workflow, job, runs-on, if) for every job of every workflow a pull
+    request can start."""
+    for workflow in sorted(WORKFLOW.parent.glob("*.yml")):
+        text = workflow.read_text()
+        if not re.search(r"^  pull_request(_target)?:", top_level_block(text, "on"),
+                         re.MULTILINE):
+            continue
+        jobs = top_level_block(text, "jobs")
+        starts = list(re.finditer(r"^  ([A-Za-z0-9_-]+):\s*$", jobs, re.MULTILINE))
+        for index, start in enumerate(starts):
+            end = starts[index + 1].start() if index + 1 < len(starts) else len(jobs)
+            block = jobs[start.end():end]
+            yield workflow.name, start.group(1), runner_labels(block), job_field(block, "if")
+
+
+HOSTED_LABEL = re.compile(r"(ubuntu|macos|windows)-[A-Za-z0-9.-]+")
+
+
+def runner_labels(block):
+    """The job's runs-on, with a matrix-selected runner resolved when every
+    matrix value is a GitHub-hosted label."""
+    runs_on = job_field(block, "runs-on") or ""
+    selected = re.fullmatch(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}", runs_on)
+    if selected:
+        values = re.search(rf"^\s+{selected.group(1)}:\s*\[(.*)\]\s*$", block, re.MULTILINE)
+        labels = [label.strip(" '\"") for label in values.group(1).split(",")] if values else []
+        if labels and all(HOSTED_LABEL.fullmatch(label) for label in labels):
+            return ", ".join(labels)
+    return runs_on
+
+
+def job_runs(condition, context):
+    if condition is None:
+        return True
+    inner = re.fullmatch(r"\$\{\{(.*)\}\}", condition.strip())
+    return bool(evaluate(inner.group(1) if inner else condition, context))
+
+
+def pull_request_context(head_repository, repository="gents-ai/gents"):
+    head = {"repo": {"full_name": head_repository} if head_repository else None}
+    return {"github": {"event_name": "pull_request", "ref": "refs/pull/1/merge",
+                       "repository": repository,
+                       "event": {"label": {"name": "adapter-interop"},
+                                 "pull_request": {"draft": False, "stack": None,
+                                                  "head": head}}},
+            "inputs": {}, "vars": {}}
+
+
+class SelfHostedRoutingTests(unittest.TestCase):
+    """Self-hosted runner accounts share the Cargo home, the compiler cache and
+    kept target trees across runners, so no fork's code may run on one."""
+
+    def self_hosted_jobs(self):
+        jobs = [job for job in pull_request_jobs()
+                if "self-hosted" in job[2] or "${{" in job[2]]
+        self.assertTrue(any(job[:2] == ("ci.yml", "rust-and-cli") for job in jobs))
+        return jobs
+
+    def test_fork_pull_requests_never_reach_a_self_hosted_runner(self):
+        for head in ("someone/gents", "gents-ai/gents-fork", None):
+            for workflow, job, _, condition in self.self_hosted_jobs():
+                with self.subTest(workflow=workflow, job=job, head=head):
+                    self.assertFalse(job_runs(condition, pull_request_context(head)))
+
+    def test_pull_requests_from_this_repository_still_run_the_studio_jobs(self):
+        context = pull_request_context("gents-ai/gents")
+        for workflow, job, _, condition in self.self_hosted_jobs():
+            with self.subTest(workflow=workflow, job=job):
+                self.assertTrue(job_runs(condition, context))
+
+    def test_the_guard_reports_skipped_jobs_to_a_fork(self):
+        guard = [condition for workflow, job, _, condition in pull_request_jobs()
+                 if (workflow, job) == ("ci.yml", "repository-guard")]
+        self.assertEqual(guard, [None])
+        text = WORKFLOW.read_text()
+        step = re.search(r"- name: Report jobs a fork pull request skips\n"
+                         r"        if: >-\n((?:          .*\n)+)", text)
+        self.assertIsNotNone(step)
+        condition = " ".join(line.strip() for line in step.group(1).splitlines())
+        self.assertTrue(job_runs(condition, pull_request_context("someone/gents")))
+        self.assertFalse(job_runs(condition, pull_request_context("gents-ai/gents")))
+        for _, job, _, _ in self.self_hosted_jobs():
+            self.assertIn(job, text[step.end():step.end() + 2000])
 
 
 class KeptTreeTrustTests(unittest.TestCase):
