@@ -44,7 +44,9 @@ args = sys.argv[1:]
 log = pathlib.Path(os.environ["CALL_LOG"])
 with log.open("a") as stream:
     stream.write(json.dumps(args) + "\\n")
-if args[:3] == ["utils", "data", "query"]:
+if args[:3] == ["utils", "data", "query"] and args[args.index("--collection") + 1] == "Node":
+    print(json.dumps({"results": [{"node_did": "did:test:node"}]}))
+elif args[:3] == ["utils", "data", "query"]:
     assert args[args.index("--collection") + 1] == "DefaultAgentSelection", args
     print(json.dumps({"results": [{"node_did": "did:test:node", "default_agent_did": None if os.getenv("MISSING_DEFAULT_AGENT") else "did:test:provisioned-agent"}]}))
 elif args[:2] == ["config", "apply"] and os.getenv("FAIL_CONFIG_APPLY"):
@@ -99,6 +101,41 @@ elif args[:2] != ["config", "apply"]:
                 self.assertNotIn(forbidden, args)
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(len(ids), 4)
+
+    def inference_config(self):
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        roots = [call[call.index("--root") + 1] for call in calls if call[:2] == ["config", "apply"]]
+        return json.loads((pathlib.Path(roots[0]) / "pack_config.json").read_text())
+
+    def test_default_sampling_pins_temperature_and_top_p(self):
+        result = self.run_ladder("all", "--concurrency", "3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        sampling = self.inference_config()["inference_sampling"][0]
+        self.assertEqual((sampling["temperature"], sampling["top_p"]), (1.0, 0.95))
+
+    def test_empty_sampling_leaves_the_target_defaults(self):
+        result = self.run_ladder("all", "--concurrency", "3", GENTS_EVAL_TEMPERATURE="", GENTS_EVAL_TOP_P="")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        sampling = self.inference_config()["inference_sampling"][0]
+        self.assertNotIn("temperature", sampling)
+        self.assertNotIn("top_p", sampling)
+        self.assertIn("temperature target, top_p target", result.stderr)
+
+    def test_target_file_overrides_the_named_target(self):
+        target = json.loads((self.scripts / "targets/workstation-1.json").read_text())
+        target["inference_backends"][0]["endpoint"] = "http://model.invalid/v1"
+        target["inference_profiles"][0]["model_name"] = "file-model"
+        path = self.root / "elsewhere.json"
+        path.write_text(json.dumps(target))
+        result = self.run_ladder("all", "--concurrency", "3", GENTS_EVAL_TARGET="ci", GENTS_EVAL_TARGET_FILE=str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = self.inference_config()
+        self.assertEqual(config["inference_backends"][0]["endpoint"], "http://model.invalid/v1")
+        self.assertEqual(config["inference_profiles"][0]["profile_id"], "did:test:node:ladder-ci")
+        self.assertEqual(config["inference_profiles"][0]["model_name"], "file-model")
+        plan = json.loads(next(self.home.glob("batch-*.json")).read_text())
+        for run in plan["runs"]:
+            self.assertIn("engineer=did:test:node:ladder-ci", run["args"])
 
     def test_repeated_launches_retain_distinct_saved_plans(self):
         for _ in range(2):
