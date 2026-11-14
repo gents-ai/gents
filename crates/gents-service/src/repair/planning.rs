@@ -42,6 +42,11 @@ pub fn keeps_served_home(observed: &RepairObservation) -> bool {
         && observed.operation != RepairOperation::Repoint
 }
 
+/// `InstallRepair.takesHome`
+pub fn takes_home(plan: &RepairPlan, home: HomeState) -> bool {
+    plan.needs_setup && home != HomeState::Absent
+}
+
 fn service_steps(observed: &RepairObservation, archive: bool, setup: bool) -> Vec<RepairStep> {
     let update = !observed.managed_update
         && (observed.version == RepairVersion::Older
