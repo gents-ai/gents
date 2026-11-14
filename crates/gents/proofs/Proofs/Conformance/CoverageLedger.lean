@@ -2862,6 +2862,33 @@ def caseCoverage : List CoverageEntry :=
       "identity_household_cases"
       "IdentityHouseholdCases")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_cleanup_visible")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_removal_confirmation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_removal_delete_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_installation_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_installation_aborted")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_compaction_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_compaction_update")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_runtime_default_account_read")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_checkpoint_arrival")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_target_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_target_tool")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_plugin_backend_use")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_runtime_default_account_read_unreached"
+      "model-production-gap: the runtime default-account read always shares the Agent write's transaction snapshot, and its metadata query and delegated read check are answered by the same native ACP state, so a different snapshot or a failed native read of a runtime-visible row is not produced by any served-node fixture.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_destructive_decision")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_fresh_backend_reopen")

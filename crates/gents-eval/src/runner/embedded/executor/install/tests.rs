@@ -217,24 +217,16 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .unwrap()
             .is_none()
     );
-    let fixture = gents_lean_vocab::lean_identity_household_cases()
-        .first()
-        .unwrap();
-    let modeled_agent = &fixture
-        .objects
-        .iter()
-        .find(|object| object.resource == "delivered_requests" && object.id == "automated-request")
-        .unwrap()
-        .owner;
     let consumer = EventConsumer::Trigger {
         trigger_id: "trigger".into(),
     };
     let mut second = None;
-    for case in &fixture.task_checkpoint_cases {
-        if case.through == 2 && second.is_none() {
+    for case in gents_lean_vocab::families::household_task_checkpoint_arrival::cases() {
+        let step = &case.input;
+        if step.through == 2 && second.is_none() {
             second = Some(source(&evaluator, "second").await);
         }
-        if case.through == 2 && case.receipt {
+        if step.through == 2 && step.receipt {
             admit(
                 &agent,
                 &home.node,
@@ -244,20 +236,21 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             )
             .await;
         }
-        let access = if case.actor == *modeled_agent {
-            &agent
-        } else {
-            &node
+        let agent_step = match step.role.as_str() {
+            "agent" => true,
+            "runtime" => false,
+            other => panic!("unmodeled checkpoint actor {other}"),
         };
+        let access = if agent_step { &agent } else { &node };
         let before = agent
             .execute("{ EventSourceCursor { after } }")
             .await
             .unwrap();
         assert_eq!(
             before["data"]["EventSourceCursor"][0]["after"],
-            case.cursor.to_string()
+            step.cursor.to_string()
         );
-        let through = case.through.to_string();
+        let through = step.through.to_string();
         let result = access
             .transact_write("test.checkpoint.advance", |txn| {
                 let consumer = &consumer;
@@ -272,17 +265,18 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .execute("{ EventSourceCursor { after } }")
             .await
             .unwrap();
-        assert_eq!(
-            after["data"]["EventSourceCursor"][0]["after"],
-            case.expected.to_string()
-        );
-        if case.actor == *modeled_agent {
-            assert_eq!(result.unwrap(), case.expected == case.through);
+        let after: u64 = after["data"]["EventSourceCursor"][0]["after"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        if agent_step {
+            assert_eq!(result.unwrap(), after == step.through);
         } else {
             assert!(result.is_err());
         }
+        case.check(after);
     }
-    assert_eq!(fixture.task_checkpoint_cases.len(), 5);
     home.node.shutdown().await.unwrap();
 }
 

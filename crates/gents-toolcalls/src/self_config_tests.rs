@@ -3744,46 +3744,39 @@ async fn automation_read_preserves_native_selected_agent_visibility() {
         })
         .await
         .unwrap();
-    let expected = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap()
-        .configuration_task_target_cases
-        .iter()
-        .find(|case| case["name"] == "task-unrelated")
-        .unwrap()["expected"]
-        .as_bool()
-        .unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         fixture.db.node.clone(),
         identity::Did::new(fixture.agent_did()).unwrap(),
         fixture.agent.as_ref(),
     )
     .unwrap();
-    let response = access
-        .execute("{ Task(filter: {task_id: {_eq: \"other-agent-task\"}}) {_docID} }")
-        .await
-        .unwrap();
-    let visible = !response["data"]["Task"].as_array().unwrap().is_empty();
-    assert_eq!(visible, expected, "native selected Task access");
     let tools = fixture.tools(&["automation"]);
-    let result = call_config_tool(
-        &tools,
-        vec![
-            "automation".into(),
-            "get".into(),
-            "task".into(),
-            "other-agent-task".into(),
-            "--agent".into(),
-            sibling,
-        ],
-    )
-    .await;
-    assert_eq!(
-        result.is_ok(),
-        expected,
-        "tool must retain invoking Agent access: {result:?}"
-    );
+    for case in gents_lean_vocab::families::household_task_target_tool::cases() {
+        assert_eq!(case.input.actor, "agent-b", "{:?}", case.input);
+        let response = access
+            .execute("{ Task(filter: {task_id: {_eq: \"other-agent-task\"}}) {_docID} }")
+            .await
+            .unwrap();
+        let visible = !response["data"]["Task"].as_array().unwrap().is_empty();
+        let result = call_config_tool(
+            &tools,
+            vec![
+                "automation".into(),
+                "get".into(),
+                "task".into(),
+                "other-agent-task".into(),
+                "--agent".into(),
+                sibling.clone(),
+            ],
+        )
+        .await;
+        assert_eq!(
+            result.is_ok(),
+            visible,
+            "tool must retain invoking Agent access: {result:?}"
+        );
+        case.check(visible);
+    }
 }
 
 #[tokio::test]

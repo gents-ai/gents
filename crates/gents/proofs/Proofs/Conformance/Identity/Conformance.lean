@@ -563,13 +563,6 @@ def policyRegistrations : List Json :=
         ("same_id", toJson (policyIdInput policy == policyIdInput candidate)),
         ("accepted", toJson ((registerPolicy (some policyYaml) candidateYaml).isSome))]
 
-def taskCheckpointCases : List Json :=
-  [(runtimeDid, 0, 1, true), (agentDid, 0, 1, true), (agentDid, 1, 1, true),
-    (agentDid, 1, 2, false), (agentDid, 1, 2, true)].map fun (actor, cursor, through, receipt) =>
-    Json.mkObj [("actor", toJson actor), ("cursor", toJson cursor), ("through", toJson through), ("receipt", toJson receipt),
-      ("expected", toJson (Identity.Automation.checkpointTaskArrival initial actor "automated-request"
-        receipt true true cursor through))]
-
 def json : Json := Json.mkObj
   [("name", toJson "user-node-agents-mixed-session-ownership-policy-followup"), ("policy_yaml", toJson policyYaml),
    ("managed_client_handoff_cases", toJson ([] : List Json)),
@@ -577,7 +570,6 @@ def json : Json := Json.mkObj
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
    ("policy_registrations", toJson policyRegistrations),
-   ("task_checkpoint_cases", toJson taskCheckpointCases),
    ("self_config_actions", toJson (traceJson initial selfConfigChanges)),
    ("invoke_session_actions", toJson (traceJson initial invokeOnlySessionActions)),
    ("self_config_lookup_cases", toJson (selfConfigLookupCases.map fun (name, attempt) =>
@@ -718,43 +710,6 @@ def retryUsersetCaseJson (name actor : String) (revokeExecution : Bool) : Json :
     ("document", toJson "retry"), ("direct", toJson false),
     ("expected", toJson (Household.allowed 8 state actor "configuration" "retry" "read"))]
 
-def compactionUsersetCaseJson (phase actor document : String) : Json :=
-  let initial := Configuration.compactionSelectionFixture
-  let edgeA : Relation := ⟨"configuration", "compaction-a", "selected_by", .entitySet "configuration" "context" "selected_by"⟩
-  let edgeB : Relation := ⟨"configuration", "compaction-b", "selected_by", .entitySet "configuration" "context" "selected_by"⟩
-  let rebound := apply (apply initial (.revoke edgeA)) (.grant edgeB)
-  let state := if phase == "revoked" || phase == "unchanged" then apply initial (.revoke edgeA)
-    else if phase == "rebound" then rebound
-    else if phase == "direct-rebound" then apply rebound (.grant
-      ⟨"configuration", "compaction-a", "reader", .actor "selected"⟩)
-    else if phase == "context-revoked" then apply rebound (.revoke
-      ⟨"configuration", "context", "selected_by", .entitySet "agents" "agent" "executor"⟩)
-    else if phase == "executor-revoked" then apply rebound (.revoke
-      ⟨"agents", "agent", "executor", .actor "selected"⟩)
-    else initial
-  let visible := Household.allowed 8 state actor "configuration" document "read"
-  let guard := Household.allowed 8 state actor "agents" "agent" "read" &&
-    Household.allowed 8 state actor "configuration" "context" "read" && visible
-  Json.mkObj [("phase", toJson phase), ("actor", toJson actor), ("document", toJson document),
-    ("expected", toJson visible), ("guard_expected", toJson guard),
-    ("update_expected", toJson (Household.allowed 8 state actor "configuration" document "update")),
-    ("owner_update_expected", toJson (Household.allowed 8 state "user" "configuration" document "update"))]
-
-def taskTargetCaseJson (name actor document transition : String) : Json :=
-  let state := if transition == "rebound" then TaskTarget.rebindTask TaskTarget.fixture "user" "a" "b" true
-    else if transition == "shared-rebound" then
-      TaskTarget.rebindTask (apply TaskTarget.fixture (.grantAs "user"
-        ⟨"configuration", "task", "reader", .actor "agent-a"⟩)) "user" "a" "b" true
-    else if transition == "task-revoked" then
-      let rebound := TaskTarget.rebindTask TaskTarget.fixture "user" "a" "b" true
-      let revoked := apply rebound (.revoke (TaskTarget.taskEdge "b"))
-      TaskTarget.rebindTask revoked "user" "b" "b" true
-    else if transition == "target-revoked" then apply TaskTarget.fixture (.revoke
-      ⟨"configuration", "target", "selected_by", .entitySet "configuration" "tools" "selected_by"⟩)
-    else TaskTarget.fixture
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("document", toJson document),
-    ("transition", toJson transition), ("expected", toJson (Household.allowed 8 state actor "configuration" document "read"))]
-
 def toolReferencesCaseJson (name : String) (references : Configuration.ToolSelectionReferences) : Json :=
   Json.mkObj [("name", toJson name), ("agents_enabled", toJson references.agentsEnabled),
     ("targets", toJson references.targets), ("services", toJson references.services),
@@ -775,43 +730,6 @@ def agentInvokeManagerCaseJson : Json :=
   let revoked := apply granted (.revokeAs "user" grant)
   Json.mkObj [("before", toJson (allowed 8 granted "reader" "agents" "agent" "invoke")),
     ("after", toJson (allowed 8 revoked "reader" "agents" "agent" "invoke"))]
-
-def packInstallationCaseJson (name installer : String) (commit revoke retryFresh direct : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩],
-      relations := [⟨"nodes", "home", "runtime_reader", .actor runtimeDid⟩], enrolled := [] }
-  let published := if direct then directCreate initial installer "configuration" "pack" true true
-    else Configuration.publishPackInstallation initial installer "pack" "home" true commit
-  let state := if revoke then apply published
-    (.revoke ⟨"configuration", "pack", "parent", .object "nodes" "home"⟩) else published
-  let updated := Configuration.publishPackInstallation state installer "pack" "home" retryFresh true
-  let allowed := fun actor permission => Household.allowed 5 updated actor "configuration" "pack" permission
-  Json.mkObj [("name", toJson name), ("installer", toJson installer),
-    ("commit", toJson commit), ("revoke_parent", toJson revoke), ("retry_fresh", toJson retryFresh),
-    ("direct", toJson direct),
-    ("installer_read", toJson (allowed installer "read")),
-    ("installer_update", toJson (allowed installer "update")),
-    ("user_read", toJson (allowed userDid "read")),
-    ("user_update", toJson (allowed userDid "update")),
-    ("user_delete", toJson (allowed userDid "delete")),
-    ("runtime_read", toJson (allowed runtimeDid "read")),
-    ("other_read", toJson (allowed siblingDid "read"))]
-
-def packRemovalCaseJson (name actor : String) (writer matchReturned : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩],
-      relations := [⟨"nodes", "home", "runtime_reader", .actor runtimeDid⟩], enrolled := [] }
-  let published := Configuration.publishPackInstallation initial agentDid "pack" "home" true true
-  let state := if writer then apply published
-    (.grantAs agentDid ⟨"configuration", "pack", "writer", .actor siblingDid⟩) else published
-  let returned := if matchReturned then "pack" else "other"
-  Json.mkObj [("name", toJson name), ("actor", toJson actor),
-    ("writer", toJson writer), ("returned_matches", toJson matchReturned),
-    ("expected", toJson (Configuration.packRemovalConfirmed state actor "pack" returned))]
-
-def packCleanupCaseJson (name : String) (visible : List Bool) : Json :=
-  Json.mkObj [("name", toJson name), ("visible", toJson visible),
-    ("expected", toJson (Configuration.packCleanupInputsVisible visible))]
 
 def datastoreToolUseCaseJson (name : String)
     (visible enabled selected declarationMatches : Bool) : Json :=
@@ -1245,22 +1163,6 @@ def backendCredentialCases : List Json := Id.run do
     backendCredentialCaseJson "inline-secret" allowed true true,
     backendCredentialCaseJson "redacted-history" allowed false true]
 
-def runtimeDefaultAccountCase (name : String) (access : Configuration.RuntimeDefaultAccountRead)
-    (visibleDefault : Option String) : Json :=
-  Json.mkObj [("name", toJson name), ("runtime_actor", toJson access.runtimeActor),
-    ("same_node", toJson access.sameNode), ("same_snapshot", toJson access.sameSnapshot),
-    ("native_read", toJson access.nativeRead), ("visible_default", toJson visibleDefault),
-    ("allowed", toJson (Configuration.runtimeMayReadDefaultAccount access))]
-
-def runtimeDefaultAccountCases : List Json := Id.run do
-  let allowed : Configuration.RuntimeDefaultAccountRead := ⟨true, true, true, true⟩
-  return [runtimeDefaultAccountCase "visible-named" allowed (some "named"),
-    runtimeDefaultAccountCase "visible-empty" allowed none,
-    runtimeDefaultAccountCase "foreign-node" { allowed with sameNode := false } (some "named"),
-    runtimeDefaultAccountCase "agent-actor" { allowed with runtimeActor := false } (some "named"),
-    runtimeDefaultAccountCase "other-snapshot" { allowed with sameSnapshot := false } (some "named"),
-    runtimeDefaultAccountCase "read-failed" { allowed with nativeRead := false } (some "named")]
-
 def runtimeDefaultChoiceCase (name currentKind nextKind : String)
     (currentRef nextRef visibleDefault : Option String) : Json :=
   let current := some (currentKind, _root_.Configuration.BackendAuth.nodeOAuth currentRef)
@@ -1342,7 +1244,6 @@ def json : Json := Json.mkObj
        Json.mkObj [("full", toJson full), ("asset", toJson name),
          ("retired", toJson (Configuration.desktopResetRetires full asset))])),
    ("backend_credential_cases", toJson backendCredentialCases),
-   ("runtime_default_account_cases", toJson runtimeDefaultAccountCases),
    ("runtime_default_choice_cases", toJson runtimeDefaultChoiceCases),
    ("configuration_plugin_backend_cases", toJson [
       pluginBackendCase "selected" (some "agent") "",
@@ -1466,24 +1367,6 @@ def json : Json := Json.mkObj
        inferenceSelfConfigCase "revoked" "agent" "context",
        inferenceSelfConfigCase "revoked" "agent" "tools",
        inferenceSelfConfigCase "direct-after-revoke" "agent" "execution"]),
-   ("configuration_compaction_cases", toJson
-      ((["initial", "revoked", "unchanged", "rebound", "direct-rebound", "context-revoked", "executor-revoked"] : List String).flatMap fun phase =>
-        (["selected", "sibling"] : List String).flatMap fun actor =>
-          (["compaction-a", "compaction-b"] : List String).map fun document =>
-            compactionUsersetCaseJson phase actor document)),
-   ("configuration_task_target_cases", toJson
-      [taskTargetCaseJson "task-owner" "user" "task" "initial",
-       taskTargetCaseJson "task-runtime" "runtime" "task" "initial",
-       taskTargetCaseJson "task-selected" "agent-a" "task" "initial",
-       taskTargetCaseJson "task-unrelated" "agent-b" "task" "initial",
-       taskTargetCaseJson "task-old-target" "agent-a" "task" "rebound",
-       taskTargetCaseJson "task-new-target" "agent-b" "task" "rebound",
-       taskTargetCaseJson "task-explicit-reader" "agent-a" "task" "shared-rebound",
-       taskTargetCaseJson "task-revoked-replay" "agent-b" "task" "task-revoked",
-       taskTargetCaseJson "target-selected" "agent-a" "target" "initial",
-       taskTargetCaseJson "target-unrelated" "agent-b" "target" "initial",
-       taskTargetCaseJson "target-revoked" "agent-a" "target" "target-revoked"]),
-
    ("configuration_tool_reference_cases", toJson
       [toolReferencesCaseJson "empty" ⟨false, [], [], []⟩,
        toolReferencesCaseJson "disabled-target" ⟨false, ["target"], [], []⟩,
@@ -1497,24 +1380,6 @@ def json : Json := Json.mkObj
        pluginProfileCaseJson "absent" none false,
        pluginProfileCaseJson "revoked" (some "agent") true]),
    ("agent_node_manager_invoke_case", agentInvokeManagerCaseJson),
-   ("configuration_pack_installation_cases", toJson
-      [packInstallationCaseJson "user-created" userDid true false false false,
-       packInstallationCaseJson "agent-created" agentDid true false false false,
-       packInstallationCaseJson "agent-parent-revoked" agentDid true true false false,
-       packInstallationCaseJson "agent-parent-revoked-claimed-fresh" agentDid true true true false,
-       packInstallationCaseJson "aborted" agentDid false false false false,
-       packInstallationCaseJson "direct-orphan" agentDid true false false true]),
-   ("configuration_pack_removal_cases", toJson
-      [packRemovalCaseJson "agent-owner" agentDid false true,
-       packRemovalCaseJson "user-parent" userDid false true,
-       packRemovalCaseJson "runtime-reader" runtimeDid false true,
-       packRemovalCaseJson "agent-writer" siblingDid true true,
-       packRemovalCaseJson "wrong-document" agentDid false false]),
-   ("configuration_pack_cleanup_cases", toJson
-      [packCleanupCaseJson "none" [],
-       packCleanupCaseJson "all-visible" [true, true],
-       packCleanupCaseJson "unavailable-first" [false, true],
-       packCleanupCaseJson "unavailable-later" [true, false]]),
    ("configuration_datastore_tool_use_cases", toJson
       [datastoreToolUseCaseJson "allowed" true true true true,
        datastoreToolUseCaseJson "revoked" false true true true,

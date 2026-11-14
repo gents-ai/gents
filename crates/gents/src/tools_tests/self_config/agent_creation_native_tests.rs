@@ -106,14 +106,12 @@ async fn cached_surface_usable(
         .is_ok()
 }
 
-async fn assert_pack_policy_observation(
+async fn pack_permission(
     admin: &ConfigAccess,
-    case: &Value,
     actor: &identity::Did,
     doc_id: &str,
     permission: &'static str,
-    expected_field: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let decisions = admin
         .transact_readonly("test.pack.policy_observation", |txn| {
             let actor = actor.clone();
@@ -140,35 +138,29 @@ async fn assert_pack_policy_observation(
             })
         })
         .await?;
-    let actual = decisions == [defra_node::DocumentAccessDecision::Allowed];
-    let expected = case[expected_field]
-        .as_bool()
-        .context("modeled PackInstallation access is missing")?;
-    assert_eq!(actual, expected, "{}: {expected_field}", case["name"]);
-    Ok(())
+    Ok(decisions == [defra_node::DocumentAccessDecision::Allowed])
 }
 
-async fn assert_pack_policy_case(
+async fn pack_installation_access(
     admin: &ConfigAccess,
-    case: &Value,
     installer: &identity::Did,
     user: &identity::Did,
     runtime: &identity::Did,
     sibling: &identity::Did,
     doc: &str,
-) -> Result<()> {
-    for (actor, permission, field) in [
-        (installer, "read", "installer_read"),
-        (installer, "update", "installer_update"),
-        (user, "read", "user_read"),
-        (user, "update", "user_update"),
-        (user, "delete", "user_delete"),
-        (runtime, "read", "runtime_read"),
-        (sibling, "read", "other_read"),
-    ] {
-        assert_pack_policy_observation(admin, case, actor, doc, permission, field).await?;
-    }
-    Ok(())
+) -> Result<gents_lean_vocab::families::household_pack_installation_access::PackInstallationAccess>
+{
+    Ok(
+        gents_lean_vocab::families::household_pack_installation_access::PackInstallationAccess {
+            installer_read: pack_permission(admin, installer, doc, "read").await?,
+            installer_update: pack_permission(admin, installer, doc, "update").await?,
+            user_read: pack_permission(admin, user, doc, "read").await?,
+            user_update: pack_permission(admin, user, doc, "update").await?,
+            user_delete: pack_permission(admin, user, doc, "delete").await?,
+            runtime_read: pack_permission(admin, runtime, doc, "read").await?,
+            other_read: pack_permission(admin, sibling, doc, "read").await?,
+        },
+    )
 }
 
 struct UnmanagedSigner(Arc<dyn NodeIdentity>);
@@ -787,28 +779,23 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .context("configuration policy model is missing")?;
-    assert_eq!(modeled.configuration_pack_installation_cases.len(), 6);
-    assert_eq!(modeled.configuration_pack_removal_cases.len(), 5);
-    let model_case = |name: &str| {
-        modeled
-            .configuration_pack_installation_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .with_context(|| format!("missing modeled pack case {name}"))
-    };
+    let mut installations = Vec::new();
+    let mut removals = Vec::new();
     let agent_did = identity::Did::new(signer.did())?;
     let runtime_did = identity::Did::new(runtime.did())?;
     let sibling_did = identity::Did::new(&sibling.agent_did)?;
-    assert_pack_policy_case(
-        &admin,
-        model_case("agent-created")?,
-        &agent_did,
-        &user_did,
-        &runtime_did,
-        &sibling_did,
-        record_doc,
-    )
-    .await?;
+    installations.push((
+        "agent-created",
+        pack_installation_access(
+            &admin,
+            &agent_did,
+            &user_did,
+            &runtime_did,
+            &sibling_did,
+            record_doc,
+        )
+        .await?,
+    ));
     let sibling_writer = ConfigAccess::local_managed_agent(
         node.clone(),
         sibling_did.clone(),
@@ -849,12 +836,6 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             Ok::<_, anyhow::Error>(doc)
         })
     }).await?;
-    let hidden_case = modeled
-        .configuration_pack_cleanup_cases
-        .iter()
-        .find(|case| case["name"] == "unavailable-first")
-        .context("missing cleanup model case")?;
-    assert_eq!(hidden_case["expected"], false);
     let error = gents_pack::pack::remove_pack(
         &sibling_writer,
         runtime.did(),
@@ -1437,27 +1418,15 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         ))
         .await?;
     assert_eq!(after_denied, before_denied);
-    let removal_case = |name: &str| {
-        modeled
-            .configuration_pack_removal_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .with_context(|| format!("missing modeled pack removal case {name}"))
-    };
     for (actor, name) in [
         (&agent_did, "agent-owner"),
         (&user_did, "user-parent"),
         (&runtime_did, "runtime-reader"),
     ] {
-        assert_pack_policy_observation(
-            &admin,
-            removal_case(name)?,
-            actor,
-            record_doc,
-            "delete",
-            "expected",
-        )
-        .await?;
+        removals.push((
+            name,
+            pack_permission(&admin, actor, record_doc, "delete").await?,
+        ));
     }
     // The Agent installed a plugin-only pack, which `remove_pack` refuses for
     // every actor before any write: its plugins are removed through plugin
@@ -1493,15 +1462,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     creator_access
         .add_actor_relationship("PackInstallation", record_doc, "writer", &sibling_did)
         .await?;
-    assert_pack_policy_observation(
-        &admin,
-        removal_case("agent-writer")?,
-        &sibling_did,
-        record_doc,
-        "delete",
-        "expected",
-    )
-    .await?;
+    removals.push((
+        "agent-writer",
+        pack_permission(&admin, &sibling_did, record_doc, "delete").await?,
+    ));
     let attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let native_denied: Result<()> = sibling_writer.transact_write("test.pack.writer_delete", |txn| {
         let attempted = attempted.clone();
@@ -1561,16 +1525,18 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .as_str()
         .context("user installation record missing")?
         .to_owned();
-    assert_pack_policy_case(
-        &admin,
-        model_case("user-created")?,
-        &user_did,
-        &user_did,
-        &runtime_did,
-        &sibling_did,
-        &user_doc,
-    )
-    .await?;
+    installations.push((
+        "user-created",
+        pack_installation_access(
+            &admin,
+            &user_did,
+            &user_did,
+            &runtime_did,
+            &sibling_did,
+            &user_doc,
+        )
+        .await?,
+    ));
     let original_bindings = user_record["data"]["PackInstallation"][0]["agent_bindings"].clone();
     assert!(!original_bindings.is_null());
     user_pack.version = "2.0.0".into();
@@ -1652,16 +1618,18 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .map(|signature| signature.identity.as_str()),
         Some(creator_signer.as_str())
     );
-    assert_pack_policy_case(
-        &admin,
-        model_case("agent-parent-revoked")?,
-        &agent_did,
-        &user_did,
-        &runtime_did,
-        &sibling_did,
-        record_doc,
-    )
-    .await?;
+    installations.push((
+        "agent-parent-revoked",
+        pack_installation_access(
+            &admin,
+            &agent_did,
+            &user_did,
+            &runtime_did,
+            &sibling_did,
+            record_doc,
+        )
+        .await?,
+    ));
     let claimed_fresh =
         gents_pack::pack::PackIdentity::new(distribution.manifest(), distribution.digest(), vec![]);
     assert!(gents_pack::pack::record_plugin_store_change(
@@ -1674,16 +1642,18 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     )
     .await
     .is_err());
-    assert_pack_policy_case(
-        &admin,
-        model_case("agent-parent-revoked-claimed-fresh")?,
-        &agent_did,
-        &user_did,
-        &runtime_did,
-        &sibling_did,
-        record_doc,
-    )
-    .await?;
+    installations.push((
+        "agent-parent-revoked-claimed-fresh",
+        pack_installation_access(
+            &admin,
+            &agent_did,
+            &user_did,
+            &runtime_did,
+            &sibling_did,
+            record_doc,
+        )
+        .await?,
+    ));
 
     let staged = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let aborted: Result<()> = creator_access.transact_write("test.pack.abort", |txn| {
@@ -1700,35 +1670,58 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     }).await;
     assert!(aborted.is_err());
     assert!(staged.load(std::sync::atomic::Ordering::Acquire));
-    let abort_case = model_case("aborted")?;
-    assert_eq!(abort_case["installer_read"], false);
-    assert_eq!(abort_case["user_read"], false);
+    let mut aborted_reads = Vec::new();
     for access in [&creator_access, &user_access] {
-        assert!(access
-            .execute(
-                "{ PackInstallation(filter: {coordinate: {_eq: \"fixture/aborted\"}}) { _docID } }"
-            )
-            .await?["data"]["PackInstallation"]
-            .as_array()
-            .context("aborted pack query missing")?
-            .is_empty());
+        aborted_reads.push(
+            !access
+                .execute(
+                    "{ PackInstallation(filter: {coordinate: {_eq: \"fixture/aborted\"}}) { _docID } }",
+                )
+                .await?["data"]["PackInstallation"]
+                .as_array()
+                .context("aborted pack query missing")?
+                .is_empty(),
+        );
+    }
+    for case in gents_lean_vocab::families::household_pack_installation_aborted::cases() {
+        case.check(
+            gents_lean_vocab::families::household_pack_installation_aborted::PackInstallationAbortedAccess {
+                installer_read: aborted_reads[0],
+                user_read: aborted_reads[1],
+            },
+        );
     }
     let direct = creator_access.write("test.pack.direct_create", &format!(
         "mutation {{ create_PackInstallation(input: {{node_did: \"{}\", coordinate: \"fixture/direct-orphan\"}}) {{_docID}} }}",
         gents_store::graphql::escape_graphql_string(runtime.did()),
     )).await?;
     let direct_doc = gents_store::graphql::created_doc_id(&direct, "PackInstallation")?;
-    assert_pack_policy_case(
-        &admin,
-        model_case("direct-orphan")?,
-        &agent_did,
-        &user_did,
-        &runtime_did,
-        &sibling_did,
-        &direct_doc,
-    )
-    .await?;
-    assert_eq!(removal_case("agent-owner")?["expected"], true);
+    installations.push((
+        "direct-orphan",
+        pack_installation_access(
+            &admin,
+            &agent_did,
+            &user_did,
+            &runtime_did,
+            &sibling_did,
+            &direct_doc,
+        )
+        .await?,
+    ));
+    for case in gents_lean_vocab::families::household_pack_installation_access::cases() {
+        let observed = installations
+            .iter()
+            .position(|(name, _)| *name == case.input.name)
+            .with_context(|| format!("pack case {} was not observed", case.input.name))?;
+        case.check(installations.swap_remove(observed).1);
+    }
+    for case in gents_lean_vocab::families::household_pack_removal_delete_access::cases() {
+        let observed = removals
+            .iter()
+            .find(|(name, _)| *name == case.input.name)
+            .with_context(|| format!("pack removal {} was not observed", case.input.name))?;
+        case.check(observed.1);
+    }
     // A plugin-only pack is retired through plugin removal: the local store
     // releases its plugins, then the Agent records the disappearance.
     let local_home = plugin_home.path().to_owned();
