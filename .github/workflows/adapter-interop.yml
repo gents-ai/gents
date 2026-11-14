@@ -42,7 +42,11 @@ env:
 
 jobs:
   adapter-interop:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'adapter-interop'
+    # Fork pull requests never run on a self-hosted runner (ci.yml rust-and-cli).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'adapter-interop' &&
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, Linux, X64, workstation-1]
     timeout-minutes: 60
     env:

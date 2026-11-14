@@ -11,22 +11,55 @@ if [[ -z "${RUNNER_TEMP:-}" ]]; then
   exit 1
 fi
 
-# The runner empties RUNNER_TEMP around every job, so linked artifacts never
-# outlive the job that built them. The host sccache service is the shared,
-# size-capped compiler cache. Keep this path free of run IDs: sccache hashes
-# CARGO_* environment values, so a per-runner stable path keeps hits warm.
-export CARGO_TARGET_ROOT="${RUNNER_TEMP}/gents-cargo-target"
-echo "CARGO_TARGET_ROOT=${CARGO_TARGET_ROOT}" >> "${GITHUB_ENV}"
-
 if [[ -z "${RUNNER_NAME:-}" ]]; then
   echo "::error::RUNNER_NAME must be set to isolate Cargo target output per runner process."
   exit 1
 fi
 
+build_space="$(dirname "${BASH_SOURCE[0]}")/ensure-rust-build-space.py"
 runner_cache_key="$(printf '%s' "${RUNNER_NAME}" | tr -c 'A-Za-z0-9._-' '_')"
+
+# The runner empties RUNNER_TEMP around every job, so linked artifacts never
+# outlive the job that built them. sccache cannot cache what links (test
+# harnesses, binaries, proc macros, build scripts), so a job-scoped tree
+# relinks all of them every job. The workflow sets GENTS_CI_KEEP_TARGET_TREE
+# only for refs whose build outputs, build-script outputs included, may be
+# reused by the next job of the same trust domain; a runner process runs one
+# job at a time, so its kept tree is reused only serially. An uncapped kept
+# tree once reached 1.7 TiB, so it is capped per runner and kept only while
+# the host keeps its free-space floor.
+export CARGO_TARGET_ROOT="${RUNNER_TEMP}/gents-cargo-target"
+if [[ "${GENTS_CI_KEEP_TARGET_TREE:-}" == "true" ]]; then
+  kept_root="${GENTS_CI_TARGET_ROOT:-${HOME}/.cache/gents-ci-target}"
+  target_limits="$(python3 "${build_space}" --limits)"
+  read -r target_max_gib target_floor_gib <<<"${target_limits}"
+  mkdir -p "${kept_root}/${runner_cache_key}"
+  keep_status=0
+  CARGO_TARGET_ROOT="${kept_root}" python3 "${build_space}" --keep \
+    "${kept_root}/${runner_cache_key}" || keep_status=$?
+  case "${keep_status}" in
+    0)
+      export CARGO_TARGET_ROOT="${kept_root}" CARGO_TARGET_MAX_GIB="${target_max_gib}"
+      echo "CARGO_TARGET_MAX_GIB=${CARGO_TARGET_MAX_GIB}" >> "${GITHUB_ENV}"
+      echo "Keeping this runner's Cargo target tree, capped at ${target_max_gib} GiB."
+      ;;
+    10)
+      echo "::warning title=Job-scoped Cargo target::$(hostname -s) has less than ${target_floor_gib} GiB free with ${RUNNER_NAME}'s kept tree at its ${target_max_gib} GiB cap, even after emptying it; this job builds in a job-scoped tree."
+      ;;
+    *)
+      exit "${keep_status}"
+      ;;
+  esac
+else
+  echo "This ${GITHUB_EVENT_NAME:-unknown} run is not from a trusted ref of this repository; it builds in a job-scoped tree."
+fi
+# Keep the target path free of run IDs: sccache hashes CARGO_* environment
+# values, so a per-runner stable path keeps hits warm.
+echo "CARGO_TARGET_ROOT=${CARGO_TARGET_ROOT}" >> "${GITHUB_ENV}"
+
 cargo_target_dir="${CARGO_TARGET_ROOT}/${runner_cache_key}"
 mkdir -p "${cargo_target_dir}"
-python3 "$(dirname "${BASH_SOURCE[0]}")/ensure-rust-build-space.py" "${cargo_target_dir}"
+python3 "${build_space}" "${cargo_target_dir}"
 echo "CARGO_TARGET_DIR=${cargo_target_dir}" >> "${GITHUB_ENV}"
 
 echo "Using CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
@@ -71,7 +104,7 @@ if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
   echo "Installed isolated Cargo configuration at ${runner_cargo_home}/config.toml."
   echo "Installed stable direct rustc wrapper at ${direct_wrapper}."
   echo "Shared dependency caches remain rooted at ${shared_cargo_home}."
-  echo "sccache is disabled for this suite; using the job-scoped Cargo target tree."
+  echo "sccache is disabled for this suite; using the Cargo target tree ${cargo_target_dir}."
   exit 0
 fi
 

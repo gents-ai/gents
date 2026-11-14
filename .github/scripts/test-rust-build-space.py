@@ -3,7 +3,9 @@ import importlib.util
 import os
 from pathlib import Path
 from collections import namedtuple
+import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,6 +16,8 @@ build_space = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build_space)
 Usage = namedtuple("Usage", "total used free")
 run_command = subprocess.run
+GIB = 1024**3
+WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "ci.yml"
 
 
 class BuildSpaceTests(unittest.TestCase):
@@ -54,6 +58,118 @@ class BuildSpaceTests(unittest.TestCase):
                                 str(self.target)], check=True),
             unittest.mock.call(["cargo", "clean", "--target-dir", str(self.target)], check=True),
         ])
+
+    def run_with_target_size(self, *gib):
+        with patch.object(build_space.shutil, "disk_usage",
+                          return_value=Usage(100, 0, 1000 * GIB)), \
+                patch.object(build_space, "tree_size",
+                             side_effect=[size * GIB for size in gib]):
+            build_space.ensure_build_space(self.target, 64, 150)
+        self.assertEqual(self.marker.read_text(), "keep")
+
+    def test_kept_tree_under_its_cap_survives(self):
+        self.run_with_target_size(150)
+        self.clean.assert_not_called()
+
+    def test_kept_tree_over_its_cap_reclaims_workspace_artifacts_first(self):
+        self.run_with_target_size(151, 90)
+        self.clean.assert_called_once_with(
+            ["cargo", "clean", "--workspace", "--target-dir", str(self.target)], check=True)
+
+    def test_kept_tree_still_over_its_cap_is_emptied(self):
+        self.run_with_target_size(400, 200, 0)
+        self.assertEqual(self.clean.call_args_list, [
+            unittest.mock.call(["cargo", "clean", "--workspace", "--target-dir",
+                                str(self.target)], check=True),
+            unittest.mock.call(["cargo", "clean", "--target-dir", str(self.target)], check=True),
+        ])
+
+    def keep_with(self, free, *used):
+        with patch.object(build_space.shutil, "disk_usage",
+                          return_value=Usage(100, 0, free * GIB)), \
+                patch.object(build_space, "tree_size",
+                             side_effect=[size * GIB for size in used]):
+            kept = build_space.keep_target(self.target, 70, 150)
+        self.assertEqual(self.marker.read_text(), "keep")
+        return kept
+
+    def test_kept_tree_is_used_while_the_host_keeps_its_floor_at_the_cap(self):
+        # 300 GiB free, 50 used of a 70 GiB cap: 280 GiB remain at the cap.
+        self.assertTrue(self.keep_with(300, 50))
+        self.clean.assert_not_called()
+
+    def test_floor_counts_only_the_room_left_below_the_cap(self):
+        self.assertTrue(self.keep_with(150, 70))
+        self.assertTrue(self.keep_with(150, 200))
+        self.clean.assert_not_called()
+
+    def test_short_host_reclaims_the_kept_tree_before_giving_it_up(self):
+        # 200 GiB free with an empty tree leaves 130 at the cap, under the floor.
+        self.assertFalse(self.keep_with(200, 0, 0, 0))
+        self.assertEqual(self.clean.call_args_list, [
+            unittest.mock.call(["cargo", "clean", "--workspace", "--target-dir",
+                                str(self.target)], check=True),
+            unittest.mock.call(["cargo", "clean", "--target-dir", str(self.target)], check=True),
+        ])
+
+    def test_reclaiming_an_over_cap_tree_can_restore_the_floor(self):
+        # 100 GiB used of a 70 GiB cap with 140 free misses the floor; emptying
+        # the workspace artifacts leaves 40 used and 200 free, 170 at the cap.
+        with patch.object(build_space.shutil, "disk_usage",
+                          side_effect=[Usage(100, 0, 140 * GIB), Usage(100, 0, 200 * GIB)]), \
+                patch.object(build_space, "tree_size", side_effect=[100 * GIB, 40 * GIB]):
+            self.assertTrue(build_space.keep_target(self.target, 70, 150))
+        self.clean.assert_called_once_with(
+            ["cargo", "clean", "--workspace", "--target-dir", str(self.target)], check=True)
+
+    def test_keep_rejects_other_runners_trees(self):
+        with self.assertRaisesRegex(ValueError, "isolated cache"):
+            build_space.keep_target(self.other, 70, 150)
+        self.clean.assert_not_called()
+
+    def test_tree_size_counts_hard_links_once_and_does_not_follow_symlinks(self):
+        artifact = self.target / "debug" / "deps" / "artifact"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_bytes(b"x" * 65536)
+        os.link(artifact, self.target / "debug" / "artifact")
+        (self.target / "debug" / "outside").symlink_to(self.other, target_is_directory=True)
+        allocated = os.lstat(artifact).st_blocks * 512
+        self.assertGreaterEqual(allocated, 65536)
+        self.assertLess(build_space.tree_size(self.target), 2 * allocated)
+        self.assertGreaterEqual(build_space.tree_size(self.target), allocated)
+
+    def limits(self, runner, maximum="", floor=""):
+        return build_space.target_limits({"RUNNER_NAME": runner,
+                                          "GENTS_CI_TARGET_MAX_GIB": maximum,
+                                          "GENTS_CI_TARGET_FLOOR_GIB": floor})
+
+    def test_unset_limits_use_safe_defaults(self):
+        self.assertEqual(self.limits("studio-1"), (60, 150))
+
+    def test_limits_are_chosen_per_runner(self):
+        caps = '{"studio-1": 70, "studio-2": 250, "default": 40}'
+        floors = '{"minisforum-1": 50}'
+        self.assertEqual(self.limits("studio-1", caps, floors), (70, 150))
+        self.assertEqual(self.limits("studio-2", caps, floors), (250, 150))
+        self.assertEqual(self.limits("minisforum-1", caps, floors), (40, 50))
+        self.assertEqual(self.limits("studio-1", "90", "120"), (90, 120))
+        self.assertEqual(self.limits("studio-1", '{"studio-2": 250}'), (60, 150))
+
+    def test_rejects_malformed_or_non_positive_limits(self):
+        for setting in ("0", "-5", "1.5", "true", "big", '{"studio-1": 0}',
+                        '{"studio-1": "70"}', '{"default": null}', "[70]"):
+            with self.subTest(setting=setting), self.assertRaises(ValueError):
+                self.limits("studio-1", setting)
+        with self.assertRaisesRegex(ValueError, "RUNNER_NAME"):
+            self.limits("")
+
+    def test_limits_command_prints_cap_and_floor(self):
+        environ = {**os.environ, "RUNNER_NAME": "studio-2",
+                   "GENTS_CI_TARGET_MAX_GIB": '{"studio-2": 250}',
+                   "GENTS_CI_TARGET_FLOOR_GIB": ""}
+        output = run_command([sys.executable, str(Path(build_space.__file__)), "--limits"],
+                             env=environ, check=True, capture_output=True, text=True)
+        self.assertEqual(output.stdout.split(), ["250", "150"])
 
     def test_insufficient_host_space_fails_before_compilation(self):
         with self.assertRaisesRegex(RuntimeError, "free additional space"):
@@ -126,6 +242,247 @@ class BuildSpaceTests(unittest.TestCase):
             with self.subTest(minimum=minimum), self.assertRaises(ValueError):
                 build_space.ensure_build_space(self.target, minimum)
         self.clean.assert_not_called()
+
+    def test_rejects_non_positive_cap(self):
+        for maximum in (0, -1):
+            with self.subTest(maximum=maximum), self.assertRaises(ValueError):
+                build_space.ensure_build_space(self.target, 64, maximum)
+        self.clean.assert_not_called()
+
+
+def loosely_equal(left, right):
+    """GitHub expression equality: strings compare case-insensitively, and
+    values of different types compare as numbers (null and '' are 0)."""
+    if isinstance(left, str) and isinstance(right, str):
+        return left.lower() == right.lower()
+    if type(left) is type(right):
+        return left == right
+
+    def number(value):
+        if value is None:
+            return 0.0
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip() or 0)
+            except ValueError:
+                return float("nan")
+        return float(value) if isinstance(value, (int, float)) else float("nan")
+
+    return number(left) == number(right)
+
+
+def evaluate(expression, context):
+    """Evaluate the subset of GitHub expression syntax the trust condition uses."""
+    tokens = re.findall(r"\(|\)|&&|\|\||==|!=|'[^']*'|[A-Za-z_][A-Za-z0-9_.-]*", expression)
+    if "".join(tokens) != re.sub(r"\s+", "", expression):
+        raise ValueError(f"unsupported expression syntax: {expression}")
+    position = 0
+
+    def take():
+        nonlocal position
+        position += 1
+        return tokens[position - 1]
+
+    def peek():
+        return tokens[position] if position < len(tokens) else None
+
+    def operand():
+        token = take()
+        if token == "(":
+            value = disjunction()
+            if take() != ")":
+                raise ValueError("unbalanced parentheses")
+            return value
+        if token.startswith("'"):
+            return token[1:-1]
+        if token in ("true", "false", "null"):
+            return {"true": True, "false": False, "null": None}[token]
+        value = context
+        for part in token.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        return value
+
+    def comparison():
+        left = operand()
+        while peek() in ("==", "!="):
+            operator, right = take(), operand()
+            left = loosely_equal(left, right) == (operator == "==")
+        return left
+
+    def conjunction():
+        left = comparison()
+        while peek() == "&&":
+            take()
+            right = comparison()
+            left = right if left else left
+        return left
+
+    def disjunction():
+        left = conjunction()
+        while peek() == "||":
+            take()
+            right = conjunction()
+            left = left if left else right
+        return left
+
+    value = disjunction()
+    if position != len(tokens):
+        raise ValueError(f"trailing tokens in {expression}")
+    return value
+
+
+def keep_condition():
+    text = WORKFLOW.read_text()
+    match = re.search(r"^  GENTS_CI_KEEP_TARGET_TREE: >-\n((?:    .*\n)+)", text, re.MULTILINE)
+    if match is None:
+        raise AssertionError("ci.yml must set GENTS_CI_KEEP_TARGET_TREE at workflow level")
+    folded = " ".join(line.strip() for line in match.group(1).splitlines())
+    inner = re.fullmatch(r"\$\{\{(.*)\}\}", folded)
+    if inner is None:
+        raise AssertionError("GENTS_CI_KEEP_TARGET_TREE must be one expression")
+    return inner.group(1)
+
+
+def top_level_block(text, key):
+    match = re.search(rf"^{key}:[^\n]*\n((?:(?:[ #].*)?\n)*)", text, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def job_field(block, field):
+    match = re.search(rf"^    {field}:(.*\n(?:(?:      .*| *)\n)*)", block, re.MULTILINE)
+    if match is None:
+        return None
+    lines = [line.strip() for line in match.group(1).splitlines()]
+    value = " ".join(line for line in lines if line and not line.startswith("#"))
+    return value[2:].strip() if value.startswith(">-") else value
+
+
+def pull_request_jobs():
+    """(workflow, job, runs-on, if) for every job of every workflow a pull
+    request can start."""
+    for workflow in sorted(WORKFLOW.parent.glob("*.yml")):
+        text = workflow.read_text()
+        if not re.search(r"^  pull_request(_target)?:", top_level_block(text, "on"),
+                         re.MULTILINE):
+            continue
+        jobs = top_level_block(text, "jobs")
+        starts = list(re.finditer(r"^  ([A-Za-z0-9_-]+):\s*$", jobs, re.MULTILINE))
+        for index, start in enumerate(starts):
+            end = starts[index + 1].start() if index + 1 < len(starts) else len(jobs)
+            block = jobs[start.end():end]
+            yield workflow.name, start.group(1), runner_labels(block), job_field(block, "if")
+
+
+HOSTED_LABEL = re.compile(r"(ubuntu|macos|windows)-[A-Za-z0-9.-]+")
+
+
+def runner_labels(block):
+    """The job's runs-on, with a matrix-selected runner resolved when every
+    matrix value is a GitHub-hosted label."""
+    runs_on = job_field(block, "runs-on") or ""
+    selected = re.fullmatch(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}", runs_on)
+    if selected:
+        values = re.search(rf"^\s+{selected.group(1)}:\s*\[(.*)\]\s*$", block, re.MULTILINE)
+        labels = [label.strip(" '\"") for label in values.group(1).split(",")] if values else []
+        if labels and all(HOSTED_LABEL.fullmatch(label) for label in labels):
+            return ", ".join(labels)
+    return runs_on
+
+
+def job_runs(condition, context):
+    if condition is None:
+        return True
+    inner = re.fullmatch(r"\$\{\{(.*)\}\}", condition.strip())
+    return bool(evaluate(inner.group(1) if inner else condition, context))
+
+
+def pull_request_context(head_repository, repository="gents-ai/gents"):
+    head = {"repo": {"full_name": head_repository} if head_repository else None}
+    return {"github": {"event_name": "pull_request", "ref": "refs/pull/1/merge",
+                       "repository": repository,
+                       "event": {"label": {"name": "adapter-interop"},
+                                 "pull_request": {"draft": False, "stack": None,
+                                                  "head": head}}},
+            "inputs": {}, "vars": {}}
+
+
+class SelfHostedRoutingTests(unittest.TestCase):
+    """Self-hosted runner accounts share the Cargo home, the compiler cache and
+    kept target trees across runners, so no fork's code may run on one."""
+
+    def self_hosted_jobs(self):
+        jobs = [job for job in pull_request_jobs()
+                if "self-hosted" in job[2] or "${{" in job[2]]
+        self.assertTrue(any(job[:2] == ("ci.yml", "rust-and-cli") for job in jobs))
+        return jobs
+
+    def test_fork_pull_requests_never_reach_a_self_hosted_runner(self):
+        for head in ("someone/gents", "gents-ai/gents-fork", None):
+            for workflow, job, _, condition in self.self_hosted_jobs():
+                with self.subTest(workflow=workflow, job=job, head=head):
+                    self.assertFalse(job_runs(condition, pull_request_context(head)))
+
+    def test_pull_requests_from_this_repository_still_run_the_studio_jobs(self):
+        context = pull_request_context("gents-ai/gents")
+        for workflow, job, _, condition in self.self_hosted_jobs():
+            with self.subTest(workflow=workflow, job=job):
+                self.assertTrue(job_runs(condition, context))
+
+    def test_the_guard_reports_skipped_jobs_to_a_fork(self):
+        guard = [condition for workflow, job, _, condition in pull_request_jobs()
+                 if (workflow, job) == ("ci.yml", "repository-guard")]
+        self.assertEqual(guard, [None])
+        text = WORKFLOW.read_text()
+        step = re.search(r"- name: Report jobs a fork pull request skips\n"
+                         r"        if: >-\n((?:          .*\n)+)", text)
+        self.assertIsNotNone(step)
+        condition = " ".join(line.strip() for line in step.group(1).splitlines())
+        self.assertTrue(job_runs(condition, pull_request_context("someone/gents")))
+        self.assertFalse(job_runs(condition, pull_request_context("gents-ai/gents")))
+        for _, job, _, _ in self.self_hosted_jobs():
+            self.assertIn(job, text[step.end():step.end() + 2000])
+
+
+class KeptTreeTrustTests(unittest.TestCase):
+    REPOSITORY = "gents-ai/gents"
+
+    def keeps(self, event_name, ref="refs/heads/main", head_repository=None, **event):
+        if head_repository is not None or event_name == "pull_request":
+            head = {"repo": {"full_name": head_repository} if head_repository else None}
+            event = {**event, "pull_request": {"head": head}}
+        context = {"github": {"event_name": event_name, "ref": ref,
+                              "repository": self.REPOSITORY, "event": event}}
+        return evaluate(keep_condition(), context) is True
+
+    def test_push_to_main_keeps_the_tree(self):
+        self.assertTrue(self.keeps("push"))
+
+    def test_pull_request_from_this_repository_keeps_the_tree(self):
+        self.assertTrue(self.keeps("pull_request", "refs/pull/1/merge", self.REPOSITORY))
+        self.assertTrue(self.keeps("pull_request", "refs/pull/1/merge", "Gents-AI/Gents"))
+
+    def test_fork_pull_request_builds_in_a_job_tree(self):
+        self.assertFalse(self.keeps("pull_request", "refs/pull/1/merge", "someone/gents"))
+        self.assertFalse(self.keeps("pull_request", "refs/pull/1/merge", "gents-ai/gents-fork"))
+
+    def test_pull_request_whose_head_repository_is_gone_builds_in_a_job_tree(self):
+        self.assertFalse(self.keeps("pull_request", "refs/pull/1/merge"))
+
+    def test_other_events_and_refs_build_in_a_job_tree(self):
+        self.assertFalse(self.keeps("push", "refs/heads/feature"))
+        self.assertFalse(self.keeps("push", "refs/tags/v1.0.0"))
+        self.assertFalse(self.keeps("merge_group", "refs/heads/gh-readonly-queue/main/pr-1"))
+        self.assertFalse(self.keeps("workflow_dispatch"))
+        self.assertFalse(self.keeps("pull_request_target", "refs/heads/main", self.REPOSITORY))
+
+    def test_only_the_workflow_condition_selects_a_kept_tree(self):
+        script = (Path(__file__).with_name("setup-rust-build-cache.sh")).read_text()
+        self.assertIn('"${GENTS_CI_KEEP_TARGET_TREE:-}" == "true"', script)
+        workflow = WORKFLOW.read_text()
+        self.assertEqual(workflow.count("GENTS_CI_KEEP_TARGET_TREE"), 1,
+                         "no job or step may override the workflow-level condition")
 
 
 if __name__ == "__main__":
