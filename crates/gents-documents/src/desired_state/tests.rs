@@ -2175,29 +2175,38 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                     let mutation = "mutation($id: ID!, $input: ProjectionAcpBindingMutationInputArg!) { update_ProjectionAcpBinding(docID: $id, input: $input) { _docID _version { cid } } }";
                     let value = format!("updated-{}-{revoked}", case.input.actor);
                     let before = creator_access.execute(query).await?;
-                    let response = access
-                        .transact_write("test.projection.update", |txn| {
-                            let doc = &doc;
-                            let value = &value;
-                            Box::pin(async move {
-                                txn.execute_desired_state_mutation(
-                                    mutation,
-                                    &json!({"id": doc, "input": {"policy_id": value}}),
-                                    Collection::ProjectionAcpBinding,
-                                    false,
-                                )
-                                .await
+                    let native_allows = node
+                        .document_acp()
+                        .check_doc_access(
+                            &defra_node::AcpIdentity::Authenticated(actor.did().parse()?),
+                            defra_node::DocumentPermission::Update,
+                            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                            "configuration",
+                            &doc,
+                        )
+                        .await?;
+                    let updated = if native_allows {
+                        let response = access
+                            .transact_write("test.projection.update", |txn| {
+                                let doc = &doc;
+                                let value = &value;
+                                Box::pin(async move {
+                                    txn.execute_desired_state_mutation(
+                                        mutation,
+                                        &json!({"id": doc, "input": {"policy_id": value}}),
+                                        Collection::ProjectionAcpBinding,
+                                        false,
+                                    )
+                                    .await
+                                })
                             })
-                        })
-                        .await;
-                    let mut updated = response.is_ok_and(|response| {
+                            .await?;
                         !gents_protocol::graphql::graphql_rows_from_response(
                             &response,
                             "update_ProjectionAcpBinding",
                         )
                         .is_empty()
-                    });
-                    if !updated {
+                    } else {
                         let raw_access = ConfigAccess::Graphql(
                             GraphqlEndpoint::as_principal(
                                 format!("http://{address}/api/v0/graphql"),
@@ -2209,7 +2218,7 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                             "mutation {{ update_ProjectionAcpBinding(docID: \"{}\", input: {{policy_id: \"{}\"}}) {{_docID}} }}",
                             escape_graphql_string(&doc), escape_graphql_string(&value),
                         )).await;
-                        updated = match native {
+                        let native_updated = match native {
                             Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
                                 &value,
                                 "update_ProjectionAcpBinding",
@@ -2222,7 +2231,12 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                             }
                             Err(error) => return Err(error.into()),
                         };
-                    }
+                        anyhow::ensure!(
+                            !native_updated,
+                            "a native write succeeded where native ACP refuses the update"
+                        );
+                        native_updated
+                    };
                     if !updated {
                         assert_eq!(
                             creator_access.execute(query).await?,

@@ -484,8 +484,12 @@ async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> 
                 })
             })
         };
-        if let Err(denied) = user_create().await {
-            assert!(denied.is_permission_denied(), "{denied:?}");
+        let user_create_refused = match user_create().await {
+            Ok(_) => false,
+            Err(denied) if denied.is_permission_denied() => true,
+            Err(error) => return Err(error.into()),
+        };
+        if user_create_refused {
             if !legacy_installed {
                 legacy_installed = true;
                 let projector = ToolPermissionProjection::new(
@@ -567,7 +571,12 @@ async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> 
             "subjects of one Agent disagree: {input:?}"
         );
         observed.push((uniform, subjects));
-        case.check(uniform);
+        case.check(
+            gents_lean_vocab::families::household_managed_tool_identity::ManagedIdentityOutcome {
+                granted: uniform,
+                user_create_refused,
+            },
+        );
     }
     assert!(legacy_installed, "no Agent create was refused");
     assert!(

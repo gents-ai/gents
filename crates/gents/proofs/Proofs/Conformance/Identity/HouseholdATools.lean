@@ -137,6 +137,18 @@ def managedIdentityAllowed : Option ClaimedDid × String × Option String → Bo
     Configuration.managedToolIdentityAllowed renderedDerivation
       ((claimed.map ClaimedDid.render).getD "") nodeKey creation
 
+structure ManagedIdentityOutcome where
+  granted : Bool
+  userCreateRefused : Bool
+  deriving ToJson
+
+/-- A managed Agent needs a native tool source grant for its derived identity,
+which a non-admin User cannot make, so the User-signed create is refused
+exactly when the identity is managed. -/
+def managedIdentityOutcome (i : ManagedIdentityInput) : ManagedIdentityOutcome :=
+  let allowed := managedIdentityAllowed i.toCase
+  { granted := allowed, userCreateRefused := allowed }
+
 structure HealthCheckInput where
   role : String
   permission : String
@@ -246,10 +258,10 @@ def toolGrantorHttp : Family GrantorInput Bool where
 /-- The user-signed scenario creates every refused Agent before it installs a
 legacy source for the User, so the refused cases come first. -/
 @[conformance_family]
-def managedToolIdentity : Family ManagedIdentityInput Bool where
+def managedToolIdentity : Family ManagedIdentityInput ManagedIdentityOutcome where
   inputs := (managedToolIdentityCases.filter (!managedIdentityAllowed ·) ++
     managedToolIdentityCases.filter managedIdentityAllowed).map ManagedIdentityInput.ofCase
-  model := fun i => managedIdentityAllowed i.toCase
+  model := managedIdentityOutcome
 
 /-- The health scenario publishes under the runtime's parent grant, then the
 runtime revokes the parent and republishes. -/

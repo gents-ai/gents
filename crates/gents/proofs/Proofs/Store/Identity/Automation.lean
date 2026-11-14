@@ -685,10 +685,13 @@ theorem task_receipt_duplicate_preserves_revocation (state : Household.State)
     (creator receipt session agent : String) (committed : Bool) :
     publishTaskReceipt state creator receipt session agent false committed = state := by rfl
 
+/-- Agent creation always grants the created Agent the executor relationship
+on its Agent document (desired-state apply), so the fixture carries it. -/
 def taskReceiptFixture : Household.State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"agents", "agent-doc", "user"⟩,
       ⟨"sessions", "session", "user"⟩],
     relations := [⟨"agents", "agent-doc", "parent", .object "nodes" "node"⟩,
+      ⟨"agents", "agent-doc", "executor", .actor "agent"⟩,
       ⟨"sessions", "session", "parent", .object "agents" "agent-doc"⟩,
       ⟨"sessions", "session", "working_agent", .actor "agent"⟩], enrolled := [] }
 

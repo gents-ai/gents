@@ -67,6 +67,13 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
     let agent_doc = gents_store::graphql::created_doc_id(&agent_row, "Agent")?;
     user.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc)
         .await?;
+    user.add_actor_relationship(
+        "Agent",
+        &agent_doc,
+        "executor",
+        &identity::Did::new(agent.did())?,
+    )
+    .await?;
     let session_row = user.write("test.receipt.session", &format!("mutation {{create_AgentSession(input:{{node_did:\"{}\",session_id:\"session\",agent_did:\"{}\"}}){{_docID}}}}", escape_graphql_string(root.did()), escape_graphql_string(agent.did()))).await?;
     let session_doc = gents_store::graphql::created_doc_id(&session_row, "AgentSession")?;
     user.add_resource_relationship("AgentSession", &session_doc, "parent", "agents", &agent_doc)
