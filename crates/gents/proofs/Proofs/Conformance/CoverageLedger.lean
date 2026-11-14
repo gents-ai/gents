@@ -1035,6 +1035,10 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "causal_hop_contracts_default_cap")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "causal_hop_contracts_session_target")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerCoverage

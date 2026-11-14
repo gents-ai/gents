@@ -436,8 +436,6 @@ def snapshotRecoveryCasesJson : String :=
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"causal_hop_default_max_request_hop\":"
-      ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""

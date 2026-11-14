@@ -49,10 +49,6 @@ pub fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
     &lean_contract_snapshot().session_input_edit_cases
 }
 
-pub fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
-    &lean_contract_snapshot().transcript_conformance_cases
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeanAuxiliaryKind {
@@ -457,14 +453,11 @@ pub struct LeanContractSnapshot {
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub causal_hop_default_max_request_hop: Option<u32>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
-    pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub session_input_edit_cases: Vec<LeanSessionInputEditCase>,
@@ -1254,29 +1247,4 @@ pub struct LeanToolIdentity {
     pub id: String,
     pub call_id: Option<String>,
     pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanTranscriptCase {
-    pub name: String,
-    pub group: String,
-    pub action: String,
-    pub action_call_ids: Vec<usize>,
-    pub action_logical_result_ids: Vec<usize>,
-    pub action_payload_hashes: Vec<usize>,
-    pub legal: bool,
-    pub pre_message_count: usize,
-    pub post_message_count: usize,
-    pub pre_tool_call_count: usize,
-    pub post_tool_call_count: usize,
-    pub pre_in_flight_count: usize,
-    pub post_in_flight_count: usize,
-    pub assistant_sequence: usize,
-    pub result_sequence: usize,
-    pub logical_result_id: usize,
-    pub payload_hash: usize,
-    pub expected_pair_closed: bool,
-    pub expected_ordered: bool,
-    pub expected_duplicate_reused_sequence: bool,
-    pub expected_strong_drain: bool,
 }

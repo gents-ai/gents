@@ -40,8 +40,6 @@ mod background;
 mod compaction_gate;
 #[path = "conformance/coverage.rs"]
 mod coverage;
-#[path = "conformance/enrollment.rs"]
-mod enrollment;
 #[path = "conformance/eval.rs"]
 mod eval;
 #[path = "conformance/interrupts_manual.rs"]
