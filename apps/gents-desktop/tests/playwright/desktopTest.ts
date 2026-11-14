@@ -1,4 +1,10 @@
-import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  test as base,
+  type Locator,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 
 import type { DesktopUiHarnessScenario } from "../ui-harness/desktopHarness";
 
@@ -50,6 +56,36 @@ const KIT_SURFACE = [
 export async function gotoHarness(page: Page, scenario: HarnessScenario = "default") {
   await page.goto(`/tests/ui-harness/harness.html?scenario=${scenario}`);
   await expect(page.locator(KIT_SURFACE).first()).toBeVisible();
+}
+
+/** Resolves once the page has drawn `count` more frames. Headless WebKit draws
+    about 20 a second where Chromium draws 60 or more, and fewer still under
+    load, so work measured per frame is paced in frames, not milliseconds. */
+export async function framesDrawn(page: Page, count: number) {
+  await page.evaluate(
+    (count) =>
+      new Promise<void>((resolve) => {
+        let left = count;
+        const next = () => (--left > 0 ? requestAnimationFrame(next) : resolve());
+        requestAnimationFrame(next);
+      }),
+    count,
+  );
+}
+
+/** Resolves once `scroller` has kept its position across two drawn frames. A
+    wheel returns before the scroll it starts has landed, and an older page
+    landing above moves the position again. */
+export async function scrollAtRest(scroller: Locator) {
+  await scroller.evaluate(async (element) => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    let top: number;
+    do {
+      top = element.scrollTop;
+      await frame();
+      await frame();
+    } while (element.scrollTop !== top);
+  });
 }
 
 /* an init script runs in every frame of the page, and a plugin frame's origin

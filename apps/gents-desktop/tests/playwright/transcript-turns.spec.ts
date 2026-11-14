@@ -1,4 +1,11 @@
-import { composer, expect, gotoHarness, sendButton, test } from "./desktopTest";
+import {
+  composer,
+  expect,
+  gotoHarness,
+  scrollAtRest,
+  sendButton,
+  test,
+} from "./desktopTest";
 
 test.describe("moving between turns", () => {
   test.beforeEach(async ({ page }, testInfo) => {
@@ -266,18 +273,17 @@ test.describe("a sent turn kept near the top", () => {
     const minimumDistance = 15_000;
     const distanceFromBottom = () =>
       viewport.evaluate((s) => s.scrollHeight - s.clientHeight - s.scrollTop);
-    /* Wheel dispatch returns before scrolling settles. Start observation only
-       after the required reading distance has been reached. */
-    await expect
-      .poll(
-        async () => {
-          const distance = await distanceFromBottom();
-          if (distance <= minimumDistance) await page.mouse.wheel(0, -1500);
-          return distance;
-        },
-        { timeout: 10_000, intervals: [150] },
-      )
-      .toBeGreaterThan(minimumDistance);
+    /* each wheel lands before the next, so the distance reached depends on
+       the wheels sent, not on how fast the page draws them */
+    for (
+      let wheel = 0;
+      wheel < 40 && (await distanceFromBottom()) <= minimumDistance;
+      wheel += 1
+    ) {
+      await page.mouse.wheel(0, -1500);
+      await scrollAtRest(viewport);
+    }
+    expect(await distanceFromBottom()).toBeGreaterThan(minimumDistance);
     await page.waitForTimeout(600);
     expect(await distanceFromBottom()).toBeGreaterThan(minimumDistance);
 
