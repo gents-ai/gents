@@ -1531,14 +1531,7 @@ mod tests {
 
     #[test]
     fn desktop_reset_scope_matches_identity_model() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let contract = snapshot["identity_household_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == "configuration-explicit-grants")
-            .unwrap();
-        for case in contract["desktop_reset_cases"].as_array().unwrap() {
+        for case in gents_lean_vocab::families::household_desktop_reset::cases::<String>() {
             let temp = tempfile::tempdir().unwrap();
             let user = temp.path().canonicalize().unwrap();
             let (home, desktop, service) = fixture(&user);
@@ -1557,7 +1550,7 @@ mod tests {
                 &upgrade,
                 r#"{"version":1,"record":{"version":1,"custody":"file"},"phase":"copying"}"#,
             );
-            let full = case["full"].as_bool().unwrap();
+            let full = case.input.full;
             let plan = if full {
                 plan_full_reset(Some(&home), &desktop, &user, &service).unwrap()
             } else {
@@ -1573,7 +1566,7 @@ mod tests {
                 .unwrap()
             };
             let binding = desktop.root().join(MANAGED_SERVER_CONFIG);
-            let path = match case["asset"].as_str().unwrap() {
+            let path = match case.input.asset.as_str() {
                 "cache" => desktop.node_data_dir(),
                 "binding" => &binding,
                 "upgrade" => &upgrade,
@@ -1584,20 +1577,18 @@ mod tests {
                 "peers" => desktop.peer_directory_path(),
                 _ => panic!("unknown modeled desktop asset"),
             };
-            assert_eq!(
-                plan.client_entries.iter().any(|entry| entry == path),
-                case["retired"].as_bool().unwrap(),
-                "{case}"
-            );
+            let retired = plan.client_entries.iter().any(|entry| entry == path);
             if !full {
                 assert!(
                     plan.store_keys.is_empty(),
-                    "client custody must remain live: {case}"
+                    "client custody must remain live: {:?}",
+                    case.input
                 );
                 assert!(!plan
                     .client_entries
                     .contains(&desktop.store_key_path().to_path_buf()));
             }
+            case.check(retired);
         }
     }
 

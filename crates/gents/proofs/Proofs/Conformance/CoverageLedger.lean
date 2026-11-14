@@ -3088,6 +3088,45 @@ def caseCoverage : List CoverageEntry :=
       "identity_household_cases"
       "IdentityHouseholdCases")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_client_goal_transaction_actor")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_client_goal_actor_fence")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_client_goal_graph_handoff")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_desktop_reset")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_managed_client_handoff")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_plugin_profile")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_plugin_delete")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_credential_publication")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_session_tool_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_grant_projection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_grant_group")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_grant_hierarchy")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_session_tool_access_unreached"
+      "model-production-gap: the session tool reads as the managed Agent, and managed-Agent signing never resolves native DAC bypass.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_unattended_receipt_unreached"
+      "model-production-gap: production has no native transaction-scoped receipt witness, so no owner observes a receipt as absent, pending, admitted or unavailable or chooses create, retire-pending, advance or hold from it.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_tool_grant_projection_unreached"
+      "model-production-gap: no production path holds a second selected source for one Agent and permission: an Agent selects one Tools document through one Context, a Tools edit changes every selecting Agent, and only the schema purpose projects patch-collection; no managed Agent is ever the Node's native owner.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_tool_grant_group_unreached"
+      "model-production-gap: no production purpose other than schema projects patch-collection, and no production Tools edit forms one tool group spanning two Agents.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_tool_grant_rebinding_unreached"
+      "model-production-gap: every rebinding case starts from an other-purpose source for patch-collection, which no production purpose projects.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_destructive_decision")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_fresh_backend_reopen")

@@ -1503,3 +1503,893 @@ async fn reviewed_plugin_delete_source_tracks_selection_and_reinstall() -> anyho
     node.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn plugin_delete_sources_follow_installed_roots_and_selections() -> anyhow::Result<()> {
+    let digest = |name: &str| match name {
+        "digest-a" => Ok(format!("sha256:{}", "a".repeat(64))),
+        "digest-b" => Ok(format!("sha256:{}", "b".repeat(64))),
+        other => Err(anyhow::anyhow!("unmodeled plugin digest {other}")),
+    };
+    for case in gents_lean_vocab::families::household_plugin_delete::cases() {
+        let (directory, runtime, node) = projection_node().await?;
+        let outsider = gents_store::identity::KeyIdentity::load_or_create(
+            directory.path().join("outsider"),
+            None,
+        )?;
+        let binding = gents_store::identity::provision_agent_identity(&runtime)?;
+        let owner = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(runtime.did())?,
+        );
+        if case.input.installed {
+            let record = gents_store::local::ProjectedPlugin {
+                coordinate: "team/worker".into(),
+                digest: digest(&case.input.root_digest)?,
+                deletes: true,
+            };
+            owner
+                .transact_write("test.plugin_delete_sources.install", |txn| {
+                    let record = &record;
+                    Box::pin(async move {
+                        txn.stage_plugin_delete_roots(&[], std::slice::from_ref(record))
+                            .await
+                    })
+                })
+                .await?;
+        }
+        let plugin = match &case.input.pin {
+            Some(pin) => serde_json::json!({"plugin": "team/worker", "digest": digest(pin)?}),
+            None => serde_json::json!({"plugin": "team/worker"}),
+        };
+        let integration = gents_protocol::graphql::graphql_input_literal(
+            &serde_json::json!({ "plugins": [plugin] }),
+        )?;
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(if case.input.managed {
+            &binding.agent_did
+        } else {
+            outsider.did()
+        });
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        let enabled = case.input.selected;
+        for mutation in [
+            format!(
+                r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"plugin-tools",integrations:{integration}}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"plugin-context",tools_id:"plugin-tools"}}) {{_docID}} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"plugin-context",enabled:{enabled}}}) {{_docID}} }}"#
+            ),
+        ] {
+            owner
+                .write("test.plugin_delete_sources.create", &mutation)
+                .await?;
+        }
+        let txn = node.database().new_txn(false).await?;
+        let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
+            txn.datastore()?.sibling(Namespace::Acpstore),
+        ));
+        let relation = NodePermission::DocumentDelete.as_str();
+        let index = gents_store::local::plugin_delete_source::object(
+            &gents_store::local::plugin_delete_source::index(runtime.did()),
+        );
+        let active = store
+            .get_relation_subjects(
+                acp::NODE_POLICY_ID,
+                acp::NODE_RESOURCE_NAME,
+                acp::NODE_OBJECT_ID,
+                relation,
+            )
+            .await?;
+        let member_prefix = gents_store::local::plugin_delete_source::member_prefix(runtime.did());
+        let mut sources = 0u64;
+        for root in store
+            .get_relation_subjects(
+                acp::NODE_POLICY_ID,
+                acp::NODE_RESOURCE_NAME,
+                &index,
+                relation,
+            )
+            .await?
+        {
+            let Subject::EntitySet { object_id, .. } = &root else {
+                continue;
+            };
+            if !active.contains(&root) {
+                continue;
+            }
+            for member in store
+                .get_relation_subjects(
+                    acp::NODE_POLICY_ID,
+                    acp::NODE_RESOURCE_NAME,
+                    object_id,
+                    relation,
+                )
+                .await?
+            {
+                let Subject::EntitySet {
+                    object_id: member_object,
+                    ..
+                } = member
+                else {
+                    continue;
+                };
+                if !decode_source_for_tests(&member_object)
+                    .is_some_and(|source| source.starts_with(&member_prefix))
+                {
+                    continue;
+                }
+                let actors = store
+                    .get_relation_subjects(
+                        acp::NODE_POLICY_ID,
+                        acp::NODE_RESOURCE_NAME,
+                        &member_object,
+                        relation,
+                    )
+                    .await?;
+                if actors
+                    .iter()
+                    .any(|actor| matches!(actor, Subject::Entity(_)))
+                {
+                    sources += 1;
+                }
+            }
+        }
+        drop(store);
+        txn.commit().await?;
+        node.shutdown().await?;
+        case.check(sources);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_tool_reads_follow_the_node_grant_and_session_acp() -> anyhow::Result<()> {
+    for case in gents_lean_vocab::families::household_session_tool_access::cases() {
+        let (_directory, runtime, node) = projection_node().await?;
+        node.add_collection(&format!(
+            "type ToolSessionProbe @policy(id: \"{}\", resource: \"sessions\") {{ name: String }}",
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+        ))
+        .await?;
+        let owner = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(runtime.did())?,
+        );
+        let node_value = escape_graphql_string(runtime.did());
+        let mut readers = Vec::new();
+        for (name, tools) in [("agent", case.input.granted), ("sibling", false)] {
+            let binding = gents_store::identity::provision_agent_identity(&runtime)?;
+            let signer = gents_store::identity::resolve_agent_identity(&runtime, &binding)?;
+            let agent_value = escape_graphql_string(&binding.agent_did);
+            let nonce = escape_graphql_string(&binding.creation_nonce);
+            for mutation in [
+                format!(
+                    r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"{name}-tools",built_ins:{{enable_session_history_tool:{tools}}}}}) {{_docID}} }}"#
+                ),
+                format!(
+                    r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"{name}-context",tools_id:"{name}-tools"}}) {{_docID}} }}"#
+                ),
+                format!(
+                    r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"{name}-context",enabled:true}}) {{_docID}} }}"#
+                ),
+            ] {
+                owner.write("test.session_tool.setup", &mutation).await?;
+            }
+            let did = identity::Did::new(&binding.agent_did)?;
+            let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+                node.clone(),
+                did.clone(),
+                signer.as_ref(),
+            )?;
+            readers.push((did, access, agent_value));
+        }
+        let create = |name: &str| {
+            format!(
+                r#"mutation {{ create_ToolSessionProbe(input: {{name:"{name}"}}) {{_docID}} }}"#
+            )
+        };
+        let (agent, agent_access, agent_value) = &readers[0];
+        let owned = gents_store::graphql::created_doc_id(
+            &agent_access
+                .write("test.session_tool.owned", &create("owned"))
+                .await?,
+            "ToolSessionProbe",
+        )?;
+        let shared = gents_store::graphql::created_doc_id(
+            &owner
+                .write("test.session_tool.shared", &create("shared"))
+                .await?,
+            "ToolSessionProbe",
+        )?;
+        owner
+            .add_actor_relationship("ToolSessionProbe", &shared, "reader", agent)
+            .await?;
+        let foreign = gents_store::graphql::created_doc_id(
+            &readers[1]
+                .1
+                .write("test.session_tool.foreign", &create("foreign"))
+                .await?,
+            "ToolSessionProbe",
+        )?;
+        if case.input.admin {
+            owner.grant_node_admin(agent).await?;
+        }
+        if !case.input.granted {
+            owner.write("test.session_tool.withdraw", &format!(
+                r#"mutation {{ update_Agent(filter: {{node_did:{{_eq:"{node_value}"}},agent_did:{{_eq:"{agent_value}"}}}},input:{{enabled:false}}) {{_docID}} }}"#
+            )).await?;
+        }
+        let doc = match case.input.session.as_str() {
+            "owned" => &owned,
+            "shared" => &shared,
+            "foreign" => &foreign,
+            other => anyhow::bail!("unmodeled session {other}"),
+        };
+        anyhow::ensure!(
+            !case.input.native_bypass,
+            "a managed Agent's signed read never resolves DAC bypass: {:?}",
+            case.input
+        );
+        let read = agent_access
+            .execute(&format!(
+                r#"{{ ToolSessionProbe(filter: {{_docID: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                escape_graphql_string(doc)
+            ))
+            .await;
+        let visible = read.is_ok_and(|response| {
+            response["data"]["ToolSessionProbe"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["_docID"] == doc.as_str()))
+        });
+        node.shutdown().await?;
+        case.check(visible);
+    }
+    Ok(())
+}
+
+fn schema_permission(name: &str) -> anyhow::Result<NodePermission> {
+    [
+        NodePermission::CollectionGet,
+        NodePermission::CollectionPatch,
+        NodePermission::CollectionTruncate,
+        NodePermission::MigrationSet,
+        NodePermission::ViewAdd,
+    ]
+    .into_iter()
+    .find(|permission| permission.as_str() == name)
+    .ok_or_else(|| anyhow::anyhow!("unmodeled schema permission {name}"))
+}
+
+async fn source_grants(
+    node: &defra_node::Node,
+    source: &str,
+    permission: NodePermission,
+    actor: &identity::Did,
+) -> anyhow::Result<bool> {
+    let txn = node.database().new_txn(false).await?;
+    let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
+        txn.datastore()?.sibling(Namespace::Acpstore),
+    ));
+    let object = gents_store::local::plugin_delete_source::object(source);
+    let roots = store
+        .get_relation_subjects(
+            acp::NODE_POLICY_ID,
+            acp::NODE_RESOURCE_NAME,
+            acp::NODE_OBJECT_ID,
+            permission.as_str(),
+        )
+        .await?;
+    let members = store
+        .get_relation_subjects(
+            acp::NODE_POLICY_ID,
+            acp::NODE_RESOURCE_NAME,
+            &object,
+            permission.as_str(),
+        )
+        .await?;
+    let granted = roots.contains(&Subject::entity_set(
+        acp::NODE_RESOURCE_NAME,
+        object.clone(),
+        permission.as_str(),
+    )) && members.contains(&Subject::Entity(actor.clone()));
+    drop(store);
+    txn.commit().await?;
+    Ok(granted)
+}
+
+async fn unauthorized_tools_edit(
+    owner: &gents_store::config_client::ConfigAccess,
+    node: &Arc<defra_node::Node>,
+    runtime: &gents_store::identity::KeyIdentity,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    tools_doc: &str,
+    input: serde_json::Value,
+) -> anyhow::Result<bool> {
+    let agent = identity::Did::new(&binding.agent_did)?;
+    let signer = gents_store::identity::resolve_agent_identity(runtime, binding)?;
+    owner
+        .add_actor_relationship("Tools", tools_doc, "writer", &agent)
+        .await?;
+    anyhow::ensure!(!node.nac_manager().is_admin(&agent).await?);
+    let writer = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent,
+        signer.as_ref(),
+    )?;
+    let mutation = format!(
+        r#"mutation($input: ToolsMutationInputArg!) {{ update_Tools(docID:"{}", input:$input) {{_docID}} }}"#,
+        escape_graphql_string(tools_doc)
+    );
+    let variables = serde_json::json!({ "input": input });
+    Ok(writer
+        .transact_write("test.tool_grant.unauthorized", |txn| {
+            let (mutation, variables) = (&mutation, &variables);
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    mutation,
+                    variables,
+                    gents_protocol::schemas::TOOLS,
+                )
+                .await
+            })
+        })
+        .await
+        .is_ok())
+}
+
+async fn rolled_back_write(
+    owner: &gents_store::config_client::ConfigAccess,
+    mutation: &str,
+) -> anyhow::Result<()> {
+    let (rolled_back, _) =
+        gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            owner.transact_write("test.tool_grant.rolled_back", |txn| {
+                Box::pin(async move { txn.execute(mutation).await.map_err(anyhow::Error::from) })
+            }),
+        )
+        .await;
+    anyhow::ensure!(rolled_back.is_err(), "the failed commit must not publish");
+    Ok(())
+}
+
+async fn schema_tool_enabled(
+    owner: &gents_store::config_client::ConfigAccess,
+    tools_doc: &str,
+) -> anyhow::Result<bool> {
+    let response = owner
+        .execute(&format!(
+            r#"{{ Tools(filter: {{_docID: {{_eq: "{}"}}}}) {{ built_ins }} }}"#,
+            escape_graphql_string(tools_doc)
+        ))
+        .await?;
+    Ok(response["data"]["Tools"][0]["built_ins"]["enable_schema_tool"] == true)
+}
+
+#[tokio::test]
+async fn schema_tool_source_changes_follow_the_modeled_projection() -> anyhow::Result<()> {
+    for case in gents_lean_vocab::families::household_tool_grant_projection::cases() {
+        let input = &case.input;
+        let (_directory, runtime, node) = projection_node().await?;
+        let owner = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(runtime.did())?,
+        );
+        let binding = gents_store::identity::provision_agent_identity(&runtime)?;
+        let agent = identity::Did::new(&binding.agent_did)?;
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(&binding.agent_did);
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        let physical = !input.source.tools_doc.is_empty();
+        let tools_id = if physical { "tools" } else { "missing-tools" };
+        let selected = !input.initial.enabled.is_empty();
+        let tools_doc = if physical {
+            Some(gents_store::graphql::created_doc_id(
+                &owner.write("test.tool_grant.tools", &format!(
+                    r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"tools",built_ins:{{enable_schema_tool:{selected}}}}}) {{_docID}} }}"#
+                )).await?,
+                "Tools",
+            )?)
+        } else {
+            None
+        };
+        let context_doc = gents_store::graphql::created_doc_id(
+            &owner.write("test.tool_grant.context", &format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"context",tools_id:"{tools_id}"}}) {{_docID}} }}"#
+            )).await?,
+            "AgentContext",
+        )?;
+        owner.write("test.tool_grant.agent", &format!(
+            r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"context",enabled:true}}) {{_docID}} }}"#
+        )).await?;
+        for grant in &input.initial.direct {
+            anyhow::ensure!(
+                grant.actor == input.source.agent,
+                "unmodeled direct grantee"
+            );
+            owner
+                .grant_node_permission(&agent, schema_permission(&grant.permission)?)
+                .await?;
+        }
+        if input.initial.admins.contains(&input.source.agent) {
+            owner.grant_node_admin(&agent).await?;
+        }
+        let enable = input.enable;
+        let update = format!(
+            r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"{tools_id}"}}}},input:{{built_ins:{{enable_schema_tool:{enable}}}}}) {{_docID}} }}"#
+        );
+        if !input.authorized {
+            let doc = tools_doc
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("an unauthorized edit needs the Tools document"))?;
+            unauthorized_tools_edit(
+                &owner,
+                &node,
+                &runtime,
+                &binding,
+                doc,
+                serde_json::json!({"built_ins": {"enable_schema_tool": enable}}),
+            )
+            .await?;
+        } else if input.committed {
+            owner.write("test.tool_grant.change", &update).await?;
+        } else {
+            rolled_back_write(&owner, &update).await?;
+        }
+        let permission = schema_permission(&input.source.permission)?;
+        let (enabled, grants) = match &tools_doc {
+            Some(doc) => (
+                schema_tool_enabled(&owner, doc).await?,
+                source_grants(
+                    &node,
+                    &gents_store::local::tool_permission_projection::tool_source(
+                        runtime.did(),
+                        doc,
+                        &context_doc,
+                        agent.as_str(),
+                        &input.source.purpose,
+                    ),
+                    permission,
+                    &agent,
+                )
+                .await?,
+            ),
+            None => (false, false),
+        };
+        let observed = |present: bool| {
+            if present {
+                vec![input.source.clone()]
+            } else {
+                Vec::new()
+            }
+        };
+        let effective = node
+            .nac_manager()
+            .check_permission(&agent, permission)
+            .await?;
+        node.shutdown().await?;
+        case.check(
+            gents_lean_vocab::families::household_tool_grant_projection::ProjectionOutput {
+                enabled: observed(enabled),
+                grants: observed(grants),
+                effective,
+            },
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow::Result<()> {
+    for case in gents_lean_vocab::families::household_tool_grant_group::cases() {
+        let input = &case.input;
+        let (_directory, runtime, node) = projection_node().await?;
+        let owner = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(runtime.did())?,
+        );
+        let binding = gents_store::identity::provision_agent_identity(&runtime)?;
+        let agent = identity::Did::new(&binding.agent_did)?;
+        let node_value = escape_graphql_string(runtime.did());
+        let agent_value = escape_graphql_string(&binding.agent_did);
+        let nonce = escape_graphql_string(&binding.creation_nonce);
+        let selected = !input.initial.enabled.is_empty();
+        let tools_doc = gents_store::graphql::created_doc_id(
+            &owner.write("test.tool_group.tools", &format!(
+                r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"tools",built_ins:{{enable_schema_tool:{selected}}}}}) {{_docID}} }}"#
+            )).await?,
+            "Tools",
+        )?;
+        let context_doc = gents_store::graphql::created_doc_id(
+            &owner.write("test.tool_group.context", &format!(
+                r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"context",tools_id:"tools"}}) {{_docID}} }}"#
+            )).await?,
+            "AgentContext",
+        )?;
+        owner.write("test.tool_group.agent", &format!(
+            r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{agent_value}",creation_nonce:"{nonce}",context_id:"context",enabled:true}}) {{_docID}} }}"#
+        )).await?;
+        let enable = input.enable;
+        let update = format!(
+            r#"mutation {{ update_Tools(filter: {{node_did:{{_eq:"{node_value}"}},tools_id:{{_eq:"tools"}}}},input:{{built_ins:{{enable_schema_tool:{enable}}}}}) {{_docID}} }}"#
+        );
+        if !input.authorized {
+            unauthorized_tools_edit(
+                &owner,
+                &node,
+                &runtime,
+                &binding,
+                &tools_doc,
+                serde_json::json!({"built_ins": {"enable_schema_tool": enable}}),
+            )
+            .await?;
+        } else if input.committed {
+            owner.write("test.tool_group.change", &update).await?;
+        } else {
+            rolled_back_write(&owner, &update).await?;
+        }
+        let tool_enabled = schema_tool_enabled(&owner, &tools_doc).await?;
+        let mut enabled = Vec::new();
+        let mut grants = Vec::new();
+        for source in &input.sources {
+            if tool_enabled {
+                enabled.push(source.clone());
+            }
+            let projected = source_grants(
+                &node,
+                &gents_store::local::tool_permission_projection::tool_source(
+                    runtime.did(),
+                    &tools_doc,
+                    &context_doc,
+                    agent.as_str(),
+                    &source.purpose,
+                ),
+                schema_permission(&source.permission)?,
+                &agent,
+            )
+            .await?;
+            if projected {
+                grants.push(source.clone());
+            }
+        }
+        let mut permissions = Vec::new();
+        for source in &input.sources {
+            permissions.push(
+                gents_lean_vocab::families::household_tool_grant_group::PermissionAllowed {
+                    permission: source.permission.clone(),
+                    allowed: node
+                        .nac_manager()
+                        .check_permission(&agent, schema_permission(&source.permission)?)
+                        .await?,
+                },
+            );
+        }
+        node.shutdown().await?;
+        case.check(
+            gents_lean_vocab::families::household_tool_grant_group::GroupOutput {
+                enabled,
+                grants,
+                permissions,
+            },
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn shared_tool_hierarchy_changes_follow_the_modeled_edges() -> anyhow::Result<()> {
+    use gents_store::local::ToolSourcePolicy;
+    for case in gents_lean_vocab::families::household_tool_grant_hierarchy::cases() {
+        let input = &case.input;
+        let (_directory, runtime, node) = projection_node().await?;
+        let owner = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(runtime.did())?,
+        );
+        let node_value = escape_graphql_string(runtime.did());
+        let mut bindings = std::collections::BTreeMap::new();
+        for modeled in [&input.agent, &input.sibling] {
+            bindings.insert(
+                modeled.clone(),
+                gents_store::identity::provision_agent_identity(&runtime)?,
+            );
+        }
+        let modeled_did = |did: &str| {
+            bindings
+                .iter()
+                .find(|(_, binding)| binding.agent_did == did)
+                .map(|(modeled, _)| modeled.clone())
+        };
+        let mut tools_docs = std::collections::BTreeMap::new();
+        for group in [&input.group, &input.next_group] {
+            let enabled = input
+                .initial
+                .permissions
+                .iter()
+                .any(|edge| edge.group.tools_doc == group.tools_doc);
+            let tools_id = escape_graphql_string(&group.tools_doc);
+            tools_docs.insert(
+                group.tools_doc.clone(),
+                gents_store::graphql::created_doc_id(
+                    &owner.write("test.tool_hierarchy.tools", &format!(
+                        r#"mutation {{ create_Tools(input: {{node_did:"{node_value}",tools_id:"{tools_id}",built_ins:{{enable_schema_tool:{enabled}}}}}) {{_docID}} }}"#
+                    )).await?,
+                    "Tools",
+                )?,
+            );
+        }
+        let mut context_docs = std::collections::BTreeMap::new();
+        for context in [&input.context_doc, &input.next_context_doc] {
+            let context_id = escape_graphql_string(context);
+            let selection = input
+                .initial
+                .contexts
+                .iter()
+                .find(|edge| &edge.context_doc == context)
+                .map(|edge| {
+                    format!(
+                        ",tools_id:\"{}\"",
+                        escape_graphql_string(&edge.group.tools_doc)
+                    )
+                })
+                .unwrap_or_default();
+            context_docs.insert(
+                context.clone(),
+                gents_store::graphql::created_doc_id(
+                    &owner.write("test.tool_hierarchy.context", &format!(
+                        r#"mutation {{ create_AgentContext(input: {{node_did:"{node_value}",context_id:"{context_id}"{selection}}}) {{_docID}} }}"#
+                    )).await?,
+                    "AgentContext",
+                )?,
+            );
+        }
+        for edge in &input.initial.agents {
+            let binding = &bindings[&edge.agent];
+            owner.write("test.tool_hierarchy.agent", &format!(
+                r#"mutation {{ create_Agent(input: {{node_did:"{node_value}",agent_did:"{}",creation_nonce:"{}",context_id:"{}",enabled:true}}) {{_docID}} }}"#,
+                escape_graphql_string(&binding.agent_did),
+                escape_graphql_string(&binding.creation_nonce),
+                escape_graphql_string(&edge.context_doc),
+            )).await?;
+        }
+        for grant in &input.initial.direct {
+            owner
+                .grant_node_permission(
+                    &identity::Did::new(&bindings[&grant.actor].agent_did)?,
+                    schema_permission(&grant.permission)?,
+                )
+                .await?;
+        }
+        let agent_binding = &bindings[&input.agent];
+        let agent_rows = owner
+            .execute(&format!(
+                r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
+                escape_graphql_string(&agent_binding.agent_did)
+            ))
+            .await?;
+        let agent_doc = agent_rows["data"]["Agent"][0]["_docID"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("the modeled Agent row is missing: {agent_rows}"))?
+            .to_owned();
+        let (collection, doc, change) = match input.action.as_str() {
+            "enable" | "disable" => (
+                "Tools",
+                &tools_docs[&input.group.tools_doc],
+                serde_json::json!({"built_ins": {"enable_schema_tool": input.action == "enable"}}),
+            ),
+            "context" => (
+                "AgentContext",
+                &context_docs[&input.context_doc],
+                serde_json::json!({"tools_id": input.next_group.tools_doc}),
+            ),
+            "agent" => (
+                "Agent",
+                &agent_doc,
+                serde_json::json!({"context_id": input.next_context_doc}),
+            ),
+            other => anyhow::bail!("unmodeled hierarchy action {other}"),
+        };
+        let update = format!(
+            r#"mutation {{ update_{collection}(docID:"{}", input:{}) {{_docID}} }}"#,
+            escape_graphql_string(doc),
+            gents_protocol::graphql::graphql_input_literal(&change)?
+        );
+        if !input.authorized {
+            if collection == "Tools" {
+                unauthorized_tools_edit(&owner, &node, &runtime, agent_binding, doc, change)
+                    .await?;
+            } else {
+                let sibling = &bindings[&input.sibling];
+                let signer = gents_store::identity::resolve_agent_identity(&runtime, sibling)?;
+                let actor = gents_store::config_client::ConfigAccess::local_managed_agent(
+                    node.clone(),
+                    identity::Did::new(&sibling.agent_did)?,
+                    signer.as_ref(),
+                )?;
+                let _ = actor
+                    .write("test.tool_hierarchy.unauthorized", &update)
+                    .await;
+            }
+        } else if input.committed {
+            owner.write("test.tool_hierarchy.change", &update).await?;
+        } else {
+            rolled_back_write(&owner, &update).await?;
+        }
+        let snapshot = owner
+            .execute(&format!(
+                r#"{{ Tools(filter: {{node_did: {{_eq: "{node_value}"}}}}) {{ _docID node_did tools_id built_ins }} AgentContext(filter: {{node_did: {{_eq: "{node_value}"}}}}) {{ _docID context_id tools_id }} Agent(filter: {{node_did: {{_eq: "{node_value}"}}}}) {{ agent_did context_id }} }}"#
+            ))
+            .await?;
+        let rows = |kind: &str| {
+            snapshot["data"][kind]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        };
+        let policy = crate::surface::ToolCeiling::meta_only();
+        let mut permissions = Vec::new();
+        for tools in rows("Tools") {
+            let tools_id = tools["tools_id"].as_str().unwrap_or_default().to_owned();
+            let mut value = tools.clone();
+            if let Some(object) = value.as_object_mut() {
+                object.remove("_docID");
+            }
+            for source in policy.node_operation_sources(&value, &[])? {
+                permissions.push(
+                    gents_lean_vocab::families::household_tool_grant_hierarchy::PermissionEdgeWire {
+                        group: gents_lean_vocab::families::household_tool_grant_hierarchy::GroupWire {
+                            tools_doc: tools_id.clone(),
+                            purpose: source.purpose.to_owned(),
+                        },
+                        permission: source.permission.as_str().to_owned(),
+                    },
+                );
+            }
+        }
+        permissions.retain(|edge| edge.group.purpose == input.group.purpose);
+        permissions
+            .sort_by_key(|e| format!("{}|{}|{}", e.group.tools_doc, e.group.purpose, e.permission));
+        let mut contexts = Vec::new();
+        for context in rows("AgentContext") {
+            if let Some(tools_id) = context["tools_id"].as_str().filter(|id| !id.is_empty()) {
+                contexts.push(
+                    gents_lean_vocab::families::household_tool_grant_hierarchy::ContextEdgeWire {
+                        group:
+                            gents_lean_vocab::families::household_tool_grant_hierarchy::GroupWire {
+                                tools_doc: tools_id.to_owned(),
+                                purpose: input.group.purpose.clone(),
+                            },
+                        context_doc: context["context_id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    },
+                );
+            }
+        }
+        contexts.sort_by_key(|e| {
+            format!(
+                "{}|{}|{}",
+                e.group.tools_doc, e.group.purpose, e.context_doc
+            )
+        });
+        let mut agents = Vec::new();
+        for agent in rows("Agent") {
+            let modeled = modeled_did(agent["agent_did"].as_str().unwrap_or_default())
+                .ok_or_else(|| anyhow::anyhow!("unmodeled Agent row {agent}"))?;
+            agents.push(
+                gents_lean_vocab::families::household_tool_grant_hierarchy::AgentEdgeWire {
+                    context_doc: agent["context_id"].as_str().unwrap_or_default().to_owned(),
+                    agent: modeled,
+                },
+            );
+        }
+        agents.sort_by_key(|e| format!("{}|{}", e.context_doc, e.agent));
+        let mut direct = Vec::new();
+        let mut admins = Vec::new();
+        let mut owners = Vec::new();
+        let mut grants = Vec::new();
+        let mut allowed = std::collections::BTreeMap::new();
+        for (modeled, binding) in &bindings {
+            let did = identity::Did::new(&binding.agent_did)?;
+            let txn = node.database().new_txn(false).await?;
+            let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
+                txn.datastore()?.sibling(Namespace::Acpstore),
+            ));
+            for name in [
+                "get-collection",
+                "patch-collection",
+                "truncate-collection",
+                "set-migration",
+                "add-view",
+            ] {
+                let subjects = store
+                    .get_relation_subjects(
+                        acp::NODE_POLICY_ID,
+                        acp::NODE_RESOURCE_NAME,
+                        acp::NODE_OBJECT_ID,
+                        name,
+                    )
+                    .await?;
+                if subjects.contains(&Subject::Entity(did.clone())) {
+                    direct.push(
+                        gents_lean_vocab::families::household_tool_grant_hierarchy::DirectWire {
+                            actor: modeled.clone(),
+                            permission: name.to_owned(),
+                        },
+                    );
+                }
+            }
+            drop(store);
+            txn.commit().await?;
+            if node.nac_manager().is_admin(&did).await? {
+                admins.push(modeled.clone());
+            }
+            if node.nac_manager().is_owner(&did).await {
+                owners.push(modeled.clone());
+            }
+            for (tools_name, tools_doc) in &tools_docs {
+                for context_doc in context_docs.values() {
+                    for name in [
+                        "get-collection",
+                        "patch-collection",
+                        "truncate-collection",
+                        "set-migration",
+                        "add-view",
+                    ] {
+                        let source = gents_store::local::tool_permission_projection::tool_source(
+                            runtime.did(),
+                            tools_doc,
+                            context_doc,
+                            did.as_str(),
+                            &input.group.purpose,
+                        );
+                        if source_grants(&node, &source, schema_permission(name)?, &did).await? {
+                            grants.push(
+                                gents_lean_vocab::families::household_tool_grant_hierarchy::SourceWire {
+                                    tools_doc: tools_name.clone(),
+                                    agent: modeled.clone(),
+                                    purpose: input.group.purpose.clone(),
+                                    permission: name.to_owned(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            allowed.insert(
+                modeled.clone(),
+                node.nac_manager()
+                    .check_permission(&did, NodePermission::CollectionPatch)
+                    .await?,
+            );
+        }
+        direct.sort_by_key(|e| format!("{}|{}", e.actor, e.permission));
+        admins.sort();
+        owners.sort();
+        grants
+            .sort_by_key(|e| format!("{}|{}|{}|{}", e.tools_doc, e.agent, e.purpose, e.permission));
+        node.shutdown().await?;
+        case.check(
+            gents_lean_vocab::families::household_tool_grant_hierarchy::HierarchyOutput {
+                hierarchy:
+                    gents_lean_vocab::families::household_tool_grant_hierarchy::HierarchyWire {
+                        permissions,
+                        contexts,
+                        agents,
+                        direct,
+                        owners,
+                        admins,
+                    },
+                grants,
+                agent_allowed: allowed[&input.agent],
+                sibling_allowed: allowed[&input.sibling],
+            },
+        );
+    }
+    Ok(())
+}

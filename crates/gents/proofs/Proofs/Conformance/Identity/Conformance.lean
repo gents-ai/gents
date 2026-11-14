@@ -566,8 +566,6 @@ def taskCheckpointCases : List Json :=
 
 def json : Json := Json.mkObj
   [("name", toJson "user-node-agents-mixed-session-ownership-policy-followup"), ("policy_yaml", toJson policyYaml),
-   ("managed_client_handoff_cases", toJson ([] : List Json)),
-   ("desktop_reset_cases", toJson ([] : List Json)),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
    ("policy_registrations", toJson policyRegistrations),
@@ -606,8 +604,6 @@ theorem detached_parent_grant_trace :
 
 def json : Json := Json.mkObj
   [("name", toJson "operations-parent-publication"), ("policy_yaml", toJson policyYaml),
-   ("managed_client_handoff_cases", toJson ([] : List Json)),
-   ("desktop_reset_cases", toJson ([] : List Json)),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
    ("policy_registrations", toJson ([] : List Json)),
@@ -728,13 +724,6 @@ def taskTargetCaseJson (name actor document transition : String) : Json :=
     ("transition", toJson transition), ("expected", toJson (Household.allowed 8 state actor "configuration" document "read"))]
 
 
-def pluginProfileCaseJson (name : String) (actor : Option String) (revoked : Bool) : Json :=
-  let state := if revoked then apply Configuration.inferenceUsersetFixture (.revoke
-      ⟨"configuration", "profile", "selected_by", .entitySet "agents" "agent-doc" "executor"⟩)
-    else Configuration.inferenceUsersetFixture
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
-    ("expected", toJson (Configuration.pluginModelMayUse state actor "profile"))]
-
 def agentInvokeManagerCaseJson : Json :=
   let grant : Relation := ⟨"agents", "agent", "session_writer", .actor "reader"⟩
   let granted := apply nodeManagerFixture (.grantAs "user" grant)
@@ -788,34 +777,6 @@ def datastoreToolUseCaseJson (name : String)
       visible enabled selected declarationMatches))]
 
 
-def pluginDeleteCase (name : String) (installed selected managed pinnedSame : Bool) : Json :=
-  let root : Configuration.PluginDeleteRoot := ⟨"team/worker", "digest-a"⟩
-  let selection : Configuration.PluginDeleteSelection :=
-    ⟨"tools-doc", "context-doc", "team/worker",
-      (if pinnedSame then some "digest-a" else some "digest-b"),
-      agentDid, (if managed then agentDid else userDid), selected⟩
-  let state : Configuration.PluginDeleteProjection :=
-    { roots := (if installed then [root] else []), selections := [selection] }
-  Json.mkObj [("name", toJson name), ("installed", toJson installed),
-    ("selected", toJson selected), ("managed", toJson managed),
-    ("pinned_same", toJson pinnedSame),
-    ("source_count", toJson (Configuration.pluginDeleteSources state).length)]
-
-def pluginDeleteUnpinnedCase : Json :=
-  let root : Configuration.PluginDeleteRoot := ⟨"team/worker", "digest-b"⟩
-  let selection : Configuration.PluginDeleteSelection :=
-    ⟨"tools-doc", "context-doc", "team/worker", none, agentDid, agentDid, true⟩
-  let state : Configuration.PluginDeleteProjection := { roots := [root], selections := [selection] }
-  Json.mkObj [("name", toJson "unpinned-upgrade"),
-    ("source_count", toJson (Configuration.pluginDeleteSources state).length)]
-
-def pluginDeleteCases : List Json :=
-  [pluginDeleteUnpinnedCase, pluginDeleteCase "selected-installed" true true true true,
-   pluginDeleteCase "uninstalled" false true true true,
-   pluginDeleteCase "disabled" true false true true,
-   pluginDeleteCase "foreign-actor" true true false true,
-   pluginDeleteCase "replaced-digest" true true true false]
-
 def toolSource : Configuration.ToolGrantSource := ⟨"tools-doc", agentDid, "schema", "patch-collection"⟩
 def otherToolSource : Configuration.ToolGrantSource := ⟨"other-tools-doc", agentDid, "schema", "patch-collection"⟩
 def otherAgentSource : Configuration.ToolGrantSource := ⟨"tools-doc", siblingDid, "schema", "patch-collection"⟩
@@ -825,69 +786,9 @@ def toolSourceJson (source : Configuration.ToolGrantSource) : Json := Json.mkObj
   [("tools_doc", toJson source.toolsDoc), ("agent", toJson source.agent),
    ("purpose", toJson source.purpose), ("permission", toJson source.permission)]
 
-def toolGrantCaseJson (name : String) (initial : Configuration.ToolGrantProjection)
-    (source : Configuration.ToolGrantSource) (enable authorized committed : Bool) : Json :=
-  let result := Configuration.changeToolGrant initial source enable authorized committed
-  Json.mkObj [("name", toJson name),
-    ("initial_enabled", toJson (initial.enabled.map toolSourceJson)),
-    ("initial_grants", toJson (initial.grants.map toolSourceJson)),
-    ("direct", toJson (initial.direct.map fun (actor, permission) =>
-      Json.mkObj [("actor", toJson actor), ("permission", toJson permission)])),
-    ("owners", toJson initial.owners), ("admins", toJson initial.admins),
-    ("source", toolSourceJson source),
-    ("enable", toJson enable), ("authorized", toJson authorized), ("committed", toJson committed),
-    ("expected_enabled", toJson (result.enabled.map toolSourceJson)),
-    ("expected_grants", toJson (result.grants.map toolSourceJson)),
-    ("expected_effective", toJson (Configuration.toolGrantEffective result source.agent source.permission))]
-
-def toolGrantCases : List Json :=
-  let selected : Configuration.ToolGrantProjection := { enabled := [toolSource], grants := [toolSource] }
-  [toolGrantCaseJson "enable" {} toolSource true true true,
-   toolGrantCaseJson "disable" selected toolSource false true true,
-   toolGrantCaseJson "other-source-survives" { selected with enabled := [toolSource, otherToolSource], grants := [toolSource, otherToolSource] } toolSource false true true,
-   toolGrantCaseJson "other-purpose-survives" { selected with enabled := [toolSource, otherPurposeSource], grants := [toolSource, otherPurposeSource] } toolSource false true true,
-   toolGrantCaseJson "other-agent-survives" { selected with enabled := [toolSource, otherAgentSource], grants := [toolSource, otherAgentSource] } toolSource false true true,
-   toolGrantCaseJson "direct-survives" { selected with direct := [(agentDid, "patch-collection")] } toolSource false true true,
-   toolGrantCaseJson "owner-survives" { selected with owners := [agentDid] } toolSource false true true,
-   toolGrantCaseJson "admin-survives" { selected with admins := [agentDid] } toolSource false true true,
-   toolGrantCaseJson "unauthorized-enable" {} toolSource true false true,
-   toolGrantCaseJson "failed-enable" {} toolSource true true false,
-   toolGrantCaseJson "unauthorized-disable" selected toolSource false false true,
-   toolGrantCaseJson "failed-disable" selected toolSource false true false,
-   toolGrantCaseJson "missing-physical-document" {} { toolSource with toolsDoc := "" } true true true,
-   toolGrantCaseJson "idempotent-enable" selected toolSource true true true]
-
 def schemaToolSources : List Configuration.ToolGrantSource :=
   Configuration.schemaToolPermissions.map fun permission =>
     ⟨"tools-doc", agentDid, "schema", permission⟩
-
-def toolGrantGroupCaseJson (name : String) (initial : Configuration.ToolGrantProjection)
-    (sources : List Configuration.ToolGrantSource) (enable authorized committed : Bool) : Json :=
-  let result := Configuration.changeToolGrantGroup initial sources enable authorized committed
-  Json.mkObj [("name", toJson name), ("sources", toJson (sources.map toolSourceJson)),
-    ("initial_enabled", toJson (initial.enabled.map toolSourceJson)),
-    ("initial_grants", toJson (initial.grants.map toolSourceJson)),
-    ("direct", toJson (initial.direct.map fun (actor, permission) =>
-      Json.mkObj [("actor", toJson actor), ("permission", toJson permission)])),
-    ("owners", toJson initial.owners), ("admins", toJson initial.admins),
-    ("enable", toJson enable), ("authorized", toJson authorized), ("committed", toJson committed),
-    ("expected_enabled", toJson (result.enabled.map toolSourceJson)),
-    ("expected_grants", toJson (result.grants.map toolSourceJson)),
-    ("expected_permissions", toJson (Configuration.schemaToolPermissions.map fun permission =>
-      Json.mkObj [("permission", toJson permission),
-        ("allowed", toJson (Configuration.toolGrantEffective result agentDid permission))]))]
-
-def toolGrantGroupCases : List Json :=
-  let initial : Configuration.ToolGrantProjection :=
-    { enabled := schemaToolSources ++ [otherPurposeSource],
-      grants := schemaToolSources ++ [otherPurposeSource],
-      direct := [(agentDid, "get-collection")] }
-  [toolGrantGroupCaseJson "schema-enable-all" {} schemaToolSources true true true,
-   toolGrantGroupCaseJson "schema-disable-preserves-overlap" initial schemaToolSources false true true,
-   toolGrantGroupCaseJson "schema-enable-rejected" {} schemaToolSources true false true,
-   toolGrantGroupCaseJson "schema-enable-rollback" {} schemaToolSources true true false,
-   toolGrantGroupCaseJson "schema-disable-rollback" initial schemaToolSources false true false,
-   toolGrantGroupCaseJson "mixed-actor-rejected" {} [toolSource, otherAgentSource] true true true]
 
 def sharedToolGroup : Configuration.ToolGroup := ⟨"tools-doc", "schema"⟩
 def nextToolGroup : Configuration.ToolGroup := ⟨"next-tools-doc", "schema"⟩
@@ -896,58 +797,6 @@ def sharedToolHierarchy : Configuration.ToolGrantHierarchy :=
   { permissions := Configuration.schemaToolPermissions.map fun permission => ⟨sharedToolGroup, permission⟩,
     contexts := [⟨sharedToolGroup, "context-doc"⟩],
     agents := [⟨"context-doc", agentDid⟩, ⟨"context-doc", siblingDid⟩] }
-
-def toolGroupJson (group : Configuration.ToolGroup) : Json := Json.mkObj
-  [("tools_doc", toJson group.toolsDoc), ("purpose", toJson group.purpose)]
-
-def toolHierarchyJson (state : Configuration.ToolGrantHierarchy) : Json := Json.mkObj
-  [("permissions", toJson (state.permissions.map fun edge => Json.mkObj
-      [("group", toolGroupJson edge.group), ("permission", toJson edge.permission)])),
-   ("contexts", toJson (state.contexts.map fun edge => Json.mkObj
-      [("group", toolGroupJson edge.group), ("context_doc", toJson edge.contextDoc)])),
-   ("agents", toJson (state.agents.map fun edge => Json.mkObj
-      [("context_doc", toJson edge.contextDoc), ("agent", toJson edge.agent)])),
-   ("direct", toJson (state.direct.map fun (actor, permission) => Json.mkObj
-      [("actor", toJson actor), ("permission", toJson permission)])),
-   ("owners", toJson state.owners), ("admins", toJson state.admins)]
-
-def toolHierarchyCaseJson (name action : String) (initial result : Configuration.ToolGrantHierarchy)
-    (authorized committed : Bool) : Json :=
-  let flattened := Configuration.flattenToolHierarchy result
-  Json.mkObj [("name", toJson name), ("action", toJson action),
-    ("initial", toolHierarchyJson initial), ("group", toolGroupJson sharedToolGroup),
-    ("next_group", toolGroupJson nextToolGroup), ("context_doc", toJson "context-doc"),
-    ("agent", toJson agentDid), ("next_context_doc", toJson "next-context-doc"),
-    ("permissions", toJson Configuration.schemaToolPermissions),
-    ("authorized", toJson authorized), ("committed", toJson committed),
-    ("expected", toolHierarchyJson result),
-    ("expected_grants", toJson (flattened.grants.map toolSourceJson)),
-    ("agent_allowed", toJson (Configuration.toolGrantEffective flattened agentDid "patch-collection")),
-    ("sibling_allowed", toJson (Configuration.toolGrantEffective flattened siblingDid "patch-collection"))]
-
-def toolHierarchyCases : List Json :=
-  let inactive : Configuration.ToolGrantHierarchy := { sharedToolHierarchy with permissions := [] }
-  let set := Configuration.setToolHierarchy
-  [toolHierarchyCaseJson "disable-shared-tools" "disable" sharedToolHierarchy
-      (set sharedToolHierarchy sharedToolGroup Configuration.schemaToolPermissions false true true) true true,
-   toolHierarchyCaseJson "enable-dormant-shared-tools" "enable" inactive
-      (set inactive sharedToolGroup Configuration.schemaToolPermissions true true true) true true,
-   toolHierarchyCaseJson "disable-keeps-independent-grant" "disable"
-      { sharedToolHierarchy with direct := [(agentDid, "patch-collection")] }
-      (set { sharedToolHierarchy with direct := [(agentDid, "patch-collection")] }
-        sharedToolGroup Configuration.schemaToolPermissions false true true) true true,
-   toolHierarchyCaseJson "failed-shared-disable" "disable" sharedToolHierarchy
-      (set sharedToolHierarchy sharedToolGroup Configuration.schemaToolPermissions false true false) true false,
-   toolHierarchyCaseJson "unauthorized-shared-enable" "enable" inactive
-      (set inactive sharedToolGroup Configuration.schemaToolPermissions true false true) false true,
-   toolHierarchyCaseJson "move-shared-context" "context" sharedToolHierarchy
-      (Configuration.rebindToolContext sharedToolHierarchy "context-doc" nextToolGroup true true) true true,
-   toolHierarchyCaseJson "failed-context-move" "context" sharedToolHierarchy
-      (Configuration.rebindToolContext sharedToolHierarchy "context-doc" nextToolGroup true false) true false,
-   toolHierarchyCaseJson "move-one-agent" "agent" sharedToolHierarchy
-      (Configuration.rebindToolAgent sharedToolHierarchy agentDid "next-context-doc" true true) true true,
-   toolHierarchyCaseJson "unauthorized-agent-move" "agent" sharedToolHierarchy
-      (Configuration.rebindToolAgent sharedToolHierarchy agentDid "next-context-doc" false true) false true]
 
 theorem shared_tool_edges_revoke_all_members_without_scanning :
     let disabled := Configuration.setToolHierarchy sharedToolHierarchy sharedToolGroup
@@ -971,23 +820,6 @@ theorem shared_context_rebinding_and_individual_rebinding_are_scoped :
      Configuration.toolGrantEffective movedAgent siblingDid "patch-collection"] =
        [false, false, false, true] := by native_decide
 
-def toolRebindingCaseJson (name : String) (authorized committed : Bool) : Json :=
-  let initial : Configuration.ToolGrantProjection :=
-    { enabled := [toolSource, otherPurposeSource], grants := [toolSource, otherPurposeSource],
-      direct := [(agentDid, "patch-collection")] }
-  let result := Configuration.replaceToolGrant initial toolSource otherToolSource authorized committed
-  Json.mkObj [("name", toJson name), ("old", toolSourceJson toolSource),
-    ("next", toolSourceJson otherToolSource),
-    ("initial_enabled", toJson (initial.enabled.map toolSourceJson)),
-    ("initial_grants", toJson (initial.grants.map toolSourceJson)),
-    ("direct", toJson (initial.direct.map fun (actor, permission) =>
-      Json.mkObj [("actor", toJson actor), ("permission", toJson permission)])),
-    ("owners", toJson initial.owners), ("admins", toJson initial.admins),
-    ("authorized", toJson authorized), ("committed", toJson committed),
-    ("expected_enabled", toJson (result.enabled.map toolSourceJson)),
-    ("expected_grants", toJson (result.grants.map toolSourceJson)),
-    ("expected_effective", toJson (Configuration.toolGrantEffective result agentDid "patch-collection"))]
-
 def sessionToolSource : Configuration.ToolGrantSource :=
   ⟨"tools-doc", agentDid, "session-history", "read-document"⟩
 
@@ -995,18 +827,6 @@ def sessionToolHousehold : State :=
   { objects := [⟨"sessions", "owned", agentDid⟩, ⟨"sessions", "shared", userDid⟩,
       ⟨"sessions", "foreign", siblingDid⟩],
     relations := [⟨"sessions", "shared", "reader", .actor agentDid⟩], enrolled := [] }
-
-def sessionToolCaseJson (session : String) (granted admin nativeBypass : Bool) : Json :=
-  let grants : Configuration.ToolGrantProjection :=
-    { enabled := (if granted then [sessionToolSource] else []),
-      grants := (if granted then [sessionToolSource] else []),
-      admins := (if admin then [agentDid] else []) }
-  Json.mkObj [("session", toJson session), ("actor", toJson agentDid),
-    ("source", toolSourceJson sessionToolSource), ("granted", toJson granted),
-    ("admin", toJson admin), ("native_bypass", toJson nativeBypass),
-    ("objects", toJson (sessionToolHousehold.objects.map objectJson)),
-    ("relations", toJson (sessionToolHousehold.relations.map relationJson)),
-    ("expected", toJson (Configuration.toolSessionReadAllowed grants sessionToolHousehold agentDid session nativeBypass))]
 
 theorem session_tool_still_requires_session_access :
     let grants : Configuration.ToolGrantProjection :=
@@ -1171,14 +991,6 @@ def runtimeDefaultChoiceCases : List Json :=
       (some "g2") none none]
 
 
-def backendCredentialPublicationCase (metadata secret : String) (authorized committed : Bool) : Json :=
-  let prior : Configuration.BackendCredentialPublication := ⟨"old", "old"⟩
-  let result := Configuration.publishBackendCredential prior metadata secret authorized committed
-  Json.mkObj [("metadata", toJson metadata), ("secret", toJson secret),
-    ("authorized", toJson authorized), ("committed", toJson committed),
-    ("expected_metadata", toJson result.metadataVersion),
-    ("expected_secret", toJson result.secretVersion)]
-
 def pluginBackendCase (name : String) (actor : Option String) (revoked : String) : Json :=
   let state := if revoked == "" then Configuration.pluginBackendFixture else
     Household.apply Configuration.pluginBackendFixture
@@ -1189,19 +1001,6 @@ def pluginBackendCase (name : String) (actor : Option String) (revoked : String)
 
 def json : Json := Json.mkObj
   [("name", toJson "configuration-explicit-grants"),
-   ("managed_client_handoff_cases", toJson (([false, true] : List Bool).flatMap fun request =>
-     ([false, true] : List Bool).flatMap fun owner =>
-     ([false, true] : List Bool).map fun node =>
-       Json.mkObj [("request", toJson request), ("owner", toJson owner),
-         ("node", toJson node),
-         ("approve", toJson (Configuration.managedClientMayApprove request owner node))])),
-   ("desktop_reset_cases", toJson (([false, true] : List Bool).flatMap fun full =>
-     ([("cache", Configuration.DesktopResetAsset.cache),
-       ("binding", .binding), ("upgrade", .upgrade), ("user_key", .userKey),
-       ("user_metadata", .userMetadata), ("p2p_key", .p2pKey),
-       ("custody", .custody), ("peers", .peers)]).map fun (name, asset) =>
-       Json.mkObj [("full", toJson full), ("asset", toJson name),
-         ("retired", toJson (Configuration.desktopResetRetires full asset))])),
    ("backend_credential_cases", toJson backendCredentialCases),
    ("runtime_default_account_cases", toJson runtimeDefaultAccountCases),
    ("runtime_default_choice_cases", toJson runtimeDefaultChoiceCases),
@@ -1234,22 +1033,6 @@ def json : Json := Json.mkObj
         [("locked", toJson locked), ("empty", toJson empty), ("unexposed", toJson unexposed),
          ("committed", toJson committed),
          ("origin", toJson (Configuration.freshBackendOrigin locked empty unexposed committed))])),
-   ("backend_credential_publication_cases", toJson [
-     backendCredentialPublicationCase "new" "new" true true,
-     backendCredentialPublicationCase "new" "other" true true,
-     backendCredentialPublicationCase "new" "new" false true,
-     backendCredentialPublicationCase "new" "new" true false]),
-   ("plugin_delete_cases", toJson pluginDeleteCases),
-   ("tool_grant_projection_cases", toJson toolGrantCases),
-   ("tool_grant_group_cases", toJson toolGrantGroupCases),
-   ("tool_grant_hierarchy_cases", toJson toolHierarchyCases),
-   ("tool_grant_rebinding_cases", toJson ([toolRebindingCaseJson "rebind" true true,
-      toolRebindingCaseJson "unauthorized-rebind" false true,
-      toolRebindingCaseJson "failed-rebind" true false])),
-   ("session_tool_access_cases", toJson ([sessionToolCaseJson "owned" true false false,
-      sessionToolCaseJson "shared" true false false, sessionToolCaseJson "foreign" true false false,
-      sessionToolCaseJson "owned" false false false, sessionToolCaseJson "foreign" false true true,
-      sessionToolCaseJson "foreign" false true false])),
    ("own_tool_edit_cases", toJson ownToolEditCases),
    ("dangling_selection_repair_cases", toJson ([
       danglingRepairCaseJson "user" ⟨true, true, .acpFiltered⟩ true,
@@ -1263,16 +1046,6 @@ def json : Json := Json.mkObj
    ("policy_registrations", toJson ([] : List Json)),
    ("self_config_actions", toJson ([] : List Json)),
    ("self_config_lookup_cases", toJson ([] : List Json)),
-   ("client_goal_transaction_actor_cases", toJson ([(some "user", "user"), (some "agent", "user"), (none, "user"), (some "", "")].map fun (actor, requester) =>
-      Json.mkObj [("actor", toJson actor), ("requester", toJson requester),
-        ("allowed", toJson (Configuration.clientGoalTransactionActorMatches actor requester))])),
-   ("client_goal_graph_handoff_cases", toJson ([(true, true, true, true, false, false),
-      (true, true, true, true, true, true), (false, true, true, true, true, true),
-      (true, false, true, true, true, true), (true, true, false, true, true, true),
-      (true, true, true, false, true, true), (true, true, true, true, true, false)].map fun (actor, command, create, authorized, replacing, delete) =>
-      Json.mkObj [("actor", toJson actor), ("command", toJson command), ("create", toJson create),
-        ("authorized", toJson authorized), ("replacing", toJson replacing), ("delete", toJson delete),
-        ("allowed", toJson (Configuration.clientGoalGraphHandoffAllowed actor command create authorized replacing delete))])),
    ("configuration_atomic_cases", toJson ([false, true].map atomicCaseJson)),
    ("configuration_provider_cases", toJson
       [providerCaseJson "normal" agentDid "normal" false false,
@@ -1302,12 +1075,6 @@ def json : Json := Json.mkObj
        taskTargetCaseJson "target-selected" "agent-a" "target" "initial",
        taskTargetCaseJson "target-unrelated" "agent-b" "target" "initial",
        taskTargetCaseJson "target-revoked" "agent-a" "target" "target-revoked"]),
-
-   ("configuration_plugin_profile_cases", toJson
-      [pluginProfileCaseJson "selected" (some "agent") false,
-       pluginProfileCaseJson "sibling" (some "sibling") false,
-       pluginProfileCaseJson "absent" none false,
-       pluginProfileCaseJson "revoked" (some "agent") true]),
    ("agent_node_manager_invoke_case", agentInvokeManagerCaseJson),
    ("configuration_pack_installation_cases", toJson
       [packInstallationCaseJson "user-created" userDid true false false false,
@@ -1333,7 +1100,6 @@ def json : Json := Json.mkObj
        datastoreToolUseCaseJson "disabled" true false true true,
        datastoreToolUseCaseJson "deselected" true true false true,
        datastoreToolUseCaseJson "changed" true true true false]),
-   ("unattended_receipt_cases", toJson Identity.UnattendedReceipt.cases),
    ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
       checks withReader ++ [actionJson withReader (.grant writer)] ++ checks withWriter ++
       [actionJson withWriter (.revoke writer)] ++ checks withoutWriter ++
@@ -1362,8 +1128,6 @@ theorem access_trace : HouseholdFixture.observed initial actions =
 
 def json : Json := Json.mkObj
   [("name", toJson "secret-configuration-publication"), ("policy_yaml", toJson policyYaml),
-   ("managed_client_handoff_cases", toJson ([] : List Json)),
-   ("desktop_reset_cases", toJson ([] : List Json)),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
    ("policy_registrations", toJson ([] : List Json)),

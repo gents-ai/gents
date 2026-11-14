@@ -911,20 +911,9 @@ async fn drive_start(case: &StartInput<String>) -> bool {
 
 #[test]
 fn modeled_client_goal_actor_binding_requires_the_transaction_signer() {
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("identity conformance case");
-    for case in &model.client_goal_transaction_actor_cases {
-        assert_eq!(
-            super::client_goal_transaction_actor_matches(
-                case["actor"].as_str(),
-                case["requester"].as_str().unwrap(),
-            ),
-            case["allowed"].as_bool().unwrap(),
-            "{case}",
-        );
-    }
+    gents_lean_vocab::families::household_client_goal_transaction_actor::replay(|input| {
+        super::client_goal_transaction_actor_matches(input.actor.as_deref(), &input.requester)
+    });
 }
 
 #[tokio::test]
@@ -932,14 +921,10 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
     use gents_session::request::lifecycle::{
         build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
     };
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap()
-        .client_goal_transaction_actor_cases
-        .iter()
-        .find(|case| case["actor"] == "agent" && case["requester"] == "user")
-        .unwrap();
+    let fence = gents_lean_vocab::families::household_client_goal_actor_fence::cases();
+    let handoff = gents_lean_vocab::families::household_client_goal_graph_handoff::cases();
+    let mut staged = Vec::new();
+    let mut handed_off = vec![None; handoff.len()];
     for replacement in [false, true] {
         let (db, user, client, binding) =
             crate::test_support::signed_test_node("goal-actor-fence").await;
@@ -1048,33 +1033,30 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 Box::pin(async move { stage_goal_control(txn, runtime.as_ref(), requested).await })
             })
             .await;
-        assert_eq!(result.is_ok(), modeled["allowed"].as_bool().unwrap());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("requester's native transaction signer"));
-        let after = agent_access
-            .execute("{Goal {_docID status objective} AgentRequest {_docID}}")
-            .await
-            .unwrap();
-        assert_eq!(
-            after, before,
-            "both fresh and replacement writes must remain absent"
-        );
-
-        let cases = &gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap()
-            .client_goal_graph_handoff_cases;
-        assert_eq!(cases.len(), 7);
+        staged.push(result.is_ok());
+        if let Err(error) = &result {
+            assert!(error
+                .to_string()
+                .contains("requester's native transaction signer"));
+            let after = agent_access
+                .execute("{Goal {_docID status objective} AgentRequest {_docID}}")
+                .await
+                .unwrap();
+            assert_eq!(
+                after, before,
+                "both fresh and replacement writes must remain absent"
+            );
+        }
         let foreign = tokio::task::spawn_blocking(|| {
             gents_store::test_support::test_identity("goal-foreign")
         })
         .await
         .unwrap();
-        for case in cases.iter().filter(|case| case["replacing"] == replacement) {
-            let requester: &dyn NodeIdentity = if case["authorized"] == false {
+        for (index, case) in handoff.iter().enumerate() {
+            if case.input.replacing != replacement {
+                continue;
+            }
+            let requester: &dyn NodeIdentity = if !case.input.authorized {
                 &foreign
             } else {
                 &user
@@ -1130,14 +1112,14 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 }),
                 signature: Vec::new(),
             };
-            if case["command"] == false {
+            if !case.input.command {
                 command.agent_doc_id = "different-agent".into();
             }
-            if case["create"] == false {
+            if !case.input.create {
                 command.native_evidence.as_mut().unwrap().request["composite_signature"][0] =
                     json!(256);
             }
-            if case["delete"] == false && replacement {
+            if !case.input.delete && replacement {
                 command
                     .native_evidence
                     .as_mut()
@@ -1146,7 +1128,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                     .as_mut()
                     .unwrap()["composite_signature"][0] = json!(256);
             }
-            if case["actor"] == false {
+            if !case.input.actor {
                 let outcome = client
                     .transact_readonly("test.goal_graph_non_agent_actor", |txn| {
                         let initial = initial.clone();
@@ -1173,11 +1155,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                     })
                     .await
                     .unwrap();
-                assert_eq!(
-                    outcome.is_ok(),
-                    case["allowed"].as_bool().unwrap(),
-                    "{case}"
-                );
+                handed_off[index] = Some(outcome.is_ok());
                 continue;
             }
             let txn = ConfigApplyTxn::begin_local_with_signer(
@@ -1199,13 +1177,11 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 }),
                 client_graphs: None,
             };
-            assert_eq!(
+            handed_off[index] = Some(
                 attach_client_goal_graphs(&txn, &command, &mut prepared)
                     .await
                     .unwrap()
                     .is_ok(),
-                case["allowed"].as_bool().unwrap(),
-                "{case}"
             );
             txn.discard().await.unwrap();
         }
@@ -1367,5 +1343,18 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             txn.discard().await.unwrap();
         }
         node.shutdown().await.unwrap();
+    }
+    assert_eq!(staged[0], staged[1], "fresh and replacement staging agree");
+    for case in fence {
+        assert_eq!(
+            (case.input.actor.as_deref(), case.input.requester.as_str()),
+            (Some("agent"), "user"),
+            "the staging scenario signs as the User in the Agent's transaction"
+        );
+        case.check(staged[0]);
+    }
+    for (case, observed) in handoff.into_iter().zip(handed_off) {
+        let observed = observed.expect("every handoff case runs in its replacement fixture");
+        case.check(observed);
     }
 }

@@ -359,6 +359,9 @@ import Proofs.Conformance.Identity.HouseholdTools
 import Proofs.Conformance.Identity.HouseholdADocuments
 import Proofs.Conformance.Identity.HouseholdAAutomation
 import Proofs.Conformance.Identity.HouseholdATools
+import Proofs.Conformance.Identity.HouseholdCReaders
+import Proofs.Conformance.Identity.HouseholdCDocuments
+import Proofs.Conformance.Identity.HouseholdCToolGrants
 import Proofs.Conformance.LspServerStart
 import Proofs.Conformance.WorkspacePermissions
 
