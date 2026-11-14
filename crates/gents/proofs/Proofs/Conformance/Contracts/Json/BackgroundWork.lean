@@ -7,6 +7,7 @@ import Proofs.Conformance.Functions.ToolCalls
 import Proofs.Conformance.Family
 import Proofs.Conformance.Functions.Session
 import Proofs.ToolCalls.PluginJob.Admission
+import Proofs.Conformance.Contracts.Json.NativeExecution
 
 namespace Conformance.Contracts
 
@@ -162,6 +163,8 @@ structure ToolOutputInput where
   name : String
   document : Nat
   segments : List SegmentWire
+  seed : Lean.Json
+  accept : Lean.Json
   deriving Lean.ToJson
 
 structure ToolOutputObservation where
@@ -175,7 +178,9 @@ def toolOutputCanonicalSource : Family ToolOutputInput ToolOutputObservation whe
     { witness := "r4c.read_tool_output.canonical_source_reconstruction"
       toolCallId := r4cReadToolOutputCanonicalSourceReconstruction.toolCallId
       canonicalSource := r4cReadToolOutputCanonicalSourceReconstruction.canonicalSource
-      name := c.name, document := c.document, segments := c.segments.map SegmentWire.ofModel }
+      name := c.name, document := c.document, segments := c.segments.map SegmentWire.ofModel
+      seed := NativeExecutionContracts.seedWire (CanonicalOutput.Execution.Examples.world 5)
+      accept := NativeExecutionContracts.operationWire .acceptForeground }
   model := fun i =>
     match r4cReadToolOutputCanonicalSourceReconstruction.cases.find? (·.name == i.name) with
     | some c => { state := c.expectedState, payload := c.expectedPayload.map (·.map UInt8.toNat) }

@@ -333,6 +333,7 @@ import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 import Proofs.Conformance.RootAdmission
 import Proofs.Conformance.Contracts.Json.ExecutionGate
+import Proofs.Conformance.Contracts.Json.NativeExecution
 import Proofs.Conformance.Contracts.Json.DispatchObservation
 import Proofs.Conformance.Contracts.Json.InterruptQueue
 import Proofs.Conformance.Contracts.Json.SessionControl
@@ -395,8 +396,6 @@ def snapshotGoalMutationCasesJson : String :=
 
 def snapshotRequestCasesJson : String :=
   ""
-    ++ "\"canonical_execution_gate_cases\":"
-      ++ Conformance.ExecutionGateContracts.casesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""

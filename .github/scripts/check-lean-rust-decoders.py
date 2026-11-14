@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 GROUPS = {
-    "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
 }
 INT_RANGES = {
     "u8": (0, 2**8 - 1), "u16": (0, 2**16 - 1),

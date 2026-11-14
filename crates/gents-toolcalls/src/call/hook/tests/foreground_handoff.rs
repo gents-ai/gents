@@ -68,38 +68,15 @@ async fn background_request_observation_uses_selected_agent_authority() {
 #[cfg(unix)]
 #[tokio::test]
 async fn foreground_background_handoff_keeps_the_same_process_after_parent_completion() {
-    use gents_lean_vocab::{LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation};
-    let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_execution_gate_cases
-        .iter()
-        .find(|case| {
-            matches!(case,
-            LeanCanonicalExecutionCase::ModelExecution { name, .. }
-            if name == "background_tool_closes_after_parent_terminal")
-        })
-        .expect("Lean foreground handoff scenario");
-    let LeanCanonicalExecutionCase::ModelExecution {
-        operations,
-        expected_observations,
-        ..
-    } = modeled
-    else {
-        unreachable!()
-    };
-    let receipt_step = operations
-        .iter()
-        .position(|operation| {
-            matches!(
-                operation,
-                LeanCanonicalExecutionOperation::PublishBackgroundReceipt { .. }
-            )
-        })
-        .unwrap();
-    let modeled_handoff = &expected_observations[receipt_step];
-    let modeled_completion = expected_observations.last().unwrap();
-    assert!(expected_observations
-        .iter()
-        .all(|observation| observation.accepted));
+    for case in gents_lean_vocab::families::native_execution_contracts_background_handoff::cases() {
+        let observed = foreground_handoff_after_parent_completion().await;
+        case.check(Some(observed));
+    }
+}
+
+#[cfg(unix)]
+async fn foreground_handoff_after_parent_completion(
+) -> gents_lean_vocab::families::native_execution_contracts_background_handoff::HandoffOutput {
     let dir = tempfile::tempdir().unwrap();
     let gate = dir.path().join("gate");
     assert!(std::process::Command::new("mkfifo")
@@ -283,15 +260,9 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     assert!(gents_session::exec::status::active_native_executors()
         .iter()
         .any(|entry| entry.pid == pid));
-    assert_eq!(
-        !hook.in_flight_lifecycles.lock().await.is_empty(),
-        modeled_handoff.in_flight,
-    );
+    let handoff_in_flight = !hook.in_flight_lifecycles.lock().await.is_empty();
     let handed_off = fetch_tool_call_row(&hook, &session, "handoff-command").await;
-    assert_eq!(
-        handed_off["lifecycle_state"].as_str(),
-        modeled_handoff.tool_state.as_deref()
-    );
+    let handoff_tool_state = handed_off["lifecycle_state"].as_str().map(str::to_owned);
     {
         let mut fixtures = hook_execution_fixtures().lock().await;
         let fixture = fixtures
@@ -321,10 +292,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     .await
     .unwrap();
     let row = fetch_tool_call_row(&hook, &session, "handoff-command").await;
-    assert_eq!(
-        row["lifecycle_state"].as_str(),
-        modeled_completion.tool_state.as_deref()
-    );
+    let completion_tool_state = row["lifecycle_state"].as_str().map(str::to_owned);
     assert_eq!(row["await_mode"], "background");
     let output =
         gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
@@ -342,6 +310,11 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     assert!(!gents_session::exec::status::active_native_executors()
         .iter()
         .any(|entry| entry.pid == pid));
+    gents_lean_vocab::families::native_execution_contracts_background_handoff::HandoffOutput {
+        handoff_in_flight,
+        handoff_tool_state,
+        completion_tool_state,
+    }
 }
 
 #[tokio::test]

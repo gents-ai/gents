@@ -4,6 +4,8 @@ import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.RequestExecutionLease
+import Proofs.Conformance.CanonicalOutputWire
+import Proofs.Conformance.Family
 
 namespace Conformance.NativeExecutionContracts
 
@@ -973,19 +975,6 @@ def observationJson (value : Observation) : String :=
     ++ "\"segments\":" ++ jsonArray (value.segments.map canonicalSegmentJson) ++ ","
     ++ "\"messages\":" ++ jsonArray (value.messages.map canonicalMessageJson) ++ "}"
 
-def caseJson (value : Case) : String :=
-  "{" ++ "\"kind\":" ++ jsonString
-    (if value.nativeGap.isSome then "model_execution" else "native_execution") ++ ","
-    ++ "\"name\":" ++ jsonString value.name ++ ","
-    ++ "\"native_gap\":" ++ (value.nativeGap.map jsonString).getD "null" ++ ","
-    ++ "\"seed\":" ++ seedJson value.seed ++ ","
-    ++ "\"query_document\":" ++ toString value.queryDocument ++ ","
-    ++ "\"operations\":" ++ jsonArray (value.inputs.map inputJson) ++ ","
-    ++ "\"expected_observations\":" ++
-      (value.expected.map (jsonArray ∘ List.map observationJson)).getD "null" ++ "}"
-
-def casesJson : String := jsonArray (cases.map caseJson)
-
 example : cases.all (fun value => value.expected.isSome) = true := by native_decide
 
 example : cases.all (fun value => value.seed.segments.isEmpty && value.seed.messages.isEmpty &&
@@ -1022,6 +1011,252 @@ example :
         observe 600 true { world 5 with messages := [changedMessagePayload] } ∧
       observe 600 true { world 5 with messages := [originalMessage] } ≠
         observe 600 true { world 5 with messages := [changedMessageIdentity] } := by
+  native_decide
+
+def caseNamed (name : String) : Option Case :=
+  cases.find? (·.name == name)
+
+theorem case_names_are_unique :
+    (cases.map (·.name)).eraseDups.length = cases.length := by
+  native_decide
+
+/-- An observation as the native adapter reports it. Segments and messages
+are a set: both sides order them by identifier, then by their compressed
+canonical JSON (Lean's `Json.compress`, which `compact_model_json` writes
+natively). -/
+def observationWire (value : Observation) : Lean.Json :=
+  let segments := value.segments.mergeSort fun left right =>
+    (left.id, (CanonicalOutputWire.segment left).compress) ≤
+      (right.id, (CanonicalOutputWire.segment right).compress)
+  let messages := value.messages.mergeSort fun left right =>
+    (left.header.id, (CanonicalOutputWire.message left).compress) ≤
+      (right.header.id, (CanonicalOutputWire.message right).compress)
+  CanonicalOutputWire.parsed (observationJson { value with segments := segments, messages := messages })
+
+def seedWire (value : World) : Lean.Json := CanonicalOutputWire.parsed (seedJson value)
+
+def operationWire (value : Input) : Lean.Json := CanonicalOutputWire.parsed (inputJson value)
+
+structure ScriptInput where
+  name : String
+  seed : Lean.Json
+  queryDocument : Nat
+  operations : List Lean.Json
+  deriving Lean.ToJson
+
+def scriptInput (value : Case) : ScriptInput :=
+  { name := value.name, seed := seedWire value.seed, queryDocument := value.queryDocument
+    operations := value.inputs.map operationWire }
+
+structure ScriptOutput where
+  observations : List Lean.Json
+  deriving Lean.ToJson
+
+def scriptOutput (name : String) : Option ScriptOutput :=
+  (caseNamed name).bind fun value => value.expected.map fun observations =>
+    { observations := observations.map observationWire }
+
+def namedCases (names : List String) : List Case :=
+  cases.filter (·.name ∈ names)
+
+/-- Title scripts whose recorded gap is a replicated raw fact. The native
+adapter delivers a replicated fact as a durable output row written outside
+the local write gate, as it does for the corrupt twin and the late live-partial
+flush, so the product's owners execute every later step of these scripts. -/
+def replicatedTitleCases : List String :=
+  [ "title_recovery_accepts_closed_partial_before_future_dated_raw"
+  , "title_closed_extent_allows_terminal_after_late_raw"
+  , "title_terminal_replay_ignores_late_raw" ]
+
+def nativelyExecuted (value : Case) : Bool :=
+  value.nativeGap.isNone || value.name ∈ replicatedTitleCases
+
+/-- Every script the native adapter executes through the product's
+transactional owners, one observation per operation. -/
+@[conformance_family]
+def script : Family ScriptInput (Option ScriptOutput) where
+  inputs := (cases.filter nativelyExecuted).map scriptInput
+  model := fun i => scriptOutput i.name
+
+structure UnreachedInput where
+  name : String
+  nativeGap : String
+  seed : Lean.Json
+  queryDocument : Nat
+  operations : List Lean.Json
+  deriving Lean.ToJson
+
+/-- model-production-gap: each script names, in `nativeGap`, the product
+transaction it lacks (the resume-to-active recovery primitive, a split tool
+close and delivery, a bridge background receipt, a candidate spawned-child
+document, or unmaterialized tool and header inputs on a title request), so no
+production path executes it. -/
+@[conformance_family]
+def scriptUnreached : Family UnreachedInput (Option ScriptOutput) where
+  inputs := ((cases.filter (!nativelyExecuted ·)).filter
+      (·.name != "background_tool_closes_after_parent_terminal")).map fun value =>
+    { name := value.name, nativeGap := value.nativeGap.getD "", seed := seedWire value.seed
+      queryDocument := value.queryDocument, operations := value.inputs.map operationWire }
+  model := fun i => scriptOutput i.name
+
+/-- The renewal and recovery scenario drives the renewal owner directly while
+another ordinary transaction holds the write gate, then the recovery owner. -/
+@[conformance_family]
+def renewalUnderHeldGate : Family ScriptInput (Option ScriptOutput) where
+  inputs := (namedCases ["renewal_wins_before_terminal_recovery"]).map scriptInput
+  model := fun i => scriptOutput i.name
+
+structure PrefixOutput where
+  beforeAppend : Lean.Json
+  deriving Lean.ToJson
+
+/-- The invalid-deadline scenario accepts and dispatches the tool, then
+corrupts its durable deadline outside the model's `Time` domain; the model
+fixes only the observation before the append. -/
+@[conformance_family]
+def toolAppendDeadline : Family ScriptInput (Option PrefixOutput) where
+  inputs := (namedCases ["tool_output_before_deadline"]).map scriptInput
+  model := fun i => (caseNamed i.name).bind fun value =>
+    (value.expected.bind (·[1]?)).map fun observation =>
+      { beforeAppend := observationWire observation }
+
+/-- The in-flight scenario accepts and dispatches a foreground tool, then
+forces the request terminal outside any owner; the model fixes the two
+accepted observations it starts from. -/
+@[conformance_family]
+def foregroundDispatchPrefix : Family ScriptInput (Option ScriptOutput) where
+  inputs := (namedCases ["running_foreground_terminal_recovery_records_handoff"]).map fun value =>
+    scriptInput { value with inputs := value.inputs.take 2 }
+  model := fun i => (caseNamed i.name).bind fun value =>
+    (run value.seed value.queryDocument (value.inputs.take 2)).map fun observations =>
+      { observations := observations.map observationWire }
+
+structure HandoffOutput where
+  handoffInFlight : Bool
+  handoffToolState : Option String
+  completionToolState : Option String
+  deriving Lean.ToJson
+
+def isBackgroundReceipt : Input → Bool
+  | .backgroundReceipt => true
+  | _ => false
+
+/-- A running foreground process handed to the background keeps running after
+its parent request completes. The native bridge hands off through its own
+receipt and completion callbacks, so only the tool state at the receipt and at
+completion, and the in-flight membership at the receipt, are observable. -/
+@[conformance_family]
+def backgroundHandoff : Family ScriptInput (Option HandoffOutput) where
+  inputs := (namedCases ["background_tool_closes_after_parent_terminal"]).map scriptInput
+  model := fun i => (caseNamed i.name).bind fun value => do
+    let observations ← value.expected
+    let receipt ← value.inputs.findIdx? isBackgroundReceipt
+    let handoff ← observations[receipt]?
+    let completion ← observations.getLast?
+    pure { handoffInFlight := handoff.inFlight, handoffToolState := handoff.toolState
+           completionToolState := completion.toolState }
+
+example : ((caseNamed "background_tool_closes_after_parent_terminal").bind (·.expected)).map
+    (·.all (·.accepted)) = some true := by native_decide
+
+structure TitleInput where
+  name : String
+  raw : Lean.Json
+  deriving Lean.ToJson
+
+def firstRaw (value : Case) : Option Segment :=
+  match value.inputs.head? with
+  | some (.appendRaw _ _ record) => some record
+  | _ => none
+
+def titleInput (value : Case) : TitleInput :=
+  { name := value.name
+    raw := ((firstRaw value).map CanonicalOutputWire.segment).getD Lean.Json.null }
+
+structure TitleOutput where
+  outcome : Option String
+  requestState : String
+  terminalSelection : Option Lean.Json
+  messages : Nat
+  deriving Lean.ToJson
+
+def outcomeWire : Outcome → String
+  | .complete => "complete"
+  | .«partial» => "partial"
+
+def closedOutcome (segments : List Segment) : Option String :=
+  segments.findSome? fun segment => match segment.close with
+    | some (.closed outcome _ _) => some (outcomeWire outcome)
+    | _ => none
+
+def terminalSelectionWire : TerminalSelection → Lean.Json
+  | .noMessage => CanonicalOutputWire.parsed "{\"kind\":\"no_message\"}"
+  | .message id => CanonicalOutputWire.parsed ("{\"kind\":\"message\",\"id\":" ++ toString id ++ "}")
+
+def titleOutput (name : String) : Option TitleOutput :=
+  (caseNamed name).bind fun value => (value.expected.bind List.getLast?).map fun last =>
+    { outcome := closedOutcome last.segments, requestState := last.requestState
+      terminalSelection := last.terminalSelection.map terminalSelectionWire
+      messages := last.messages.length }
+
+def titleScenarioCases : List String :=
+  [ "title_reasoning_audit_complete_no_message"
+  , "title_live_partial_retains_received_reasoning"
+  , "title_expired_unlatched_recovery_no_message" ]
+
+example : (namedCases titleScenarioCases).all (fun value =>
+    firstRaw value == some (AuxiliaryCases.observed .title) &&
+      value.expected.any (·.all (·.accepted))) = true := by native_decide
+
+/-- A title task whose parent request already ended streams the complete
+provider reasoning into its own request and completes with no message. -/
+@[conformance_family]
+def titleParentTerminal : Family TitleInput (Option TitleOutput) where
+  inputs := (namedCases ["title_reasoning_audit_complete_no_message"]).map titleInput
+  model := fun i => titleOutput i.name
+
+/-- The watcher, router and daemon dispatch a title audit once; it streams the
+complete provider reasoning and completes with no message. -/
+@[conformance_family]
+def titleWatcherDispatch : Family TitleInput (Option TitleOutput) where
+  inputs := (namedCases ["title_reasoning_audit_complete_no_message"]).map titleInput
+  model := fun i => titleOutput i.name
+
+/-- Each title attempt that times out after streaming reasoning closes its
+received extent as partial; the request completes with no message. -/
+@[conformance_family]
+def titleTimeout : Family TitleInput (Option TitleOutput) where
+  inputs := (namedCases ["title_live_partial_retains_received_reasoning"]).map titleInput
+  model := fun i => titleOutput i.name
+
+/-- Reasoning-only provider results retain each attempt as partial output
+before the bounded fallback title; the request completes with no message. -/
+@[conformance_family]
+def titleReasoningOnly : Family TitleInput (Option TitleOutput) where
+  inputs := (namedCases ["title_live_partial_retains_received_reasoning"]).map titleInput
+  model := fun i => titleOutput i.name
+
+/-- A crashed title whose lease expired is recovered by the recovery owner:
+its committed reasoning closes as partial and the request fails with no
+message. -/
+@[conformance_family]
+def titleCrashRecovery : Family TitleInput (Option TitleOutput) where
+  inputs := (namedCases ["title_expired_unlatched_recovery_no_message"]).map titleInput
+  model := fun i => titleOutput i.name
+
+example : backgroundAdmission.context.awaitMode.toDefraDB = "background" := by native_decide
+
+example :
+    (titleCases.filter (·.nativeGap.isNone)).length = 11 ∧
+    (titleCases.filter (·.nativeGap.isSome)).map (·.name) =
+      [ "title_recovery_accepts_closed_partial_before_future_dated_raw"
+      , "title_closed_extent_allows_terminal_after_late_raw"
+      , "title_terminal_replay_ignores_late_raw"
+      , "title_rejects_publication_and_tool_dispatch" ] ∧
+    titleCases.all (fun value => value.nativeGap.isSome ||
+      (value.seed.claimed.bind fun claimed => match claimed.evidence with
+        | .auxiliary binding => some binding
+        | _ => none).isSome == (value.seed.purpose == .titleAudit)) = true := by
   native_decide
 
 end Conformance.NativeExecutionContracts

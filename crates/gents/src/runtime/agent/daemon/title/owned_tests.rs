@@ -32,10 +32,7 @@ use crate::turn::prompt::LayeredPromptBuilder;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_inference::backends::provider::BackendProviderKind;
 use gents_inference::resolved::{ResolvedAgent, SamplingConfig};
-use gents_lean_vocab::{
-    LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
-    LeanPayloadKind, LeanTerminalSelection,
-};
+use gents_lean_vocab::canonical_wire as wire;
 use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_protocol::row::AgentRequest;
@@ -1083,7 +1080,7 @@ async fn access_review_preserves_a_fenced_output_failure_for_the_caller_and_daem
         None,
     )
     .await;
-    let (fields, _) = modeled_title_fields("title_reasoning_audit_complete_no_message");
+    let fields = stimulus_fields();
     let mut provider = TitleProvider::new(provider_events(&fields, true), false);
     provider.fence_generation = Some((
         fixture.agent_access(),
@@ -1636,42 +1633,8 @@ impl TitleFixture {
     }
 }
 
-fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, OutputOutcome) {
-    let case = gents_lean_vocab::lean_contract_snapshot().canonical_execution_gate_cases.iter().find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name: found, .. } | LeanCanonicalExecutionCase::ModelExecution { name: found, .. } if found == name)).expect("Lean title script");
-    let (LeanCanonicalExecutionCase::NativeExecution {
-        operations,
-        expected_observations,
-        ..
-    }
-    | LeanCanonicalExecutionCase::ModelExecution {
-        operations,
-        expected_observations,
-        ..
-    }) = case
-    else {
-        unreachable!()
-    };
-    assert_eq!(operations.len(), expected_observations.len());
-    assert!(
-        expected_observations.iter().all(|step| step.accepted),
-        "{name}: modeled title path changed"
-    );
-    let final_state = expected_observations.last().unwrap();
-    assert_eq!(
-        final_state.terminal_selection,
-        Some(LeanTerminalSelection::NoMessage)
-    );
-    assert!(final_state.messages.is_empty());
-    let LeanCanonicalExecutionOperation::AppendOutput { record, .. } = &operations[0] else {
-        panic!("{name}: first modeled action changed")
-    };
-    assert!(matches!(
-        &record.coordinate.source,
-        LeanCanonicalSource::Auxiliary {
-            auxiliary_kind: gents_lean_vocab::LeanAuxiliaryKind::Title,
-            ..
-        }
-    ));
+fn title_fields(raw: &gents_lean_vocab::family::Json) -> Vec<(StreamPayload, String, u32, u32)> {
+    let record: wire::Segment = wire::decode(&raw.0);
     let flush = record.flush.as_ref().expect("modeled raw flush");
     let mut cursor = 0usize;
     let fields = flush
@@ -1683,11 +1646,11 @@ fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, 
             cursor = end;
             let declaration = run.declaration.as_ref().expect("modeled declaration");
             let kind = match &declaration.kind {
-                LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
-                LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
-                LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
-                LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,
-                _ => panic!("{name}: title fixture changed payload kind"),
+                wire::PayloadKind::Reasoning => StreamPayload::Reasoning,
+                wire::PayloadKind::Signature => StreamPayload::ReasoningSignature,
+                wire::PayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
+                wire::PayloadKind::Redacted => StreamPayload::ReasoningRedacted,
+                other => panic!("title fixture has payload kind {other:?}"),
             };
             (
                 kind,
@@ -1698,19 +1661,63 @@ fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, 
         })
         .collect::<Vec<_>>();
     assert_eq!(cursor, flush.payload.len());
-    let closure = final_state
-        .segments
-        .iter()
-        .find_map(|record| record.close.as_ref())
-        .expect("modeled title closure");
-    let gents_lean_vocab::LeanCanonicalClosure::Closed { outcome, .. } = closure else {
-        panic!("modeled title retracted")
-    };
-    let outcome = match outcome {
-        gents_lean_vocab::LeanOutcome::Complete => OutputOutcome::Complete,
-        gents_lean_vocab::LeanOutcome::Partial => OutputOutcome::Partial,
-    };
-    (fields, outcome)
+    fields
+}
+
+fn stimulus_fields() -> Vec<(StreamPayload, String, u32, u32)> {
+    vec![
+        (
+            StreamPayload::Reasoning,
+            "considering a title".to_owned(),
+            0,
+            0,
+        ),
+        (
+            StreamPayload::ReasoningSignature,
+            "signature".to_owned(),
+            0,
+            1,
+        ),
+    ]
+}
+
+async fn title_outcome(fixture: &TitleFixture) -> Option<OutputOutcome> {
+    let (rows, _) = fixture.output_rows().await;
+    let mut outcomes = rows.iter().filter_map(|row| match &row.segment.close {
+        Some(SourceClose::Closed { outcome, .. }) => Some(*outcome),
+        _ => None,
+    });
+    let first = outcomes.next();
+    assert!(
+        outcomes.all(|outcome| Some(outcome) == first),
+        "title attempts closed with different outcomes"
+    );
+    first
+}
+
+async fn title_observation<T>(fixture: &TitleFixture, outcome: Option<OutputOutcome>) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
+    let (state, terminal) = fixture.terminal_row().await;
+    let (_, messages) = fixture.output_rows().await;
+    let terminal_selection = terminal.map(|terminal| match terminal {
+        gents_protocol::output::TerminalOutput::NoMessage => {
+            serde_json::json!({"kind": "no_message"})
+        }
+        gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
+            serde_json::json!({"kind": "message", "native": message_doc_id})
+        }
+    });
+    gents_lean_vocab::family::recode(&serde_json::json!({
+        "outcome": outcome.map(|outcome| match outcome {
+            OutputOutcome::Complete => "complete",
+            OutputOutcome::Partial => "partial",
+        }),
+        "request_state": state.as_str(),
+        "terminal_selection": terminal_selection,
+        "messages": messages,
+    }))
 }
 
 fn provider_events(
@@ -1948,206 +1955,181 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
 
 #[tokio::test]
 async fn title_reasoning_survives_parent_terminal_under_own_request() {
-    let (fields, outcome) = modeled_title_fields("title_reasoning_audit_complete_no_message");
-    for parent_state in [
-        RequestLifecycleState::Failed,
-        RequestLifecycleState::Interrupted,
-    ] {
-        let fixture = TitleFixture::new().await;
-        match parent_state {
-            RequestLifecycleState::Failed => fixture.terminalize_parent().await,
-            RequestLifecycleState::Interrupted => fixture.interrupt_parent().await,
-            _ => unreachable!(),
+    for case in
+        gents_lean_vocab::families::native_execution_contracts_title_parent_terminal::cases()
+    {
+        let fields = title_fields(&case.input.raw);
+        for parent_state in [
+            RequestLifecycleState::Failed,
+            RequestLifecycleState::Interrupted,
+        ] {
+            let fixture = TitleFixture::new().await;
+            match parent_state {
+                RequestLifecycleState::Failed => fixture.terminalize_parent().await,
+                RequestLifecycleState::Interrupted => fixture.interrupt_parent().await,
+                _ => unreachable!(),
+            }
+            let public_head_before = fixture.session_message_count().await;
+            let provider = TitleProvider::new(provider_events(&fields, true), false);
+            let calls = provider.calls.clone();
+            let (_shutdown, rx) = tokio::sync::watch::channel(false);
+            fixture
+                .task(provider, true)
+                .run(fixture.title.clone(), rx)
+                .await
+                .unwrap();
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "parent: {parent_state:?}");
+            let outcome = title_outcome(&fixture).await;
+            assert_title_audit(&fixture, &fields, outcome.expect("title closed"), 1, true).await;
+            assert_eq!(
+                fixture.session_message_count().await,
+                public_head_before,
+                "parent: {parent_state:?}"
+            );
+            case.check(Some(title_observation(&fixture, outcome).await));
         }
-        let public_head_before = fixture.session_message_count().await;
-        let provider = TitleProvider::new(provider_events(&fields, true), false);
-        let calls = provider.calls.clone();
-        let (_shutdown, rx) = tokio::sync::watch::channel(false);
-        fixture
-            .task(provider, true)
-            .run(fixture.title.clone(), rx)
-            .await
-            .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "parent: {parent_state:?}");
-        assert_title_audit(&fixture, &fields, outcome, 1, true).await;
-        assert_eq!(
-            fixture.session_message_count().await,
-            public_head_before,
-            "parent: {parent_state:?}"
-        );
-        assert_eq!(
-            fixture.terminal_row().await,
-            (
-                RequestLifecycleState::Completed,
-                Some(gents_protocol::output::TerminalOutput::NoMessage)
-            ),
-            "parent: {parent_state:?}"
-        );
     }
 }
 
 #[tokio::test]
 async fn title_timeout_drains_each_received_reasoning_attempt_as_partial() {
-    let (fields, outcome) = modeled_title_fields("title_live_partial_retains_received_reasoning");
-    let fixture = TitleFixture::new().await;
-    let provider = TitleProvider::new(provider_events(&fields, false), true);
-    let calls = provider.calls.clone();
-    let entered = provider.entered.clone();
-    let (_shutdown, rx) = tokio::sync::watch::channel(false);
-    let task = fixture.task(provider, true);
-    let title = fixture.title.clone();
-    let running = tokio::spawn(async move { task.run(title, rx).await });
-    tokio::time::timeout(Duration::from_secs(15), entered.notified())
-        .await
-        .expect("first title provider attempt starts");
-    wait_for_title_streams(&fixture, 1, fields.len()).await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(10)).await;
-    tokio::time::resume();
-    tokio::time::timeout(Duration::from_secs(15), entered.notified())
-        .await
-        .expect("second title provider attempt starts");
-    wait_for_title_streams(&fixture, 2, fields.len()).await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(10)).await;
-    tokio::time::resume();
-    tokio::time::timeout(Duration::from_secs(15), running)
-        .await
-        .expect("timed out title attempts drain their output")
-        .unwrap()
-        .unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(outcome, OutputOutcome::Partial);
-    assert_title_audit(&fixture, &fields, outcome, 2, false).await;
-    assert_eq!(
-        fixture.terminal_row().await,
-        (
-            RequestLifecycleState::Completed,
-            Some(gents_protocol::output::TerminalOutput::NoMessage)
-        )
-    );
+    for case in gents_lean_vocab::families::native_execution_contracts_title_timeout::cases() {
+        let fields = title_fields(&case.input.raw);
+        let fixture = TitleFixture::new().await;
+        let provider = TitleProvider::new(provider_events(&fields, false), true);
+        let calls = provider.calls.clone();
+        let entered = provider.entered.clone();
+        let (_shutdown, rx) = tokio::sync::watch::channel(false);
+        let task = fixture.task(provider, true);
+        let title = fixture.title.clone();
+        let running = tokio::spawn(async move { task.run(title, rx).await });
+        tokio::time::timeout(Duration::from_secs(15), entered.notified())
+            .await
+            .expect("first title provider attempt starts");
+        wait_for_title_streams(&fixture, 1, fields.len()).await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::time::resume();
+        tokio::time::timeout(Duration::from_secs(15), entered.notified())
+            .await
+            .expect("second title provider attempt starts");
+        wait_for_title_streams(&fixture, 2, fields.len()).await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::time::resume();
+        tokio::time::timeout(Duration::from_secs(15), running)
+            .await
+            .expect("timed out title attempts drain their output")
+            .unwrap()
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let outcome = title_outcome(&fixture).await;
+        assert_title_audit(&fixture, &fields, outcome.expect("title closed"), 2, false).await;
+        case.check(Some(title_observation(&fixture, outcome).await));
+    }
 }
 
 #[tokio::test]
 async fn crashed_title_recovers_committed_reasoning_without_publication() {
-    let (fields, outcome) = modeled_title_fields("title_expired_unlatched_recovery_no_message");
-    let model = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_execution_gate_cases
-        .iter()
-        .find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name, .. } | LeanCanonicalExecutionCase::ModelExecution { name, .. } if name == "title_expired_unlatched_recovery_no_message"))
-        .expect("modeled title recovery");
-    let (LeanCanonicalExecutionCase::NativeExecution {
-        expected_observations,
-        ..
+    for case in gents_lean_vocab::families::native_execution_contracts_title_crash_recovery::cases()
+    {
+        let fields = title_fields(&case.input.raw);
+        let fixture = TitleFixture::new().await;
+        let provider = TitleProvider::new(provider_events(&fields, false), true);
+        let entered = provider.entered.clone();
+        let (_shutdown, rx) = tokio::sync::watch::channel(false);
+        let task = fixture.task(provider, true);
+        let title = fixture.title.clone();
+        let running = tokio::spawn(async move { task.run(title, rx).await });
+        entered.notified().await;
+        wait_for_title_streams(&fixture, 1, fields.len()).await;
+        let (before, before_messages) = fixture.output_rows().await;
+        assert_eq!(before_messages, 0);
+        assert!(before.iter().all(|row| row.segment.close.is_none()));
+        let before_ids = before
+            .iter()
+            .map(|row| row.doc_id.clone())
+            .collect::<Vec<_>>();
+
+        running.abort();
+        assert!(running
+            .await
+            .expect_err("title task must abort")
+            .is_cancelled());
+        let (aborted, aborted_messages) = fixture.output_rows().await;
+        assert_eq!(aborted_messages, 0);
+        assert_eq!(aborted.len(), before.len());
+        assert!(aborted.iter().all(|row| row.segment.close.is_none()));
+        let physical = gents_store::graphql::escape_graphql_string(&fixture.title.doc_id);
+        let owner = gents_store::graphql::escape_graphql_string(fixture.identity.did());
+        let response = fixture.agent_access()
+            .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }} }}, limit: 2) {{ execution_generation lifecycle_state }} }}"#))
+            .await
+            .expect("read title lease owner");
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
+            .expect("title lease rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["lifecycle_state"], "processing");
+        let generation = gents_store::graphql::escape_graphql_string(
+            rows[0]["execution_generation"]
+                .as_str()
+                .expect("title execution generation"),
+        );
+        let past = gents_store::graphql::escape_graphql_string(
+            &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
+        );
+        let expired = fixture.agent_access()
+            .write("test.title_expire_own_lease", &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }}, execution_generation: {{ _eq: "{generation}" }}, lifecycle_state: {{ _eq: "processing" }} }}, input: {{ execution_lease_expires_at: "{past}" }}) {{ _docID }} }}"#))
+            .await
+            .expect("expire exact title generation");
+        assert_eq!(
+            expired["data"]["update_AgentRequest"][0]["_docID"],
+            fixture.title.doc_id
+        );
+
+        let first =
+            gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
+                &fixture.node,
+                fixture.identity.did(),
+                std::slice::from_ref(&fixture.agent_config.agent_identity),
+            )
+            .await
+            .expect("recover crashed title");
+        assert_eq!(first.requests_recovered, 1);
+        let outcome = title_outcome(&fixture).await;
+        assert_title_audit(&fixture, &fields, outcome.expect("title closed"), 1, false).await;
+        case.check(Some(title_observation(&fixture, outcome).await));
+        assert_eq!(fixture.session_message_count().await, 0);
+        let (after, _) = fixture.output_rows().await;
+        assert_eq!(
+            after.len(),
+            before_ids.len() + 1,
+            "recovery adds one exact closure"
+        );
+        assert!(before_ids
+            .iter()
+            .all(|id| after.iter().any(|row| &row.doc_id == id)));
+
+        let replay =
+            gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
+                &fixture.node,
+                fixture.identity.did(),
+                std::slice::from_ref(&fixture.agent_config.agent_identity),
+            )
+            .await
+            .expect("repeat title recovery");
+        assert_eq!(replay.requests_recovered, 0);
+        let replayed = title_outcome(&fixture).await;
+        assert_title_audit(&fixture, &fields, replayed.expect("title closed"), 1, false).await;
+        case.check(Some(title_observation(&fixture, replayed).await));
+        assert_eq!(fixture.output_rows().await.0.len(), after.len());
     }
-    | LeanCanonicalExecutionCase::ModelExecution {
-        expected_observations,
-        ..
-    }) = model
-    else {
-        unreachable!()
-    };
-    assert_eq!(
-        expected_observations.last().unwrap().request_state,
-        "failed"
-    );
-    assert_eq!(outcome, OutputOutcome::Partial);
-    let fixture = TitleFixture::new().await;
-    let provider = TitleProvider::new(provider_events(&fields, false), true);
-    let entered = provider.entered.clone();
-    let (_shutdown, rx) = tokio::sync::watch::channel(false);
-    let task = fixture.task(provider, true);
-    let title = fixture.title.clone();
-    let running = tokio::spawn(async move { task.run(title, rx).await });
-    entered.notified().await;
-    wait_for_title_streams(&fixture, 1, fields.len()).await;
-    let (before, before_messages) = fixture.output_rows().await;
-    assert_eq!(before_messages, 0);
-    assert!(before.iter().all(|row| row.segment.close.is_none()));
-    let before_ids = before
-        .iter()
-        .map(|row| row.doc_id.clone())
-        .collect::<Vec<_>>();
-
-    running.abort();
-    assert!(running
-        .await
-        .expect_err("title task must abort")
-        .is_cancelled());
-    let (aborted, aborted_messages) = fixture.output_rows().await;
-    assert_eq!(aborted_messages, 0);
-    assert_eq!(aborted.len(), before.len());
-    assert!(aborted.iter().all(|row| row.segment.close.is_none()));
-    let physical = gents_store::graphql::escape_graphql_string(&fixture.title.doc_id);
-    let owner = gents_store::graphql::escape_graphql_string(fixture.identity.did());
-    let response = fixture.agent_access()
-        .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }} }}, limit: 2) {{ execution_generation lifecycle_state }} }}"#))
-        .await
-        .expect("read title lease owner");
-    let rows = response["data"]["AgentRequest"]
-        .as_array()
-        .expect("title lease rows");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["lifecycle_state"], "processing");
-    let generation = gents_store::graphql::escape_graphql_string(
-        rows[0]["execution_generation"]
-            .as_str()
-            .expect("title execution generation"),
-    );
-    let past = gents_store::graphql::escape_graphql_string(
-        &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
-    );
-    let expired = fixture.agent_access()
-        .write("test.title_expire_own_lease", &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }}, execution_generation: {{ _eq: "{generation}" }}, lifecycle_state: {{ _eq: "processing" }} }}, input: {{ execution_lease_expires_at: "{past}" }}) {{ _docID }} }}"#))
-        .await
-        .expect("expire exact title generation");
-    assert_eq!(
-        expired["data"]["update_AgentRequest"][0]["_docID"],
-        fixture.title.doc_id
-    );
-
-    let first = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
-        &fixture.node,
-        fixture.identity.did(),
-        std::slice::from_ref(&fixture.agent_config.agent_identity),
-    )
-    .await
-    .expect("recover crashed title");
-    assert_eq!(first.requests_recovered, 1);
-    assert_title_audit(&fixture, &fields, outcome, 1, false).await;
-    assert_eq!(
-        fixture.terminal_row().await,
-        (
-            RequestLifecycleState::Failed,
-            Some(gents_protocol::output::TerminalOutput::NoMessage)
-        )
-    );
-    assert_eq!(fixture.session_message_count().await, 0);
-    let (after, _) = fixture.output_rows().await;
-    assert_eq!(
-        after.len(),
-        before_ids.len() + 1,
-        "recovery adds one exact closure"
-    );
-    assert!(before_ids
-        .iter()
-        .all(|id| after.iter().any(|row| &row.doc_id == id)));
-
-    let replay = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
-        &fixture.node,
-        fixture.identity.did(),
-        std::slice::from_ref(&fixture.agent_config.agent_identity),
-    )
-    .await
-    .expect("repeat title recovery");
-    assert_eq!(replay.requests_recovered, 0);
-    assert_title_audit(&fixture, &fields, outcome, 1, false).await;
-    assert_eq!(fixture.output_rows().await.0.len(), after.len());
 }
 
 #[tokio::test]
 async fn missing_title_capture_fails_before_provider_dispatch() {
-    let (fields, _) = modeled_title_fields("title_reasoning_audit_complete_no_message");
+    let fields = stimulus_fields();
     let fixture = TitleFixture::new().await;
     let provider = TitleProvider::new(provider_events(&fields, true), false);
     let calls = provider.calls.clone();
@@ -2174,228 +2156,229 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
     let warnings = capture.0.clone();
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
-    let (fields, outcome) = modeled_title_fields("title_reasoning_audit_complete_no_message");
-    for preexisting in [false, true] {
-        let mut fixture = TitleFixture::new().await;
-        fixture.terminalize_parent().await;
-        if !preexisting {
-            gents_session::request::admission::terminalize_pending_request_rejection(
-                &fixture.node,
-                &fixture.title.doc_id,
-                &fixture.title.node_did,
-                &fixture.title.agent_did,
-                fixture.agent_config.agent_identity.as_ref(),
-                "retire setup title before live creation",
-                "test.title_live_creation_setup",
-            )
-            .await
-            .unwrap();
-        }
+    for case in
+        gents_lean_vocab::families::native_execution_contracts_title_watcher_dispatch::cases()
+    {
+        let fields = title_fields(&case.input.raw);
+        for preexisting in [false, true] {
+            let mut fixture = TitleFixture::new().await;
+            fixture.terminalize_parent().await;
+            if !preexisting {
+                gents_session::request::admission::terminalize_pending_request_rejection(
+                    &fixture.node,
+                    &fixture.title.doc_id,
+                    &fixture.title.node_did,
+                    &fixture.title.agent_did,
+                    fixture.agent_config.agent_identity.as_ref(),
+                    "retire setup title before live creation",
+                    "test.title_live_creation_setup",
+                )
+                .await
+                .unwrap();
+            }
 
-        let provider = TitleProvider::new(provider_events(&fields, true), false);
-        let calls = provider.calls.clone();
-        let prompt_builder = LayeredPromptBuilder::for_agent(
-            &fixture.agent_config.system_prompt,
-            &fixture.agent_config.agent_did,
-            &[],
-            false,
-            &[],
-        );
-        let preamble = prompt_builder.preamble().to_string();
-        let (status_owner, status) = RuntimeStatusHandle::start_with_unbounded_test_clock(
-            fixture.node.clone(),
-            fixture.identity.did().to_owned(),
-        );
-        status
-            .initialize_startup(&fixture.agent_config.agent_did)
-            .await
-            .unwrap();
-        status
-            .readiness()
-            .register_slot(&fixture.agent_config.agent_did, 1)
-            .await
-            .unwrap();
-        let (dispatch, receiver) = tokio::sync::mpsc::channel(8);
-        let snapshot = Arc::new(ActiveRuntimeSnapshot {
-            generation: 1,
-            node: None,
-            local_did: String::new(),
-            default_agent_did: fixture.agent_config.agent_did.clone(),
-            tool_configs: rapidhash::RapidHashMap::from_iter([(
-                fixture.agent_config.agent_did.clone(),
-                fixture.tool_config.clone(),
-            )]),
-            agents: rapidhash::RapidHashMap::from_iter([(
-                fixture.agent_config.agent_did.clone(),
-                fixture.agent_config.clone(),
-            )]),
-            tool_surfaces: Default::default(),
-            backend_admission_configs: Default::default(),
-            unavailable_agents: Default::default(),
-            active_schedules: Default::default(),
-            unavailable_schedules: Default::default(),
-            active_event_triggers: Default::default(),
-            unavailable_event_triggers: Default::default(),
-            active_tasks: Default::default(),
-            dispatchers: rapidhash::RapidHashMap::from_iter([(
-                fixture.agent_config.agent_did.clone(),
-                dispatch,
-            )]),
-            agent_executor_capacities: Default::default(),
-            agent_executor_queue_capacities: Default::default(),
-        });
-        status
-            .readiness()
-            .publish_snapshot(snapshot.as_ref())
-            .await
-            .unwrap();
-        status
-            .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
-            .await
-            .unwrap();
-        let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let mut daemon = AgentDaemon::new(AgentDaemonInit {
-            node: fixture.node.clone(),
-            tool_config: fixture.tool_config.clone(),
-            agent_config: fixture.agent_config.clone(),
-            provider_family: None,
-            model: Arc::new(provider),
-            preamble,
-            loop_tools: Arc::new(Vec::new()),
-            prompt_builder,
-            hook_failure_policy: FailurePolicy::default(),
-            rendered_request_capture_factory: Some(
-                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
-                    fixture.node.clone(), fixture.agent_config.agent_identity.as_ref(),
-                ).unwrap(),
-            ),
-            background_tool_registry: BackgroundToolRegistry::default(),
-            background_execution_registry: BackgroundExecutionRegistry::default(),
-            startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
-            runtime_status: status.clone(),
-            slot_generation: 1,
-            request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+            let provider = TitleProvider::new(provider_events(&fields, true), false);
+            let calls = provider.calls.clone();
+            let prompt_builder = LayeredPromptBuilder::for_agent(
+                &fixture.agent_config.system_prompt,
+                &fixture.agent_config.agent_did,
+                &[],
+                false,
+                &[],
+            );
+            let preamble = prompt_builder.preamble().to_string();
+            let (status_owner, status) = RuntimeStatusHandle::start_with_unbounded_test_clock(
                 fixture.node.clone(),
-                fixture.identity.clone(),
-                gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
-            ),
-        })
-        .unwrap();
-        let daemon_rx = Arc::new(tokio::sync::Mutex::new(receiver));
-        let daemon_shutdown = shutdown_rx.clone();
-        let gate = RuntimeAdmissionGate::closed();
-        gate.open().await;
-        let router_gate = gate.clone();
-        let router_node = fixture.node.clone();
-        let router_did = fixture.identity.did().to_owned();
-        let router_agent = fixture.agent_config.agent_identity.clone();
-        let router_task = tokio::spawn(async move {
-            run_router_with_watcher(RouterInputs {
-                node: router_node.clone(),
-                node_did: router_did.clone(),
-                watcher: DefraWatcher::for_agents(router_node, &router_did, vec![router_agent])
-                    .expect("request watcher"),
-                active_snapshot_rx: snapshot_rx,
-                shutdown: shutdown_rx,
-                admission_gate: router_gate,
-                runtime_status: status,
-                runtime_snapshot_observer: None,
-                unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
+                fixture.identity.did().to_owned(),
+            );
+            status
+                .initialize_startup(&fixture.agent_config.agent_did)
+                .await
+                .unwrap();
+            status
+                .readiness()
+                .register_slot(&fixture.agent_config.agent_did, 1)
+                .await
+                .unwrap();
+            let (dispatch, receiver) = tokio::sync::mpsc::channel(8);
+            let snapshot = Arc::new(ActiveRuntimeSnapshot {
+                generation: 1,
+                node: None,
+                local_did: String::new(),
+                default_agent_did: fixture.agent_config.agent_did.clone(),
+                tool_configs: rapidhash::RapidHashMap::from_iter([(
+                    fixture.agent_config.agent_did.clone(),
+                    fixture.tool_config.clone(),
+                )]),
+                agents: rapidhash::RapidHashMap::from_iter([(
+                    fixture.agent_config.agent_did.clone(),
+                    fixture.agent_config.clone(),
+                )]),
+                tool_surfaces: Default::default(),
+                backend_admission_configs: Default::default(),
+                unavailable_agents: Default::default(),
+                active_schedules: Default::default(),
+                unavailable_schedules: Default::default(),
+                active_event_triggers: Default::default(),
+                unavailable_event_triggers: Default::default(),
+                active_tasks: Default::default(),
+                dispatchers: rapidhash::RapidHashMap::from_iter([(
+                    fixture.agent_config.agent_did.clone(),
+                    dispatch,
+                )]),
+                agent_executor_capacities: Default::default(),
+                agent_executor_queue_capacities: Default::default(),
+            });
+            status
+                .readiness()
+                .publish_snapshot(snapshot.as_ref())
+                .await
+                .unwrap();
+            status
+                .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
+                .await
+                .unwrap();
+            let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+            let mut daemon = AgentDaemon::new(AgentDaemonInit {
+                node: fixture.node.clone(),
+                tool_config: fixture.tool_config.clone(),
+                agent_config: fixture.agent_config.clone(),
+                provider_family: None,
+                model: Arc::new(provider),
+                preamble,
+                loop_tools: Arc::new(Vec::new()),
+                prompt_builder,
+                hook_failure_policy: FailurePolicy::default(),
+                rendered_request_capture_factory: Some(
+                    gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                        fixture.node.clone(), fixture.agent_config.agent_identity.as_ref(),
+                    ).unwrap(),
+                ),
+                background_tool_registry: BackgroundToolRegistry::default(),
+                background_execution_registry: BackgroundExecutionRegistry::default(),
+                startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+                runtime_status: status.clone(),
+                slot_generation: 1,
+                request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+                    fixture.node.clone(),
+                    fixture.identity.clone(),
+                    gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
+                ),
             })
-            .await
-        });
+            .unwrap();
+            let daemon_rx = Arc::new(tokio::sync::Mutex::new(receiver));
+            let daemon_shutdown = shutdown_rx.clone();
+            let gate = RuntimeAdmissionGate::closed();
+            gate.open().await;
+            let router_gate = gate.clone();
+            let router_node = fixture.node.clone();
+            let router_did = fixture.identity.did().to_owned();
+            let router_agent = fixture.agent_config.agent_identity.clone();
+            let router_task = tokio::spawn(async move {
+                run_router_with_watcher(RouterInputs {
+                    node: router_node.clone(),
+                    node_did: router_did.clone(),
+                    watcher: DefraWatcher::for_agents(router_node, &router_did, vec![router_agent])
+                        .expect("request watcher"),
+                    active_snapshot_rx: snapshot_rx,
+                    shutdown: shutdown_rx,
+                    admission_gate: router_gate,
+                    runtime_status: status,
+                    runtime_snapshot_observer: None,
+                    unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
+                })
+                .await
+            });
 
-        if !preexisting {
-            daemon.spawn_conversation_title_generation(&fixture.parent);
-            let old_doc_id = fixture.title.doc_id.clone();
-            let session = gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
-            let purpose =
-                gents_store::graphql::escape_graphql_string(RequestPurpose::TitleAudit.as_str());
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                let response = fixture.agent_access()
-                    .execute(&format!("{{ AgentRequest(filter: {{ session_id: {{ _eq: \"{session}\" }}, purpose: {{ _eq: \"{purpose}\" }} }}) {{ _docID }} }}"))
-                    .await
-                    .unwrap();
-                let next = response["data"]["AgentRequest"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter_map(|row| row["_docID"].as_str())
-                    .find(|doc_id| *doc_id != old_doc_id);
-                if let Some(doc_id) = next {
-                    fixture.title =
-                        gents_session::request::admission::load_request_for_admission_test_as(
-                            &fixture.node,
-                            doc_id,
-                            &fixture.agent_config.agent_did,
-                        )
+            if !preexisting {
+                daemon.spawn_conversation_title_generation(&fixture.parent);
+                let old_doc_id = fixture.title.doc_id.clone();
+                let session =
+                    gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
+                let purpose = gents_store::graphql::escape_graphql_string(
+                    RequestPurpose::TitleAudit.as_str(),
+                );
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                loop {
+                    let response = fixture.agent_access()
+                        .execute(&format!("{{ AgentRequest(filter: {{ session_id: {{ _eq: \"{session}\" }}, purpose: {{ _eq: \"{purpose}\" }} }}) {{ _docID }} }}"))
                         .await
                         .unwrap();
+                    let next = response["data"]["AgentRequest"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter_map(|row| row["_docID"].as_str())
+                        .find(|doc_id| *doc_id != old_doc_id);
+                    if let Some(doc_id) = next {
+                        fixture.title =
+                            gents_session::request::admission::load_request_for_admission_test_as(
+                                &fixture.node,
+                                doc_id,
+                                &fixture.agent_config.agent_did,
+                            )
+                            .await
+                            .unwrap();
+                        break;
+                    }
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "title creator did not persist a request"
+                    );
+                    tokio::task::yield_now().await;
+                }
+            }
+            if !preexisting {
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    0,
+                    "creator dispatched before daemon"
+                );
+            }
+            let daemon_task = tokio::spawn(async move {
+                daemon
+                    .run(
+                        daemon_rx,
+                        crate::runtime::agent::worker_capacity::WorkerCapacity::new(1),
+                        daemon_shutdown,
+                    )
+                    .await
+            });
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                if fixture.terminal_row().await.0 == RequestLifecycleState::Completed {
                     break;
                 }
                 assert!(
                     tokio::time::Instant::now() < deadline,
-                    "title creator did not persist a request"
+                    "watcher did not complete title audit"
                 );
                 tokio::task::yield_now().await;
             }
-        }
-        if !preexisting {
-            assert_eq!(
-                calls.load(Ordering::SeqCst),
-                0,
-                "creator dispatched before daemon"
-            );
-        }
-        let daemon_task = tokio::spawn(async move {
-            daemon
-                .run(
-                    daemon_rx,
-                    crate::runtime::agent::worker_capacity::WorkerCapacity::new(1),
-                    daemon_shutdown,
-                )
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "preexisting={preexisting}");
+            let outcome = title_outcome(&fixture).await;
+            assert_title_audit(&fixture, &fields, outcome.expect("title closed"), 1, true).await;
+            case.check(Some(title_observation(&fixture, outcome).await));
+            shutdown_tx.send(true).unwrap();
+            gate.close().await;
+            tokio::time::timeout(Duration::from_secs(5), router_task)
                 .await
-        });
-
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-        loop {
-            if fixture.terminal_row().await.0 == RequestLifecycleState::Completed {
-                break;
-            }
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), daemon_task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            status_owner.close().await.unwrap();
             assert!(
-                tokio::time::Instant::now() < deadline,
-                "watcher did not complete title audit"
+                warnings.lock().unwrap().is_empty(),
+                "title owner emitted WARN"
             );
-            tokio::task::yield_now().await;
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "preexisting={preexisting}");
-        assert_title_audit(&fixture, &fields, outcome, 1, true).await;
-        assert_eq!(
-            fixture.terminal_row().await,
-            (
-                RequestLifecycleState::Completed,
-                Some(gents_protocol::output::TerminalOutput::NoMessage)
-            )
-        );
-        shutdown_tx.send(true).unwrap();
-        gate.close().await;
-        tokio::time::timeout(Duration::from_secs(5), router_task)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), daemon_task)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        status_owner.close().await.unwrap();
-        assert!(
-            warnings.lock().unwrap().is_empty(),
-            "title owner emitted WARN"
-        );
     }
 }
 
@@ -2757,64 +2740,61 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
     let warnings = capture.0.clone();
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
-    let (fields, outcome) = modeled_title_fields("title_live_partial_retains_received_reasoning");
-    assert_eq!(outcome, OutputOutcome::Partial);
-    let fixture = TitleFixture::new().await;
-    let provider = TitleProvider::new(reasoning_only_events(&fields), false);
-    let calls = provider.calls.clone();
-    let (_shutdown, rx) = tokio::sync::watch::channel(false);
-    fixture
-        .task(provider, true)
-        .run(fixture.title.clone(), rx)
-        .await
-        .expect("reasoning-only title is an ordinary provider result");
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        usize::try_from(super::TITLE_GENERATION_MAX_ATTEMPTS).unwrap()
-    );
-    assert_title_audit(&fixture, &fields, outcome, 2, false).await;
+    for case in gents_lean_vocab::families::native_execution_contracts_title_reasoning_only::cases()
+    {
+        let fields = title_fields(&case.input.raw);
+        let fixture = TitleFixture::new().await;
+        let provider = TitleProvider::new(reasoning_only_events(&fields), false);
+        let calls = provider.calls.clone();
+        let (_shutdown, rx) = tokio::sync::watch::channel(false);
+        fixture
+            .task(provider, true)
+            .run(fixture.title.clone(), rx)
+            .await
+            .expect("reasoning-only title is an ordinary provider result");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            usize::try_from(super::TITLE_GENERATION_MAX_ATTEMPTS).unwrap()
+        );
+        let outcome = title_outcome(&fixture).await;
+        assert_title_audit(&fixture, &fields, outcome.expect("title closed"), 2, false).await;
 
-    let doc = gents_store::graphql::escape_graphql_string(&fixture.title.doc_id);
-    let response = fixture.agent_access()
-        .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ execution_generation }} }}"))
-        .await
-        .unwrap();
-    let generation = response["data"]["AgentRequest"][0]["execution_generation"]
-        .as_str()
-        .expect("title execution generation")
-        .to_owned();
-    let (rows, _) = fixture.output_rows().await;
-    assert!(rows.iter().all(|row| matches!(
-        &row.segment.writer,
-        OutputWriter::RequestExecution { execution_generation } if *execution_generation == generation
-    )));
+        let doc = gents_store::graphql::escape_graphql_string(&fixture.title.doc_id);
+        let response = fixture.agent_access()
+            .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ execution_generation }} }}"))
+            .await
+            .unwrap();
+        let generation = response["data"]["AgentRequest"][0]["execution_generation"]
+            .as_str()
+            .expect("title execution generation")
+            .to_owned();
+        let (rows, _) = fixture.output_rows().await;
+        assert!(rows.iter().all(|row| matches!(
+            &row.segment.writer,
+            OutputWriter::RequestExecution { execution_generation } if *execution_generation == generation
+        )));
 
-    assert_eq!(
-        fixture.terminal_row().await,
-        (
-            RequestLifecycleState::Completed,
-            Some(gents_protocol::output::TerminalOutput::NoMessage)
-        )
-    );
-    let session = gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
-    let response = fixture
-        .agent_access()
-        .execute(&format!(
-            "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
-        ))
-        .await
-        .unwrap();
-    let title = &response["data"]["AgentSession"][0]["title"];
-    assert_eq!(
-        title["text"],
-        super::sanitize_generated_title("", &fixture.parent.content),
-        "fallback title: {title}"
-    );
-    assert_eq!(
-        warnings.lock().unwrap().len(),
-        usize::try_from(super::TITLE_GENERATION_MAX_ATTEMPTS).unwrap(),
-        "only the bounded attempt warnings are emitted"
-    );
+        case.check(Some(title_observation(&fixture, outcome).await));
+        let session = gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
+        let response = fixture
+            .agent_access()
+            .execute(&format!(
+                "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
+            ))
+            .await
+            .unwrap();
+        let title = &response["data"]["AgentSession"][0]["title"];
+        assert_eq!(
+            title["text"],
+            super::sanitize_generated_title("", &fixture.parent.content),
+            "fallback title: {title}"
+        );
+        assert_eq!(
+            warnings.lock().unwrap().len(),
+            usize::try_from(super::TITLE_GENERATION_MAX_ATTEMPTS).unwrap(),
+            "only the bounded attempt warnings are emitted"
+        );
+    }
 }
 
 #[tokio::test]
@@ -2924,7 +2904,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
 
 #[tokio::test]
 async fn fenced_title_output_fails_closed_without_retry() {
-    let (fields, _) = modeled_title_fields("title_live_partial_retains_received_reasoning");
+    let fields = stimulus_fields();
     let fixture = TitleFixture::new().await;
     let mut provider = TitleProvider::new(reasoning_only_events(&fields), false);
     provider.fence_generation = Some((
