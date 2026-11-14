@@ -96,29 +96,21 @@ def ownToolEditCases : List OwnToolEditInput :=
 holding `sets` directly. An Agent with only the User's own-only self-config
 grant holds the Agent baseline: no NAC relation operation, so the held-bounded
 rule refuses every source it would project, even one for a held baseline
-permission. The Engineer's policy delegate set admits a source it holds. -/
+permission. The Engineer's policy delegate set admits a source it holds. The
+goal-tools edit is the single `goal` purpose group. -/
 def ownToolEditAccepted (i : OwnToolEditInput) : Bool :=
-  let sources := ConfigurationFixture.editToolSources ToolPolicy.ContractCases.agentGoalOnly false
+  let sources := (ConfigurationFixture.editToolSources ToolPolicy.ContractCases.agentGoalOnly false).filter
+    (·.purpose == "goal")
   let initial : Configuration.ToolGrantProjection :=
     { admins := [userDid],
       direct := ((ownToolEditSets i.sets).flatMap GrantSets.GrantSet.permissions).map (agentDid, ·) }
   let result := Configuration.configureToolGrantGroup initial ConfigurationFixture.toolGrantorHousehold
     sources agentDid true true
-  !sources.isEmpty && result != initial
+  Configuration.validToolGrantGroup sources && result != initial
 
 @[conformance_family]
 def ownToolEdit : Family OwnToolEditInput Bool where
-  inputs := ownToolEditCases.filter fun i => i.name == "own-only-goal"
-  model := ownToolEditAccepted
-
-/-- model-production-gap: the self-configuration tool runs only for an Agent
-that also holds its own-only self-configuration grant, so an Agent holding
-exactly the Agent baseline and policy delegate sets cannot be built through it.
-With that grant added, production accepts the goal-tools edit the model refuses
-for the two sets alone. -/
-@[conformance_family]
-def ownToolEditUnreached : Family OwnToolEditInput Bool where
-  inputs := ownToolEditCases.filter fun i => i.name != "own-only-goal"
+  inputs := ownToolEditCases
   model := ownToolEditAccepted
 
 structure DanglingRepairInput where

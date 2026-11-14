@@ -1024,14 +1024,23 @@ def editToolSources (surface : ToolPolicy.Surface) (pack : Bool) : List Configur
 def selfConfigPackSurface : ToolPolicy.Surface :=
   { ToolPolicy.ContractCases.secureMinimal with selfConfig := true, selfConfigCategories := .all }
 
+/-- One edit selects one purpose's tool group; a surface enabling several
+purposes is several group edits. -/
+def editToolGroups (surface : ToolPolicy.Surface) (pack : Bool) :
+    List (List Configuration.ToolGrantSource) :=
+  let sources := editToolSources surface pack
+  (sources.map (·.purpose)).eraseDups.map fun purpose => sources.filter (·.purpose == purpose)
+
 theorem own_only_grant_cannot_enable_tool_sources :
     let initial : Configuration.ToolGrantProjection :=
       { admins := [userDid],
         direct := GrantSets.GrantSet.agentBaseline.permissions.map (agentDid, ·) }
     [ToolPolicy.ContractCases.agentGoalOnly, selfConfigPackSurface].all fun surface =>
-      !(editToolSources surface true).isEmpty &&
-        Configuration.configureToolGrantGroup initial toolGrantorHousehold
-          (editToolSources surface true) agentDid true true == initial := by
+      !(editToolGroups surface true).isEmpty &&
+        (editToolGroups surface true).all fun group =>
+          Configuration.validToolGrantGroup group &&
+            Configuration.configureToolGrantGroup initial toolGrantorHousehold group agentDid true true ==
+              initial := by
   native_decide
 
 def callbackState : State :=

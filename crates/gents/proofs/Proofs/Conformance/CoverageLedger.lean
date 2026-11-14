@@ -2941,9 +2941,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "household_fresh_backend_origin_unreached"
       "model-production-gap: FreshBackendStore::initialize builds its temporary native Node without HTTP or P2P transport and has no seam that fails its schema commit, so an exposed or uncommitted fresh-store baseline cannot be driven.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "family" "household_own_tool_edit_unreached"
-      "model-production-gap: the self-configuration tool runs only for an Agent that also holds its own-only self-configuration grant, so an Agent holding exactly the Agent baseline and policy delegate sets cannot be built through it; with that grant added, production accepts the goal-tools edit the model refuses for the two sets alone.")
-      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "household_self_config_lookup_unreached"
       "model-production-gap: native document ACP cannot fence a document replacement between the self-config lookup and its relationship grant, so a lookup whose Agent document changed generation in between cannot be driven.")
       "identity-permission" [Surface.runtimeInternal]

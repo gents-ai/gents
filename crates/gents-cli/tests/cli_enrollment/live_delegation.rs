@@ -329,12 +329,16 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             })
         })
         .await?;
+    let [decision] = invoke.as_slice() else {
+        panic!("one native invoke decision for one Agent document: {invoke:?}");
+    };
     for case in gents_lean_vocab::families::household_agent_manager_invoke_live::cases() {
         assert_eq!(case.input.phase, "after", "{:?}", case.input);
-        case.check(matches!(
-            invoke.as_slice(),
-            [gents::defra_node::DocumentAccessDecision::Allowed]
-        ));
+        case.check(match decision {
+            gents::defra_node::DocumentAccessDecision::Allowed => true,
+            gents::defra_node::DocumentAccessDecision::Denied => false,
+            other => panic!("invoke decision is neither allowed nor denied: {other:?}"),
+        });
     }
     let mut unrelated_root_reads = Vec::new();
     for (binding, documents) in [

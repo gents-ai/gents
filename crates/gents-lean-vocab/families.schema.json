@@ -656,7 +656,6 @@
   "household_ordinary_client_mutation": {"input":{"fields":[["intent","bool"],["mutation","bool"]],"struct":"OrdinaryMutationInput"},"output":"bool"},
   "household_ordinary_receipt_visibility": {"input":{"fields":[["name","string"],["present","bool"]],"struct":"PresenceInput"},"output":"bool"},
   "household_own_tool_edit": {"input":{"fields":[["name","string"],["sets",{"list":"string"}]],"struct":"OwnToolEditInput"},"output":"bool"},
-  "household_own_tool_edit_unreached": {"input":{"fields":[["name","string"],["sets",{"list":"string"}]],"struct":"OwnToolEditInput"},"output":"bool"},
   "household_pack_cleanup_visible": {"input":{"fields":[["name","string"],["visible",{"list":"bool"}]],"struct":"PackCleanupInput"},"output":"bool"},
   "household_pack_installation_aborted": {"input":{"fields":[["name","string"],["installer","string"],["commit","bool"],["revoke_parent","bool"],["retry_fresh","bool"],["direct","bool"]],"struct":"PackInstallationInput"},"output":{"fields":[["installer_read","bool"],["user_read","bool"]],"struct":"PackInstallationAbortedAccess"}},
   "household_pack_installation_access": {"input":{"fields":[["name","string"],["installer","string"],["commit","bool"],["revoke_parent","bool"],["retry_fresh","bool"],["direct","bool"]],"struct":"PackInstallationInput"},"output":{"fields":[["installer_read","bool"],["installer_update","bool"],["user_read","bool"],["user_update","bool"],["user_delete","bool"],["runtime_read","bool"],["other_read","bool"]],"struct":"PackInstallationAccess"}},

@@ -1217,6 +1217,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         &sibling_doc.identity_binding(),
     )
     .unwrap();
+    let sibling_did = identity::Did::new(&sibling).unwrap();
     let no_grant = SelfConfigCore::new(
         fixture.db.node.clone(),
         fixture.node_did().to_owned(),
@@ -1263,9 +1264,29 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         ))
         .await;
     assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
+    gents_store::identity::GrantSet::PolicyDelegate
+        .grant(
+            &gents_store::config_client::ConfigAccess::local_as(
+                fixture.db.node.clone(),
+                identity::Did::new(fixture.db.node_identity.did()).unwrap(),
+            ),
+            &sibling_did,
+        )
+        .await
+        .unwrap();
+    let engineer_goal = no_grant
+        .apply(tools_request(
+            &no_grant,
+            vec![("built_ins".into(), Some(json!({"enable_goal_tools":true})))],
+        ))
+        .await;
     for case in gents_lean_vocab::families::household_own_tool_edit::cases() {
-        assert_eq!(case.input.name, "own-only-goal", "{:?}", case.input);
-        case.check(goal.is_ok());
+        let edit = match case.input.name.as_str() {
+            "own-only-goal" => &goal,
+            "engineer-goal" => &engineer_goal,
+            other => panic!("unmodeled own Tools edit {other}"),
+        };
+        case.check(edit.is_ok());
     }
 }
 
