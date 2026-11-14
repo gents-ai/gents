@@ -398,6 +398,13 @@ impl schemars::JsonSchema for SurfaceToolDecl {
             }),
             "Surrounding whitespace is trimmed; blank means create.",
         );
+        let padded_upsert = super::noted(
+            serde_json::json!({
+                "type": "string",
+                "pattern": format!("^{space}*upsert{space}*$")
+            }),
+            "Surrounding whitespace is trimmed.",
+        );
         let padded_query = super::noted(
             serde_json::json!({
                 "type": "string",
@@ -408,11 +415,20 @@ impl schemars::JsonSchema for SurfaceToolDecl {
         schemars::json_schema!({
             "anyOf": [
                 {
-                    "allOf": [create],
+                    "allOf": [create.clone()],
                     "properties": { "kind": { "anyOf": [
                         { "enum": ["create", "write", null] },
                         padded_create
-                    ] } }
+                    ] } },
+                    "not": { "required": ["key_fields"] }
+                },
+                {
+                    "allOf": [create],
+                    "properties": { "kind": { "anyOf": [
+                        { "enum": ["upsert"] },
+                        padded_upsert
+                    ] } },
+                    "required": ["kind", "key_fields"]
                 },
                 {
                     "allOf": [query],
@@ -456,6 +472,19 @@ impl Serialize for SurfaceToolDecl {
         S: serde::Serializer,
     {
         match self {
+            Self::Create(decl) if decl.key_fields.is_some() => {
+                #[derive(Serialize)]
+                struct Upsert<'a> {
+                    kind: &'static str,
+                    #[serde(flatten)]
+                    decl: &'a WriteToolDecl,
+                }
+                Upsert {
+                    kind: "upsert",
+                    decl,
+                }
+                .serialize(serializer)
+            }
             Self::Create(decl) => decl.serialize(serializer),
             Self::Query(decl) => {
                 use serde::ser::SerializeMap;
@@ -483,16 +512,27 @@ impl<'de> Deserialize<'de> for SurfaceToolDecl {
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|kind| !kind.is_empty())
-            .unwrap_or("create");
-        match kind {
+            .unwrap_or("create")
+            .to_owned();
+        match kind.as_str() {
             "query" | "read" => Ok(Self::Query(
                 serde_json::from_value(value).map_err(serde::de::Error::custom)?,
             )),
-            "create" | "write" => Ok(Self::Create(
-                serde_json::from_value(value).map_err(serde::de::Error::custom)?,
-            )),
+            kind @ ("create" | "write" | "upsert") => {
+                let decl: WriteToolDecl =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                match (kind, decl.key_fields.is_some()) {
+                    ("upsert", false) => Err(serde::de::Error::custom(
+                        "an upsert entry needs key_fields: the fields that find its document",
+                    )),
+                    ("create" | "write", true) => Err(serde::de::Error::custom(
+                        "key_fields belong to an upsert entry; set kind \"upsert\"",
+                    )),
+                    _ => Ok(Self::Create(decl)),
+                }
+            }
             other => Err(serde::de::Error::custom(format!(
-                "surface entry kind must be \"create\" or \"query\", got {other:?}"
+                "surface entry kind must be \"create\", \"upsert\" or \"query\", got {other:?}"
             ))),
         }
     }

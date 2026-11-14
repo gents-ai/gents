@@ -51,6 +51,7 @@ import Proofs.Conformance.RootCandidates
 import Proofs.Conformance.ToolRoot
 import Proofs.Conformance.MCPHealthShutdown
 import Proofs.Conformance.DatastoreWrite
+import Proofs.Conformance.DatastoreUpsert
 import Proofs.Conformance.DocumentSigner
 import Proofs.Conformance.LspConsent
 import Proofs.Conformance.ConfigurationDiscovery

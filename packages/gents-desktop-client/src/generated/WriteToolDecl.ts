@@ -11,4 +11,9 @@ import type { WriteToolOutputObligation } from "./WriteToolOutputObligation.js";
  * `tool_name` and `collection` are trimmed at deserialization; `description`
  * is preserved verbatim.
  */
-export type WriteToolDecl = { notification?: MailboxNotificationPolicy | null, tool_name: string, collection: string, description?: string, fields?: Array<WriteToolField>, output_obligation?: WriteToolOutputObligation | null, };
+export type WriteToolDecl = { notification?: MailboxNotificationPolicy | null, tool_name: string, collection: string, description?: string, fields?: Array<WriteToolField>, output_obligation?: WriteToolOutputObligation | null,
+/**
+ * Upsert keys: a write updates the document whose key fields equal the
+ * input's, or creates one when none does.
+ */
+key_fields?: Array<string> | null, };

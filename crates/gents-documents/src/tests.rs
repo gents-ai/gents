@@ -82,6 +82,7 @@ fn validate_rejects_write_tool_with_empty_tool_name() {
         description: String::new(),
         fields: Vec::new(),
         output_obligation: None,
+        key_fields: None,
     }];
     let result = validate_write_tools(&decls);
     assert!(result.is_err(), "empty tool_name must be rejected");
@@ -102,6 +103,7 @@ fn validate_rejects_invalid_write_tool_collection_identifiers() {
             description: String::new(),
             fields: Vec::new(),
             output_obligation: None,
+            key_fields: None,
         }];
         let err = validate_write_tools(&decls)
             .expect_err("invalid collection identifier must be rejected")
@@ -129,6 +131,7 @@ fn validate_rejects_invalid_write_tool_field_identifiers() {
                 fill: None,
             }],
             output_obligation: None,
+            key_fields: None,
         }];
         let err = validate_write_tools(&decls)
             .expect_err("invalid field identifier must be rejected")
@@ -155,6 +158,7 @@ fn validate_rejects_model_provided_requester_identity() {
             fill: None,
         }],
         output_obligation: None,
+        key_fields: None,
     };
     assert!(decl
         .validate()
@@ -176,6 +180,7 @@ fn validate_rejects_duplicate_write_tool_names() {
         description: String::new(),
         fields: Vec::new(),
         output_obligation: None,
+        key_fields: None,
     };
     let decls = vec![decl("ActionRequest"), decl("OtherCollection")];
     let result = validate_write_tools(&decls);
@@ -201,6 +206,7 @@ fn validate_accepts_well_formed_write_tools() {
                 fill: None,
             }],
             output_obligation: None,
+            key_fields: None,
         },
         WriteToolDecl {
             notification: None,
@@ -209,6 +215,7 @@ fn validate_accepts_well_formed_write_tools() {
             description: String::new(),
             fields: Vec::new(),
             output_obligation: None,
+            key_fields: None,
         },
     ];
     assert!(
@@ -273,6 +280,7 @@ fn dynamic_output_obligation_requires_a_model_provided_required_field() {
                 minimum_writes: 1,
                 expected_count_field: Some("expected_total".to_string()),
             }),
+            key_fields: None,
         }];
         assert!(validate_write_tools(&decls)
             .unwrap_err()
@@ -294,6 +302,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
             fill: None,
         }],
         output_obligation: None,
+        key_fields: None,
     }];
     let result = validate_write_tools(&decls);
     assert!(
@@ -316,6 +325,7 @@ fn validate_rejects_write_tool_name_colliding_with_defra_query() {
         description: String::new(),
         fields: Vec::new(),
         output_obligation: None,
+        key_fields: None,
     }];
     assert!(
         validate_write_tools(&decls).is_err(),
@@ -332,6 +342,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
         description: String::new(),
         fields: Vec::new(),
         output_obligation: None,
+        key_fields: None,
     }];
     let cli_tool_names = vec!["rg".to_string()];
     let result = super::write_tool::validate_write_tool_declarations(&decls, &cli_tool_names, &[]);
@@ -366,6 +377,7 @@ fn validate_rejects_duplicate_field_names_within_decl() {
             },
         ],
         output_obligation: None,
+        key_fields: None,
     }];
     let result = validate_write_tools(&decls);
     assert!(result.is_err(), "duplicate field names must be rejected");
@@ -541,6 +553,7 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
             fill: Some(WriteToolFieldFill::Correlation),
         }],
         output_obligation: None,
+        key_fields: None,
     }];
     assert!(validate_write_tools(&decls).is_err());
 }

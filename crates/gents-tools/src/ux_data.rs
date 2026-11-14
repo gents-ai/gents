@@ -47,6 +47,7 @@ pub struct UxDataCall {
 /// The `kind` a call or a surface listing reports for an entry.
 fn kind_of(entry: &SurfaceToolDecl) -> &'static str {
     match entry {
+        SurfaceToolDecl::Create(decl) if decl.key_fields.is_some() => "upsert",
         SurfaceToolDecl::Create(_) => "create",
         SurfaceToolDecl::Query(_) => "query",
     }
@@ -239,7 +240,7 @@ fn args_object(args: Value) -> Result<Map<String, Value>> {
 }
 
 /// Runs one declared tool of one declared surface for the UX plugin listed
-/// as `ux`, answering `{"kind": "query" | "create", "output": <the tool's
+/// as `ux`, answering `{"kind": "query" | "create" | "upsert", "output": <the tool's
 /// own result>}`.
 pub async fn call(home: &Path, access: &ConfigAccess, request: UxDataCall) -> Result<Value> {
     let UxDataCall {

@@ -385,6 +385,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 minimum_writes: 1,
                 expected_count_field: None,
             }),
+            key_fields: None,
         };
         let tool_doc: gents_documents::Tools = serde_json::from_value(serde_json::json!({
             "node_did":behavior.agent.node_did(), "tools_id":format!("{}:tools", behavior.agent.agent_did),

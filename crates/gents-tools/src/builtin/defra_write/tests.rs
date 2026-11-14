@@ -127,6 +127,7 @@ fn decl() -> WriteToolDecl {
             },
         ],
         output_obligation: None,
+        key_fields: None,
     }
 }
 
@@ -188,6 +189,7 @@ async fn writes_native_measurements_without_string_coercion() {
             })
             .collect(),
         output_obligation: None,
+        key_fields: None,
     };
     let tool = BoundedWriteTool::new(ConfigAccess::local(node.clone()), declaration);
     Tool::call(
@@ -312,6 +314,7 @@ async fn rejects_decl_with_non_identifier_field_name() {
             fill: None,
         }],
         output_obligation: None,
+        key_fields: None,
     };
     let tool = BoundedWriteTool::new(ConfigAccess::local(node), bad);
     assert!(
@@ -358,6 +361,7 @@ async fn bounded_writes_follow_the_datastore_write_model() {
                 description: "write a correlated result".into(),
                 fields: fields.clone(),
                 output_obligation: None,
+                key_fields: None,
             },
         )
         .declared_by(input.surface.clone());
@@ -521,6 +525,7 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
                     fill: None,
                 })
                 .collect(),
+            key_fields: None,
         },
     );
     let definition = Tool::definition(&tool, String::new()).await;
@@ -591,6 +596,7 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
                     minimum_writes: 1,
                     expected_count_field: Some(field.into()),
                 }),
+                key_fields: None,
             },
         )
     };
@@ -676,6 +682,7 @@ async fn count_carriers_store_as_the_count_carrier_model() {
                 fill: None,
             }],
             output_obligation: None,
+            key_fields: None,
         };
         let tool = BoundedWriteTool::new(
             ConfigAccess::local_as(
@@ -778,4 +785,131 @@ fn write_grant_guidance_names_the_call_that_keeps_the_callers_datastore_group() 
 
     let granted = super::write_grant_guidance(false, Some(&group), &["Kept".to_owned()]);
     assert_eq!(granted["writable"], true);
+}
+
+#[tokio::test]
+async fn upserts_follow_the_datastore_upsert_model() {
+    let mut store = crate::test_support::MixedSigningStore::new(
+        "type UpsertSetting { owner: String theme: String }",
+    )
+    .await;
+    let writer_did = store.agent_did(0);
+    let cases = gents_lean_vocab::families::datastore_upsert_write::cases::<String, String>();
+    let existing = |case: &str| -> &'static [&'static str] {
+        match case {
+            "none" => &[],
+            "mine" => &["writer"],
+            "foreign" => &["other"],
+            "unsigned" => &["unsigned"],
+            "several" => &["writer", "writer"],
+            existing => panic!("unknown existing {existing}"),
+        }
+    };
+    for signing in [false, true] {
+        store.reopen(signing).await;
+        for (index, case) in cases.iter().enumerate() {
+            for (copy, who) in existing(&case.input.existing).iter().enumerate() {
+                let access = match (*who, signing) {
+                    ("writer", true) => store.agent_access(0),
+                    ("other", true) => store.agent_access(1),
+                    ("unsigned", false) => store.unsigned_access(),
+                    _ => continue,
+                };
+                access
+                    .write(
+                        "test.upsert_setting",
+                        &format!(
+                            r#"mutation {{ add_UpsertSetting(input: {{owner: "owner-{index}", theme: "light-{copy}"}}) {{ _docID }} }}"#
+                        ),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+    let node = store.node().clone();
+    let rows = |owner: String| {
+        let node = node.clone();
+        async move {
+            let response = ConfigAccess::local(node)
+                .execute(&format!(
+                    r#"{{ UpsertSetting(filter: {{owner: {{_eq: "{owner}"}}}}) {{ _docID theme }} }}"#
+                ))
+                .await
+                .unwrap();
+            response["data"]["UpsertSetting"]
+                .as_array()
+                .unwrap()
+                .clone()
+        }
+    };
+    let tool = BoundedWriteTool::new(
+        store.agent_access(0),
+        WriteToolDecl {
+            notification: None,
+            tool_name: "save_setting".into(),
+            collection: "UpsertSetting".into(),
+            description: String::new(),
+            fields: ["owner", "theme"]
+                .into_iter()
+                .map(|name| WriteToolField {
+                    name: name.into(),
+                    required: false,
+                    fill: None,
+                })
+                .collect(),
+            output_obligation: None,
+            key_fields: Some(vec!["owner".into()]),
+        },
+    );
+    for (index, case) in cases.into_iter().enumerate() {
+        let owner = format!("owner-{index}");
+        let before = rows(owner.clone()).await;
+        let mut args = serde_json::Map::new();
+        if case.input.keyed {
+            args.insert("owner".into(), json!(owner));
+        }
+        args.insert("theme".into(), json!("dark"));
+        let outcome = match tool.call(super::BoundedWriteParams(args)).await {
+            Ok(output) => {
+                let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let after = rows(owner.clone()).await;
+                let written = output["written"].as_str().unwrap().to_owned();
+                match written.as_str() {
+                    "created" => assert_eq!(after.len(), before.len() + 1, "{output}"),
+                    "updated" => {
+                        assert_eq!(after.len(), before.len(), "{output}");
+                        assert_eq!(after[0]["_docID"], output["document_id"]);
+                        assert_eq!(after[0]["theme"], "dark");
+                        let doc_id = output["document_id"].as_str().unwrap();
+                        let signers = gents_store::identity::document_signers(
+                            &ConfigAccess::local(node.clone()),
+                            &[doc_id],
+                        )
+                        .await
+                        .unwrap();
+                        assert_eq!(signers[doc_id].as_deref(), Some(writer_did.as_str()));
+                    }
+                    written => panic!("unknown written {written}"),
+                }
+                written
+            }
+            Err(error) => {
+                assert_eq!(rows(owner.clone()).await, before);
+                let message = error.to_string();
+                if message.contains("give `owner` a value") {
+                    "refused_missing_key".to_owned()
+                } else if message.contains("updates only a document its writer signed") {
+                    "refused_foreign".to_owned()
+                } else if message.contains("updates exactly one") {
+                    "refused_ambiguous".to_owned()
+                } else {
+                    panic!("unexpected refusal {message}")
+                }
+            }
+        };
+        case.check(outcome);
+    }
+    drop(tool);
+    store.shutdown().await;
 }

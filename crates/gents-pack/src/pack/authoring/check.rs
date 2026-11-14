@@ -177,7 +177,23 @@ pub fn load_config(archive: &PackArchive) -> Result<crate::pack::AuthoredPackCon
         &|_| None,
     )?;
     gents_documents::DesiredStateApplyPlan::from_pack_config(&config.documents)?;
+    check_surface_entries(&config.documents)?;
     Ok(config)
+}
+
+fn check_surface_entries(config: &gents_documents::PackConfig) -> Result<()> {
+    for surface in &config.datastore_tool_surfaces {
+        for entry in surface.entries.as_deref().unwrap_or(&[]) {
+            entry.validate().with_context(|| {
+                format!(
+                    "datastore surface {} tool {}",
+                    surface.surface_id,
+                    entry.tool_name()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 pub fn check_readme(dir: &Path, problems: &mut Vec<String>) {
@@ -309,6 +325,28 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("on-move") && warnings[0].contains("Move"));
         assert!(self_write_warnings(&self_writing_config(&["Scoreboard"])).is_empty());
+    }
+
+    #[test]
+    fn upsert_key_fields_follow_the_declaration_model() {
+        for case in gents_lean_vocab::families::datastore_upsert_declaration::cases() {
+            let mut config = serde_json::to_value(self_writing_config(&[])).unwrap();
+            config["datastore_tool_surfaces"] = serde_json::json!([{
+                "surface_id": "settings",
+                "node_did": PLACEHOLDER_OWNER,
+                "entries": [{
+                    "kind": "upsert",
+                    "tool_name": "save_settings",
+                    "collection": "Settings",
+                    "fields": case.input.fields.iter()
+                        .map(|name| serde_json::json!({"name": name}))
+                        .collect::<Vec<_>>(),
+                    "key_fields": case.input.keys,
+                }],
+            }]);
+            let config: gents_documents::PackConfig = serde_json::from_value(config).unwrap();
+            case.check(check_surface_entries(&config).is_ok());
+        }
     }
 
     fn scaffold_minimal(dir: &Path, name: &str) {

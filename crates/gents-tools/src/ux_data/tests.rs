@@ -1059,3 +1059,87 @@ async fn surfaces_lists_each_declared_surface_with_its_callable_tools() {
     );
     fixture.node.shutdown().await.expect("node shutdown");
 }
+
+#[tokio::test]
+async fn a_page_upserts_its_own_document_and_never_one_another_identity_signed() {
+    let fixture = Fixture::new().await;
+    install_board(
+        fixture.home.path(),
+        vec![declared("board", &["list_tasks", "add_task", "move_task"])],
+    );
+    install_verified_board_schema(
+        fixture.home.path(),
+        "type BoardTask { title: String lane: String }",
+    )
+    .await;
+    let mut surface = board_surface(&fixture.node_did, "board", true);
+    surface["entries"]["entries"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "kind": "upsert",
+            "tool_name": "move_task",
+            "collection": "BoardTask",
+            "description": "Put a task in a lane.",
+            "fields": [
+                {"name": "title", "required": true},
+                {"name": "lane", "required": true},
+            ],
+            "key_fields": ["title"],
+        }));
+    fixture.write_surface(surface).await;
+    let upsert = |access: ConfigAccess, lane: &'static str| {
+        let home = fixture.home.path().to_owned();
+        let node_did = fixture.node_did.clone();
+        async move {
+            call(
+                &home,
+                &access,
+                UxDataCall {
+                    ux: BOARD.into(),
+                    node_did,
+                    surface: "board".into(),
+                    tool: "move_task".into(),
+                    args: json!({"title": "page-owned", "lane": lane}),
+                },
+            )
+            .await
+        }
+    };
+    let created = upsert(fixture.client_access.clone(), "doing")
+        .await
+        .unwrap();
+    assert_eq!(created["kind"], "upsert");
+    assert_eq!(created["output"]["written"], "created");
+    let doc_id = created["output"]["document_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let updated = upsert(fixture.client_access.clone(), "done").await.unwrap();
+    assert_eq!(updated["output"]["written"], "updated");
+    assert_eq!(updated["output"]["document_id"], doc_id.as_str());
+    let signers = gents_store::identity::document_signers(&fixture.access, &[&doc_id])
+        .await
+        .unwrap();
+    assert_eq!(
+        signers[&doc_id].as_deref(),
+        Some(fixture.client_did.as_str())
+    );
+
+    let refused = upsert(fixture.access.clone(), "todo").await.unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("updates only a document its writer signed"),
+        "{refused:#}"
+    );
+    let rows = fixture
+        .access
+        .execute("{ BoardTask(filter: {title: {_eq: \"page-owned\"}}) { _docID lane } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        rows["data"]["BoardTask"],
+        json!([{"_docID": doc_id, "lane": "done"}])
+    );
+    fixture.node.shutdown().await.expect("node shutdown");
+}
