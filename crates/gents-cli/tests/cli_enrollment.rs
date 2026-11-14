@@ -901,9 +901,13 @@ async fn observed_changes(access: &ConfigAccess, collections: &[&str]) -> Vec<Sn
     changes
 }
 
-async fn observe_change_until(changes: &mut [SnapshotChanges], deadline: Instant) {
+async fn observe_change(changes: &mut [SnapshotChanges]) {
     let futures = changes.iter_mut().map(|change| Box::pin(change.recv()));
-    let _ = tokio::time::timeout_at(deadline, futures::future::select_all(futures)).await;
+    futures::future::select_all(futures).await;
+}
+
+async fn observe_change_until(changes: &mut [SnapshotChanges], deadline: Instant) {
+    let _ = tokio::time::timeout_at(deadline, observe_change(changes)).await;
 }
 
 async fn query_collection_dids(

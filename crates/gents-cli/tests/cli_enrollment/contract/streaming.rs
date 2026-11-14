@@ -19,27 +19,21 @@ pub(super) fn latest_user_text(request: &Value) -> Option<String> {
     }
 }
 
-async fn emission_deadline(
-    mut emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
-    budget: Duration,
-) -> Result<(std::time::Instant, tokio::time::Instant)> {
-    let emitted = *emission.wait_for(|timestamp| timestamp.is_some()).await?;
-    let emitted = emitted.context("provider first-frame timestamp missing")?;
-    let deadline = tokio::time::Instant::from_std(emitted + budget);
-    anyhow::ensure!(
-        tokio::time::Instant::now() < deadline,
-        "provider content visibility deadline already elapsed before observation"
-    );
-    Ok((emitted, deadline))
-}
-
+/// Waits for the gated provider's streamed content in the app's live
+/// projection, then checks the order: the provider emitted it, and the runtime
+/// request is still open because the test holds the completion gate.
+///
+/// The projection joins the app's observed request row with the runtime's
+/// transcript, so either the app store or a runtime document may be the last
+/// input to arrive; the wait wakes on both. It has no deadline of its own: the
+/// caller's turn bound ends a turn whose content never becomes visible.
 pub(super) async fn wait_for_visible_content(
     core: &ClientCore,
     graphql: &str,
     request: &str,
     expected: &str,
-    emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
-    visibility_budget: Duration,
+    gate: &tokio::sync::Semaphore,
+    emission: &tokio::sync::watch::Receiver<Option<std::time::Instant>>,
 ) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
     let mut changes = observed_changes(
@@ -47,32 +41,46 @@ pub(super) async fn wait_for_visible_content(
         &["AgentRequest", "AgentMessage", "AgentOutputSegment"],
     )
     .await;
-    let (started, deadline) = emission_deadline(emission, visibility_budget).await?;
+    let mut store_updates = core.store_updates();
+    loop {
+        store_updates.borrow_and_update();
+        let content = canonical_live_content(core, graphql, request).await?;
+        if content.is_some_and(|content| content.contains(expected)) {
+            break;
+        }
+        tokio::select! {
+            changed = store_updates.changed() => {
+                changed.context("app projection update channel closed")?;
+            }
+            () = observe_change(&mut changes) => {}
+        }
+    }
+    let emitted = (*emission.borrow())
+        .context("streamed content was visible before the provider emitted it")?;
+    anyhow::ensure!(
+        gate.available_permits() == 0,
+        "provider completion gate was released before the streamed content was visible"
+    );
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ _docID request_id lifecycle_state }} }}"#,
+            escape_graphql_string(request),
+        ),
+    )
+    .await?;
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(first_graphql_row(&response, "AgentRequest")?.clone())
+            .context("decoding canonical AgentRequest row")?;
+    anyhow::ensure!(
+        !row.is_terminal(),
+        "runtime request completed while the provider completion gate was held: {response}"
+    );
     tracing::info!(
         request,
-        budget_ms = visibility_budget.as_millis(),
-        "canonical live visibility deadline started"
+        since_provider_emission_ms = emitted.elapsed().as_millis(),
+        "canonical live content observed while provider completion remains gated"
     );
-    tokio::time::timeout_at(deadline, async {
-        loop {
-            let content = canonical_live_content(core, graphql, request).await?;
-            anyhow::ensure!(
-                tokio::time::Instant::now() < deadline,
-                "provider content visibility deadline elapsed during observation"
-            );
-            if content.is_some_and(|content| content.contains(expected)) {
-                tracing::info!(
-                    request,
-                    elapsed_ms = started.elapsed().as_millis(),
-                    "canonical live content observed while provider completion remains gated"
-                );
-                return Ok::<_, anyhow::Error>(());
-            }
-            observe_change_until(&mut changes, deadline).await;
-        }
-    })
-    .await
-    .context("streaming content did not reach client projection before provider completion")??;
     Ok(())
 }
 

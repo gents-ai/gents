@@ -245,11 +245,6 @@ async fn run_contract_with_streaming_cadence(
         assert_observer_did_not_overflow(&core).await?;
 
         let session = Uuid::new_v4().to_string();
-        let stream_visibility_budget = if paced {
-            Duration::from_secs(2)
-        } else {
-            Duration::from_millis(500)
-        };
         visible_turn(
             &core,
             &graphql,
@@ -258,8 +253,7 @@ async fn run_contract_with_streaming_cadence(
             &session,
             "First conversation turn",
             stream_gate.as_deref(),
-            stream_emission.clone(),
-            stream_visibility_budget,
+            &stream_emission,
         )
         .await?;
 
@@ -312,8 +306,7 @@ async fn run_contract_with_streaming_cadence(
             &session,
             FOLLOWUP_PROMPT,
             followup_stream_gate.as_deref(),
-            followup_emission.clone(),
-            stream_visibility_budget,
+            &followup_emission,
         )
         .await?;
         assert_local_pagination(&core, &graphql, &session, &node_did).await?;
@@ -351,10 +344,10 @@ async fn visible_turn(
     session: &str,
     prompt: &str,
     stream_gate: Option<&tokio::sync::Semaphore>,
-    stream_emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
-    stream_visibility_budget: Duration,
+    stream_emission: &tokio::sync::watch::Receiver<Option<std::time::Instant>>,
 ) -> Result<()> {
     let started = Instant::now();
+    let live_content_visible = std::sync::atomic::AtomicBool::new(false);
     let result = timeout(TURN_BUDGET, async {
         core.submit_request(session, node_did, prompt, Some(agent_did))
             .await?;
@@ -379,8 +372,8 @@ async fn visible_turn(
                         graphql,
                         &request,
                         expected,
-                        stream_emission.clone(),
-                        stream_visibility_budget,
+                        gate,
+                        stream_emission,
                     )
                     .await;
                     if let Err(error) = &visibility {
@@ -402,6 +395,7 @@ async fn visible_turn(
                     }
                     gate.add_permits(1);
                     visibility?;
+                    live_content_visible.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 wait_for_runtime_reply(core, session, node_did, &request, expected).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
@@ -443,7 +437,9 @@ async fn visible_turn(
     if !matches!(result, Ok(Ok(()))) {
         let diagnostics = pairing_diagnostics(core, graphql).await;
         core.shutdown().await?;
-        bail!("client-visible turn exceeded 20s or failed: {result:?}; {diagnostics}");
+        let streamed =
+            stream_gate.map(|_| live_content_visible.load(std::sync::atomic::Ordering::Relaxed));
+        bail!("client-visible turn exceeded 20s or failed: {result:?}; streamed content visible while provider completion was gated: {streamed:?}; {diagnostics}");
     }
     tracing::info!(
         elapsed_ms = started.elapsed().as_millis(),
