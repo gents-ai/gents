@@ -7,9 +7,16 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 mod environment;
+mod holder;
+#[cfg(all(
+    any(test, feature = "test-home-guard"),
+    not(all(feature = "native-e2e", debug_assertions))
+))]
+mod isolation;
 mod systemd_status;
 pub mod update;
 pub use environment::read_environment_file;
+pub use holder::{AnotherHomesService, ServiceHolder, ServiceRecord};
 
 #[cfg(not(all(feature = "native-e2e", debug_assertions)))]
 pub const SERVICE_LABEL: &str = "ai.gents.runtime";
@@ -323,6 +330,11 @@ pub struct CommandOutput {
 pub trait CommandRunner {
     fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput>;
 
+    /// What the service manager records for the job it holds under the label.
+    fn service_record(&self, platform: NativeServicePlatform) -> Result<Option<ServiceRecord>> {
+        observe_record(self, platform)
+    }
+
     fn background_item_status(&self, _definition: &Path) -> BackgroundItemStatus {
         BackgroundItemStatus::Unavailable
     }
@@ -340,12 +352,62 @@ pub trait CommandRunner {
     }
 }
 
+/// `InstallRepair.ManagerRecord` as the service manager reports it: launchd's
+/// record of the loaded job, or systemd's record of the unit.
+fn observe_record<R>(runner: &R, platform: NativeServicePlatform) -> Result<Option<ServiceRecord>>
+where
+    R: CommandRunner + ?Sized,
+{
+    match platform {
+        NativeServicePlatform::Macos => {
+            let uid = runner.run(OsStr::new("/usr/bin/id"), &["-u".into()])?;
+            if !uid.success {
+                bail!("could not resolve current user id: {}", output_detail(&uid));
+            }
+            let target = format!("gui/{}/{SERVICE_LABEL}", uid.stdout.trim());
+            let print = runner
+                .run(OsStr::new("launchctl"), &["print".into(), target.into()])
+                .context("launchd user services are unavailable")?;
+            ensure_launchd_result(&print, LaunchdOperation::Inspect)?;
+            Ok(print.success.then(|| holder::launchd_record(&print.stdout)))
+        }
+        NativeServicePlatform::Linux => {
+            let show = runner
+                .run(
+                    OsStr::new("systemctl"),
+                    &[
+                        "--user".into(),
+                        "show".into(),
+                        holder::SYSTEMD_RECORD_PROPERTIES.into(),
+                        SYSTEMD_UNIT.into(),
+                    ],
+                )
+                .context("systemd user services are unavailable; a user systemd session is required (Gents does not change linger or root settings)")?;
+            if !show.success {
+                bail!(
+                    "systemctl could not report which home the Gents unit serves: {}",
+                    output_detail(&show)
+                );
+            }
+            Ok(holder::systemd_record(&show.stdout))
+        }
+    }
+}
+
 pub struct ProcessCommandRunner;
 
 impl CommandRunner for ProcessCommandRunner {
     fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
         use std::io::{Read as _, Seek as _, SeekFrom};
         use wait_timeout::ChildExt as _;
+
+        #[cfg(all(
+            any(test, feature = "test-home-guard"),
+            not(all(feature = "native-e2e", debug_assertions))
+        ))]
+        if let Some(output) = isolation::answer(program, args) {
+            return Ok(output);
+        }
 
         let mut stdout = tempfile::tempfile().context("creating native command stdout capture")?;
         let mut stderr = tempfile::tempfile().context("creating native command stderr capture")?;
@@ -535,8 +597,50 @@ where
         &self.config.home
     }
 
+    #[cfg(test)]
+    pub(crate) fn runner(&self) -> &R {
+        &self.runner
+    }
+
     pub fn definition_path(&self) -> PathBuf {
         self.config.definition_path(self.platform)
+    }
+
+    /// `InstallRepair.holder`: whose the job the service manager holds under
+    /// the label is, read from the manager's record of it, never from the
+    /// definition path under this process's `HOME`.
+    pub fn holder(&self) -> Result<ServiceHolder> {
+        let record = self.runner.service_record(self.platform)?;
+        Ok(ServiceHolder::of(
+            record.as_ref(),
+            &self.config.home,
+            &self.definition_path(),
+        ))
+    }
+
+    /// `InstallRepair.mayChange`: every request that changes the label goes
+    /// through here and is refused while it holds another home's job.
+    pub fn ensure_may_change(&self) -> Result<()> {
+        match self.holder()? {
+            ServiceHolder::Another { home, definition } => Err(AnotherHomesService {
+                label: SERVICE_LABEL,
+                home: self.config.home.display().to_string(),
+                serving: home,
+                definition,
+            }
+            .into()),
+            _ => Ok(()),
+        }
+    }
+
+    fn change(&self, program: &str, args: &[OsString]) -> Result<CommandOutput> {
+        self.ensure_may_change()?;
+        self.run_allow_failure(program, args)
+    }
+
+    fn change_checked(&self, program: &str, args: &[OsString]) -> Result<()> {
+        self.ensure_may_change()?;
+        self.run_checked(program, args)
     }
 
     pub fn install(&self) -> Result<()> {
@@ -829,12 +933,13 @@ where
                     let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
                     let domain = format!("gui/{}", self.current_uid()?);
                     let path = self.config.definition_path(self.platform);
-                    let bootstrap = self.run_allow_failure(
+                    let bootstrap = self.change(
                         "launchctl",
                         &["bootstrap".into(), domain.into(), path.into_os_string()],
                     )?;
                     // bootstrap fails when already loaded; kickstart remains
                     // the idempotent operation for the loaded job.
+                    self.ensure_may_change()?;
                     let kick = self.runner.run(
                         OsStr::new("launchctl"),
                         &["kickstart".into(), target.into()],
@@ -882,11 +987,11 @@ where
                 self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
                 // A unit that hit its start limit refuses `start` until its
                 // failed state is cleared. A unit that is not failed ignores this.
-                self.run_allow_failure(
+                self.change(
                     "systemctl",
                     &["--user".into(), "reset-failed".into(), SYSTEMD_UNIT.into()],
                 )?;
-                self.run_checked(
+                self.change_checked(
                     "systemctl",
                     &["--user".into(), "start".into(), SYSTEMD_UNIT.into()],
                 )?;
@@ -908,23 +1013,21 @@ where
                     self.run_allow_failure("launchctl", &["print".into(), target.clone().into()])?;
                 ensure_launchd_result(&loaded, LaunchdOperation::Inspect)?;
                 if loaded.success {
-                    let booted_out = self.run_allow_failure(
-                        "launchctl",
-                        &["bootout".into(), target.clone().into()],
-                    )?;
+                    let booted_out =
+                        self.change("launchctl", &["bootout".into(), target.clone().into()])?;
                     ensure_launchd_result(&booted_out, LaunchdOperation::Stop)?;
                     self.wait_unloaded_or_inactive()?;
                 }
             }
             NativeServicePlatform::Linux => {
-                self.run_checked(
+                self.change_checked(
                     "systemctl",
                     &["--user".into(), "stop".into(), SYSTEMD_UNIT.into()],
                 )?;
                 self.wait_unloaded_or_inactive()?;
                 // A unit that ends `failed` because of this stop was stopped
                 // on purpose; clear it so status does not report a crash.
-                self.run_allow_failure(
+                self.change(
                     "systemctl",
                     &["--user".into(), "reset-failed".into(), SYSTEMD_UNIT.into()],
                 )?;
@@ -948,7 +1051,7 @@ where
             NativeServicePlatform::Macos => self.set_macos_enabled(enabled),
             NativeServicePlatform::Linux => {
                 let verb = if enabled { "enable" } else { "disable" };
-                self.run_checked(
+                self.change_checked(
                     "systemctl",
                     &["--user".into(), verb.into(), SYSTEMD_UNIT.into()],
                 )
@@ -1292,7 +1395,7 @@ where
     fn set_macos_enabled(&self, enabled: bool) -> Result<()> {
         let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
         let verb = if enabled { "enable" } else { "disable" };
-        self.run_checked("launchctl", &[verb.into(), target.into()])
+        self.change_checked("launchctl", &[verb.into(), target.into()])
     }
 
     fn run_allow_failure(&self, program: &str, args: &[OsString]) -> Result<CommandOutput> {

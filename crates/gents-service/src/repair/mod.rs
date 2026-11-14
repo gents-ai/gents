@@ -15,7 +15,8 @@ use tokio::time::Instant;
 
 use crate::home_state::{default_home_ignoring_env, read_runtime_state};
 use crate::native_service::{
-    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceExit, ServiceRefusal,
+    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceExit, ServiceHolder,
+    ServiceRefusal,
 };
 use crate::repair::crash_loop::{job_sample, CrashLoopWatch};
 use crate::repair::home::{
@@ -212,6 +213,7 @@ async fn prepare_with_lock(
             previous_version: None,
             served_home_present: false,
             operation,
+            holder: crate::native_service::ServiceHolder::Free,
         },
     };
     facts.node_version = served_version(&facts.port);
@@ -687,6 +689,11 @@ async fn start(
     let config = manager.config().clone();
     repairs.step(RepairStep::StartNode);
     let sample = on_manager(&config, |manager| {
+        if let ServiceHolder::Another { home, definition } = manager.holder()? {
+            return Ok(Err(home
+                .or(definition)
+                .unwrap_or_else(|| manager.definition_path())));
+        }
         match manager.installed_home()? {
             None => manager.install()?,
             Some(installed) => {
@@ -766,10 +773,11 @@ async fn start(
 async fn service_serving_another(home: &Path) -> Option<PathBuf> {
     let manager = local_service(home, &current_executable().ok()?).ok()??;
     on_manager(manager.config(), |manager| {
-        Ok(match manager.installed_home()? {
-            Some(installed) if installed != manager.home() && manager.job_pid()?.is_some() => {
-                Some(installed)
-            }
+        Ok(match manager.holder()? {
+            ServiceHolder::Another {
+                home: Some(serving),
+                ..
+            } if manager.job_pid()?.is_some() => Some(serving),
             _ => None,
         })
     })

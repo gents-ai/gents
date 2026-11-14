@@ -12,6 +12,14 @@ source consistency checks, not a separate runtime compatibility version.
   (`desktop_node_reconnect`), which asks the client's observer and answers
   with the node's runtime connection; the `fleet-read` grant still governs
   what the client snapshot shows.
+- A `gents` command never stops, starts, enables, disables or replaces a
+  background service that runs another home's node, whatever its `HOME` or
+  `--home`. Which home the loaded job serves is read from launchd's or
+  systemd's own record of it (the definition it was loaded from and its
+  `--home`), not from a file under the asking process's `HOME`; asked to
+  change such a service, the command names the two calls that start a node
+  beside it or move the service. Test builds no longer reach the machine's
+  service manager at all.
 
 ## 1.0.0-rc2 - 2026-11-10
 
