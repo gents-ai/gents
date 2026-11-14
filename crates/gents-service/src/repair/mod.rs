@@ -213,7 +213,7 @@ async fn prepare_with_lock(
             previous_version: None,
             served_home_present: false,
             operation,
-            holder: crate::native_service::ServiceHolder::Free,
+            holder: ServiceHolder::Free,
         },
     };
     facts.node_version = served_version(&facts.port);
