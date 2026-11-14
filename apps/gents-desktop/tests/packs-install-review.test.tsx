@@ -576,13 +576,25 @@ describe("the install review", () => {
 });
 
 describe("the models a pack needs", () => {
+  // Property: the install review asks for one usable model per declared slot,
+  // previews every choice, and installs with exactly the chosen bindings in
+  // slot order. Single-threaded and CPU-bound (no interleaving to model):
+  // each select trip costs real jsdom work, so the test keeps the fewest trips
+  // that still cover slots declared out of name order.
   it("asks for a model for each slot, previews each choice, and installs with them", async () => {
+    /* two slots, declared out of name order: a preview sends the choices by
+       name and an install by slot, and each further slot is one more trip
+       through the select */
+    const [coordinatorSlot, workerSlot] = SLOTS;
     const installPack = bridge(
-      slotted(SLOTS, [
-        profile("large", "Large"),
-        profile("glm", "GLM"),
-        profile("down", "Down", false),
-      ]),
+      slotted(
+        [workerSlot!, coordinatorSlot!],
+        [
+          profile("large", "Large"),
+          profile("glm", "GLM"),
+          profile("down", "Down", false),
+        ],
+      ),
     );
     show(installPack);
     const { user, review } = await openRegistryReview();
@@ -592,9 +604,8 @@ describe("the models a pack needs", () => {
     expect(coordinator).toHaveTextContent("Choose a model");
     expect(installButton(review)).toBeDisabled();
     for (const [slot, model] of [
-      ["coordinator", "Large"],
       ["worker", "GLM"],
-      ["verifier", "Large"],
+      ["coordinator", "Large"],
     ] as const) {
       await user.click(within(models).getByRole("combobox", { name: slot }));
       expect(screen.queryByRole("option", { name: "Down" })).toBeNull();
@@ -603,7 +614,6 @@ describe("the models a pack needs", () => {
     await waitFor(() =>
       expect(previews(installPack).at(-1)?.inferenceSlots).toEqual([
         "coordinator=large",
-        "verifier=large",
         "worker=glm",
       ]),
     );
@@ -616,7 +626,7 @@ describe("the models a pack needs", () => {
     await waitFor(() => expect(installs(installPack)).toHaveLength(1));
     expect(installs(installPack)[0]).toMatchObject({
       expectDigest: DIGEST,
-      inferenceSlots: ["coordinator=large", "worker=glm", "verifier=large"],
+      inferenceSlots: ["worker=glm", "coordinator=large"],
     });
   });
 

@@ -244,6 +244,46 @@ where
     }
 }
 
+/// Hang detector for every wait without a deadline of its own: the longest a
+/// subscribed collection may stay unchanged before the wait fails with the
+/// rows it last read. It is one suite-wide ceiling, far above any host's
+/// scheduling delay, and never a per-test latency budget; the runtime has no
+/// quiescence notification to fail on instead, and a fixture that holds a
+/// provider response or a process is quiet by design.
+pub const STALL_CEILING: Duration = Duration::from_secs(600);
+
+/// Resolves with the first read of `query` that satisfies `predicate`,
+/// re-reading on each change to `collection`, and panics with the last rows
+/// once `collection` has not changed for [`STALL_CEILING`]. The predicate
+/// must change only together with a `collection` change that `reader`
+/// observes: a reader other than the rows' owner sees a child row when its
+/// session link is published, which is a later change to the child's own
+/// collection.
+pub async fn rows_when<R, F>(
+    reader: &R,
+    collection: &str,
+    query: &str,
+    predicate: F,
+) -> serde_json::Value
+where
+    R: SnapshotReader + ?Sized,
+    F: Fn(&serde_json::Value) -> bool,
+{
+    let mut changes = reader.subscribe_changes(collection).await;
+    loop {
+        let rows = reader.read_data(query).await;
+        if predicate(&rows) {
+            return rows;
+        }
+        if tokio::time::timeout(STALL_CEILING, changes.recv())
+            .await
+            .is_err()
+        {
+            panic!("{collection} stalled for {STALL_CEILING:?}: {rows}");
+        }
+    }
+}
+
 pub async fn wait_for_rows<R, F>(
     reader: &R,
     collection: &str,
@@ -255,16 +295,20 @@ where
     R: SnapshotReader + ?Sized,
     F: Fn(&serde_json::Value) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut changes = reader.subscribe_changes(collection).await;
-    loop {
-        let rows = reader.read_data(query).await;
-        if predicate(&rows) {
-            return rows;
+    let last = std::sync::Mutex::new(serde_json::Value::Null);
+    let observed = rows_when(reader, collection, query, |rows| {
+        let holds = predicate(rows);
+        if !holds {
+            *last.lock().expect("last rows") = rows.clone();
         }
-        tokio::time::timeout_at(deadline, changes.recv())
-            .await
-            .unwrap_or_else(|_| panic!("deadline waiting for {collection}: {rows}"));
+        holds
+    });
+    match tokio::time::timeout(timeout, observed).await {
+        Ok(rows) => rows,
+        Err(_) => panic!(
+            "deadline waiting for {collection}: {}",
+            last.lock().expect("last rows")
+        ),
     }
 }
 
