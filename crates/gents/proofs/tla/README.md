@@ -219,6 +219,25 @@ See `../README.md` for how this fits the broader formal-verification model.
   waits on the `pending_native` write-attempt event, a projection the attempt
   may skip once it holds a terminal outcome; `LostWakeup` drops permit
   semantics, the lost wakeup an enable-then-check wait avoids.
+- `GoalWrapup` — the one wrap-up turn of a Goal whose token budget is
+  exhausted (#3810). Goal sources reconcile from the rows they read and
+  write in separate transactions (begin the wrap-up, claim the parent,
+  publish the child keyed by goal, parent and sequence, set the
+  `wrapup_completed` latch); a caller that stops polling drops a step
+  between them. `OneWrapupPerParent`, `NeverAfterCompletedWrapup`,
+  `OneWrapup` and `LatchRecorded` hold for two sources. `Window` is the test
+  that read the Goal after a fixed polling window and asserted the latch the
+  source had not yet written; `NoWrapupGuard` drops the `requestIsWrapup`
+  input of Lean `Goals.decide` and publishes a second wrap-up while the latch
+  is unwritten; `UnkeyedChild` publishes two children of one claim.
+- `BackgroundWakeIdentity` — concurrent background-completion notifications
+  of one finished request coalescing into one wake request (#3810), and the
+  fixture that prepares their tools. Under the process gate and DefraDB's
+  read-conflict abort, `OneWake`, `SameIdentity`, `NoneFailed` and
+  `EveryNotifierAnswered` hold. `WallClock` is the fixture that appended
+  each tool's output observed at the wall clock and was refused by the claim
+  deadline before any notification ran; `NoGate` loses a notifier to aborted
+  attempts; `NoGateNoConflict` creates two wakes.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup

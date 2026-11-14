@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundWakeIdentityWallClock ----
+EXTENDS BackgroundWakeIdentity
+
+====

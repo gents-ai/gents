@@ -1,0 +1,4 @@
+---- MODULE MCGoalWrapupUnkeyedChild ----
+EXTENDS GoalWrapup
+
+====
