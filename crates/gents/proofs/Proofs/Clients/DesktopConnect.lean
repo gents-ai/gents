@@ -242,4 +242,28 @@ theorem fresh_desktop_joins_a_terminal_node (answered : Bool) (h : answered = tr
       ⟨[.createIdentity, .saveRoute, .startClient, .requestEnrollment, .approve], none, true⟩ := by
   simp [connect, blocker, clientSteps, opt, h, approval_owner]
 
+/-- What the startup screen shows while the settings of a configured local home
+are unread. Decision (#3735): a desktop that is not enrolled with the node is
+shown the connect screen whatever state the node is in, naming up front what a
+connect would refuse (`blocker`), so a stopped node is reported with the call
+that starts it rather than left as an unexplained wait, and a node that comes
+up is seen by the next read of its status. An enrolled desktop waits for its
+settings. -/
+inductive Screen where
+  | loadingSettings
+  | notConnected
+  deriving DecidableEq, Repr
+
+def screen (node : NodeState) (enrolled : Bool) : Screen × Option Refusal :=
+  if enrolled then (.loadingSettings, none) else (.notConnected, blocker node)
+
+theorem stopped_node_is_named_on_the_connect_screen :
+    screen .notRunning false = (.notConnected, some .nodeNotRunning) := rfl
+
+/-- The refusal the screen names is the one Connect this desktop would give a
+fresh desktop. -/
+theorem screen_names_what_connect_refuses (node : NodeState) :
+    (screen node false).2 = (connect ⟨node, false, false, false, true, .owner⟩).refusal := by
+  cases node <;> simp [screen, connect, blocker, approval_owner]
+
 end DesktopConnect
