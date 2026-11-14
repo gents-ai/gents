@@ -1,5 +1,3 @@
-#![cfg(any(unix, windows))]
-
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +11,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio_util::codec::{Framed, FramedRead, LengthDelimitedCodec};
 
-mod support;
+use crate::support;
 use support::Attachment;
 
 type Connection = Framed<local::Connection, LengthDelimitedCodec>;

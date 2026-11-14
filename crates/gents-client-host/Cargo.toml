@@ -5,14 +5,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Headless native host for Gents clients"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [features]
 runtime-e2e = []
 editor-e2e = ["runtime-e2e"]
-
-[[test]]
-name = "runtime"
-required-features = ["runtime-e2e"]
 
 [dependencies]
 gents-service.workspace = true

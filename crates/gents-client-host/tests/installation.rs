@@ -1,5 +1,3 @@
-#![cfg(any(unix, windows))]
-
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +6,7 @@ use gents_desktop_bridge::host::local;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tokio::process::Command;
 
-mod support;
+use crate::support;
 use support::Attachment;
 
 #[tokio::test]

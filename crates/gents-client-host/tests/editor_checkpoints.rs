@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -9,8 +7,7 @@ use serde_json::{json, Value};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-#[path = "support/homes.rs"]
-mod homes;
+use crate::support::homes;
 
 struct Peer {
     child: Child,
