@@ -22,11 +22,6 @@ const BOARD: &str = "acme/board/board";
 
 #[test]
 fn operator_ux_surface_checks_follow_model() {
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    assert_eq!(model.configuration_ux_datastore_cases.len(), 5);
     let initial: DatastoreToolSurfaceDocument =
         serde_json::from_value(board_surface(NODE, "board", true)).unwrap();
     let expected = initial
@@ -37,9 +32,9 @@ fn operator_ux_surface_checks_follow_model() {
         .find(|entry| entry.tool_name() == "list_tasks")
         .unwrap()
         .clone();
-    for case in &model.configuration_ux_datastore_cases {
+    gents_lean_vocab::families::household_ux_datastore::replay(|case| {
         let home = tempfile::tempdir().unwrap();
-        let tools = if case["declared"] == true {
+        let tools = if case.declared {
             vec!["list_tasks"]
         } else {
             vec!["add_task"]
@@ -48,19 +43,17 @@ fn operator_ux_surface_checks_follow_model() {
         let listing = gents_pack::plugin::ux::find(home.path(), BOARD).unwrap();
         let allowed = manifest_allows_tool(&listing, "board", "list_tasks");
         let mut surface = initial.clone();
-        surface.enabled = case["enabled"].as_bool().unwrap();
-        if case["unchanged"] == false {
+        surface.enabled = case.enabled;
+        if !case.unchanged {
             surface
                 .entries
                 .as_mut()
                 .unwrap()
                 .retain(|entry| entry.tool_name() != "list_tasks");
         }
-        let visible = case["visible"].as_bool().unwrap().then_some(&surface);
-        let usable =
-            allowed && gents_documents::confirm_visible_datastore_tool(visible, &expected).is_ok();
-        assert_eq!(usable, case["expected"].as_bool().unwrap(), "{case}");
-    }
+        let visible = case.visible.then_some(&surface);
+        allowed && gents_documents::confirm_visible_datastore_tool(visible, &expected).is_ok()
+    });
 }
 
 struct Fixture {
@@ -526,24 +519,19 @@ async fn watch_stops_when_the_query_projection_changes() {
 #[tokio::test]
 async fn a_page_creates_through_the_declared_create_tool_and_reads_it_back() {
     let fixture = Fixture::new().await;
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let embedded = model
-        .configuration_ux_create_cases
-        .iter()
-        .find(|case| case["name"] == "embedded-held")
-        .unwrap();
-    let created = fixture
-        .call(
-            "board",
-            "add_task",
-            json!({"title": "Write the tests", "lane": "doing"}),
-        )
-        .await
-        .unwrap();
-    assert!(embedded["expected"].as_bool().unwrap());
+    let mut created = None;
+    for case in gents_lean_vocab::families::household_ux_create_embedded::cases() {
+        let outcome = fixture
+            .call(
+                "board",
+                "add_task",
+                json!({"title": "Write the tests", "lane": "doing"}),
+            )
+            .await;
+        case.check(outcome.is_ok());
+        created = outcome.ok();
+    }
+    let created = created.unwrap();
     assert_eq!(created["kind"], "create");
     assert_eq!(created["output"]["collection"], "BoardTask");
     let doc_id = created["output"]["document_id"].as_str().unwrap();
@@ -673,29 +661,33 @@ async fn http_operator_signs_ux_create_from_the_verified_installed_pack() {
         "type BoardTask { title: String lane: String }",
     )
     .await;
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let approved = model
-        .configuration_ux_create_cases
-        .iter()
-        .find(|case| case["name"] == "remote-approved-graph")
-        .unwrap();
-    let request = UxDataCall {
-        ux: BOARD.into(),
-        node_did: fixture.node_did.clone(),
-        surface: "board".into(),
-        tool: "add_task".into(),
-        args: json!({"title":"client-authored", "lane":"doing"}),
-    };
-    let outcome = call(fixture.home.path(), &fixture.client_access, request).await;
-    assert_eq!(
-        outcome.is_ok(),
-        approved["expected"].as_bool().unwrap(),
-        "{outcome:?}"
-    );
-    let outcome = outcome.unwrap();
+    let mut approved = None;
+    for case in gents_lean_vocab::families::household_ux_create_remote::cases() {
+        let unsigned;
+        let access = if case.input.signed_graph {
+            &fixture.client_access
+        } else {
+            unsigned =
+                ConfigAccess::Graphql(gents_store::config_client::GraphqlEndpoint::as_principal(
+                    fixture._db.client_endpoint(),
+                    fixture.client_did.as_str(),
+                ));
+            &unsigned
+        };
+        let request = UxDataCall {
+            ux: BOARD.into(),
+            node_did: fixture.node_did.clone(),
+            surface: "board".into(),
+            tool: "add_task".into(),
+            args: json!({"title": format!("client-{}", case.input.name), "lane":"doing"}),
+        };
+        let outcome = call(fixture.home.path(), access, request).await;
+        case.check(outcome.is_ok());
+        if case.input.signed_graph {
+            approved = outcome.ok();
+        }
+    }
+    let outcome = approved.unwrap();
     let doc_id = outcome["output"]["document_id"].as_str().unwrap();
     let history = fixture
         .client_access

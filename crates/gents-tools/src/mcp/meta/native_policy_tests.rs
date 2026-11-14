@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::{json, Value};
 
 use gents_documents::apply_desired_state_plan;
@@ -118,35 +119,6 @@ async fn assert_genesis_signer(
 /// Agent writes use the retained managed signer from the Node root.
 #[tokio::test]
 async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> Result<()> {
-    let modeled = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .expect("MCP use model")
-            .mcp_service_use_cases
-            .clone()
-    })
-    .await?;
-    let expected = |field: &str, value: bool| {
-        modeled
-            .iter()
-            .find(|case| {
-                case[field] == value
-                    && [
-                        "same_actor",
-                        "same_chain",
-                        "same_selection",
-                        "selected",
-                        "service_visible",
-                        "enabled",
-                    ]
-                    .iter()
-                    .filter(|name| **name != field)
-                    .all(|name| case[*name] == true)
-            })
-            .and_then(|case| case["allowed"].as_bool())
-            .expect("modeled MCP use case")
-    };
     let directory = tempfile::tempdir()?;
     let runtime =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
@@ -297,29 +269,28 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
             docs,
         )),
     };
-    assert_eq!(
-        lookup_service(&ctx, "one").await?.endpoint,
-        "http://one:8080"
-    );
-    assert!(expected("service_visible", true));
+    let current = lookup_service(&ctx, "one").await;
+    let mut observed = RapidHashMap::new();
+    observed.insert("", current.is_ok());
+    assert_eq!(current?.endpoint, "http://one:8080");
     let old_tool = super::CallToolTool::new(ctx.clone());
     assert_eq!(invoke(&old_tool, "one", "selected").await?, "invoked");
     assert!(invoke(&old_tool, "one", "unselected").await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let mut wrong_actor = ctx.clone();
     wrong_actor.actor = identity::Did::new(sibling.did())?;
-    assert_eq!(
+    observed.insert(
+        "same_actor",
         lookup_service(&wrong_actor, "one").await.is_ok(),
-        expected("same_actor", false)
     );
     let mut wrong_chain = ctx.clone();
     let ResolvedConfiguration::Documents(selection) = &mut wrong_chain.configuration else {
         unreachable!()
     };
     selection.documents[1].doc_id = tools_doc.clone();
-    assert_eq!(
+    observed.insert(
+        "same_chain",
         lookup_service(&wrong_chain, "one").await.is_ok(),
-        expected("same_chain", false)
     );
     let query = "{ ToolServiceRegistry { service_id } }";
     let rows = |response: &Value| {
@@ -356,10 +327,7 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
             })
         })
         .await?;
-    assert_eq!(
-        lookup_service(&ctx, "one").await.is_ok(),
-        expected("service_visible", false)
-    );
+    observed.insert("service_visible", lookup_service(&ctx, "one").await.is_ok());
     assert_eq!(rows(&agent_access.execute(query).await?), 0);
     assert!(invoke(&old_tool, "one", "selected").await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -386,10 +354,24 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
         &plan(vec![(Collection::Tools, tools(&remote_two))])?,
     )
     .await?;
-    assert_eq!(
-        lookup_service(&ctx, "one").await.is_ok(),
-        expected("same_selection", false)
-    );
+    observed.insert("same_selection", lookup_service(&ctx, "one").await.is_ok());
+    let cases = tokio::task::spawn_blocking(|| {
+        gents_lean_vocab::families::household_mcp_service_native_policy::cases()
+    })
+    .await?;
+    for case in cases {
+        let input = &case.input;
+        let changed = [
+            ("same_actor", input.same_actor),
+            ("same_chain", input.same_chain),
+            ("same_selection", input.same_selection),
+            ("service_visible", input.service_visible),
+        ]
+        .into_iter()
+        .find_map(|(name, held)| (!held).then_some(name))
+        .unwrap_or_default();
+        case.check(observed[changed]);
+    }
     assert!(invoke(&old_tool, "one", "selected").await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     ctx.remote_tools = remote_two.clone();

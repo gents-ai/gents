@@ -10,25 +10,13 @@ use gents_store::test_support::PIN_FIXED_DID;
 
 #[test]
 fn callback_checkpoint_claim_markers_match_lean() {
-    let cases = &gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap()
-        .callback_checkpoint_claim_cases;
-    assert!(!cases.is_empty(), "Lean emitted no callback claim cases");
-    for case in cases {
-        let claim_time = case["claim_time"].as_bool().unwrap();
-        let retained_configuration = case["retained_configuration"].as_bool().unwrap();
+    gents_lean_vocab::families::household_callback_claim_recorded::replay(|case| {
         let row = json!({
-            "claimed_at": claim_time.then_some("2024-01-01T00:00:00Z"),
-            "claimed_callback": retained_configuration.then_some("{}"),
+            "claimed_at": case.claim_time.then_some("2024-01-01T00:00:00Z"),
+            "claimed_callback": case.retained_configuration.then_some("{}"),
         });
-        assert_eq!(
-            callback_claim_recorded(&row),
-            case["expected"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+        callback_claim_recorded(&row)
+    });
 }
 
 #[tokio::test]

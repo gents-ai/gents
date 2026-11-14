@@ -275,22 +275,7 @@ mod self_config_inference {
             ).await })
         }).await?;
         let profile = gents_store::graphql::created_doc_id(&created, "InferenceProfile")?;
-        let case = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .unwrap();
-        let expected = |phase: &str| {
-            case.configuration_inference_self_config_cases
-                .iter()
-                .find(|value| {
-                    value["phase"] == phase
-                        && value["actor"] == "agent"
-                        && value["document"] == "backend-metadata"
-                })
-                .unwrap()["manager_expected"]
-                .as_bool()
-                .unwrap()
-        };
+        let mut linked = std::collections::BTreeMap::new();
         let link = || {
             agent.transact_write("test.backend.selected_by", |txn| {
                 let backend = &backend;
@@ -308,7 +293,7 @@ mod self_config_inference {
                 })
             })
         };
-        assert_eq!(link().await.is_ok(), expected("before"));
+        linked.insert("before", link().await.is_ok());
         owner
             .transact_write("test.backend.grant", |txn| {
                 let runtime = &runtime;
@@ -319,7 +304,7 @@ mod self_config_inference {
                 })
             })
             .await?;
-        assert_eq!(link().await.is_ok(), expected("granted"));
+        linked.insert("granted", link().await.is_ok());
         let node_rows = owner.execute("{ Node {_docID node_did} }").await?;
         let node_doc = node_rows["data"]["Node"]
             .as_array()
@@ -396,7 +381,18 @@ mod self_config_inference {
                 gents_store::config_client::AgentSelfConfigPermission::Revoke,
             )
             .await?;
-        assert_eq!(link().await.is_ok(), expected("revoked"));
+        linked.insert("revoked", link().await.is_ok());
+        for case in
+            gents_lean_vocab::families::household_inference_self_config_backend_manager::cases()
+        {
+            anyhow::ensure!(
+                case.input.actor == "agent" && case.input.document == "backend-metadata",
+                "unmodeled backend link {:?}",
+                case.input
+            );
+            let observed = linked[case.input.phase.as_str()];
+            case.check(observed);
+        }
         db.node.shutdown().await?;
         Ok(())
     }

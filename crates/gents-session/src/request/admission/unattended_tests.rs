@@ -17,16 +17,6 @@ async fn observe(access: &ConfigAccess, owner: &str, selected: &str) -> bool {
 
 #[tokio::test]
 async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> anyhow::Result<()> {
-    let cases = &gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap()
-        .unattended_agent_cases;
-    let expected = |name: &str| {
-        cases.iter().find(|case| case["name"] == name).unwrap()["allowed"]
-            .as_bool()
-            .unwrap()
-    };
     let db = gents_inference::test_support::test_db(
         "enabled-and-native-invoke-are-independen",
         crate::test_support::no_lifecycle_plugins(),
@@ -69,92 +59,77 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
             Ok::<_, anyhow::Error>(doc)
         })
     }).await?;
-    assert_eq!(
-        observe(&agent_access, root.did(), selected.did()).await,
-        expected("allowed")
-    );
-    assert_eq!(
-        observe(&owner_access, root.did(), selected.did()).await,
-        expected("wrong_actor")
-    );
-    owner_access
-        .transact_write("test.unattended.disable", |txn| {
-            let agent_doc = &agent_doc;
-            Box::pin(async move {
-                txn.execute_client_signed_update(
-                    &format!(
-                        "mutation($input: AgentMutationInputArg!) {{update_Agent(docID:\"{}\",input:$input){{_docID}}}}",
-                        gents_store::graphql::escape_graphql_string(agent_doc)
-                    ),
-                    &serde_json::json!({"input": {"enabled": false}}),
-                    gents_protocol::schemas::AGENT,
-                )
-                .await
-            })
-        })
-        .await?;
-    assert_eq!(
-        observe(&agent_access, root.did(), selected.did()).await,
-        expected("disabled")
-    );
-    owner_access
-        .transact_write("test.unattended.enable", |txn| {
-            let agent_doc = &agent_doc;
-            Box::pin(async move {
-                txn.execute_client_signed_update(
-                    &format!(
-                        "mutation($input: AgentMutationInputArg!) {{update_Agent(docID:\"{}\",input:$input){{_docID}}}}",
-                        gents_store::graphql::escape_graphql_string(agent_doc)
-                    ),
-                    &serde_json::json!({"input": {"enabled": true}}),
-                    gents_protocol::schemas::AGENT,
-                )
-                .await
-            })
-        })
-        .await?;
-    gents_store::test_support::relationships::actor_in_txn(
-        &owner_access,
-        "Agent",
-        &agent_doc,
-        "reader",
-        &identity::Did::new(selected.did())?,
-        false,
-    )
-    .await?;
-    gents_store::test_support::relationships::actor_in_txn(
-        &owner_access,
-        "Agent",
-        &agent_doc,
-        "executor",
-        &identity::Did::new(selected.did())?,
-        true,
-    )
-    .await?;
-    assert!(
-        !agent_access.execute("{Agent {_docID}} ").await?["data"]["Agent"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        observe(&agent_access, root.did(), selected.did()).await,
-        expected("reader_only")
-    );
+    let selected_identity = identity::Did::new(selected.did())?;
+    let mut enabled = true;
+    let mut executor = true;
+    let mut reader = false;
+    for case in gents_lean_vocab::families::household_unattended_session_admission::cases() {
+        if case.input.enabled != enabled {
+            let value = case.input.enabled;
+            owner_access
+                .transact_write("test.unattended.enabled", |txn| {
+                    let agent_doc = &agent_doc;
+                    Box::pin(async move {
+                        txn.execute_client_signed_update(
+                            &format!(
+                                "mutation($input: AgentMutationInputArg!) {{update_Agent(docID:\"{}\",input:$input){{_docID}}}}",
+                                gents_store::graphql::escape_graphql_string(agent_doc)
+                            ),
+                            &serde_json::json!({"input": {"enabled": value}}),
+                            gents_protocol::schemas::AGENT,
+                        )
+                        .await
+                    })
+                })
+                .await?;
+            enabled = value;
+        }
+        let invoke = case.input.invoke == "allowed";
+        if !invoke && !reader {
+            gents_store::test_support::relationships::actor_in_txn(
+                &owner_access,
+                "Agent",
+                &agent_doc,
+                "reader",
+                &selected_identity,
+                false,
+            )
+            .await?;
+            reader = true;
+        }
+        if invoke != executor {
+            gents_store::test_support::relationships::actor_in_txn(
+                &owner_access,
+                "Agent",
+                &agent_doc,
+                "executor",
+                &selected_identity,
+                !invoke,
+            )
+            .await?;
+            executor = invoke;
+        }
+        if !invoke {
+            assert!(
+                !agent_access.execute("{Agent {_docID}} ").await?["data"]["Agent"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let observer = if case.input.actor_matches {
+            &agent_access
+        } else {
+            &owner_access
+        };
+        case.check(observe(observer, root.did(), selected.did()).await);
+    }
     node.shutdown().await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn missing_native_node_authority_is_not_treated_as_invoke() -> anyhow::Result<()> {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap()
-        .unattended_agent_cases
-        .iter()
-        .find(|case| case["name"] == "unavailable")
-        .unwrap();
     let db = gents_inference::test_support::test_db(
         "unattended-unavailable-without-native-in",
         crate::test_support::no_lifecycle_plugins(),
@@ -178,10 +153,9 @@ async fn missing_native_node_authority_is_not_treated_as_invoke() -> anyhow::Res
         identity::Did::new(agent.did())?,
         agent.as_ref(),
     )?;
-    assert_eq!(
-        observe(&access, root.did(), agent.did()).await,
-        case["allowed"].as_bool().unwrap()
-    );
+    for case in gents_lean_vocab::families::household_unattended_session_unavailable::cases() {
+        case.check(observe(&access, root.did(), agent.did()).await);
+    }
     node.shutdown().await?;
     Ok(())
 }

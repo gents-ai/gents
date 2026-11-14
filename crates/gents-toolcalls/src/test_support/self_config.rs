@@ -46,45 +46,36 @@ pub async fn grant_modeled_direct_sets(
 }
 
 /// Grants `subject` the node permissions the init Engineer holds through the
-/// tool sources of its preset Tools: every self-config category plus pack
-/// installation, and a datastore query surface (Lean
-/// `Identity.Configuration.toolOperationSources`, cases `self-config-all`,
-/// `schema-and-pack-overlap` without schema, and `datastore-query`). A fixture
-/// Agent that authors its own Engineer-like Tools must already hold these: the
-/// native held-bounded rule refuses a self-granted tool source.
+/// tool sources of its preset Tools: every self-config category and a
+/// datastore query surface, as the production tool-source projection derives
+/// them. A fixture Agent that authors its own Engineer-like Tools must already
+/// hold these: the native held-bounded rule refuses a self-granted tool source.
 pub async fn grant_engineer_tool_source_permissions(
     db: &gents_inference::test_support::TestDb,
     subject: &str,
 ) {
-    use gents_store::config_client::NodePermission;
-    let permissions = tokio::task::spawn_blocking(|| {
-        let model = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .expect("configuration contract");
-        let mut permissions = std::collections::BTreeSet::new();
-        for name in ["self-config-all", "datastore-query"] {
-            let case = model
-                .tool_operation_cases
-                .iter()
-                .find(|case| case["name"] == name)
-                .unwrap_or_else(|| panic!("modeled operation case {name}"));
-            for source in case["sources"].as_array().unwrap() {
-                permissions.insert(source["permission"].as_str().unwrap().to_owned());
-            }
-        }
-        permissions
-    })
-    .await
-    .unwrap();
+    use gents_tools::surface::{EndpointScope, ToolPolicySurface};
+    let mut self_config = ToolPolicySurface::secure_minimal();
+    self_config.self_config = true;
+    self_config.self_config_categories = EndpointScope::all();
+    let mut query = ToolPolicySurface::secure_minimal();
+    query.query_tools = EndpointScope::only_map(std::collections::BTreeMap::from([(
+        ("tool".to_owned(), "collection".to_owned()),
+        Default::default(),
+    )]));
+    let mut permissions = [self_config, query]
+        .iter()
+        .flat_map(|surface| surface.covered_node_operation_sources(false))
+        .map(|source| source.permission)
+        .collect::<Vec<_>>();
+    permissions.sort_by_key(|permission| permission.as_str());
+    permissions.dedup();
     let admin = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).unwrap(),
     );
     let subject = identity::Did::new(subject).unwrap();
-    for name in permissions {
-        let permission = NodePermission::parse(&name)
-            .unwrap_or_else(|| panic!("modeled permission {name:?} has no native owner"));
+    for permission in permissions {
         admin
             .grant_node_permission(&subject, permission)
             .await

@@ -1242,13 +1242,6 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         .expect("own-only goal edit model")["accepted"]
         .as_bool()
         .unwrap();
-    let no_source_change = household
-        .tool_source_change_cases
-        .iter()
-        .find(|case| case["name"] == "present-noop")
-        .expect("source no-op model")["allowed"]
-        .as_bool()
-        .unwrap();
     let goal = no_grant
         .apply(tools_request(
             &no_grant,
@@ -1272,7 +1265,10 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
             )],
         ))
         .await;
-    assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
+    for case in gents_lean_vocab::families::household_tool_source_change_preview::cases() {
+        assert_eq!(case.input.step, "preview", "unmodeled step");
+        case.check(preview.is_ok());
+    }
 }
 
 use gents_automation::test_support::self_config::*;
