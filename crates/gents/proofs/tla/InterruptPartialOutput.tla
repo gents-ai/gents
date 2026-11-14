@@ -13,14 +13,15 @@
 (*    `drive_admissions`), whose provider poll returns the chunk and sends *)
 (*    it through a oneshot reply (`loop_stream.rs`, provider poll handoff). *)
 (*    `Receive` is that step.                                              *)
-(*  - The handoff. The owned generator then reads that reply and yields     *)
-(*    `LoopStreamItem::Text`. Reading the reply with `.await` is a          *)
-(*    suspension point: a tokio oneshot returns `Pending` when the task's  *)
-(*    cooperative budget is spent even if the value is present, so the     *)
-(*    chunk can sit in the reply while the drive is re-polled. `Yield` is   *)
-(*    that step; with `AtomicHandoff` the reply is read synchronously       *)
-(*    (`try_recv`: the driver resumes the generator only after the work     *)
-(*    finished) and `Receive` yields in the same step.                     *)
+(*  - The handoff. The admission driver then re-polls the owned generator  *)
+(*    through its `select!`, and the generator reads that reply and yields *)
+(*    `LoopStreamItem::Text`. Both are suspension points: `select!` and a   *)
+(*    tokio oneshot return `Pending` when the task's cooperative budget is *)
+(*    spent, even with the value present, so the chunk can sit in the      *)
+(*    reply while the drive is re-polled. `Yield` is that step. With        *)
+(*    `AtomicHandoff` the driver resumes the generator directly after the  *)
+(*    work and the generator reads the reply with `try_recv`, so `Receive`  *)
+(*    yields in the same step.                                             *)
 (*  - The stream processor (`stream_processor.rs` `process_item`), awaited *)
 (*    outside the drive's select and so never cancelled: first visible     *)
 (*    text is flushed at once as an `AgentOutputSegment`, later text waits *)
@@ -196,6 +197,15 @@ TerminalOnce == terminalWrites <= 1
 
 (* A latched interrupt ends the request. *)
 InterruptSettles == latched ~> Terminal
+
+(* An observed interrupt wins the drive's next select: once it is observed *)
+(* no further chunk is received, processed into the accumulator or batch-  *)
+(* flushed by the stream, and the drive leaves for the drain.              *)
+PromptInterrupt ==
+  [][(Streaming /\ observed) =>
+       (emitted' = emitted /\ acc' = acc /\ durable' = durable)]_vars
+
+InterruptLeavesSelect == (Streaming /\ observed) ~> (drive = "draining")
 
 (* Non-vacuity: an interrupt that lands after output was received ends the *)
 (* request with that output durable. TLC reports this invariant violated;  *)
