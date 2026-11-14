@@ -281,6 +281,8 @@ test("the add-panel trigger stays fixed while its dock expands during a press", 
   await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
   await page.getByRole("button", { name: "More", exact: true }).first().click();
   await page.getByRole("menuitem", { name: "Started sessions" }).click();
+  /* the More menu also lists Background until its close animation ends */
+  await expect(page.locator('[data-slot="dropdown-menu-content"]')).toHaveCount(0);
 
   // Hold the outer edge fixed while the divider advances, as during dock opening.
   const layout = await page.addStyleTag({
