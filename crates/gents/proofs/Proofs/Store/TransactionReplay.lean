@@ -216,4 +216,34 @@ theorem a_sent_signed_write_runs_twice_only_after_a_confirmed_conflict
     simp_all [run, runFrom, Mode.maxAttempts, disposition, repeatable, signedWriteMayRepeat,
       Mode.idempotent?]
 
+/-- An unsigned conflict-retry transaction repeats a commit-stage failure only
+when it is the store's conflict, which the store reports only for an attempt
+it aborted. Any other commit failure (a timed-out commit whose landing is
+unknown) fails the call, so an increment cannot land twice
+(`tla/SharedOwnerHotCounter.tla`, `NoDoubleApply`). -/
+theorem conflict_retry_repeats_a_commit_only_on_conflict
+    (failure : Failure) (c : Bool)
+    (h : disposition .conflictRetry .commit failure false c true = .retry) :
+    failure = .conflict := by
+  cases failure <;> cases c <;> simp_all [disposition, repeatable, Mode.idempotent?]
+
+/-- The run-level form: a conflict-retry run whose commit fails without being
+a conflict ends there, with one callback and the possibly-landed commit
+reported as unconfirmed. -/
+theorem an_unconfirmed_commit_ends_a_conflict_retry_run
+    (failure : Failure) (confirmedAbort : Bool) (rest : List Attempt)
+    (h : failure ≠ .conflict) :
+    let r := run .conflictRetry false (.fails .commit failure confirmedAbort :: rest)
+    r.result = .failed ∧ r.callbacks = 1 ∧ r.unconfirmed = !confirmedAbort := by
+  cases failure <;> cases confirmedAbort <;>
+    simp_all [run, runFrom, Mode.maxAttempts, disposition, repeatable, signedWriteMayRepeat,
+      Mode.idempotent?]
+
+/-- A conflict at commit is repeated by an unsigned conflict-retry
+transaction while attempts remain, on a fresh transaction whose callback
+reads again (`tla/SharedOwnerHotCounter.tla`, `Retry`). -/
+theorem conflict_retry_repeats_a_commit_conflict_while_attempts_remain (c : Bool) :
+    disposition .conflictRetry .commit .conflict false c true = .retry := by
+  cases c <;> rfl
+
 end TransactionReplay
