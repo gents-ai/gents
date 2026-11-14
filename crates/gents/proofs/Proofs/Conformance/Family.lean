@@ -10,7 +10,10 @@ open Lean
 
 /-- The wire shape of a family type. An enum carries each constructor with its
 wire name: the name its `conformance_vocabulary` function gives it, or
-`wireName` of the constructor when it has none. -/
+`wireName` of the constructor when it has none. A struct carries each field's
+Lean name with its `wireName`, computed when the family elaborates: the
+generator encodes every case of every family, and recomputing the name per
+field and case dominated its interpreted run. -/
 inductive Schema where
   | bool
   | nat
@@ -20,7 +23,7 @@ inductive Schema where
   | option (item : Schema)
   | list (item : Schema)
   | enum (name : String) (values : List (String × String))
-  | struct (name : String) (fields : List (String × Schema))
+  | struct (name : String) (fields : List (String × String × Schema))
 
 /-- A family whose inputs are chosen by hand because its domain is not finite.
 Its key, wire shape, JSON and snapshot entry are derived like a function's. -/
@@ -55,8 +58,8 @@ partial def Schema.wire : Schema → Json
   | .enum name values =>
       Json.mkObj [("enum", name), ("values", Json.arr (values.map (Json.str ·.2)).toArray)]
   | .struct name fields =>
-      Json.mkObj [("struct", name), ("fields", Json.arr (fields.map fun (field, schema) =>
-        Json.arr #[Json.str (wireName field), schema.wire]).toArray)]
+      Json.mkObj [("struct", name), ("fields", Json.arr (fields.map fun (_, wire, schema) =>
+        Json.arr #[Json.str wire, schema.wire]).toArray)]
 
 /-- A number in a `json` field crosses the wire as itself when it is an
 integer within `i64` or `u64`, and otherwise as `{"$number": token}`. Lean
@@ -94,8 +97,8 @@ partial def Schema.encode : Schema → Json → Json
   | .json, value => jsonWire value
   | .enum _ values, .str value => Json.str ((values.lookup value).getD value)
   | .struct _ fields, value =>
-      Json.mkObj (fields.map fun (field, schema) =>
-        (wireName field, schema.encode ((value.getObjVal? field).toOption.getD Json.null)))
+      Json.mkObj (fields.map fun (field, wire, schema) =>
+        (wire, schema.encode ((value.getObjVal? field).toOption.getD Json.null)))
   | _, value => value
 
 open Meta Elab Term
@@ -132,7 +135,7 @@ private def enumSchemaTerm (name : Name) (constructors : List Name) : MetaM (TSy
   let values ← constructors.toArray.mapM fun constructor => do
     let wire ← match vocabulary with
       | some (_, function) => `($(mkIdent function) $(mkIdent constructor))
-      | none => `(wireName $(quote constructor.getString!))
+      | none => pure (quote (wireName constructor.getString!))
     `(($(quote constructor.getString!), $wire))
   `(Schema.enum $(quote name.getString!) [$values,*])
 
@@ -152,7 +155,7 @@ private partial def schemaTerm (type : Expr) : MetaM (TSyntax `term) := do
         let fields ← forallTelescope constructor.type fun parameters _ =>
           parameters.mapM fun parameter => do
             let field := (← parameter.fvarId!.getUserName).toString
-            `(($(quote field), $(← schemaTerm (← inferType parameter))))
+            `(($(quote field), $(quote (wireName field)), $(← schemaTerm (← inferType parameter))))
         `(Schema.struct $(quote name.getString!) [$fields,*])
       else
         let (name, constructors) ← enumConstructors type
@@ -195,7 +198,8 @@ private def familyTerm (declaration : Name) : TermElabM (TSyntax `term) := do
       throwError "{declaration}: parameters {names} do not have distinct names"
     let idents := names.map mkIdent
     let fields ← parameters.mapIdxM fun index parameter => do
-      `(($(quote names[index]!.toString), $(← schemaTerm (← inferType parameter))))
+      let field := names[index]!.toString
+      `(($(quote field), $(quote (wireName field)), $(← schemaTerm (← inferType parameter))))
     let values ← idents.mapIdxM fun index ident =>
       `(($(quote names[index]!.toString), toJson $ident))
     let input ← `(Schema.struct "Input" [$fields,*])

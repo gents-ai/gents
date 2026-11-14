@@ -608,35 +608,13 @@ mod tests {
 
     #[test]
     fn checkpoint_model_ledgers_round_trip_through_actual_durable_owner() {
-        let proofs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
-        let prepared = std::process::Command::new("lake")
-            .args(["build", "Proofs.Conformance.EditorUndoCheckpoint"])
-            .current_dir(&proofs)
-            .output()
-            .unwrap();
-        assert!(
-            prepared.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&prepared.stdout),
-            String::from_utf8_lossy(&prepared.stderr)
-        );
-        let output = std::process::Command::new("lake")
-            .args([
-                "env",
-                "lean",
-                "--run",
-                "Proofs/Conformance/EditorUndoCheckpoint.lean",
-            ])
-            .current_dir(proofs)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let cases: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let output = gents_lean_contract::run_prepared_generator(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs"),
+            "Proofs.Conformance.EditorUndoCheckpoint:olean",
+            "Proofs/Conformance/EditorUndoCheckpoint.lean",
+        )
+        .expect("run Lean owner");
+        let cases: serde_json::Value = serde_json::from_str(&output).unwrap();
         let mut count = 0;
         for case in cases.as_array().unwrap() {
             for entry in case["trace"].as_array().unwrap() {

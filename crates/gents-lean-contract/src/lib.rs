@@ -311,15 +311,16 @@ fn run_generator_unlocked(proofs_dir: &Path, file: &str) -> Result<String> {
 }
 
 /// Runs `file` after the caller built `target` under the same proofs lock,
-/// serving the output recorded for the same build when there is one.
+/// serving the output recorded for the same build and input when there is one.
 ///
 /// Lake rewrites `<module>.trace` whenever it rebuilds a module; its `depHash`
 /// covers the module source, the traces of every import, the build options and
 /// the Lean toolchain. A recorded output is reused only when the run file is
 /// the target module's own source and the hash, toolchain and input equal the
 /// ones it was produced from, so a rebuilt import or edited source regenerates
-/// it. A file outside the target module may import modules the target does not,
-/// so it always runs.
+/// it. Each input is recorded in its own slot, so callers replaying different
+/// observed inputs do not evict each other. A file outside the target module
+/// may import modules the target does not, so it always runs.
 fn run_built_generator_unlocked(
     proofs_dir: &Path,
     target: &str,
@@ -329,7 +330,7 @@ fn run_built_generator_unlocked(
     let Some(key) = generator_cache_key(proofs_dir, target, file, input)? else {
         return run_generator_with_input_unlocked(proofs_dir, file, input);
     };
-    let path = generator_cache_path(proofs_dir, target);
+    let path = generator_cache_path(proofs_dir, target, input);
     if let Ok(recorded) = std::fs::read_to_string(&path) {
         if let Some((recorded_key, output)) = recorded.split_once('\n') {
             if recorded_key == key {
@@ -377,11 +378,19 @@ fn generator_cache_key(
     Ok(Some(key.to_string()))
 }
 
-fn generator_cache_path(proofs_dir: &Path, target: &str) -> PathBuf {
+fn generator_cache_path(proofs_dir: &Path, target: &str, input: Option<&str>) -> PathBuf {
+    let slot = match input {
+        Some(input) => format!(
+            "{}.{:016x}",
+            target.replace(':', "."),
+            rapidhash::v3::rapidhash_v3(input.as_bytes())
+        ),
+        None => target.replace(':', "."),
+    };
     proofs_dir
         .join(".lake/build")
         .join(GENERATOR_CACHE_DIR)
-        .join(target.replace(':', "."))
+        .join(slot)
 }
 
 fn record_generator_output(path: &Path, key: &str, output: &str) -> Result<()> {
@@ -726,13 +735,18 @@ mod tests {
             };
             assert_eq!(run("a")?.trim(), "21 a");
 
-            let recorded = generator_cache_path(&root, "Fixture.Receipt:olean");
+            let recorded = generator_cache_path(&root, "Fixture.Receipt:olean", Some("a"));
             let (key, _) = std::fs::read_to_string(&recorded)?
                 .split_once('\n')
                 .map(|(key, output)| (key.to_owned(), output.to_owned()))
                 .context("recorded generator output")?;
             std::fs::write(&recorded, format!("{key}\nrecorded\n"))?;
             assert_eq!(run("a")?.trim(), "recorded");
+            assert_eq!(run("b")?.trim(), "21 b");
+            assert_eq!(run("a")?.trim(), "recorded");
+
+            let other = generator_cache_path(&root, "Fixture.Receipt:olean", Some("b"));
+            std::fs::copy(&recorded, &other)?;
             assert_eq!(run("b")?.trim(), "21 b");
 
             std::fs::write(&recorded, format!("{key}\nrecorded\n"))?;

@@ -62,6 +62,7 @@ gents-service = { workspace = true, features = ["test-home-guard"] }
 gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
 gents-workspace-hack = { workspace = true }
 gents = { path = "../gents", features = ["test-fixtures", "typescript"] }
+gents-lean-contract.workspace = true
 defra-node.workspace = true
 chrono.workspace = true
 reqwest.workspace = true

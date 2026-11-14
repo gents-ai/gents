@@ -185,26 +185,14 @@ async fn an_unrelated_invalid_profile_does_not_block_an_account_backend() {
         "changed": [format!("InferenceBackend:{}", backend.backend_id)],
     });
     let expected = tokio::task::spawn_blocking(move || {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-        let proofs = gents_lean_contract::proofs_dir().unwrap();
-        gents_lean_contract::run_lake_build(&proofs).unwrap();
-        let mut lean = Command::new("lake")
-            .args([
-                "env",
-                "lean",
-                "--run",
-                "Proofs/Conformance/ConfigurationAffected.lean",
-            ])
-            .current_dir(proofs)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        writeln!(lean.stdin.take().unwrap(), "{model_input}").unwrap();
-        let output = lean.wait_with_output().unwrap();
-        assert!(output.status.success(), "Lean affected validation failed");
-        serde_json::from_slice::<bool>(&output.stdout).unwrap()
+        let output = gents_lean_contract::run_prepared_generator_with_input(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.ConfigurationAffected:olean",
+            "Proofs/Conformance/ConfigurationAffected.lean",
+            &model_input.to_string(),
+        )
+        .expect("Lean affected validation");
+        serde_json::from_str::<bool>(&output).unwrap()
     })
     .await
     .unwrap();
