@@ -696,6 +696,25 @@ def unrelocatable(binaries, source):
     return sorted(found)
 
 
+DOC_FENCE = re.compile(r"^\s*(?://[/!]|#!?\[doc\s*=).*```(?!\s*(?:text|ignore)\b)")
+
+
+def doctests(packages):
+    """Doc comments that rustdoc would test. nextest does not run doctests and
+    none exist today, so the archive job refuses the first one instead of
+    letting it go unrun; add a `cargo test --doc` step when one is wanted."""
+    members = workspace()
+    found = []
+    for package in packages:
+        for path in sorted((ROOT / members[package][0]).rglob("*.rs")):
+            if "target" in path.relative_to(ROOT).parts:
+                continue
+            for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                if DOC_FENCE.match(line):
+                    found.append(f"{path.relative_to(ROOT)}:{number}")
+    return found
+
+
 def run_build(selection, name):
     """Build every selected crate's tests once, in one Cargo invocation, into a nextest archive.
 
@@ -741,6 +760,9 @@ def run_build(selection, name):
             problems.append(f"{package} has {total} tests but is listed in NO_TESTS; remove it from the list")
         elif package not in NO_TESTS and not total:
             problems.append(f"{package} selected zero tests")
+    if fences := doctests(packages):
+        problems.append(f"doc comments hold code blocks rustdoc would test, which nextest does not run "
+                        f"(tag them text or ignore, or add a doctest step): {', '.join(fences[:10])}")
     if stuck := unrelocatable(binaries, source):
         problems.append(f"test binaries embed the build checkout's path {source}: {', '.join(stuck)}")
     (output / f"{name}.tests.json").write_text(json.dumps(tests, indent=2, sort_keys=True))

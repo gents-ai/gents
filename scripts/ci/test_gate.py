@@ -230,6 +230,13 @@ class Shards(unittest.TestCase):
         with self.assertRaises(SystemExit):
             gate.run_shard(selection, "portable", 4)
 
+    def test_no_portable_crate_has_a_doctest(self):
+        self.assertEqual(gate.doctests(self.PORTABLE), [])
+        for line in ("/// ```", "    //! ```rust", '#[doc = "```"]', "/// ```no_run"):
+            self.assertTrue(gate.DOC_FENCE.match(line), line)
+        for line in ("/// ```text", "//! ```ignore", "// ```", "let fence = \"```\";"):
+            self.assertFalse(gate.DOC_FENCE.match(line), line)
+
     def test_a_binary_holding_the_build_checkout_path_is_unrelocatable(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "src"
