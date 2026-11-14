@@ -174,30 +174,26 @@ jobs:
           mkdir -p "$(dirname "$CORE_PACK_TOOL")"
           cp "$CARGO_TARGET_DIR/fast-dev/gents" "$CORE_PACK_TOOL"
 
-      # Plugin builds stamp each artifact with its source digest and builder;
-      # the pack build skips a plugin whose stamp matches. The key covers the
-      # packs, the build driver and the toolchain, so an exact hit is trusted.
+      # The pack build skips a plugin whose stamp records its mirrored source
+      # digest, builder and artifact hash. The stamp does not cover the build
+      # driver, lockfile or toolchain, so they key the entry and an older entry
+      # is restored only when they match; only the artifacts and stamps are
+      # kept (the Cargo trees behind them are about 3 GiB).
       - name: Restore built plugins
-        id: plugins
         if: ${{ !inputs.fresh }}
         uses: actions/cache@v5
         with:
           path: |
-            core-packs/*/target
-            core-packs/*/plugins/*/target
             core-packs/*/plugins/*.afb
+            core-packs/*/target/plugins/*/target/gents-build.stamp
           key: >-
-            core-packs-plugins-v1-${{ steps.keys.outputs.platform }}-${{ steps.keys.outputs.checkout }}-${{ hashFiles(
-            'core-packs/**', 'crates/gents-pack/**', 'crates/gents-cli/src/commands/pack/**',
-            'crates/gents-cli/src/commands/afterburner_build.rs', 'Cargo.lock') }}
+            core-packs-plugins-v2-${{ steps.keys.outputs.platform }}-${{ steps.keys.outputs.checkout }}-${{ hashFiles(
+            'core-packs/rust-toolchain.toml', 'core-packs/.cargo/**', 'Cargo.lock', 'crates/gents-pack/**',
+            'crates/gents-cli/src/commands/pack/**', 'crates/gents-cli/src/commands/afterburner_build.rs') }}-${{ hashFiles('core-packs/**') }}
           restore-keys: |
-            core-packs-plugins-v1-${{ steps.keys.outputs.platform }}-${{ steps.keys.outputs.checkout }}-
-
-      # An older entry keeps Cargo's compiled dependencies, but its stamps may
-      # come from another build driver: every plugin goes back through Cargo.
-      - name: Distrust stamps restored from another build
-        if: steps.plugins.outputs.cache-hit != 'true'
-        run: find core-packs -name gents-build.stamp -delete
+            core-packs-plugins-v2-${{ steps.keys.outputs.platform }}-${{ steps.keys.outputs.checkout }}-${{ hashFiles(
+            'core-packs/rust-toolchain.toml', 'core-packs/.cargo/**', 'Cargo.lock', 'crates/gents-pack/**',
+            'crates/gents-cli/src/commands/pack/**', 'crates/gents-cli/src/commands/afterburner_build.rs') }}-
 
       - name: Build core packs
         run: make core-packs CORE_PACK_TOOL="$CORE_PACK_TOOL"
