@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Selection and guard checks for gate.py against the real workspace graph; no builds."""
 
+import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -12,6 +14,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gate  # noqa: E402
 
 MEMBERS = gate.workspace()
+CI = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+SCRIPT = re.compile(r"(?<![\w/.-])(?:\./)?((?:\.github/scripts|scripts)/[\w./-]+\.(?:sh|py|mjs|json))")
+
+
+def workflow_jobs(text):
+    """Job id -> its text, for the top-level jobs of a workflow file."""
+    body = text.split("\njobs:\n", 1)[1]
+    parts = re.split(r"^  ([a-z][\w-]*):[ \t]*$", body, flags=re.M)
+    return dict(zip(parts[1::2], parts[2::2]))
 
 
 def select(*files, **options):
@@ -82,10 +93,109 @@ class Selection(unittest.TestCase):
         self.assertTrue(select("crates/gents-pack/src/lib.rs")["core_packs"])
         self.assertFalse(select("crates/gents-cli/src/lib.rs")["core_packs"])
 
+    def test_a_workflow_only_change_runs_only_the_jobs_every_event_runs(self):
+        selection = select(".github/workflows/core-packs.yml", ".github/scripts/test-release-signing-mode.py")
+        self.assertEqual(selection["jobs"], [])
+        self.assertFalse(selection["everything"])
+
+    def test_scripts_the_selected_jobs_run_are_never_inert(self):
+        # A path that classifies as inert runs only the always-on jobs, so every
+        # script a plan-selected job or the runner setup calls must select work.
+        jobs = workflow_jobs(CI)
+        sources = [jobs[name] for name in set(gate.WORKFLOW_JOBS.values()) | {"test"}]
+        sources += [(gate.ROOT / ".github/actions/rust-runner/action.yml").read_text(),
+                    Path(gate.__file__).read_text()]
+        referenced = {path for text in sources for path in SCRIPT.findall(text)}
+        self.assertIn(".github/scripts/host-runtime-service.sh", referenced)
+        for path in sorted(referenced):
+            self.assertTrue((gate.ROOT / path).exists(), path)
+            self.assertNotEqual(gate.classify(path, MEMBERS), {"inert"}, path)
+
+    def test_a_portable_runner_must_be_a_label_list(self):
+        for value, expected in (("", gate.STUDIO), ('["self-hosted","Linux","ci-portable"]',
+                                                    ["self-hosted", "Linux", "ci-portable"])):
+            os.environ["GATE_PORTABLE_RUNNER"] = value
+            try:
+                self.assertEqual(gate.runner("portable"), expected)
+            finally:
+                del os.environ["GATE_PORTABLE_RUNNER"]
+        for value in ("ci-portable", '"ci-portable"', "[]", '[""]', "[1]"):
+            os.environ["GATE_PORTABLE_RUNNER"] = value
+            try:
+                with self.assertRaises(SystemExit, msg=value):
+                    gate.runner("portable")
+            finally:
+                del os.environ["GATE_PORTABLE_RUNNER"]
+
     def test_only_narrows_a_plan(self):
         selection = select(everything=True, only={"lint", "test:cli"})
         self.assertEqual(selection["jobs"], ["lint", "test:cli"])
         self.assertEqual(list(groups(selection)), ["cli"])
+
+
+class Verdict(unittest.TestCase):
+    """The `gate` job: `needs` as GitHub passes it, for the plans each event makes."""
+
+    def needs(self, selection, **results):
+        names = set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | {"test"}
+        selected = {gate.workflow_job(job) for job in selection["jobs"]}
+        needs = {name: {"result": "success" if name in selected or name in gate.ALWAYS else "skipped",
+                        "outputs": {}} for name in names}
+        needs["plan"]["outputs"] = {"plan": json.dumps(selection)}
+        for name, result in results.items():
+            needs[name.replace("_", "-")]["result"] = result
+        return needs
+
+    def test_the_gate_needs_every_job_it_judges(self):
+        listed = re.search(r"^  gate:\n(?:    .*\n)*?    needs:\n((?:      - \S+\n)+)", CI, flags=re.M)
+        self.assertIsNotNone(listed)
+        needs = set(re.findall(r"- (\S+)", listed.group(1)))
+        self.assertEqual(needs, set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | {"test"})
+        self.assertEqual(set(workflow_jobs(CI)) - {"gate"}, needs)
+        self.assertEqual(gate.verdict({name: {"result": "success"} for name in needs - {"lint"}}),
+                         ["lint: missing from the gate job's needs", "plan: produced no plan"])
+
+    def test_every_event_passes_when_its_jobs_pass(self):
+        plans = {
+            "docs only": select("docs/upgrade-from-rc1.md", "AGENTS.md"),
+            "workflow only": select(".github/workflows/core-packs.yml"),
+            "one crate": select("crates/gents-cli/src/lib.rs"),
+            "draft": select("crates/gents-store/src/graphql.rs", tier="draft"),
+            "frontend": select("packages/gents-desktop-ui/src/index.ts"),
+            "everything (push, merge queue, dispatch)": select(everything=True),
+        }
+        for event, selection in plans.items():
+            self.assertEqual(gate.verdict(self.needs(selection)), [], event)
+
+    def test_a_selected_job_that_was_skipped_fails(self):
+        selection = select("crates/gents-cli/src/lib.rs")
+        for job in ("lint", "test", "fmt", "contract"):
+            problems = gate.verdict(self.needs(selection, **{job: "skipped"}))
+            self.assertEqual(len(problems), 1, job)
+            self.assertIn(f"{job}: the plan selected", problems[0])
+
+    def test_a_job_the_plan_left_out_may_be_skipped_but_not_fail(self):
+        selection = select("docs/upgrade-from-rc1.md")
+        self.assertEqual(gate.verdict(self.needs(selection, lint="skipped")), [])
+        self.assertEqual(gate.verdict(self.needs(selection, desktop_ui="failure")), ["desktop-ui: failure"])
+
+    def test_failed_or_cancelled_jobs_fail(self):
+        selection = select(everything=True)
+        for result in ("failure", "cancelled"):
+            self.assertEqual(gate.verdict(self.needs(selection, test=result)), [f"test: {result}"])
+            self.assertEqual(gate.verdict(self.needs(selection, repository_guard=result)),
+                             [f"repository-guard: {result}"])
+
+    def test_jobs_every_event_runs_must_succeed(self):
+        selection = select("docs/upgrade-from-rc1.md")
+        for name in gate.ALWAYS[1:]:
+            problems = gate.verdict(self.needs(selection, **{name.replace("-", "_"): "skipped"}))
+            self.assertEqual(problems, [f"{name}: runs on every event but was skipped"])
+
+    def test_no_plan_fails(self):
+        needs = self.needs(select("docs/upgrade-from-rc1.md"), plan="failure")
+        needs["plan"]["outputs"] = {}
+        self.assertEqual(gate.verdict(needs), ["plan: failure"])
 
 
 class Guards(unittest.TestCase):

@@ -4,14 +4,17 @@ name: CI
 # their reverse dependents and selects jobs; every job runs a `make gate-run`
 # recipe, so `make gate` runs the same commands locally. A draft is linted
 # across the changed crates and their dependents and tested on the crates it
-# changes; a pull request that is ready for review also tests the dependents;
-# a push to main selects everything.
+# changes; a pull request that is ready for review, and a merge queue entry,
+# also test the dependents; a push to main selects everything. `gate` is the
+# one check to require, so it must run on every event a merge waits for.
 on:
   push:
     branches:
       - main
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       full_candidate:
@@ -89,13 +92,31 @@ jobs:
             echo "GATE_EVERYTHING=true" >> "$GITHUB_ENV"
           fi
 
+      # A queue entry is its base plus every pull request queued ahead of it
+      # and its own; the diff covers all of them.
+      - name: List the files the merge queue entry changes
+        if: github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          git diff --name-only --no-renames "${BASE_SHA}" HEAD > "${RUNNER_TEMP}/changed-files.txt"
+          count="$(wc -l < "${RUNNER_TEMP}/changed-files.txt")"
+          echo "The merge queue entry changes ${count} paths."
+          if (( count == 0 )); then
+            echo "GATE_EVERYTHING=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install --no-self-update
 
       - name: Select gate jobs
         id: plan
         env:
-          GATE_EVERYTHING: ${{ github.event_name != 'pull_request' && 'true' || env.GATE_EVERYTHING }}
+          GATE_EVERYTHING: >-
+            ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+            && 'true' || env.GATE_EVERYTHING }}
           GATE_ONLY: ${{ inputs.only }}
           GATE_PORTABLE_RUNNER: ${{ vars.GENTS_CI_PORTABLE_RUNNER }}
           GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
@@ -153,6 +174,11 @@ jobs:
         run: |
           rustup toolchain install --no-self-update
           make gate-selftest
+
+      - name: Check the live node backstop
+        run: |
+          shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh
+          python3 .github/scripts/test-host-runtime-service.py
 
       - name: Check Harbor runner syntax
         run: |
@@ -241,6 +267,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
       - uses: ./.github/actions/rust-runner
 
       - name: Check the product build and clippy
@@ -273,6 +303,11 @@ jobs:
         if: always()
         run: .github/scripts/show-sccache-stats.sh
 
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
   # Proofs, the files generated from them, the one-consumer-per-family scan
   # and, when the runtime group does not run them, the structure ratchets.
   contract:
@@ -286,6 +321,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
 
       - uses: ./.github/actions/rust-runner
         with:
@@ -308,6 +347,11 @@ jobs:
         if: always()
         run: .github/scripts/show-sccache-stats.sh
 
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
   # One job per group of crates that holds a changed crate or a dependent.
   # Each job starts from an empty RUNNER_TEMP target tree; the host sccache
   # service supplies cached rlibs, so parallel jobs share compilation.
@@ -326,6 +370,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
 
       # Enable only after provisioning a separate OS account and runner. The
       # configured path must be the running fleet node's actual gents home.
@@ -364,6 +412,11 @@ jobs:
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
 
   desktop-packages:
     needs: plan
@@ -475,6 +528,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -501,6 +558,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
           path: apps/gents-desktop/test-results/bombadil
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
 
   triage-hygiene:
     # The issue-triage bot holds `issues: write` and runs on a daily cron. These
@@ -543,7 +605,9 @@ jobs:
           "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-rc1-notary-auth.py
           "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-release-signing-mode.py
 
-  # The one check to require: every job the plan selected succeeded.
+  # The one check to require: every job that runs on every event, and every
+  # job the plan selected, succeeded. A skip passes only for a job the plan
+  # left out (scripts/ci/gate.py verdict).
   gate:
     if: always()
     needs:
@@ -562,16 +626,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+
       - name: Require every selected job
         env:
           NEEDS: ${{ toJSON(needs) }}
-        run: |
-          python3 - <<'PYTHON'
-          import json, os, sys
-
-          needs = json.loads(os.environ["NEEDS"])
-          bad = {name: job["result"] for name, job in needs.items() if job["result"] not in ("success", "skipped")}
-          for name, result in sorted(bad.items()):
-              print(f"::error::{name}: {result}")
-          sys.exit(1 if bad else 0)
-          PYTHON
+        run: python3 scripts/ci/gate.py verdict

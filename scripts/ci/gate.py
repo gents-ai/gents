@@ -5,6 +5,7 @@
   gate.py run JOB                            run one job (fmt, lint, contract, ts-*, test:<group>)
   gate.py all [--base REF]                   plan, then run every selected job
   gate.py packages GROUP...                  list the crates of test groups
+  gate.py verdict                            decide the `gate` job from NEEDS
 
 `run` reads the plan from GATE_PLAN (CI passes the plan job's output) or
 computes it against --base.
@@ -85,12 +86,17 @@ NO_TESTS = {
 }
 
 # A change here can alter any build or the gate itself, so it selects everything.
+# Every script a selected job runs is here, under CONTRACT_PATHS or TS_PATHS;
+# test_gate.py fails when one would classify as inert.
 GLOBAL_PATHS = (
     "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "clippy.toml", "rustfmt.toml",
     ".cargo/", "Makefile", "scripts/ci/", ".github/workflows/ci.yml", ".github/actions/",
     ".github/scripts/setup-", ".github/scripts/rustc-direct.sh",
     ".github/scripts/ensure-rust-build-space.py", ".github/scripts/desktop-runtime-journey.sh",
-    "scripts/macos-clang-lld.sh", "scripts/linux-lld.sh", "third_party/", "examples/",
+    ".github/scripts/show-sccache-stats.sh", ".github/scripts/check-isolated-runtime-runner.py",
+    ".github/scripts/collect-migration-lens-diagnostics.py", ".github/scripts/host-runtime-service.sh",
+    "scripts/macos-clang-lld.sh", "scripts/linux-lld.sh", "scripts/measure-gents-binary.sh",
+    "scripts/check-native-e2e-capabilities.sh", "third_party/", "examples/",
 )
 CONTRACT_PATHS = (
     "contracts/", ".github/scripts/check-lean-", ".github/scripts/test-lean-",
@@ -227,7 +233,15 @@ def classify(path, members):
 def runner(kind):
     if kind == "portable":
         override = os.environ.get("GATE_PORTABLE_RUNNER", "").strip()
-        return json.loads(override) if override else STUDIO
+        if not override:
+            return STUDIO
+        try:
+            labels = json.loads(override)
+        except json.JSONDecodeError:
+            labels = None
+        if not (isinstance(labels, list) and labels and all(isinstance(label, str) and label for label in labels)):
+            fail(f"GATE_PORTABLE_RUNNER must be a JSON list of runner labels, got {override!r}")
+        return labels
     if kind == "runtime":
         isolated = os.environ.get("GATE_RUNTIME_ISOLATED") == "true"
         return STUDIO + ["studio-1", "ci-runtime-isolated" if isolated else "ci-runtime"]
@@ -549,6 +563,49 @@ def run(selection, job):
         fail(f"unknown job {job}")
 
 
+# The workflow job that runs each plan job, and the jobs every event runs.
+WORKFLOW_JOBS = {
+    "fmt": "fmt", "lint": "lint", "contract": "contract", "ts-packages": "desktop-packages",
+    "ts-unit": "desktop-ui", "ts-browser": "desktop-ui", "ts-fuzz": "desktop-ui-bombadil",
+}
+ALWAYS = ("plan", "repository-guard", "publish-control-tests", "triage-hygiene", "notary-control-tests")
+
+
+def workflow_job(job):
+    return "test" if job.startswith("test:") else WORKFLOW_JOBS[job]
+
+
+def verdict(needs):
+    """The `gate` job's decision from its `toJSON(needs)`: a list of problems, empty to pass.
+
+    A job is skipped both when the plan did not select it and when a job it
+    needs failed, so a skip passes only for a job the plan left out.
+    """
+    problems = {}
+    known = set(ALWAYS) | set(WORKFLOW_JOBS.values()) | {"test"}
+    for name in sorted(set(needs) - known):
+        problems[name] = "gate needs it but gate.py does not know it; add it to WORKFLOW_JOBS or ALWAYS"
+    for name in sorted(known - set(needs)):
+        problems[name] = "missing from the gate job's needs"
+    for name, job in sorted(needs.items()):
+        if job.get("result") not in ("success", "skipped"):
+            problems[name] = job.get("result")
+    for name in ALWAYS:
+        result = needs.get(name, {}).get("result")
+        if result != "success":
+            problems.setdefault(name, f"runs on every event but was {result}")
+    raw = needs.get("plan", {}).get("outputs", {}).get("plan")
+    if not raw:
+        problems.setdefault("plan", "produced no plan")
+        return [f"{name}: {problem}" for name, problem in problems.items()]
+    for job in json.loads(raw)["jobs"]:
+        owner = workflow_job(job)
+        result = needs.get(owner, {}).get("result")
+        if result != "success":
+            problems.setdefault(owner, f"the plan selected {job} but it was {result}")
+    return [f"{name}: {problem}" for name, problem in problems.items()]
+
+
 def emit(selection):
     print(json.dumps(selection, indent=2))
     output = os.environ.get("GITHUB_OUTPUT")
@@ -581,7 +638,13 @@ def main():
         if name == "run":
             command.add_argument("job")
     commands.add_parser("packages").add_argument("groups", nargs="+")
+    commands.add_parser("verdict", help="decide the gate job from NEEDS (its toJSON(needs))")
     arguments = parser.parse_args()
+    if arguments.command == "verdict":
+        problems = verdict(json.loads(os.environ["NEEDS"]))
+        for problem in problems:
+            print(f"::error::{problem}")
+        sys.exit(1 if problems else 0)
     if arguments.command == "packages":
         print(" ".join(package for group in GROUPS if group.name in arguments.groups for package in group.packages))
         return

@@ -92,14 +92,28 @@ echo "Using SCCACHE_DIR=${SCCACHE_DIR}"
 echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
 sccache --version
 # Never start or recycle the shared host daemon here; the checked-in launchd
-# service owns it.
-service_domain="gui/$(id -u)/com.source.gents.sccache"
-if ! launchctl print "${service_domain}" 2>/dev/null | grep -q 'state = running'; then
-  echo "::error::Host sccache launchd service is not running (${service_domain})."
+# service owns it. It is a LaunchAgent, so it exists only while the runner user
+# has a GUI login session: a WindowServer crash or a logout removes it (and the
+# host's live Gents node with it), and the job must say so rather than build
+# uncached on a host that has lost its session.
+cache_unavailable() {
+  local message="$1 Builds here stop until this is fixed; rerun the failed jobs afterwards."
+  echo "::error title=Studio compiler cache unavailable on $(hostname -s)::${message}"
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    printf '### Studio compiler cache unavailable on %s\n\n%s\n' "$(hostname -s)" "${message}" >> "${GITHUB_STEP_SUMMARY}"
+  fi
   exit 1
+}
+user_domain="gui/$(id -u)"
+service_domain="${user_domain}/com.source.gents.sccache"
+if ! launchctl print "${user_domain}" >/dev/null 2>&1; then
+  cache_unavailable "$(id -un) has no GUI login session on $(hostname -s), so its LaunchAgents (the sccache service, the live Gents node) are gone. This usually follows a WindowServer crash. A person must log in as $(id -un) at the console or over Screen Sharing, or restart the host so it logs in automatically."
+elif ! service_print="$(launchctl print "${service_domain}" 2>/dev/null)"; then
+  cache_unavailable "The sccache LaunchAgent ${service_domain} is not loaded on $(hostname -s). A person must load it as $(id -un): launchctl bootstrap ${user_domain} ~/Library/LaunchAgents/com.source.gents.sccache.plist (installed from .github/runner/)."
+elif ! grep -q 'state = running' <<<"${service_print}"; then
+  cache_unavailable "The sccache LaunchAgent ${service_domain} is loaded but not running on $(hostname -s). A person must start it as $(id -un): launchctl kickstart ${service_domain}, then read ~/Library/Logs/gents-sccache.stderr.log if it stops again."
 fi
 if ! sccache --show-stats >/dev/null 2>&1; then
-  echo "::error::Host sccache service is unavailable; repair the launchd service before running Studio builds."
-  exit 1
+  cache_unavailable "The sccache LaunchAgent ${service_domain} is running but its server does not answer on $(hostname -s). A person must restart it as $(id -un): launchctl kickstart -k ${service_domain}, and read ~/Library/Logs/gents-sccache.log."
 fi
 echo "Reusing the host sccache server."
