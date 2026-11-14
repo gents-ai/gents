@@ -8,8 +8,8 @@ use crate::goal::{
     CreateGoalForSessionOutcome,
 };
 use crate::{
-    triggers::engine::goal_source::GoalSource, triggers::engine::TriggerSource,
-    triggers::runtime_snapshot::ActiveRuntimeSnapshot,
+    triggers::engine::goal_source::GoalSource, triggers::engine::FireIntent,
+    triggers::engine::TriggerSource, triggers::runtime_snapshot::ActiveRuntimeSnapshot,
 };
 use defra_node::Node as EmbeddedNode;
 use events::{
@@ -780,19 +780,13 @@ async fn usage_limited_goal_after_failed_request(
     let (mut source, _snapshot_tx) = source_for_agent(db, agent).await;
     let goal = wait_for_goal_transition_as(
         access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "usage limit of the failed request",
         |goal| goal.parsed_status() == Some(GoalStatus::UsageLimited),
     )
     .await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
-            .await
-            .is_err(),
-        "a usage-limited goal must not continue"
-    );
+    assert_settles_without_fire(&mut source, "a usage-limited goal must not continue").await;
     goal.last_failure
 }
 
@@ -863,7 +857,6 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
     wait_for_goal_transition_as(
         &access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "provider reset decision",
@@ -878,12 +871,8 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
     )
     .await;
     if opted_in {
-        assert!(
-            tokio::time::timeout(RESCAN * 5, source.next_fire())
-                .await
-                .is_err(),
-            "reset must not publish a second continuation"
-        );
+        assert_settles_without_fire(&mut source, "reset must not publish a second continuation")
+            .await;
     }
     goal_and_children(&db, &access).await
 }
@@ -1308,27 +1297,47 @@ async fn seed_goal_fields_from_access(
     assert_eq!(response["data"]["update_Goal"].as_array().unwrap().len(), 1);
 }
 
+/// Owner passes a test grants before it calls an expected decision missing.
+/// The bound counts settled rescans, not wall time, so load cannot exhaust it.
+const SETTLED_PASSES: usize = 8;
+
 async fn wait_for_goal_transition_as(
     access: &ConfigAccess,
-    node: &Arc<EmbeddedNode>,
     node_did: &str,
     source: &mut GoalSource,
     description: &str,
     reached: impl Fn(&crate::goal::GoalDocument) -> bool,
 ) -> crate::goal::GoalDocument {
-    let mut updates = node.subscribe_updates();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::select! {
-            _ = source.next_fire() => panic!("unexpected goal fire while waiting for {description}"),
-            goal = async {
-                loop {
-                    let goal = load_goal_as(access, node_did).await.expect("Goal exists");
-                    if reached(&goal) { break goal; }
-                    updates.recv().await.expect("native update subscription closed");
-                }
-            } => goal,
+    for _ in 0..SETTLED_PASSES {
+        if source.rescan_to_settled(true).await.is_some() {
+            panic!("unexpected goal fire while waiting for {description}");
         }
-    }).await.unwrap_or_else(|_| panic!("goal transition did not complete: {description}"))
+        let goal = load_goal_as(access, node_did).await.expect("Goal exists");
+        if reached(&goal) {
+            return goal;
+        }
+    }
+    panic!("goal transition did not complete in {SETTLED_PASSES} settled passes: {description}")
+}
+
+/// The owner's next continuation, from settled rescans.
+async fn next_intent(source: &mut GoalSource, description: &str) -> FireIntent {
+    for _ in 0..SETTLED_PASSES {
+        if let Some(intent) = source.rescan_to_settled(true).await {
+            return intent;
+        }
+    }
+    panic!("{description}: the goal owner settled {SETTLED_PASSES} times without firing")
+}
+
+/// The owner, run to its settled point twice, publishes nothing.
+async fn assert_settles_without_fire(source: &mut GoalSource, description: &str) {
+    for _ in 0..2 {
+        assert!(
+            source.rescan_to_settled(true).await.is_none(),
+            "{description}"
+        );
+    }
 }
 
 #[expect(
@@ -1790,10 +1799,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     .expect("set goal");
 
     let (mut source, _tx) = source_for_agent(&db, &agent_identity).await;
-    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("lineage continuation timed out")
-        .expect("lineage continuation intent");
+    next_intent(&mut source, "lineage continuation").await;
     let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     let child = &children[0];
@@ -1826,12 +1832,11 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
             .unwrap();
         assert_eq!(recovered.requests_recovered, 0);
         let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
-                .await
-                .is_err(),
-            "repeated maintenance and source reconciliation must not emit another continuation"
-        );
+        assert_settles_without_fire(
+            &mut restarted,
+            "repeated maintenance and source reconciliation must not emit another continuation",
+        )
+        .await;
         let children = goal_children_from_access(&access).await;
         assert_eq!(children.len(), 1);
         let child = &children[0];
@@ -1898,10 +1903,7 @@ async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
 
     let (mut source, _tx) = source_for_agent(&db, &agent).await;
     for _ in 0..2 {
-        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-            .await
-            .expect("delimiter continuation timed out")
-            .expect("delimiter continuation intent");
+        next_intent(&mut source, "delimiter continuation").await;
     }
     let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 2);
@@ -1937,10 +1939,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     .expect("set goal");
 
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
-    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("goal source timed out")
-        .expect("goal continuation intent");
+    let intent = next_intent(&mut source, "goal continuation").await;
     assert!(intent.pre_materialized_request_id.is_some());
 
     let children = goal_children_from_access(&access).await;
@@ -1965,12 +1964,11 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     );
     assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("goal"));
 
-    assert!(
-        tokio::time::timeout(Duration::from_millis(150), source.next_fire())
-            .await
-            .is_err(),
-        "a pending child must suppress duplicate continuation"
-    );
+    assert_settles_without_fire(
+        &mut source,
+        "a pending child must suppress duplicate continuation",
+    )
+    .await;
     assert_eq!(goal_children_from_access(&access).await.len(), 1);
 }
 
@@ -2005,17 +2003,20 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
     create_visible_foreign_collision(&db, agent.as_ref(), &collision_id, None).await;
 
     let (mut source, _tx) = source_for_agent(&db, &agent).await;
-    let fired = tokio::time::timeout(Duration::from_secs(2), source.next_fire()).await;
-    if !matches!(fired, Ok(Some(_))) {
+    let mut fired = None;
+    for _ in 0..SETTLED_PASSES {
+        fired = source.rescan_to_settled(true).await;
+        if fired.is_some() {
+            break;
+        }
+    }
+    if fired.is_none() {
         let state = access
             .execute("{ Goal { goal_id status last_continued_from_request_id continuation_sequence } AgentRequest { request_id node_did session_id retry_key caused_by_trigger_kind } }")
             .await;
-        let outcome = match fired {
-            Err(_) => "timeout",
-            Ok(None) => "source ended",
-            Ok(Some(_)) => unreachable!(),
-        };
-        panic!("owned continuation did not fire ({outcome}); state={state:?}");
+        panic!(
+            "owned continuation did not fire in {SETTLED_PASSES} settled passes; state={state:?}"
+        );
     }
     let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
@@ -2059,12 +2060,11 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
     .await;
 
     let (mut source, _tx) = source_for_agent(&db, &agent).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
-            .await
-            .is_err(),
-        "a conflicting retry key must not be reported as an owned continuation"
-    );
+    assert_settles_without_fire(
+        &mut source,
+        "a conflicting retry key must not be reported as an owned continuation",
+    )
+    .await;
     assert!(goal_children_from_access(&access).await.is_empty());
 }
 
@@ -2085,19 +2085,11 @@ async fn restart_reconcile_does_not_duplicate_a_goal_continuation() {
     .expect("set goal");
 
     let (mut first, _first_tx) = source_for_agent(&db, &agent).await;
-    tokio::time::timeout(Duration::from_secs(2), first.next_fire())
-        .await
-        .expect("first source timed out")
-        .expect("first continuation");
+    next_intent(&mut first, "first source").await;
     drop(first);
 
     let (mut restarted, _restart_tx) = source_for_agent(&db, &agent).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
-            .await
-            .is_err(),
-        "restart must not emit a second child"
-    );
+    assert_settles_without_fire(&mut restarted, "restart must not emit a second child").await;
     assert_eq!(goal_children_from_access(&access).await.len(), 1);
 }
 
@@ -2126,10 +2118,7 @@ async fn restart_materializes_a_claimed_continuation_after_crash() {
     assert!(goal_children_from_access(&access).await.is_empty());
 
     let (mut restarted, _restart_tx) = source_for_agent(&db, &agent).await;
-    tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
-        .await
-        .expect("recovery source timed out")
-        .expect("recovered continuation");
+    next_intent(&mut restarted, "recovery source").await;
     assert_eq!(goal_children_from_access(&access).await.len(), 1);
 }
 
@@ -2160,10 +2149,7 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     .expect("atomically charge and claim wrap-up retry"));
 
     let (mut restarted, _tx) = source_for_agent(&db, &agent).await;
-    tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
-        .await
-        .expect("wrap-up retry recovery timed out")
-        .expect("wrap-up retry recovery intent");
+    next_intent(&mut restarted, "wrap-up retry recovery").await;
     let recovered = load_goal_as(&access, db.node_identity.did())
         .await
         .expect("goal exists");
@@ -3039,11 +3025,7 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
     .expect("set goal");
 
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(150), source.next_fire())
-            .await
-            .is_err()
-    );
+    assert_settles_without_fire(&mut source, "the goal owner must not continue").await;
     assert!(goal_children_from_access(&access).await.is_empty());
 }
 
@@ -3106,10 +3088,11 @@ async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
         .await
         .unwrap();
         let (mut source, _tx) = source_for_agent(&db, &agent).await;
-        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-            .await
-            .unwrap_or_else(|_| panic!("{name}: the retired input prevented continuation"))
-            .expect("continued Goal request");
+        next_intent(
+            &mut source,
+            &format!("{name}: the retired input prevented continuation"),
+        )
+        .await;
         let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(goal.parsed_status(), Some(GoalStatus::Active), "{name}");
         let children = goal_children_from_access(&access).await;
@@ -3137,7 +3120,6 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
     wait_for_goal_transition_as(
         &access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "interrupted goal to pause",
@@ -3219,10 +3201,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
 
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent_identity).await;
-    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("goal source timed out")
-        .expect("wrapup intent");
+    next_intent(&mut source, "goal continuation").await;
     let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     let user_children = goal_children_from_access(&db.client_access(&user)).await;
@@ -3244,7 +3223,6 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     .await;
     let goal = wait_for_goal_transition_as(
         &access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "completed wrapup",
@@ -3254,12 +3232,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         },
     )
     .await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
-            .await
-            .is_err(),
-        "a completed wrapup must not continue"
-    );
+    assert_settles_without_fire(&mut source, "a completed wrapup must not continue").await;
     assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
     assert_eq!(goal.tokens_used, Some(105));
     assert_eq!(goal.wrapup_requested, Some(true));
@@ -3295,12 +3268,11 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         assert_eq!(recovered.requests_recovered, 0);
         assert_eq!(recovered.responses_recovered, 0);
         let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
-                .await
-                .is_err(),
+        assert_settles_without_fire(
+            &mut restarted,
             "recovery and goal reconciliation must not emit a second wrapup",
-        );
+        )
+        .await;
         let current = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(current.parsed_status(), Some(GoalStatus::BudgetLimited));
         assert_eq!(
@@ -3398,7 +3370,6 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
     let goal = wait_for_goal_transition_as(
         &access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "provider usage limit",
@@ -3504,10 +3475,8 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         CancellationToken::new(),
     )
     .with_rescan_interval(Duration::from_secs(3600));
-    let pass = Duration::from_millis(300);
     wait_for_goal_transition_as(
         &access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "usage limit before the reset is resumed",
@@ -3522,9 +3491,10 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         .unwrap()
         .remove(0);
     updates.publish_update(goal_collection_id, "goal-doc");
-    assert!(tokio::time::timeout(pass, source.next_fire())
-        .await
-        .is_err());
+    assert!(
+        source.rescan_to_settled(false).await.is_none(),
+        "an update-triggered rescan must leave the passed reset to the tick"
+    );
     assert_eq!(
         goal_and_children(&db, &access).await,
         (Some(GoalStatus::UsageLimited), 0)
@@ -3581,7 +3551,6 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
     let goal = wait_for_goal_transition_as(
         &access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "OpenRouter credits exhaustion",
@@ -3630,10 +3599,11 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
 
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
     for expected_children in 1..=3 {
-        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-            .await
-            .unwrap_or_else(|_| panic!("goal source timed out before child {expected_children}"))
-            .expect("wrapup or retry intent");
+        next_intent(
+            &mut source,
+            &format!("wrapup or retry intent before child {expected_children}"),
+        )
+        .await;
         let children = goal_children_from_access(&access).await;
         assert_eq!(children.len(), expected_children);
         let child = children
@@ -3645,7 +3615,6 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
 
     let goal = wait_for_goal_transition_as(
         &access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "failed wrap-up abandonment",
@@ -3660,12 +3629,11 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
         .last_failure
         .as_deref()
         .is_some_and(|reason| reason.contains("after 2 retries")));
-    assert!(
-        tokio::time::timeout(RESCAN * 5, source.next_fire())
-            .await
-            .is_err(),
-        "bounded failed wrap-up must not spawn a fourth child"
-    );
+    assert_settles_without_fire(
+        &mut source,
+        "bounded failed wrap-up must not spawn a fourth child",
+    )
+    .await;
     assert_eq!(goal_children_from_access(&access).await.len(), 3);
 }
 
@@ -4288,10 +4256,11 @@ async fn goal_source_continues_same_second_child_that_sorts_before_root() {
             seed_same_second_canonical_goal_child(&db, &user, &agent, &access, parent_id, false)
                 .await;
         let (mut controller, _snapshot_tx) = source_for_agent(&db, &agent).await;
-        let intent = tokio::time::timeout(Duration::from_secs(2), controller.next_fire())
-            .await
-            .expect("causal child must not be hidden by lexical root ordering")
-            .expect("continuation intent");
+        let intent = next_intent(
+            &mut controller,
+            "causal child must not be hidden by lexical root ordering",
+        )
+        .await;
         let next_id = intent
             .pre_materialized_request_id
             .expect("materialized child");
@@ -4384,7 +4353,6 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
         let waiting = serde_json::to_value(
             wait_for_goal_transition_as(
                 &access,
-                &db.node,
                 db.node_identity.did(),
                 &mut source,
                 &format!(
@@ -4419,11 +4387,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
                 "{process:?}/{reason:?}: {field}"
             );
         }
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), source.next_fire())
-                .await
-                .is_err()
-        );
+        assert_settles_without_fire(&mut source, "the goal owner must not continue").await;
         assert_eq!(
             serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap())
                 .unwrap(),
@@ -4434,10 +4398,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     }
 
     publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
-    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("goal source timed out after readiness recovered")
-        .expect("goal continuation intent");
+    next_intent(&mut source, "goal continuation after readiness recovered").await;
     let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].session_id, SESSION);
@@ -4454,12 +4415,11 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
 
     drop(source);
     let (mut restarted, _restart_tx) = source_for_agent(&db, &agent).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
-            .await
-            .is_err(),
-        "restart must not duplicate the recovered continuation"
-    );
+    assert_settles_without_fire(
+        &mut restarted,
+        "restart must not duplicate the recovered continuation",
+    )
+    .await;
     assert_eq!(goal_children_from_access(&access).await.len(), 1);
 }
 
@@ -4484,10 +4444,11 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
     let (mut source, _tx) = source_for_agent(&db, &agent).await;
 
     for round in 1..=(crate::goal::MAX_INFRASTRUCTURE_RETRIES as usize + 1) {
-        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-            .await
-            .unwrap_or_else(|_| panic!("round {round}: goal source timed out"))
-            .expect("goal continuation intent");
+        next_intent(
+            &mut source,
+            &format!("round {round}: goal continuation intent"),
+        )
+        .await;
         let children = goal_children_from_access(&access).await;
         assert_eq!(children.len(), round);
         let pending = children
@@ -4512,12 +4473,11 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
             Reason::RuntimeConfigurationInvalid.public_message(),
         )
         .await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(300), source.next_fire())
-                .await
-                .is_err(),
-            "round {round}: a rejected child must wait for readiness"
-        );
+        assert_settles_without_fire(
+            &mut source,
+            &format!("round {round}: a rejected child must wait for readiness"),
+        )
+        .await;
         let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         assert_eq!(
             goal.parsed_status(),
@@ -4532,10 +4492,7 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
         publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
     }
 
-    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("goal source timed out after the final race")
-        .expect("goal continuation intent");
+    next_intent(&mut source, "goal continuation after the final race").await;
     let children = goal_children_from_access(&access).await;
     let pending = children
         .iter()
@@ -4549,7 +4506,6 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
     .await;
     let waiting = wait_for_goal_transition_as(
         &access,
-        &db.node,
         db.node_identity.did(),
         &mut source,
         "readiness wait after the rejected child (stale readiness must not re-issue it)",
@@ -4567,10 +4523,11 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
     assert_eq!(waiting.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(waiting.infrastructure_retry_count.unwrap_or_default(), 0);
     publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
-    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("goal source timed out after readiness was republished")
-        .expect("goal continuation intent");
+    next_intent(
+        &mut source,
+        "goal continuation after readiness was republished",
+    )
+    .await;
     assert_eq!(
         goal_children_from_access(&access).await.len(),
         children.len() + 1
@@ -4609,12 +4566,11 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
     let claimed =
         serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap()).unwrap();
     let (mut source, _tx) = unready_source_for_agent(&db, &agent);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
-            .await
-            .is_err(),
-        "a claimed child must not be published to an unready behavior"
-    );
+    assert_settles_without_fire(
+        &mut source,
+        "a claimed child must not be published to an unready behavior",
+    )
+    .await;
     assert!(goal_children_from_access(&access).await.is_empty());
     assert_eq!(
         serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap()).unwrap(),
@@ -4623,10 +4579,7 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
     );
 
     publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
-    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("goal source timed out after readiness recovered")
-        .expect("claimed continuation");
+    next_intent(&mut source, "goal continuation after readiness recovered").await;
     let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     assert_eq!(
@@ -4663,6 +4616,9 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
         cancel.clone(),
     )
     .with_rescan_interval(RESCAN);
+    // This test exercises `next_fire`'s own trigger loop, which a settled
+    // rescan bypasses, and that loop exposes no settled point; it keeps its
+    // windows.
     assert!(
         tokio::time::timeout(Duration::from_millis(50), source.next_fire())
             .await
