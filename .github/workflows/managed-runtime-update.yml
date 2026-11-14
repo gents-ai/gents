@@ -101,4 +101,4 @@ jobs:
       - name: Exercise first-run setup against launchd
         if: runner.os == 'macOS'
         run: |
-          cargo test --locked -p gents-cli --features live-e2e,native-e2e --test cli_live_suite cli_onboarding_live::no_model:: --profile fast-dev -- --ignored --nocapture --test-threads=1
+          cargo test --locked -p gents-cli --features live-e2e,native-e2e --test integration cli_live_suite::cli_onboarding_live::no_model:: --profile fast-dev -- --ignored --nocapture --test-threads=1
