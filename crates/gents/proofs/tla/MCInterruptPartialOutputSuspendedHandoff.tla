@@ -1,0 +1,4 @@
+---- MODULE MCInterruptPartialOutputSuspendedHandoff ----
+EXTENDS InterruptPartialOutput
+
+====
