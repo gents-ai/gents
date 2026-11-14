@@ -39,86 +39,36 @@ const DEFAULT_REPLACEMENT_OWNER_DIDS: [&str; 6] = [
 
 #[test]
 fn modeled_removal_requires_the_exact_returned_document() {
-    let cases = &gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration contract")
-        .configuration_removal_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let target = case["target"].as_str().unwrap();
-        let rows: Vec<_> = case["returned"]
-            .as_array()
-            .unwrap()
+    gents_lean_vocab::families::household_configuration_removal::replay(|case| {
+        let rows: Vec<_> = case
+            .returned
             .iter()
             .map(|id| json!({"_docID": id}))
             .collect();
         let response = json!({"data": {"delete_Skill": rows}});
-        assert_eq!(
-            confirm_removal(&response, "Skill", target).is_ok(),
-            case["expected"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
+        confirm_removal(&response, "Skill", &case.target).is_ok()
+    });
     assert!(confirm_removal(&json!({"data": {"delete_Skill": null}}), "Skill", "doc").is_err());
 }
 
 #[tokio::test]
 async fn modeled_callback_configuration_publication_and_revocation() -> Result<()> {
-    use gents_lean_vocab::{lean_identity_household_cases, LeanIdentitySubject};
     use gents_store::identity::NodeIdentity as _;
-    let case = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let modeled_user = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "home")
-        .unwrap()
-        .owner;
-    let modeled_agent = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
-    let modeled_runtime = case
-        .relations
-        .iter()
-        .find_map(|relation| match &relation.subject {
-            LeanIdentitySubject::Actor { actor }
-                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .unwrap();
-    // Modeled DIDs carry no keys. Each modeled actor is played by a held
-    // identity so every write is signed by its real actor.
     let keys = tempfile::tempdir()?;
     let held = |name: &str| {
         gents_store::identity::KeyIdentity::load_or_create(keys.path().join(name), None)
     };
     let (user_key, runtime_key, agent_key) = (held("user")?, held("runtime")?, held("agent")?);
-    let mut actors = BTreeMap::new();
-    for observation in &case.callback_configuration_cases {
-        let modeled = observation["actor"].as_str().unwrap().to_owned();
-        if !actors.contains_key(&modeled) {
-            let real = if modeled == *modeled_runtime {
-                runtime_key.did().to_owned()
-            } else if modeled == *modeled_agent {
-                agent_key.did().to_owned()
-            } else {
-                held(&format!("actor-{}", actors.len()))?.did().to_owned()
-            };
-            actors.insert(modeled, real);
-        }
-    }
+    let sibling_key = held("sibling")?;
+    let cases = gents_lean_vocab::families::household_callback_configuration_access::cases();
+    let actors: BTreeMap<&str, String> = [
+        ("runtime", runtime_key.did().to_owned()),
+        ("agent", agent_key.did().to_owned()),
+        ("sibling", sibling_key.did().to_owned()),
+    ]
+    .into_iter()
+    .collect();
     let (user, agent, runtime) = (user_key.did(), agent_key.did(), runtime_key.did());
-    assert_ne!(modeled_user, modeled_agent);
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     // The Node is the runtime's identity; the user is the configuration actor.
@@ -138,8 +88,12 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
         .with_client_signing_capability(user_key.client_signing_capability()?)?,
     );
     let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
-    node.add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
-        .await?;
+    node.add_dac_policy_with_counter_as(
+        &context,
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+        0,
+    )
+    .await?;
     register_config_schemas(&node).await?;
     for actor in actors.values() {
         for permission in [
@@ -189,8 +143,8 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
         .as_str()
         .unwrap();
     let mut revoked = false;
-    for observation in &case.callback_configuration_cases {
-        if observation["revoked"] == true && !revoked {
+    for observation in cases {
+        if observation.input.revoked && !revoked {
             owner
                 .delete_actor_relationship(
                     "CallbackBinding",
@@ -202,8 +156,8 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
             apply(&owner, docs.clone()).await?;
             revoked = true;
         }
-        let actor = &actors[observation["actor"].as_str().unwrap()];
-        let id = observation["id"].as_str().unwrap();
+        let actor = &actors[observation.input.role.as_str()];
+        let id = observation.input.id.as_str();
         let (collection, field) = match id {
             "binding" => ("CallbackBinding", "binding_id"),
             "callback" => ("Callback", "callback_id"),
@@ -217,12 +171,7 @@ async fn modeled_callback_configuration_publication_and_revocation() -> Result<(
                 escape_graphql_string(id)
             ))
             .await?;
-        assert_eq!(
-            !response["data"][collection].as_array().unwrap().is_empty(),
-            observation["expected"].as_bool().unwrap(),
-            "{} {id}",
-            observation["actor"]
-        );
+        observation.check(!response["data"][collection].as_array().unwrap().is_empty());
     }
     node.shutdown().await?;
     Ok(())
@@ -1993,34 +1942,6 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
 
 #[tokio::test]
 async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_actor() -> Result<()> {
-    use gents_lean_vocab::{
-        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
-    };
-    let case = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration contract");
-    let modeled_agent = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
-    let _modeled_runtime = case
-        .relations
-        .iter()
-        .find_map(|relation| match &relation.subject {
-            LeanIdentitySubject::Actor { actor }
-                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .expect("modeled runtime");
-    assert!(case.actions.iter().any(
-        |action| matches!(action, LeanIdentityAction::Check { actor, .. } if actor == modeled_agent)
-    ));
     // Modeled DIDs carry no keys; held identities play the modeled User,
     // runtime and Agent so the User's configuration writes are signed.
     use gents_store::identity::NodeIdentity as _;
@@ -2053,7 +1974,7 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
     let runtime_did = identity::Did::new(runtime)?;
     let agent_access = ConfigAccess::local_as(node.clone(), identity::Did::new(agent)?);
     let ctx = defra_core::RequestContext::default().with_identity(Some(user.clone()));
-    node.add_dac_policy_with_counter_as(&ctx, &case.policy_yaml, 0)
+    node.add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
     node.add_collection_as(&ctx, gents_protocol::schemas::NODE)
         .await?;
@@ -2067,8 +1988,8 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
         )
         .await?;
     let doc_id = gents_store::graphql::created_doc_id(&response, "Node")?;
-    for observation in &case.configuration_node_binding_cases {
-        let visible = observation["visible"].as_bool().unwrap();
+    for observation in gents_lean_vocab::families::household_node_binding::cases() {
+        let visible = observation.input.visible;
         if visible {
             user_access
                 .add_actor_relationship("Node", &doc_id, "runtime_reader", &runtime_did)
@@ -2081,12 +2002,12 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
         let binding = ConfigurationNodeBinding {
             enabled: true,
             default_agent_did: None,
-            node_did: if observation["same_node"] == true {
+            node_did: if observation.input.same_node {
                 runtime_did.clone()
             } else {
                 identity::Did::new(agent)?
             },
-            doc_id: if observation["has_doc"] == true {
+            doc_id: if observation.input.has_doc {
                 doc_id.clone()
             } else {
                 String::new()
@@ -2106,11 +2027,7 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
                 })
             })
             .await;
-        assert_eq!(
-            result.is_ok(),
-            observation["expected"].as_bool().unwrap(),
-            "modeled binding: {result:?}"
-        );
+        observation.check(result.is_ok());
     }
     node.shutdown().await?;
     Ok(())
@@ -2118,14 +2035,9 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
 
 #[tokio::test]
 async fn projection_binding_publication_follows_modeled_native_ownership() -> Result<()> {
-    use gents_lean_vocab::lean_identity_household_cases;
     use gents_store::config_client::{GraphqlEndpoint, NodePermission};
     use gents_store::identity::NodeIdentity;
 
-    let model = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .context("missing configuration model")?;
     let dir = tempfile::tempdir()?;
     let runtime =
         gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
@@ -2226,8 +2138,11 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
         .as_str()
         .context("projection ID")?
         .to_owned();
-    for revoked in [false, true] {
-        if revoked {
+    let mut revoked_reads = BTreeMap::new();
+    let mut parent_revoked = false;
+    for case in gents_lean_vocab::families::household_projection_binding::cases() {
+        let revoked = case.input.revoked;
+        if revoked && !parent_revoked {
             creator_access
                 .delete_resource_relationship(
                     "ProjectionAcpBinding",
@@ -2237,13 +2152,10 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                     &parent,
                 )
                 .await?;
+            parent_revoked = true;
         }
-        for case in model
-            .projection_binding_cases
-            .iter()
-            .filter(|case| case["revoked"] == revoked)
         {
-            let actor = match case["actor"].as_str().context("modeled actor")? {
+            let actor = match case.input.actor.as_str() {
                 "user" => &user,
                 "creator" => &creator,
                 "runtime" => &runtime,
@@ -2253,8 +2165,7 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                 _ => unreachable!(),
             };
             let access = access(actor, true)?;
-            let expected = case["expected"].as_bool().context("modeled expectation")?;
-            let actual = match case["permission"].as_str().context("modeled permission")? {
+            let actual = match case.input.permission.as_str() {
                 "read" => !gents_protocol::graphql::graphql_rows_from_response(
                     &access.execute(query).await?,
                     "ProjectionAcpBinding",
@@ -2262,65 +2173,45 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                 .is_empty(),
                 "update" => {
                     let mutation = "mutation($id: ID!, $input: ProjectionAcpBindingMutationInputArg!) { update_ProjectionAcpBinding(docID: $id, input: $input) { _docID _version { cid } } }";
-                    let value = format!("updated-{}-{revoked}", case["actor"].as_str().unwrap());
-                    if !expected {
-                        let before = creator_access.execute(query).await?;
-                        let raw_access = ConfigAccess::Graphql(
-                            GraphqlEndpoint::as_principal(
-                                format!("http://{address}/api/v0/graphql"),
-                                actor.did(),
-                            )
-                            .with_client_signing_capability(actor.client_signing_capability()?)?,
-                        );
-                        let response = raw_access.write("test.projection.denied", &format!(
-                            "mutation {{ update_ProjectionAcpBinding(docID: \"{}\", input: {{policy_id: \"{}\"}}) {{_docID}} }}",
-                            escape_graphql_string(&doc), escape_graphql_string(&value),
-                        )).await;
-                        let updated = match response {
-                            Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
-                                &value,
-                                "update_ProjectionAcpBinding",
-                            )
-                            .is_empty(),
-                            Err(error)
-                                if error.is_permission_denied() || error.is_graphql_rejection() =>
-                            {
-                                false
-                            }
-                            Err(error) => return Err(error.into()),
-                        };
+                    let value = format!("updated-{}-{revoked}", case.input.actor);
+                    let before = creator_access.execute(query).await?;
+                    let response = access
+                        .transact_write("test.projection.update", |txn| {
+                            let doc = &doc;
+                            let value = &value;
+                            Box::pin(async move {
+                                txn.execute_desired_state_mutation(
+                                    mutation,
+                                    &json!({"id": doc, "input": {"policy_id": value}}),
+                                    Collection::ProjectionAcpBinding,
+                                    false,
+                                )
+                                .await
+                            })
+                        })
+                        .await;
+                    let updated = response.is_ok_and(|response| {
+                        !gents_protocol::graphql::graphql_rows_from_response(
+                            &response,
+                            "update_ProjectionAcpBinding",
+                        )
+                        .is_empty()
+                    });
+                    if !updated {
                         assert_eq!(
                             creator_access.execute(query).await?,
                             before,
                             "denied mutation changed the document"
                         );
-                        updated
-                    } else {
-                        let response = access
-                            .transact_write("test.projection.update", |txn| {
-                                let doc = &doc;
-                                let value = &value;
-                                Box::pin(async move {
-                                    txn.execute_desired_state_mutation(
-                                        mutation,
-                                        &json!({"id": doc, "input": {"policy_id": value}}),
-                                        Collection::ProjectionAcpBinding,
-                                        false,
-                                    )
-                                    .await
-                                })
-                            })
-                            .await;
-                        !gents_protocol::graphql::graphql_rows_from_response(
-                            &response?,
-                            "update_ProjectionAcpBinding",
-                        )
-                        .is_empty()
                     }
+                    updated
                 }
                 _ => unreachable!(),
             };
-            assert_eq!(actual, expected, "{case}");
+            if revoked && case.input.permission == "read" {
+                revoked_reads.insert(case.input.actor.clone(), actual);
+            }
+            case.check(actual);
         }
     }
     drop(creator_access);
@@ -2345,14 +2236,7 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
         (&user, "user"),
         (&sibling, "sibling"),
     ] {
-        let expected = model
-            .projection_binding_cases
-            .iter()
-            .find(|case| {
-                case["revoked"] == true && case["actor"] == role && case["permission"] == "read"
-            })
-            .and_then(|case| case["expected"].as_bool())
-            .context("modeled restart expectation")?;
+        let expected = revoked_reads[role];
         let access = ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
                 .with_client_signing_capability(actor.client_signing_capability()?)?,

@@ -2992,6 +2992,14 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_unattended_session_unavailable")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_removal")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_configuration_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_node_binding")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_projection_binding")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "household_fresh_backend_admission_unreached"
       "model-production-gap: a fresh-store admission cannot observe a missing or broken private binding; FreshBackendStore::initialize installs the private legacy schema itself, and a store whose binding is absent or altered is refused only on reopen (household_fresh_backend_reopen).")
       "identity-permission" [Surface.runtimeInternal]

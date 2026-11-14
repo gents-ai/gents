@@ -659,13 +659,6 @@ def atomicCaseJson (commit : Bool) : Json :=
     ("agent_read", toJson (Household.allowed 5 state agentDid "configuration" "atomic" "read")),
     ("sibling_read", toJson (Household.allowed 5 state siblingDid "configuration" "atomic" "read"))]
 
-def bindingCaseJson (sameNode hasDoc visible : Bool) : Json :=
-  let observed := if sameNode then "node" else "other"
-  let doc := if hasDoc then "doc" else ""
-  Json.mkObj [("same_node", toJson sameNode), ("has_doc", toJson hasDoc),
-    ("visible", toJson visible),
-    ("expected", toJson (Configuration.usableNodeBinding "node" observed doc "node" visible))]
-
 def providerInitial : State :=
   { objects := [⟨"agents", "agent-doc", userDid⟩,
       ⟨"configuration", "context-doc", userDid⟩,
@@ -1218,14 +1211,6 @@ def callbackState : State :=
       ⟨"configuration", "callback", "parent", .object "nodes" "home"⟩,
       ⟨"configuration", "module", "parent", .object "nodes" "home"⟩], enrolled := [] }
 
-def callbackCaseJson (actor id : String) (revoked : Bool) : Json :=
-  let granted := Automation.publishCallbackReaders callbackState userDid "binding" "callback" agentDid true
-  let state := if revoked then apply granted
-    (.revoke ⟨"configuration", "binding", "reader", .actor agentDid⟩) else granted
-  Json.mkObj [("actor", toJson actor), ("id", toJson id), ("revoked", toJson revoked),
-    ("expected", toJson (allowed 5 state actor "configuration" id "read")),
-    ("claim_allowed", toJson (Automation.callbackClaimAllowed state actor agentDid "binding" "callback" true true))]
-
 def backendCredentialCaseJson (name : String) (access : Configuration.BackendCredentialAccess)
     (currentSecret historicalSecret : Bool) : Json :=
   Json.mkObj [("name", toJson name),
@@ -1441,9 +1426,6 @@ def json : Json := Json.mkObj
         ("authorized", toJson authorized), ("replacing", toJson replacing), ("delete", toJson delete),
         ("allowed", toJson (Configuration.clientGoalGraphHandoffAllowed actor command create authorized replacing delete))])),
    ("configuration_atomic_cases", toJson ([false, true].map atomicCaseJson)),
-   ("configuration_node_binding_cases", toJson ([(true, true, true), (false, true, true),
-      (true, false, true), (true, true, false)].map fun (sameNode, hasDoc, visible) =>
-        bindingCaseJson sameNode hasDoc visible)),
    ("configuration_provider_cases", toJson
       [providerCaseJson "normal" agentDid "normal" false false,
        providerCaseJson "auxiliary" agentDid "auxiliary" false false,
@@ -1544,26 +1526,6 @@ def json : Json := Json.mkObj
        datastoreWriteCaseJson "mutation-failed" true false false,
        datastoreWriteCaseJson "unconfirmed" true false true,
        datastoreWriteCaseJson "source-revoked" false true true]),
-   ("projection_binding_cases", toJson
-      ([false, true].flatMap fun revoked =>
-        let state := if revoked then apply Configuration.projectionBindingFixture
-          (.revoke ⟨"configuration", "binding", "parent", .object "nodes" "node"⟩)
-          else Configuration.projectionBindingFixture
-        ["user", "creator", "runtime", "agent", "sibling", "outsider"].flatMap fun actor =>
-          ["read", "update"].map fun permission => Json.mkObj
-            [("revoked", toJson revoked), ("actor", toJson actor),
-             ("permission", toJson permission),
-             ("expected", toJson (Household.allowed 5 state actor "configuration" "binding" permission))])),
-   ("configuration_removal_cases", toJson
-      ([(["doc"], "exact"), ([], "empty"), (["other"], "different"),
-        (["doc", "doc"], "duplicate")].map fun (returned, name) =>
-        Json.mkObj [("name", toJson name), ("target", toJson "doc"), ("returned", toJson returned),
-          ("expected", toJson (_root_.Configuration.Affected.removalConfirmed "doc" returned))])),
-   ("callback_configuration_cases", toJson
-      [callbackCaseJson runtimeDid "binding" false, callbackCaseJson runtimeDid "callback" false,
-       callbackCaseJson runtimeDid "module" false, callbackCaseJson agentDid "binding" false,
-       callbackCaseJson agentDid "callback" false, callbackCaseJson agentDid "module" false,
-       callbackCaseJson siblingDid "binding" false, callbackCaseJson agentDid "binding" true]),
    ("unattended_receipt_cases", toJson Identity.UnattendedReceipt.cases),
    ("outcome_reader_cases", Automation.outcomeReaderCasesJson),
    ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
