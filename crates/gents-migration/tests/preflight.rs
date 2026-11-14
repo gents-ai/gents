@@ -1,7 +1,7 @@
+use crate::common;
+use common::fresh_node;
 use gents_migration::{check_migration_compatibility, ensure_migrations, Error};
 use gents_protocol::schemas;
-mod common;
-use common::fresh_node;
 
 #[tokio::test]
 async fn preflight_accepts_the_same_legacy_lineage_without_mutating_it() {

@@ -6,7 +6,7 @@ use gents_migration::{
 use gents_protocol::schemas::{AGENT_REQUEST, AGENT_REQUEST_NAME, MAILBOX_ITEM, MAILBOX_ITEM_NAME};
 use serde_json::Value;
 
-mod common;
+use crate::common;
 use common::fresh_node;
 
 fn created_request_doc_id(data: &Value) -> String {

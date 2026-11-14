@@ -3,7 +3,7 @@ use gents_protocol::schemas::{
     TOOL_FILE_INVENTORY_NAME,
 };
 
-mod common;
+use crate::common;
 
 #[tokio::test]
 async fn inventory_metadata_has_its_pinned_fresh_schema() {

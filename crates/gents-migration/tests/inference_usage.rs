@@ -1,7 +1,7 @@
 use gents_migration::ensure_migrations;
 use gents_protocol::schemas;
 
-mod common;
+use crate::common;
 
 #[tokio::test]
 async fn fresh_inference_usage_keeps_its_canonical_root_and_single_indexes() {

@@ -4,7 +4,7 @@ use gents_migration::{
     CollectionExpectation, DynamicRegistry, LensSpec, LensSpecOwned, MigrationStepOwned,
 };
 
-mod common;
+use crate::common;
 use common::fresh_node;
 
 const FIXTURE_SDL: &str = r#"
