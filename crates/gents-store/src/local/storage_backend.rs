@@ -540,8 +540,8 @@ mod tests {
         );
     }
 
-    /// A store from before backend protection (v1.0.0-rc1 and earlier) has
-    /// no provenance marker; it is refused as an older home, with the
+    /// A store from before backend protection, or from an earlier lineage
+    /// version, has no marker of this version's lineage; it is refused as an older home, with the
     /// start-fresh message, not as an internal fault.
     #[test]
     fn a_store_without_backend_provenance_is_an_older_home() {

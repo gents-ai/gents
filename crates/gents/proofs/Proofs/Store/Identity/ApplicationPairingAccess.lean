@@ -84,10 +84,13 @@ def unpaired : State :=
 
 /-- `pairings_apply` as document ACP sees it: the author creates the overlay
 through the native create gate and links it to its Node, both in the one
-native transaction that creates it. External premise (defradb.rs #2770):
-outside a transaction a relationship change also requires node
-`get-collection`, which the author Agent does not hold, so the `parent` grant
-below stands only for the in-transaction link. -/
+native transaction that creates it. The author Agent holds node
+`get-collection` through its baseline (defradb.rs #2744), so natively it could
+also add the link in a later transaction; the Rust owner does not, and the
+`parent` grant below stands for the in-transaction link. A later link by the
+author would reach the same state: the grant is the author's own on its own
+overlay (`mayManage`), and it opens the overlay to its Node's administration
+only. -/
 def paired : State :=
   apply (directCreate unpaired "author" "application_pairings" "overlay" true true)
     (.grantAs "author" ⟨"application_pairings", "overlay", "parent", .object "nodes" "node"⟩)

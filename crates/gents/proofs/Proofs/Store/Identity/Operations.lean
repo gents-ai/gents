@@ -615,6 +615,24 @@ def receiverHasGrant (senderGranted relationshipDelivered : Bool) : Bool :=
 theorem sender_grant_without_relationship_delivery_is_not_receiver_grant :
     receiverHasGrant true false = false := by decide
 
+/-- What the receiver reads of a delivered document. A receiver that hosts the
+receiving node is its node key and reads past document ACP
+(`Household.readObserved`), so it reads the document whether or not the
+relationship was delivered; the relationship still decides every other reader
+on that node. Transport publication names the hosting node key as the reader,
+so in production the relationship no longer gates that reader's read: it
+remains the record of the grant and what a non-hosting reader would need. -/
+def receiverReads (hostsNode senderGranted relationshipDelivered : Bool) : Bool :=
+  Household.readObserved hostsNode (receiverHasGrant senderGranted relationshipDelivered)
+
+theorem hosting_receiver_reads_without_delivered_grant (senderGranted delivered : Bool) :
+    receiverReads true senderGranted delivered = true := by
+  simp [receiverReads, Household.readObserved]
+
+theorem other_receiver_reads_only_a_delivered_grant (senderGranted delivered : Bool) :
+    receiverReads false senderGranted delivered = receiverHasGrant senderGranted delivered := by
+  simp [receiverReads, Household.readObserved]
+
 /-- The marker is publication progress for one exact pairing document and
 one exact Agent, not an authorization decision. The native relation is the
 read authority. A new entitlement generation must be explicitly authorized

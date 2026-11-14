@@ -12,9 +12,18 @@ so an Agent that links or shares a document it manages can withdraw that
 relationship as itself. Like the add, it is only the native operation gate;
 document ACP still admits a change only from the document's owner or a
 declared manager of that relation (`Household.mayManage`), and a removed tuple
-only narrows access (`Household.revocation_only_narrows`). -/
+only narrows access (`Household.revocation_only_narrows`).
+
+`get-collection` is here because every document write needs it (maintainer
+decision, 2026-11-13, gents#3747). External premise (defradb.rs #2744,
+`NodePermission::go_order`): the pinned DefraDB checks `get-collection` before
+`update-document` and `delete-document`, inside and outside a transaction, so
+an Agent without it can write none of its requests, outputs or tool calls. The
+permission reads a collection's definition, never its documents, and changes
+no schema (`GrantSets.schemaChangePermissions` excludes it). -/
 def requiredPermissions : List String :=
-  ["read-document", "update-document", "add-dac-relation", "delete-dac-relation"]
+  ["get-collection", "read-document", "update-document", "add-dac-relation",
+   "delete-dac-relation"]
 
 /-- An executing Agent carries its own signer. Native NAC decides whether that
 actor may create documents and manage the new document relationships; the

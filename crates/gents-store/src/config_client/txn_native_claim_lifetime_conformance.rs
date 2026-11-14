@@ -91,7 +91,8 @@ async fn signed_claimed_access(
             remote_signer: Some(signer.clone()),
             signing_authorization: None,
         },
-    );
+    )
+    .expect("the signing identity registers");
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(data)

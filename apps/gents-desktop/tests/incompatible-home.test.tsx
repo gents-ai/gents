@@ -164,7 +164,7 @@ describe("a home this version cannot open", () => {
 
     const panel = await screen.findByTestId("incompatible-home");
     expect(panel).toHaveTextContent(
-      "This home was created by an older Gents version (v1.0.0-rc1 or earlier). This release can't open or convert it. Back it up or delete it to start fresh; nothing is carried over.",
+      "This home was created by an older Gents version. This release can't open or convert it. Back it up or delete it to start fresh; nothing is carried over.",
     );
     expect(panel).toHaveTextContent(`${HOME}/data`);
     expect(screen.getByTestId("incompatible-home-retained")).toHaveTextContent(

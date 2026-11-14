@@ -60,7 +60,7 @@ subtle.workspace = true
 tempfile = "3"
 tokio.workspace = true
 tokio-util.workspace = true
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 uuid.workspace = true
 

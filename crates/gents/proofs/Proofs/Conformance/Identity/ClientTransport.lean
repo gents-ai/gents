@@ -31,4 +31,26 @@ def decisionAccess : Family DecisionAccessInput DecisionAccessOutput where
         if i.permission == "read" && ["user", "agent", "outsider"].contains i.actor then some granted
         else none }
 
+structure RevokedReaderInput where
+  reopened : Bool
+  deriving ToJson
+
+structure RevokedReaderOutput where
+  documentAcp : Bool
+  hostRead : Bool
+  deriving ToJson
+
+/-- The client revokes its own `reader` relation on the received decision.
+Document ACP then grants it nothing, and it still reads the decision as the
+key hosting its own store (`Household.nativeRead`), before and after the
+store is reopened. -/
+@[conformance_family]
+def revokedReader : Family RevokedReaderInput RevokedReaderOutput where
+  inputs := [{ reopened := false }, { reopened := true }]
+  model := fun _ =>
+    let revoked := apply clientTransportPublished
+      (.revoke ⟨"enrollment_records", "decision", "reader", .actor "client"⟩)
+    { documentAcp := allowed 5 revoked "client" "enrollment_records" "decision" "read"
+      hostRead := nativeRead true 5 revoked "client" "enrollment_records" "decision" }
+
 end Conformance.ClientTransport

@@ -441,6 +441,42 @@ def allowedIn : List ResourceDefinition → Nat → State → DID → String →
 def allowed (fuel : Nat) (state : State) (actor resource id permission : String) : Bool :=
   allowedIn policy fuel state actor resource id permission
 
+/-- What a read observes, given whether the reader bypasses document ACP and
+what the document policy answers.
+
+External premise (defradb.rs #2744, `LensedDocFetcher::dac_bypass` read by
+`QueryRunner::lent`; upstream models `NacDacBypass.tla` and `NacOrder.lean`):
+while node access control is on, a named caller that it grants `bypass-dac`
+reads every document on that node, whatever document ACP answers, decided at
+the read's own snapshot. The NAC owner holds every node permission, and Gents
+enables NAC with the node key as owner (`with_node_acp_enabled` on a node
+built with that identity), so the hosting runtime's node key reads every
+document on its own node. A native admin (`GrantSets.householdOwner`) holds
+`bypass-dac` too.
+
+Decision (maintainer, 2026-11-13, gents#3747): accepted and modeled as it is.
+`allowed` remains the document policy's own answer and still decides every
+other actor, including another node's key and every Agent. Giving NAC an owner
+other than the node key, or an upstream switch that keeps the owner under
+document ACP, is the deferred larger question (gents#3683). -/
+def readObserved (bypass documentAcp : Bool) : Bool := bypass || documentAcp
+
+def nativeRead (bypass : Bool) (fuel : Nat) (state : State) (actor resource id : String) : Bool :=
+  readObserved bypass (allowed fuel state actor resource id "read")
+
+/-- The hosting runtime's node key reads whatever the relationships say, so no
+revocation withdraws its read. -/
+theorem bypass_reads_every_document (fuel : Nat) (state : State) (actor resource id : String) :
+    nativeRead true fuel state actor resource id = true := by
+  simp [nativeRead, readObserved]
+
+/-- Every actor without the bypass reads exactly what document ACP grants, so
+a revocation that narrows document ACP narrows its read. -/
+theorem without_bypass_document_acp_decides (fuel : Nat) (state : State)
+    (actor resource id : String) :
+    nativeRead false fuel state actor resource id = allowed fuel state actor resource id "read" := by
+  simp [nativeRead, readObserved]
+
 /-- An Agent-created Agent is owned by the creating Agent. The Node parent
 separately gives its user owner inherited control; an ungranted sibling has no
 access merely because it belongs to the same runtime. -/
@@ -845,11 +881,14 @@ management remains a native ACP1 operation. Missing or conflicting evidence
 cannot select a node or another agent as a substitute actor.
 
 External premise (defradb.rs #2770): outside a native transaction a
-relationship change also requires node `get-collection`, which an Agent
-creator does not hold. Callback and fork-child repair therefore commit the
-grant and the marker in one native transaction as the creator, so only the
-`grantSucceeded = markSucceeded` outcomes arise there; the unequal outcomes
-remain modeled for children whose grant committed before that premise. -/
+relationship change also requires node `get-collection`. An Agent creator
+holds it through its baseline since defradb.rs #2744 made every document
+write require it (`NodeProvisioning.requiredPermissions`), so the permission
+no longer forces the transaction. Callback and fork-child repair still commit
+the grant and the marker in one native transaction as the creator, now for
+atomicity alone, so only the `grantSucceeded = markSucceeded` outcomes arise
+there; the unequal outcomes remain modeled for children whose grant committed
+separately. -/
 def recoverParent (state : ParentPublication)
     (nativeOwner claimedCreator authenticatedCreator : Option DID)
     (grantSucceeded markSucceeded : Bool) : ParentPublication :=

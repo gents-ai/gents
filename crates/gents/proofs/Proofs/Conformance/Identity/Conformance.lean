@@ -413,6 +413,11 @@ def observed (state : State) : List Action → List Bool
 theorem node_administrator_is_explicit_and_revocable :
     observed initial nodeAdministratorChanges = [false, false, true, false] := by native_decide
 
+/-- Document ACP's answers: the reader grant is explicit and its revocation
+withdraws it. A runtime that does not host the node reads exactly this. The
+hosting runtime's node key reads past document ACP (`Household.nativeRead`,
+`Configuration.hosting_runtime_reads_without_reader_grant`), so for it the
+revocation removes the relation and not the read. -/
 theorem runtime_reader_is_explicit_and_revocable :
     observed initial runtimeReaderChanges = [true, true, false, false, false, true, true] := by native_decide
 
@@ -1403,6 +1408,8 @@ def toolOperationCaseJson (name : String) (schema history goal create selfConfig
     ("goal", toJson goal), ("create", toJson create), ("self_config", toJson selfConfig),
     ("category", toJson category), ("pack", toJson pack),
     ("query", toJson false), ("write", toJson false),
+    ("live_agent_reads_collections", toJson (GrantSets.agentEffective ⟨true, true, true⟩
+      ((Configuration.toolOperationSources surface pack).map (·.2)) [] "get-collection")),
     ("sources", toJson ((Configuration.toolOperationSources surface pack).map fun (purpose, permission) =>
       Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
 
@@ -1417,6 +1424,8 @@ def datastoreOperationCaseJson (name : String) (query write : Bool) : Json :=
     ("goal", toJson false), ("create", toJson false), ("self_config", toJson false),
     ("category", toJson "none"), ("pack", toJson false),
     ("query", toJson query), ("write", toJson write),
+    ("live_agent_reads_collections", toJson (GrantSets.agentEffective ⟨true, true, true⟩
+      ((Configuration.toolOperationSources surface false).map (·.2)) [] "get-collection")),
     ("sources", toJson ((Configuration.toolOperationSources surface false).map fun (purpose, permission) =>
       Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
 
@@ -2021,7 +2030,9 @@ def json : Json := Json.mkObj
           ["read", "update"].map fun permission => Json.mkObj
             [("revoked", toJson revoked), ("actor", toJson actor),
              ("permission", toJson permission),
-             ("expected", toJson (Household.allowed 5 state actor "configuration" "binding" permission))])),
+             ("expected", toJson (if permission == "read" then
+               Household.nativeRead (actor == "runtime") 5 state actor "configuration" "binding"
+               else Household.allowed 5 state actor "configuration" "binding" permission))])),
    ("configuration_removal_cases", toJson
       ([(["doc"], "exact"), ([], "empty"), (["other"], "different"),
         (["doc", "doc"], "duplicate")].map fun (returned, name) =>
@@ -2120,7 +2131,9 @@ def json : Json := Json.mkObj
         ["user", "runtime", "agent", "sibling", "outsider"].flatMap fun actor =>
           ["read", "update"].map fun permission => Json.mkObj
             [("revoked", toJson revoked), ("actor", toJson actor), ("permission", toJson permission),
-             ("expected", toJson (Household.allowed 5 state actor "application_pairings" "overlay" permission))])),
+             ("expected", toJson (if permission == "read" then
+               Household.nativeRead (actor == "runtime") 5 state actor "application_pairings" "overlay"
+               else Household.allowed 5 state actor "application_pairings" "overlay" permission))])),
    ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
       checks withReader ++ [actionJson withReader (.grant writer)] ++ checks withWriter ++
       [actionJson withWriter (.revoke writer)] ++ checks withoutWriter ++
