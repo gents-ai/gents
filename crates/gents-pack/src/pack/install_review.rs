@@ -485,9 +485,11 @@ mod tests {
     use crate::pack::archive::PackArchive;
 
     fn fixture(name: &str) -> PackArchive {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../gents/tests/fixtures/packs")
-            .join(name);
+        let root = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        )
+        .join("../gents/tests/fixtures/packs")
+        .join(name);
         let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
         PackArchive::from_bytes(&bytes).unwrap()
     }
@@ -616,8 +618,10 @@ mod tests {
 
     #[test]
     fn a_data_tool_surface_reports_its_tools() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/ux-plugins/board_docs");
+        let root = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        )
+        .join("../../examples/ux-plugins/board_docs");
         let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
         let archive = PackArchive::from_bytes(&bytes).unwrap();
         let config = crate::pack::load_pack_config(

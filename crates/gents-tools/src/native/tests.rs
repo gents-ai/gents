@@ -382,7 +382,16 @@ fn temp_root(name: &str) -> PathBuf {
 fn ensure_native_fs_runner_for_test() {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {
-        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        // A gate shard runs archived binaries with no Cargo build state; the
+        // archive carries gents-fs-runner beside the test binaries.
+        if std::env::var_os("GENTS_TEST_BINARIES_PREBUILT").is_some() {
+            assert!(
+                native_fs_runner_binary_for_current_test().is_some(),
+                "GENTS_TEST_BINARIES_PREBUILT is set but no gents-fs-runner is adjacent to the test binary"
+            );
+            return;
+        }
+        let repo_root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
             .expect("gents manifest should be under workspace crates/")
