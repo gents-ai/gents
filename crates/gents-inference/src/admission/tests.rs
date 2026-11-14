@@ -725,7 +725,7 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["backend_id"], "missing");
@@ -764,7 +764,7 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["call_state"], "completed");
@@ -796,8 +796,7 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
             .await;
         });
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let rows = call_rows(&node, &registry.signer).await;
+        let rows = wait_for_call_row_count(&node, &registry.signer, 2).await;
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["call_state"], "running");
         assert_eq!(rows[1]["call_state"], "queued");
@@ -813,7 +812,7 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["call_state"], "completed");
@@ -894,7 +893,7 @@ async fn explicit_failure_releases_reconstructed_slot() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    registry.drop_cleanup_idle().await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_state"], "failed");
