@@ -147,8 +147,6 @@ mod docs;
 mod identity;
 #[path = "conformance/manual_run.rs"]
 mod manual_run;
-#[path = "conformance/pairing_reconcile.rs"]
-mod pairing_reconcile;
 #[path = "conformance/prompt_assembly.rs"]
 mod prompt_assembly;
 #[path = "conformance/root_admission.rs"]
