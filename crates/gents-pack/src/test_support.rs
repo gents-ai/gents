@@ -1,11 +1,29 @@
+/// The workspace's pack fixtures, found from the runtime CARGO_MANIFEST_DIR of
+/// whichever workspace crate's test calls this: an archived test binary runs
+/// against another checkout, where this crate's compile-time path is absent.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fixture_packs_dir() -> std::path::PathBuf {
+    let manifest_dir = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    );
+    manifest_dir
+        .ancestors()
+        .map(|ancestor| ancestor.join("crates/gents/tests/fixtures/packs"))
+        .find(|candidate| candidate.is_dir())
+        .unwrap_or_else(|| {
+            panic!(
+                "no crates/gents/tests/fixtures/packs above {}",
+                manifest_dir.display()
+            )
+        })
+}
+
 #[cfg(any(test, feature = "test-fixtures"))]
 pub fn fixture_pack_copy(
     name: &str,
     plugin_output: &serde_json::Value,
 ) -> (tempfile::TempDir, std::path::PathBuf) {
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../gents/tests/fixtures/packs")
-        .join(name);
+    let source = fixture_packs_dir().join(name);
     let manifest: crate::pack::PackManifest = serde_json::from_slice(
         &std::fs::read(source.join("manifest.json"))
             .unwrap_or_else(|error| panic!("fixture {name:?} manifest: {error}")),
@@ -51,8 +69,7 @@ pub fn fixture_pack_names() -> Vec<String> {
         "job_plugin_fixture",
         "plugin_documents_fixture",
     ];
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs");
+    let root = fixture_packs_dir();
     let mut names = Vec::new();
     for entry in std::fs::read_dir(&root)
         .unwrap_or_else(|error| panic!("reading {}: {error}", root.display()))

@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use super::runtime_hop_cap::RuntimeHopCapError;
 use super::ReceiptWriteError;
@@ -140,7 +139,10 @@ fn every_store_owner_variant_preserves_the_access_classification() {
         .map(|case| case.input.wrapper.clone())
         .collect();
     let declared = error_owner_variants_holding(
-        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+        &std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        )
+        .join("src"),
         &["ConfigClientError", "GraphqlResponseError"],
     );
     assert_eq!(

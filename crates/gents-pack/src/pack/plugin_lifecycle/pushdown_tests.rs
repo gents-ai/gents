@@ -6,8 +6,10 @@ use crate::pack::PackSource;
 
 #[tokio::test]
 async fn asset_install_keeps_portable_source_across_reinstall() {
-    let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/tests/fixtures/packs/assets_fixture");
+    let fixture = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../gents/tests/fixtures/packs/assets_fixture");
     let (bytes, _) = pack_dir(&fixture).unwrap();
     let archive = PackArchive::from_bytes(&bytes).unwrap();
     let home = tempfile::tempdir().unwrap();

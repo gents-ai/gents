@@ -286,7 +286,12 @@ mod tests {
 
     use super::*;
 
-    const SCHEMA_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/families.schema.json");
+    fn schema_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        )
+        .join("families.schema.json")
+    }
 
     fn render(schema: &BTreeMap<&str, BTreeMap<&str, Value>>) -> String {
         let kinds: Vec<String> = schema
@@ -344,7 +349,7 @@ mod tests {
     fn family_schema_is_current() {
         let live = render(&live_schema());
         if std::env::var_os("GENTS_WRITE_FAMILY_SCHEMA").is_some() {
-            fs::write(SCHEMA_PATH, &live).unwrap();
+            fs::write(schema_path(), &live).unwrap();
             return;
         }
         assert_eq!(live, CHECKED_IN_SCHEMA);

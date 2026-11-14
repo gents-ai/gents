@@ -344,8 +344,10 @@ async fn plugin_build_accepts_data_collections_that_live_on_the_node() {
     let home_path = std::fs::canonicalize(home.path()).unwrap();
     let outside = tempfile::tempdir().unwrap();
     let builder = outside.path().join("builder.sh");
-    let artifact = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../gents/tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb");
+    let artifact = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../gents/tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb");
     std::fs::write(
         &builder,
         format!(

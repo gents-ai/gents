@@ -58,7 +58,9 @@ mod tests {
             return;
         }
 
-        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        );
         // rustup is the authority on whether the SELECTED toolchain carries
         // the component; a shim on PATH proves nothing (minimal profiles omit
         // rust-analyzer). Executing rustup here is fine: the production

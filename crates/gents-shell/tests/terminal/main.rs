@@ -111,13 +111,7 @@ fn emacs_quit_restores_the_terminal() {
 fn raw_mode_is_off_after_quit() {
     let s = Shell::start_command(
         "sh",
-        &[
-            "-c",
-            WITH_STTY,
-            env!("CARGO_BIN_EXE_gents-shell"),
-            "--keys",
-            "emacs",
-        ],
+        &["-c", WITH_STTY, &pty::gents_shell(), "--keys", "emacs"],
         &[],
         36,
         132,
@@ -133,11 +127,7 @@ fn raw_mode_is_off_after_quit() {
 fn redirected_stdout_exits_2_untouched() {
     let s = Shell::start_command(
         "sh",
-        &[
-            "-c",
-            r#""$0" >/dev/null; echo rc=$?"#,
-            env!("CARGO_BIN_EXE_gents-shell"),
-        ],
+        &["-c", r#""$0" >/dev/null; echo rc=$?"#, &pty::gents_shell()],
         &[],
         36,
         132,

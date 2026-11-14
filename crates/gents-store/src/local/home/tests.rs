@@ -419,7 +419,10 @@ mod retirement {
 #[test]
 fn runtime_writers_name_home_entries_only_from_the_inventory() {
     const NOT_GENTS_HOMES: &[&str] = &["fixture-domain-plugin"];
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let crates = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("..");
     let receiver = r"\b(?:home|home_dir|agent_home|gents_home|home_path)\s*\.join\(\s*";
     let literal = regex::Regex::new(&format!(r#"{receiver}"([^"]+)""#)).unwrap();
     let constant =

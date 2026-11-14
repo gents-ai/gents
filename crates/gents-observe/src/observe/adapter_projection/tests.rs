@@ -228,11 +228,13 @@ fn open_extension_surfaces_carry_capture_metadata() {
 }
 
 fn workspace_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(std::path::Path::parent)
-        .map(std::path::Path::to_path_buf)
-        .expect("workspace root")
+    std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .parent()
+    .and_then(std::path::Path::parent)
+    .map(std::path::Path::to_path_buf)
+    .expect("workspace root")
 }
 
 fn read_adapter_projection_fixture(fixture_name: &str) -> (AdapterProjectionEnvelope, Value) {
@@ -1400,9 +1402,11 @@ fn resolve_fixture_root(root: PathBuf) -> PathBuf {
     if root.exists() || root.is_absolute() {
         return root;
     }
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(root)
+    std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../..")
+    .join(root)
 }
 
 fn validate_external_fixture_file(path: &Path) -> Result<()> {

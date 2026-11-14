@@ -301,7 +301,6 @@ pub async fn read_inventory_in_txn(
 #[cfg(test)]
 mod access_classification {
     use std::collections::BTreeSet;
-    use std::path::Path;
 
     use gents_store::config_client::access_classification_fixture::{
         classify_owner, error_owner_variants_holding, AccessClassification, AccessFailure, Erasure,
@@ -322,7 +321,10 @@ mod access_classification {
             .iter()
             .map(|case| case.input.wrapper.clone())
             .collect();
-        let crates = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
+        let crates = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        )
+        .join("..");
         let mut declared = BTreeSet::new();
         for entry in std::fs::read_dir(crates).expect("workspace crates") {
             let source = entry.expect("crate directory").path().join("src");

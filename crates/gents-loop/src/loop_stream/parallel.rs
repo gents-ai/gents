@@ -362,7 +362,7 @@ mod tests {
             inputs.push(serde_json::json!({"limit": limit, "calls": modeled, "accepted": accepted, "settled": settled, "stop": stop, "actions": []}));
             actual.push(serde_json::json!({"length": read_prefix(calls, limit), "complete": complete, "ordered": ordered, "admitted": []}));
         }
-        let proof_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
+        let proof_dir = gents_lean_contract::proofs_dir().expect("Lean proofs directory");
         gents_lean_contract::run_lake_build(&proof_dir).expect("build Lean contract");
         let mut lean = Command::new("lake")
             .args([

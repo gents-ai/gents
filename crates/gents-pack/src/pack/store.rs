@@ -724,8 +724,10 @@ where
 
 #[cfg(test)]
 pub(crate) fn test_pack_named(name: &str, version: &str) -> (Vec<u8>, PackHeader) {
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../gents/tests/fixtures/packs/assets_fixture");
+    let source = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../gents/tests/fixtures/packs/assets_fixture");
     let manifest: crate::pack::PackManifest =
         serde_json::from_slice(&std::fs::read(source.join("manifest.json")).unwrap()).unwrap();
     let dir = tempfile::tempdir().expect("tempdir");
