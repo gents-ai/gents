@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 
 #[path = "../../gents-inference/src/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
-mod support;
+use crate::support;
 
 use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,

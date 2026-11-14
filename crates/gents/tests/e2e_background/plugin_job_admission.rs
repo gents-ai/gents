@@ -10,7 +10,7 @@ use gents_toolcalls::background::job::view::{load_job_view, JobKey};
 use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
-use crate::plugin_job_support::{
+use super::plugin_job_support::{
     effects, guest_pin, install_job_fixture, job_call, job_settings, spawn, JobHarness, PlanEntry,
     MODEL,
 };
