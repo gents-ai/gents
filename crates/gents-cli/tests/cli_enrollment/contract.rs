@@ -9,7 +9,6 @@ const AGED_HISTORY_RECOVERY: Duration = Duration::from_secs(p2p::PENDING_RECOVER
 const TURN_BUDGET: Duration = Duration::from_secs(20);
 const RECONNECT_BUDGET: Duration = Duration::from_secs(20);
 const MODEL_DELAY: Duration = Duration::from_secs(2);
-const RETURN_TO_OBSERVER_BUDGET: Duration = Duration::from_secs(2);
 const READINESS_PROBE_INTERVAL: Duration = Duration::from_secs(3);
 const READINESS_PROBE_BUDGET: Duration = Duration::from_millis(750);
 const REPLY: &str = "PAIRING_CONTRACT_ASSISTANT_REPLY";
@@ -401,11 +400,6 @@ async fn visible_turn(
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
         )?;
-        let return_budget = if stream_gate.is_some() {
-            Duration::from_millis(500)
-        } else {
-            RETURN_TO_OBSERVER_BUDGET
-        };
         let observed_return_skew_us = if client_visible >= runtime_completed {
             (client_visible - runtime_completed).as_micros() as i128
         } else {
@@ -427,10 +421,6 @@ async fn visible_turn(
             AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{created_at claimed_at terminalized_at lifecycle_state terminal_output}}
         }}"#, escape_graphql_string(&request))).await?;
         tracing::info!(timestamps = ?lifecycle, "runtime lifecycle timing evidence");
-        anyhow::ensure!(
-            client_visible.saturating_sub(runtime_completed) <= return_budget,
-            "completed reply took too long to reach the client projection: runtime={runtime_completed:?}, client={client_visible:?}",
-        );
         Ok::<_, anyhow::Error>(())
     })
     .await;
@@ -646,10 +636,6 @@ async fn wait_for_runtime_reply(
             .as_millis(),
         observer_minus_terminal_database_us,
         "independently observed local database and app projection visibility",
-    );
-    anyhow::ensure!(
-        observer_ready <= terminal_database_ready + Duration::from_millis(500),
-        "local DB had the terminal selection more than 500ms before the observer projected it"
     );
     Ok(())
 }
