@@ -201,8 +201,17 @@ pub fn resolve(
         .canonicalize()
         .map_err(|_| format!("{requested} does not exist or cannot be read"))?;
     if let Ok(home) = gents_home.canonicalize() {
-        if target.starts_with(&home) || home.starts_with(&target) {
-            return Err(format!("{requested} is the gents home or contains it"));
+        if target.starts_with(&home) {
+            return Err(format!(
+                "{requested} is inside the gents home {}, which plugins never read or write. Give a path outside it; an agent whose tool root is the gents home has no folder a plugin can use, so give it a tool root outside the home",
+                home.display()
+            ));
+        }
+        if home.starts_with(&target) {
+            return Err(format!(
+                "{requested} contains the gents home {}, which plugins never read or write. Give a folder that does not contain it",
+                home.display()
+            ));
         }
     }
     Ok(Resolved {
