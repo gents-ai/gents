@@ -1,0 +1,4 @@
+---- MODULE MCSharedOwnerHotCounterLostWakeup ----
+EXTENDS SharedOwnerHotCounter
+
+====
