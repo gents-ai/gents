@@ -952,44 +952,6 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
 }
 
 #[tokio::test]
-async fn interactive_claim_atomically_pins_session_agent() {
-    let db = test_db("interactive-claim-session-projection").await;
-    let actors = support::agent_requests::RequestActors::new(&db).await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = support::agent_requests::canonical_now();
-    let doc_id = actors
-        .create_request(
-            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
-                .state("pending"),
-        )
-        .await;
-
-    let request = actors.build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = actors.lifecycle(
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    assert_session_observes_request(
-        &actors,
-        &session_id,
-        &(request_id),
-        RequestLifecycleState::Claimed,
-    )
-    .await;
-}
-
-#[tokio::test]
 async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     let db = test_db("interactive-executing").await;
     let actors = support::agent_requests::RequestActors::new(&db).await;

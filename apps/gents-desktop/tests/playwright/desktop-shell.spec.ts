@@ -7,6 +7,7 @@ import {
   openChat,
   openConfig,
   openConfigSection,
+  OWN_VIEWPORT,
   primarySurfaceCount,
   sendButton,
   test,
@@ -419,7 +420,9 @@ test.describe("kit shell", () => {
     await expect(line("context")).toHaveText([/impl Parser \{/, /\}/]);
   });
 
-  test("condensed session agent details are keyboard accessible", async ({ page }) => {
+  test("condensed session agent details are keyboard accessible @own-viewport", async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 800, height: 300 });
     await gotoHarness(page, "coding");
     await page
@@ -482,7 +485,11 @@ test.describe("kit shell", () => {
   });
 
   for (const method of ["button", "shortcut"] as const) {
-    test(`search ${method} waits for session context to close`, async ({ page }) => {
+    /* the button run sets its own window size; the shortcut run uses the project's */
+    const tag = method === "button" ? " @own-viewport" : "";
+    test(`search ${method} waits for session context to close${tag}`, async ({
+      page,
+    }) => {
       if (method === "button") {
         await page.setViewportSize({ width: 1024, height: 768 });
       }
@@ -515,7 +522,9 @@ test.describe("kit shell", () => {
     });
   }
 
-  test("navigation sheet hands its dialog to Search on phones", async ({ page }) => {
+  test("navigation sheet hands its dialog to Search on phones @own-viewport", async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoHarness(page);
     await page.addStyleTag({
@@ -543,7 +552,7 @@ test.describe("kit shell", () => {
     });
   });
 
-  test("keeps dialogs inside short windows", async ({ page }) => {
+  test("keeps dialogs inside short windows @own-viewport", async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 300 });
     await gotoHarness(page);
     await page.getByRole("link", { name: "Nodes" }).first().click();
@@ -562,7 +571,7 @@ test.describe("kit shell", () => {
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(285);
   });
 
-  test("contains mailbox text and preserves horizontal code scrolling on phones", async ({
+  test("contains mailbox text and preserves horizontal code scrolling on phones @own-viewport", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -651,14 +660,8 @@ test.describe("kit shell", () => {
   });
 });
 
-test.describe("each session's dock", () => {
-  test("is as it was when a session is left and come back to", async ({
-    page,
-  }, testInfo) => {
-    test.skip(
-      testInfo.project.name !== "chromium-desktop",
-      "the dock is a column only in a roomy window",
-    );
+test.describe("each session's dock", { tag: OWN_VIEWPORT }, () => {
+  test("is as it was when a session is left and come back to", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoHarness(page);
     await page

@@ -5,7 +5,9 @@ test.beforeEach(async ({ page }) => {
   await gotoHarness(page, "empty-fleet");
 });
 
-test("setup actions do not overlap the theme control", async ({ page }) => {
+test("setup actions do not overlap the theme control @own-viewport", async ({
+  page,
+}) => {
   const next = page.getByTestId("setup-next");
   await next.scrollIntoViewIfNeeded();
   const action = await next.boundingBox();
@@ -19,7 +21,7 @@ test("setup actions do not overlap the theme control", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("remote connection fields fit a narrow viewport with the keyboard open", async ({
+test("remote connection fields fit a narrow viewport with the keyboard open @own-viewport", async ({
   page,
 }) => {
   await page.getByRole("radio", { name: /Remote connect/ }).click();
@@ -52,7 +54,7 @@ test("remote connection fields fit a narrow viewport with the keyboard open", as
   ).toBeLessThanOrEqual(1);
 });
 
-test("keyboard submission accepts the native owner's bare server address", async ({
+test("keyboard submission accepts the native owner's bare server address @own-viewport", async ({
   page,
 }) => {
   await page.getByRole("radio", { name: /Remote connect/ }).click();

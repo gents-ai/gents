@@ -1,4 +1,4 @@
-import { expect, gotoHarness, test, type Page } from "./desktopTest";
+import { expect, gotoHarness, OWN_VIEWPORT, test, type Page } from "./desktopTest";
 
 async function openMailbox(page: Page) {
   const link = page.getByRole("link", { name: /^Mailbox(?:\s+\d+)?$/ });
@@ -112,7 +112,7 @@ test("opens the mailbox's dialog over another page with its shortcut", async ({
   await expect(dialog).toHaveCount(0);
 });
 
-test.describe("mobile mailbox", () => {
+test.describe("mobile mailbox", { tag: OWN_VIEWPORT }, () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
   async function keyboard(page: Page) {

@@ -3,6 +3,7 @@ import {
   gotoHarness,
   openConfig,
   openConfigSection,
+  OWN_VIEWPORT,
   test,
   type Page,
 } from "./desktopTest";
@@ -40,7 +41,7 @@ async function stackTwoSheets(page: Page) {
 
 const scrollTop = (body: Locator) => body.evaluate((el) => el.scrollTop);
 
-test.describe("stacked editor sheets", () => {
+test.describe("stacked editor sheets", { tag: OWN_VIEWPORT }, () => {
   test("a wheel over the top sheet scrolls it", async ({ page }) => {
     const { top } = await stackTwoSheets(page);
     const body = bodyOf(top);
