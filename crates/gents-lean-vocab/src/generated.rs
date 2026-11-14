@@ -1,12 +1,7 @@
 use crate::*;
-use crate::required_nullable;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-
-pub fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
-    &lean_contract_snapshot().completion_retry_cases
-}
 
 pub fn lean_feature_matrix() -> &'static LeanFeatureMatrix {
     &lean_contract_snapshot().feature_matrix
@@ -20,16 +15,8 @@ pub fn lean_identity_household_cases() -> &'static [LeanIdentityHouseholdCase] {
     &lean_contract_snapshot().identity_household_cases
 }
 
-pub fn lean_managed_exec_tool_boundary_cases() -> &'static [LeanManagedExecToolBoundaryCase] {
-    &lean_contract_snapshot().managed_exec_tool_boundary_cases
-}
-
 pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
     &lean_contract_snapshot().recovery_sweep_cases
-}
-
-pub fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
-    &lean_contract_snapshot().transcript_conformance_cases
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,28 +24,6 @@ pub fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
 pub enum LeanClaimedDid {
     Key(String),
     Derived { node_key: String, creation_nonce: String },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCompletionRetryCase {
-    pub name: String,
-    pub domain: String,
-    pub action: String,
-    pub failure_origin: Option<String>,
-    pub classified_failure: Option<String>,
-    pub legal: bool,
-    pub pre_phase: String,
-    pub pre_now: i64,
-    pub pre_deadline: Option<i64>,
-    pub pre_scheduled_wake: Option<i64>,
-    pub expected_phase: Option<String>,
-    pub expected_transport_used: Option<usize>,
-    pub expected_resample_used: Option<usize>,
-    pub expected_attempt: Option<usize>,
-    pub expected_account_used: Option<usize>,
-    pub expected_repair_used: Option<bool>,
-    pub expected_usage_charged: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -91,13 +56,7 @@ pub struct LeanConfigurationSignedWriteRetryCase {
 pub struct LeanContractSnapshot {
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
-    pub goal_client_start_cases: Vec<serde_json::Value>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub causal_hop_default_max_request_hop: Option<u32>,
-    pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
-    pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
-    pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
@@ -430,19 +389,6 @@ pub enum LeanIdentitySubject {
     Object { resource: String, id: String },
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LeanManagedExecToolBoundaryCase {
-    pub name: String,
-    pub tool_name: String,
-    pub work_class: String,
-    pub boundary: String,
-    pub kill_scope: String,
-    pub timeout_requires_kill: bool,
-    pub cancel_requires_kill: bool,
-    pub descendants_in_termination_scope: bool,
-    pub capture_drain_bounded: bool,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanManagedToolIdentityCase {
@@ -515,29 +461,4 @@ pub struct LeanTaskCheckpointCase {
     pub through: u64,
     pub receipt: bool,
     pub expected: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanTranscriptCase {
-    pub name: String,
-    pub group: String,
-    pub action: String,
-    pub action_call_ids: Vec<usize>,
-    pub action_logical_result_ids: Vec<usize>,
-    pub action_payload_hashes: Vec<usize>,
-    pub legal: bool,
-    pub pre_message_count: usize,
-    pub post_message_count: usize,
-    pub pre_tool_call_count: usize,
-    pub post_tool_call_count: usize,
-    pub pre_in_flight_count: usize,
-    pub post_in_flight_count: usize,
-    pub assistant_sequence: usize,
-    pub result_sequence: usize,
-    pub logical_result_id: usize,
-    pub payload_hash: usize,
-    pub expected_pair_closed: bool,
-    pub expected_ordered: bool,
-    pub expected_duplicate_reused_sequence: bool,
-    pub expected_strong_drain: bool,
 }
