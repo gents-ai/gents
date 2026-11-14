@@ -31,7 +31,7 @@ impl RuntimeDocumentProjector {
         if let Some(installed) = &self.startup_plugins {
             self.tools.reconcile_installed(ctx, installed).await?;
         }
-        self.tools.reconcile(ctx).await?;
+        self.tools.update(ctx).await?;
         self.reconcile_transport(ctx).await
     }
 

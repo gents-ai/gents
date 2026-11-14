@@ -9,9 +9,15 @@ use tokio::io::AsyncWriteExt;
 
 use super::{home::StoreLock, store_key::StoreKey};
 
-const MARKER: &str = ".gents-private-backend-v1";
+/// The store's lineage marker. Its version names the node grants a store was
+/// created under as well as its format: v2 began when the Agent baseline
+/// gained `get-collection` (gents#3747, Lean
+/// `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`). A store
+/// without this version's marker is reported as made by an older version and
+/// is never opened, so nothing in it changes; there is no conversion.
+const MARKER: &str = ".gents-private-backend-v2";
 pub(crate) const PROVENANCE_MARKER: &str = MARKER;
-const DOMAIN: &[u8] = b"gents private backend fresh store v1\0";
+const DOMAIN: &[u8] = b"gents private backend fresh store v2\0";
 type MarkerMac = Hmac<Sha256>;
 
 #[derive(Debug, thiserror::Error)]

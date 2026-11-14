@@ -334,49 +334,17 @@ theorem actorless_reconcile_cannot_mint :
 def baselineBeforeGetCollection : List String :=
   GrantSet.agentBaseline.permissions.filter (· != "get-collection")
 
-/-- A release may widen the baseline. An Agent published under an earlier one
-holds part of it, installed under its publisher's authority, and the actorless
-startup reconcile cannot add the rest (`actorless_reconcile_cannot_mint`), so
-without this step a store created before the widening would not open
-(`widened_baseline_blocks_actorless_reconcile`).
+/-- A store created under the earlier baseline cannot be opened: the actorless
+startup reconcile finds a live Agent's `get-collection` missing and cannot add
+it (`actorless_reconcile_cannot_mint`).
 
-Decision (maintainer, 2026-11-13, gents#3747): when the hosting node opens its
-store it completes, as the node key that owns NAC, the baseline of every live
-managed Agent that already holds some of it. The publisher authorized the
-baseline for that Agent; the release defines what the baseline contains. The
-step adds baseline permissions only, removes nothing, and mints nothing for an
-Agent that holds none of the baseline, so a never-published or tampered Agent
-is still refused. -/
-def completeBaseline (o : AgentObservation) (installed : List String) : List String :=
-  if o.live && installed.any (GrantSet.agentBaseline.permissions.contains ·) then
-    GrantSet.agentBaseline.permissions ++
-      installed.filter (!GrantSet.agentBaseline.permissions.contains ·)
-  else installed
-
+Decision (maintainer, 2026-11-13, gents#3747): such a store is not carried
+forward. Widening the baseline changes the store's lineage marker
+(`gents-store` `backend_protection::MARKER`), so a home created before it is
+reported as made by an older version and left untouched
+(`InstallRepair.StoreKind.unknownLineage`); it must be recreated. -/
 theorem widened_baseline_blocks_actorless_reconcile :
     projectBaseline actorless ⟨true, true, true⟩ baselineBeforeGetCollection = none := by decide
-
-theorem completed_baseline_admits_actorless_reconcile :
-    (projectBaseline actorless ⟨true, true, true⟩
-      (completeBaseline ⟨true, true, true⟩ baselineBeforeGetCollection)).isSome = true := by decide
-
-theorem completion_mints_nothing_for_an_unpublished_agent (o : AgentObservation) :
-    completeBaseline o [] = [] := by
-  simp [completeBaseline]
-
-theorem completion_leaves_a_dead_agent (o : AgentObservation) (installed : List String)
-    (dead : o.live = false) : completeBaseline o installed = installed := by
-  simp [completeBaseline, dead]
-
-theorem completion_adds_only_baseline (o : AgentObservation) (installed : List String) (p : String)
-    (h : p ∈ completeBaseline o installed) :
-    p ∈ installed ∨ GrantSet.agentBaseline.permissions.contains p = true := by
-  unfold completeBaseline at h
-  split at h
-  · rcases List.mem_append.mp h with h | h
-    · exact Or.inr (by simpa using h)
-    · exact Or.inl (List.mem_filter.mp h).1
-  · exact Or.inl h
 
 theorem enrolled_user_publishes_and_disables_agent :
     projectBaseline (holderOf (receives .enrolledUser)) ⟨true, true, true⟩ [] =

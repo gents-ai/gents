@@ -80,3 +80,71 @@ async fn existing_unbound_store_without_provenance_is_left_untouched() -> anyhow
     node.shutdown().await?;
     Ok(())
 }
+
+/// A store created before the Agent baseline gained `get-collection` carries
+/// the previous lineage marker. It is refused as an older home before any
+/// node opens it.
+#[tokio::test]
+async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyhow::Result<()> {
+    use super::backend_protection::{BackendProtectionError, FreshBackendStore, PROVENANCE_MARKER};
+    let directory = tempfile::tempdir()?;
+    let home = directory.path().to_owned();
+    let data = home.join("data");
+    let lock_home = home.clone();
+    let lock_data = data.clone();
+    let lock = tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&lock_data)?;
+        Ok::<_, anyhow::Error>(home::lock_store(&lock_home, &lock_data)?)
+    })
+    .await??;
+    let key = StoreKey::from_host(&[7; 32])?;
+    let identity_path = home.join("node.key");
+    let did = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        Ok(
+            crate::identity::KeyIdentity::load_or_create(identity_path, None)?
+                .did()
+                .to_owned(),
+        )
+    })
+    .await??;
+    FreshBackendStore::observe(&data, &lock)
+        .await?
+        .initialize(&key, Some(&did))
+        .await?;
+    assert!(PROVENANCE_MARKER.ends_with("-v2"));
+    std::fs::rename(
+        data.join(PROVENANCE_MARKER),
+        data.join(".gents-private-backend-v1"),
+    )?;
+    let listing = |data: &std::path::Path| -> anyhow::Result<Vec<(String, u64)>> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(data)? {
+            let entry = entry?;
+            files.push((
+                entry.file_name().to_string_lossy().into_owned(),
+                entry.metadata()?.len(),
+            ));
+        }
+        files.sort();
+        Ok(files)
+    };
+    let before = listing(&data)?;
+
+    let refused = ProtectedBackendStore::open(&data, &key, &lock)
+        .await
+        .map(|_| ())
+        .expect_err("the previous lineage is not this version's");
+    assert!(
+        matches!(refused, BackendProtectionError::MissingProvenance),
+        "{refused:?}"
+    );
+    let store = super::storage_backend::incompatible_store(&refused, &data)
+        .context("the refusal is reported as an incompatible store")?;
+    assert_eq!(
+        store.kind,
+        gents_protocol::operations::install_repair::IncompatibleStoreKind::UnknownLineage
+    );
+    assert!(store.kind.made_by_older_version());
+    assert_eq!(listing(&data)?, before, "the refused store is untouched");
+    Ok(())
+}

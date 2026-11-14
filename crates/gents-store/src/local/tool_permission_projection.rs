@@ -199,84 +199,6 @@ impl ToolPermissionProjection {
     }
 
     pub(super) async fn update(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
-        self.project(ctx, false).await
-    }
-
-    /// The projection as the node opens its store: baselines a release
-    /// widened are completed first, so the actorless projection that follows
-    /// finds nothing missing for an Agent published under the earlier one.
-    pub(super) async fn reconcile(&self, ctx: &db::DocumentMutationContext<'_>) -> Result<()> {
-        self.project(ctx, true).await
-    }
-
-    /// Lean `Identity.GrantSets.completeBaseline`. The node key adds the
-    /// baseline permissions a live Agent lacks when it already holds some of
-    /// the baseline, as the NAC owner and in the reconcile's transaction. An
-    /// Agent holding none of it is left for the projection to refuse, and a
-    /// node whose key does not own NAC fails here instead of opening.
-    async fn complete_baselines(
-        &self,
-        store: &Arc<acp::zanzibar::store::TransactionZanzibarStore>,
-        baselines: &[(String, String)],
-    ) -> Result<()> {
-        let baseline = crate::identity::GrantSet::AgentBaseline.permissions();
-        let mut roots = Vec::with_capacity(baseline.len());
-        for permission in baseline {
-            roots.push(
-                store
-                    .get_relation_subjects(
-                        acp::NODE_POLICY_ID,
-                        acp::NODE_RESOURCE_NAME,
-                        acp::NODE_OBJECT_ID,
-                        permission.as_str(),
-                    )
-                    .await
-                    .map_err(external)?,
-            );
-        }
-        let mut nac = None;
-        for (source, agent) in baselines {
-            let object = super::plugin_delete_source::object(source);
-            let missing: Vec<_> = baseline
-                .iter()
-                .zip(&roots)
-                .filter(|(permission, installed)| {
-                    !installed.contains(&Subject::entity_set(
-                        acp::NODE_RESOURCE_NAME,
-                        object.clone(),
-                        permission.as_str(),
-                    ))
-                })
-                .map(|(permission, _)| *permission)
-                .collect();
-            if missing.is_empty() || missing.len() == baseline.len() {
-                continue;
-            }
-            let nac = match &nac {
-                Some(nac) => nac,
-                None => {
-                    let loaded = acp::NodeACP::new(store.clone());
-                    loaded.load().await.map_err(external)?;
-                    nac.insert(loaded)
-                }
-            };
-            for permission in missing {
-                for (parent, kind, subject) in [
-                    (Some(source.as_str()), "actor", agent.as_str()),
-                    (None, "source", source.as_str()),
-                ] {
-                    nac.change_source_permission(
-                        &self.node, permission, parent, kind, subject, false,
-                    )
-                    .await
-                    .map_err(external)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn project(&self, ctx: &db::DocumentMutationContext<'_>, opening: bool) -> Result<()> {
         let view = ctx.view;
         let agents = documents(view, "Agent").await?;
         let contexts = documents(view, "AgentContext").await?;
@@ -308,7 +230,6 @@ impl ToolPermissionProjection {
                 }
             }
         }
-        let mut baselines = Vec::new();
         let mut desired: BTreeMap<&'static str, BTreeMap<String, String>> = BTreeMap::new();
         let mut plugin_desired: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         // Agent rows are read by field: the projection serves Agents whose rows
@@ -341,7 +262,6 @@ impl ToolPermissionProjection {
                 continue;
             }
             let baseline = self.source(&agent_doc, "", agent, "agent-baseline");
-            baselines.push((baseline.clone(), agent.to_owned()));
             for permission in crate::identity::GrantSet::AgentBaseline.permissions() {
                 desired
                     .entry(permission.as_str())
@@ -396,9 +316,6 @@ impl ToolPermissionProjection {
         let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
             view.sibling(Namespace::Acpstore),
         ));
-        if opening {
-            self.complete_baselines(&store, &baselines).await?;
-        }
         let prefix = self.prefix();
         for permission in PERMISSIONS {
             let wanted = desired.remove(permission.as_str()).unwrap_or_default();

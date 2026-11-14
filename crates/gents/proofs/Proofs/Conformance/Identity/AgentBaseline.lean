@@ -54,30 +54,6 @@ def packInstall : Family InstallInput InstallOutput where
   model := fun i =>
     { installed := ((observe (holderNamed i.actor) [] [.publish]).head?.map (·.installed)).getD [] }
 
-structure CompletionInput where
-  live : Bool
-  installed : List String
-  deriving ToJson
-
-structure CompletionOutput where
-  installed : List String
-  opens : Bool
-  deriving ToJson
-
-/-- A store opening: the hosting node completes each live Agent's baseline
-(`completeBaseline`), then the actorless startup reconcile must find nothing
-missing. The inputs are a store from before `get-collection` joined the
-baseline, a current store, and an Agent holding none of the baseline. -/
-@[conformance_family]
-def completion : Family CompletionInput CompletionOutput where
-  inputs := [baselineBeforeGetCollection, GrantSet.agentBaseline.permissions, []].map
-    fun installed => { live := true, installed }
-  model := fun i =>
-    let observation : AgentObservation := ⟨true, i.live, true⟩
-    let completed := completeBaseline observation i.installed
-    { installed := completed
-      opens := (projectBaseline actorless observation completed).isSome }
-
 example : baselineCases.all fun (_, actor, holder, _) => holderNamed actor == holder := by
   native_decide
 
