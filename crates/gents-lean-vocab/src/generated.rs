@@ -1,13 +1,8 @@
 use crate::*;
-use crate::canonical_output::LeanCanonicalMessage;
 use crate::required_nullable;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-
-pub fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecutionCase] {
-    &lean_contract_snapshot().canonical_execution_gate_cases
-}
 
 pub fn lean_completion_retry_cases() -> &'static [LeanCompletionRetryCase] {
     &lean_contract_snapshot().completion_retry_cases
@@ -35,348 +30,6 @@ pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
 
 pub fn lean_transcript_cases() -> &'static [LeanTranscriptCase] {
     &lean_contract_snapshot().transcript_conformance_cases
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanAuxiliaryKind {
-    Compaction,
-    CompactionFallback,
-    Title,
-    AccessReview,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanCanonicalClosure {
-    Closed { outcome: LeanOutcome, segments: u64, stream_bytes: Vec<u64> },
-    Retracted,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalCoordinate {
-    pub request: u64,
-    pub source: LeanCanonicalSource,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalDeclaration {
-    pub block: u64,
-    pub part: u64,
-    pub kind: LeanPayloadKind,
-    pub tool: Option<LeanToolIdentity>,
-    pub media_kind: Option<LeanMediaKind>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanCanonicalExecutionCase {
-    TraceSummary { name: String, completed: bool },
-    NativeExecution {
-        name: String,
-        seed: LeanCanonicalExecutionSeed,
-        query_document: u64,
-        operations: Vec<LeanCanonicalExecutionOperation>,
-        expected_observations: Vec<LeanCanonicalExecutionObservation>,
-        native_gap: Option<String>,
-    },
-    ModelExecution {
-        name: String,
-        seed: LeanCanonicalExecutionSeed,
-        query_document: u64,
-        operations: Vec<LeanCanonicalExecutionOperation>,
-        expected_observations: Vec<LeanCanonicalExecutionObservation>,
-        native_gap: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalExecutionObservation {
-    pub accepted: bool,
-    pub generation: Option<u64>,
-    pub terminal_generation: Option<u64>,
-    pub request_state: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub terminal_selection: Option<LeanTerminalSelection>,
-    pub tool_state: Option<String>,
-    pub tool_stuck_since: Option<u64>,
-    pub in_flight: bool,
-    pub next_sequence: u64,
-    pub accepted_sequence: Option<u64>,
-    pub physical_tool_request: Option<u64>,
-    pub lease_deadline: Option<u64>,
-    pub compaction_cursor: Option<u64>,
-    pub segments: Vec<LeanCanonicalSegment>,
-    pub messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanCanonicalExecutionOperation {
-    AcceptForeground {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        closing: LeanCanonicalSegment,
-        message: LeanCanonicalMessage<LeanPayloadSpec>,
-        admissions: Vec<LeanCanonicalToolAdmission>,
-    },
-    AcceptBackground {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        closing: LeanCanonicalSegment,
-        message: LeanCanonicalMessage<LeanPayloadSpec>,
-        admissions: Vec<LeanCanonicalToolAdmission>,
-    },
-    Dispatch {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        call: u64,
-        cancellation_allows: bool,
-        tool_policy_allows: bool,
-    },
-    CloseForegroundTool {
-        actor: u64,
-        now: u64,
-        document: u64,
-        authority_outcome: String,
-        record: LeanCanonicalSegment,
-    },
-    CompleteForegroundTool {
-        actor: u64,
-        now: u64,
-        document: u64,
-        authority_outcome: String,
-        record: LeanCanonicalSegment,
-        message: LeanCanonicalMessage<LeanPayloadSpec>,
-    },
-    DeliverForegroundResult {
-        actor: u64,
-        now: u64,
-        document: u64,
-        message: LeanCanonicalMessage<LeanPayloadSpec>,
-    },
-    TerminalizeCompleted {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        outcome: String,
-        selection: LeanTerminalSelection,
-    },
-    RecoverExpiredGeneration {
-        actor: u64,
-        now: u64,
-        expected_generation: u64,
-        fresh_generation: u64,
-        duration: u64,
-        deadline: u64,
-        items: Vec<LeanCanonicalRecoveryItem>,
-    },
-    RecoverExpiredTerminal {
-        actor: u64,
-        now: u64,
-        expected_generation: u64,
-        fresh_generation: u64,
-        outcome: String,
-        selection: LeanTerminalSelection,
-        items: Vec<LeanCanonicalRecoveryItem>,
-    },
-    ClosePartial {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        item: LeanCanonicalRecoveryItem,
-    },
-    CloseAuxiliary {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        closing: LeanCanonicalSegment,
-    },
-    RetractBeforeRetry {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        record: LeanCanonicalSegment,
-    },
-    RenewLease { actor: u64, now: u64, generation: u64, expected_deadline: u64 },
-    AppendOutput { actor: u64, now: u64, generation: u64, record: LeanCanonicalSegment },
-    AppendToolOutput {
-        actor: u64,
-        now: u64,
-        document: u64,
-        record: LeanCanonicalSegment,
-    },
-    AppendOutputWhileSiblingWaits {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        record: LeanCanonicalSegment,
-    },
-    AcceptTurn {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        closing: LeanCanonicalSegment,
-        message: LeanCanonicalMessage<LeanPayloadSpec>,
-        admissions: Vec<LeanCanonicalToolAdmission>,
-    },
-    BackgroundTool {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        document: u64,
-        action: String,
-    },
-    PublishBackgroundReceipt {
-        actor: u64,
-        now: u64,
-        parent_document: u64,
-        closing: LeanCanonicalSegment,
-        message: LeanCanonicalMessage<LeanPayloadSpec>,
-    },
-    AdmitSpawnedBackground {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        admission: LeanCanonicalSpawnedToolAdmission,
-    },
-    PublishAuthored {
-        actor: u64,
-        now: u64,
-        generation: u64,
-        closing: LeanCanonicalSegment,
-        message: LeanCanonicalMessage<LeanPayloadSpec>,
-    },
-    AdvanceCompactionCursor { actor: u64, now: u64, cursor: u64 },
-    RevokeCorrupt {
-        actor: u64,
-        now: u64,
-        expected_generation: u64,
-        fresh_generation: u64,
-        outcome: String,
-        selection: LeanTerminalSelection,
-    },
-    DeliverReplicatedSegment { actor: u64, now: u64, record: LeanCanonicalSegment },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalExecutionSeed {
-    pub purpose: LeanRequestPurpose,
-    #[serde(deserialize_with = "required_nullable")]
-    pub title_binding: Option<LeanCanonicalTitleBinding>,
-    pub request_id: u64,
-    pub session_id: u64,
-    pub node_did: u64,
-    pub lease: LeanRequestExecutionWorld,
-    pub transcript_session_id: u64,
-    pub next_sequence: u64,
-    pub segments: Vec<LeanCanonicalSegment>,
-    pub messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
-    pub tool_calls: Vec<u64>,
-    pub in_flight: Vec<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalFlush {
-    pub ordinal: u64,
-    pub runs: Vec<LeanCanonicalRun>,
-    pub payload: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalRecoveryItem {
-    pub closing: LeanCanonicalSegment,
-    pub message: Option<LeanCanonicalMessage<LeanPayloadSpec>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalRun {
-    pub stream: u64,
-    pub bytes: u64,
-    pub declaration: Option<LeanCanonicalDeclaration>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalSegment {
-    pub id: u64,
-    pub coordinate: LeanCanonicalCoordinate,
-    pub writer: LeanCanonicalWriter,
-    pub flush: Option<LeanCanonicalFlush>,
-    pub close: Option<LeanCanonicalClosure>,
-    pub created_at: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanCanonicalSource {
-    Provider { scope: u64, turn: u64, attempt: u64 },
-    Auxiliary { auxiliary_kind: LeanAuxiliaryKind, scope: u64, turn: u64, attempt: u64 },
-    Tool { call: u64 },
-    Authored { key: u64 },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalSpawnedToolAdmission {
-    pub document: u64,
-    pub parent_tool_document: u64,
-    pub call_id: u64,
-    pub request_id: u64,
-    pub state: String,
-    pub operation: String,
-    pub deadline: u64,
-    pub started_at: Option<u64>,
-    pub current_time: u64,
-    pub failure_class: Option<String>,
-    pub persistence: String,
-    pub await_mode: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalTitleBinding {
-    pub purpose: LeanRequestPurpose,
-    pub physical_request: u64,
-    pub logical_request: u64,
-    pub parent_physical: u64,
-    pub parent_logical: u64,
-    pub node: u64,
-    pub session: u64,
-    pub authenticated: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCanonicalToolAdmission {
-    pub document: u64,
-    pub call_id: u64,
-    pub request_id: u64,
-    pub state: String,
-    pub operation: String,
-    pub deadline: u64,
-    pub started_at: Option<u64>,
-    pub current_time: u64,
-    pub failure_class: Option<String>,
-    pub persistence: String,
-    pub await_mode: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanCanonicalWriter {
-    Request { generation: u64 },
-    Tool { call: u64 },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -438,7 +91,6 @@ pub struct LeanConfigurationSignedWriteRetryCase {
 pub struct LeanContractSnapshot {
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
-    pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
     #[serde(deserialize_with = "required_nullable")]
     pub causal_hop_default_max_request_hop: Option<u32>,
@@ -446,7 +98,6 @@ pub struct LeanContractSnapshot {
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
-    pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
@@ -501,14 +152,6 @@ pub struct LeanFeatureSurfaceRequirement {
     pub feature: String,
     pub required: Vec<LeanSurface>,
     pub deferred: Vec<LeanFeatureSurfaceDeferral>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGrantRecipientCase {
-    pub recipient: String,
-    pub direct: Vec<String>,
-    pub projected: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -809,71 +452,12 @@ pub struct LeanManagedToolIdentityCase {
     pub allowed: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanMediaKind {
-    Image,
-    Audio,
-    Video,
-    Document,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanOrdinaryClientMutationCase {
     pub intent: bool,
     pub mutation: bool,
     pub allowed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanOutcome {
-    Complete,
-    Partial,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanPayloadKind {
-    Text,
-    Reasoning,
-    Signature,
-    ReasoningStop,
-    Summary,
-    Encrypted,
-    Redacted,
-    Arguments,
-    ToolOutput,
-    Media,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPayloadRef {
-    pub close_id: u64,
-    pub stream: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPayloadSpec {
-    pub reference: LeanPayloadRef,
-    pub presentation: LeanPresentation,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanPresentation {
-    Full,
-    Composed { parts: Vec<LeanPresentationPart> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanPresentationPart {
-    Range { start: u64, end: u64 },
-    Literal { bytes: Vec<u8> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -900,59 +484,6 @@ pub struct LeanRecoverySweepCase {
     pub recovery_cause: Option<String>,
     pub notification_reason: Option<String>,
     pub deadline_audit_ref: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRequestExecutionLease {
-    pub status: LeanRequestExecutionLeaseStatus,
-    pub generation: Option<u64>,
-    pub duration: Option<u64>,
-    pub explicit_deadline: Option<u64>,
-    pub outcome: Option<LeanRequestExecutionOutcome>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanRequestExecutionLeaseStatus {
-    Vacant,
-    Active,
-    Recoverable,
-    Terminal,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanRequestExecutionOutcome {
-    Completed,
-    Failed,
-    Interrupted,
-    Dead,
-    Superseded,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRequestExecutionWorld {
-    pub request: LeanRequestExecutionRequestPhase,
-    pub lease: LeanRequestExecutionLease,
-    pub used_generations: Vec<u64>,
-    pub now: u64,
-    pub effective_expiry: u64,
-    pub continuation_required: bool,
-    pub token_charge_required: bool,
-    pub continuation_count: u64,
-    pub token_charge_count: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub enum LeanRequestPurpose {
-    #[serde(rename = "normal")]
-    Normal,
-    #[serde(rename = "title-audit")]
-    TitleAudit,
-    #[serde(rename = "access-review")]
-    AccessReview,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -984,21 +515,6 @@ pub struct LeanTaskCheckpointCase {
     pub through: u64,
     pub receipt: bool,
     pub expected: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanTerminalSelection {
-    Message { id: u64 },
-    NoMessage,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolIdentity {
-    pub id: String,
-    pub call_id: Option<String>,
-    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]
