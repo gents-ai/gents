@@ -17,6 +17,7 @@ const CONTRACT_RUN_FILE: &str = "Proofs/Conformance/Contracts.lean";
 const LAKE_BUILD_ATTEMPTS: usize = 3;
 
 const LOCK_FILE_NAME: &str = "gents-lean-contract.lock";
+const GENERATOR_CACHE_DIR: &str = "gents-generator-output";
 
 static PROCESS_STDOUT_CACHE: OnceLock<(PathBuf, String)> = OnceLock::new();
 
@@ -44,7 +45,7 @@ pub fn load_contract_stdout() -> Result<String> {
         &PROCESS_STDOUT_CACHE,
         &PROCESS_LOAD_MUTEX,
         &run_lake_build_unlocked,
-        &run_contract_generator_unlocked,
+        &run_built_contract_generator_unlocked,
     )
 }
 
@@ -264,7 +265,7 @@ pub fn run_contract_generator(proofs_dir: &Path) -> Result<String> {
 pub fn run_prepared_generator(proofs_dir: &Path, target: &str, file: &str) -> Result<String> {
     with_proofs_dir_lock(proofs_dir, || {
         prepare_generator_unlocked(proofs_dir, target)?;
-        run_generator_unlocked(proofs_dir, file)
+        run_built_generator_unlocked(proofs_dir, target, file, None)
     })
 }
 
@@ -278,7 +279,7 @@ pub fn run_prepared_generator_with_input(
 ) -> Result<String> {
     with_proofs_dir_lock(proofs_dir, || {
         prepare_generator_unlocked(proofs_dir, target)?;
-        run_generator_with_input_unlocked(proofs_dir, file, Some(input))
+        run_built_generator_unlocked(proofs_dir, target, file, Some(input))
     })
 }
 
@@ -301,8 +302,98 @@ fn run_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
     run_generator_unlocked(proofs_dir, CONTRACT_RUN_FILE)
 }
 
+fn run_built_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
+    run_built_generator_unlocked(proofs_dir, CONTRACT_TARGET, CONTRACT_RUN_FILE, None)
+}
+
 fn run_generator_unlocked(proofs_dir: &Path, file: &str) -> Result<String> {
     run_generator_with_input_unlocked(proofs_dir, file, None)
+}
+
+/// Runs `file` after the caller built `target` under the same proofs lock,
+/// serving the output recorded for the same build when there is one.
+///
+/// Lake rewrites `<module>.trace` whenever it rebuilds a module; its `depHash`
+/// covers the module source, the traces of every import, the build options and
+/// the Lean toolchain. A recorded output is reused only when the run file is
+/// the target module's own source and the hash, toolchain and input equal the
+/// ones it was produced from, so a rebuilt import or edited source regenerates
+/// it. A file outside the target module may import modules the target does not,
+/// so it always runs.
+fn run_built_generator_unlocked(
+    proofs_dir: &Path,
+    target: &str,
+    file: &str,
+    input: Option<&str>,
+) -> Result<String> {
+    let Some(key) = generator_cache_key(proofs_dir, target, file, input)? else {
+        return run_generator_with_input_unlocked(proofs_dir, file, input);
+    };
+    let path = generator_cache_path(proofs_dir, target);
+    if let Ok(recorded) = std::fs::read_to_string(&path) {
+        if let Some((recorded_key, output)) = recorded.split_once('\n') {
+            if recorded_key == key {
+                return Ok(output.to_owned());
+            }
+        }
+    }
+    let output = run_generator_with_input_unlocked(proofs_dir, file, input)?;
+    record_generator_output(&path, &key, &output)?;
+    Ok(output)
+}
+
+fn generator_cache_key(
+    proofs_dir: &Path,
+    target: &str,
+    file: &str,
+    input: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(module) = target.strip_suffix(":olean") else {
+        return Ok(None);
+    };
+    let module_path = module.replace('.', "/");
+    if Path::new(file) != Path::new(&format!("{module_path}.lean")) {
+        return Ok(None);
+    }
+    let trace_path = proofs_dir
+        .join(".lake/build/lib/lean")
+        .join(format!("{module_path}.trace"));
+    let trace = std::fs::read_to_string(&trace_path)
+        .with_context(|| format!("reading Lake trace {}", trace_path.display()))?;
+    let trace: serde_json::Value = serde_json::from_str(&trace)
+        .with_context(|| format!("parsing Lake trace {}", trace_path.display()))?;
+    let dep_hash = trace
+        .get("depHash")
+        .and_then(serde_json::Value::as_str)
+        .with_context(|| format!("Lake trace {} has no depHash", trace_path.display()))?;
+    let toolchain = std::fs::read_to_string(proofs_dir.join("lean-toolchain"))
+        .context("reading lean-toolchain")?;
+    let key = serde_json::json!({
+        "target": target,
+        "depHash": dep_hash,
+        "toolchain": toolchain,
+        "input": input,
+    });
+    Ok(Some(key.to_string()))
+}
+
+fn generator_cache_path(proofs_dir: &Path, target: &str) -> PathBuf {
+    proofs_dir
+        .join(".lake/build")
+        .join(GENERATOR_CACHE_DIR)
+        .join(target.replace(':', "."))
+}
+
+fn record_generator_output(path: &Path, key: &str, output: &str) -> Result<()> {
+    let directory = path
+        .parent()
+        .context("generator output path has no directory")?;
+    std::fs::create_dir_all(directory)
+        .with_context(|| format!("creating {}", directory.display()))?;
+    let staged = path.with_extension("staged");
+    std::fs::write(&staged, format!("{key}\n{output}"))
+        .with_context(|| format!("writing {}", staged.display()))?;
+    std::fs::rename(&staged, path).with_context(|| format!("recording {}", path.display()))
 }
 
 fn run_generator_with_input_unlocked(
@@ -600,6 +691,53 @@ mod tests {
             assert!(message.contains("Fixture.Missing:olean"));
             assert!(message.contains("exclusive Lean contract load lock"));
             assert!(message.contains("stderr:"));
+            Ok(())
+        })();
+        std::fs::remove_dir_all(root)?;
+        result
+    }
+
+    #[test]
+    fn generator_output_is_reused_only_for_the_same_module_build() -> Result<()> {
+        let root = unique_temp_dir("generator-output");
+        let result = (|| {
+            std::fs::copy(
+                proofs_dir()?.join("lean-toolchain"),
+                root.join("lean-toolchain"),
+            )?;
+            std::fs::write(
+                root.join("lakefile.lean"),
+                "import Lake\nopen Lake DSL\npackage fixture\nlean_lib Fixture\n",
+            )?;
+            std::fs::create_dir(root.join("Fixture"))?;
+            let input = root.join("Fixture/Input.lean");
+            std::fs::write(&input, "def fixtureValue : Nat := 21\n")?;
+            std::fs::write(
+                root.join("Fixture/Receipt.lean"),
+                "import Fixture.Input\ndef main : IO Unit := do\n  let line ← (← IO.getStdin).getLine\n  IO.println s!\"{fixtureValue} {line.trim}\"\n",
+            )?;
+            let run = |observed: &str| {
+                run_prepared_generator_with_input(
+                    &root,
+                    "Fixture.Receipt:olean",
+                    "Fixture/Receipt.lean",
+                    observed,
+                )
+            };
+            assert_eq!(run("a")?.trim(), "21 a");
+
+            let recorded = generator_cache_path(&root, "Fixture.Receipt:olean");
+            let (key, _) = std::fs::read_to_string(&recorded)?
+                .split_once('\n')
+                .map(|(key, output)| (key.to_owned(), output.to_owned()))
+                .context("recorded generator output")?;
+            std::fs::write(&recorded, format!("{key}\nrecorded\n"))?;
+            assert_eq!(run("a")?.trim(), "recorded");
+            assert_eq!(run("b")?.trim(), "21 b");
+
+            std::fs::write(&recorded, format!("{key}\nrecorded\n"))?;
+            std::fs::write(&input, "def fixtureValue : Nat := 22\n")?;
+            assert_eq!(run("a")?.trim(), "22 a");
             Ok(())
         })();
         std::fs::remove_dir_all(root)?;
