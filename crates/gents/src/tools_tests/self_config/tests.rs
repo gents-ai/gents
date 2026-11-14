@@ -1230,17 +1230,6 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     // The own-only grant leaves the sibling with the Agent baseline and no NAC
     // relation operation, so the held-bounded rule refuses each new tool
     // source; an edit that projects no new source needs no relation authority.
-    let household = &gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
-    let no_source_change = household
-        .tool_source_change_cases
-        .iter()
-        .find(|case| case["name"] == "present-noop")
-        .expect("source no-op model")["allowed"]
-        .as_bool()
-        .unwrap();
     let goal = no_grant
         .apply(tools_request(
             &no_grant,
@@ -1263,7 +1252,10 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
             )],
         ))
         .await;
-    assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
+    for case in gents_lean_vocab::families::household_tool_source_change_preview::cases() {
+        assert_eq!(case.input.step, "preview", "unmodeled step");
+        case.check(preview.is_ok());
+    }
     gents_store::identity::GrantSet::PolicyDelegate
         .grant(
             &gents_store::config_client::ConfigAccess::local_as(

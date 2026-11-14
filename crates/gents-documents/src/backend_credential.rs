@@ -275,10 +275,6 @@ mod tests {
 
     #[test]
     fn modeled_binding_cases_match_private_resolver() {
-        let modeled = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .expect("configuration contract");
         let credential = BackendCredential {
             credential_id: "credential".into(),
             node_did: "node".into(),
@@ -289,37 +285,156 @@ mod tests {
                 key: "private".into(),
             },
         };
-        for name in [
-            "authorized",
-            "foreign-node",
-            "unapproved-destination",
-            "rotated-credential",
-        ] {
-            let case = modeled
-                ._backend_credential_cases
-                .iter()
-                .find(|case| case["name"] == name)
-                .expect("modeled binding case");
-            let node = if name == "foreign-node" {
-                "other"
-            } else {
-                "node"
-            };
-            let endpoint = if name == "unapproved-destination" {
-                "https://other.example"
-            } else {
+        gents_lean_vocab::families::household_backend_credential_binding::replay(|case| {
+            let node = if case.same_node { "node" } else { "other" };
+            let endpoint = if case.destination_approved {
                 "https://provider.example"
-            };
-            let version = if name == "rotated-credential" {
-                "rotation-2"
             } else {
-                "rotation-1"
+                "https://other.example"
             };
-            assert_eq!(
-                credential.matches_binding(node, "provider", endpoint, version),
-                case["may_use"].as_bool().expect("modeled result"),
-                "{name}"
-            );
+            let version = if case.credential_version_matches {
+                "rotation-1"
+            } else {
+                "rotation-2"
+            };
+            credential.matches_binding(node, "provider", endpoint, version)
+        });
+    }
+
+    #[tokio::test]
+    async fn backend_and_credential_documents_follow_modeled_native_acp() -> anyhow::Result<()> {
+        use gents_store::config_client::ConfigAccess;
+        use gents_store::graphql::{created_doc_id, escape_graphql_string};
+        use gents_store::identity::NodeIdentity;
+        let directory = tempfile::tempdir()?;
+        let key = |name: &str| {
+            gents_store::identity::KeyIdentity::load_or_create(directory.path().join(name), None)
+        };
+        let (user, agent, runtime) = (key("user")?, key("agent")?, key("runtime")?);
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(user.did())
+                .build()
+                .await?,
+        );
+        let context =
+            defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
+        node.add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
+        .await?;
+        let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?);
+        for schema in [
+            gents_protocol::schemas::NODE,
+            gents_protocol::schemas::INFERENCE_BACKEND_METADATA,
+            gents_protocol::schemas::BACKEND_CREDENTIAL,
+        ] {
+            owner.add_collection(schema).await?;
         }
+        let node_did = escape_graphql_string(runtime.did());
+        let node_doc = created_doc_id(
+            &owner
+                .write(
+                    "test.credential.node",
+                    &format!(
+                        "mutation {{create_Node(input:{{node_did:\"{node_did}\"}}){{_docID}}}}"
+                    ),
+                )
+                .await?,
+            "Node",
+        )?;
+        let backend = created_doc_id(
+            &owner
+                .write(
+                    "test.credential.backend",
+                    &format!("mutation {{create_InferenceBackendMetadata(input:{{node_did:\"{node_did}\",backend_id:\"backend\",name:\"backend\",provider_kind:\"OpenAiCompatible\",endpoint:\"http://localhost:8000/v1\",auth_kind:\"unauthenticated\"}}){{_docID}}}}"),
+                )
+                .await?,
+            "InferenceBackendMetadata",
+        )?;
+        let credential = created_doc_id(
+            &owner
+                .write(
+                    "test.credential.secret",
+                    &format!("mutation {{create_BackendCredential(input:{{node_did:\"{node_did}\",credential_id:\"credential\"}}){{_docID}}}}"),
+                )
+                .await?,
+            "BackendCredential",
+        )?;
+        let agent_did = identity::Did::new(agent.did())?;
+        owner
+            .add_resource_relationship(
+                "InferenceBackendMetadata",
+                &backend,
+                "parent",
+                "nodes",
+                &node_doc,
+            )
+            .await?;
+        owner
+            .add_actor_relationship("InferenceBackendMetadata", &backend, "reader", &agent_did)
+            .await?;
+        owner
+            .add_resource_relationship(
+                "BackendCredential",
+                &credential,
+                "parent",
+                "nodes",
+                &node_doc,
+            )
+            .await?;
+        owner
+            .add_actor_relationship(
+                "BackendCredential",
+                &credential,
+                "runtime_writer",
+                &identity::Did::new(runtime.did())?,
+            )
+            .await?;
+        let mut revoked = false;
+        for case in gents_lean_vocab::families::household_backend_credential_native::cases() {
+            if case.input.revoked && !revoked {
+                revoked = true;
+                owner
+                    .delete_actor_relationship(
+                        "InferenceBackendMetadata",
+                        &backend,
+                        "reader",
+                        &agent_did,
+                    )
+                    .await?;
+            }
+            let actor = match case.input.actor.as_str() {
+                "user" => user.did(),
+                "agent" => agent.did(),
+                "runtime" => runtime.did(),
+                actor => anyhow::bail!("unmodeled actor {actor}"),
+            };
+            let doc = match case.input.doc.as_str() {
+                "backend" => &backend,
+                "credential" => &credential,
+                doc => anyhow::bail!("unmodeled document {doc}"),
+            };
+            let permission = match case.input.permission.as_str() {
+                "read" => defra_node::DocumentPermission::Read,
+                "update" => defra_node::DocumentPermission::Update,
+                permission => anyhow::bail!("unmodeled permission {permission}"),
+            };
+            let allowed = node
+                .document_acp()
+                .check_doc_access(
+                    &defra_node::AcpIdentity::Authenticated(actor.parse()?),
+                    permission,
+                    gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                    &case.input.resource,
+                    doc,
+                )
+                .await?;
+            case.check(allowed);
+        }
+        node.shutdown().await?;
+        Ok(())
     }
 }

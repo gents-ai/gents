@@ -427,20 +427,13 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .await
         .is_err());
 
-    let cases = gents_lean_vocab::lean_identity_household_cases();
-    let group = cases
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap()
-        ._tool_grant_group_cases
-        .iter()
-        .find(|case| case["name"] == "schema-enable-all")
-        .unwrap();
-    let permissions: Vec<_> = group["sources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|source| NodePermission::parse(source["permission"].as_str().unwrap()).unwrap())
+    let mut schema_surface = crate::surface::ToolPolicySurface::secure_minimal();
+    schema_surface.schema_management = true;
+    let permissions: Vec<_> = schema_surface
+        .covered_node_operation_sources(false)
+        .into_iter()
+        .filter(|source| source.purpose == "schema")
+        .map(|source| source.permission)
         .collect();
     for permission in &permissions {
         owner

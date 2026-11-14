@@ -1000,15 +1000,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         )?)
         .await
         .map_err(|error| anyhow::anyhow!("cached write failed: {error}"))?;
-    let write_case = |name: &str| {
-        modeled
-            .configuration_datastore_write_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .with_context(|| format!("missing modeled write case {name}"))
-    };
-    assert!(write_case("committed")?["expected"].as_bool().unwrap());
-    assert!(written.contains("selected-agent-write"));
+    let mut writes = std::collections::BTreeMap::new();
+    writes.insert("committed", written.contains("selected-agent-write"));
     let before_failed_write = sibling_writer
         .execute("{ FixtureEntry { _docID name } }")
         .await?;
@@ -1019,12 +1012,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         )
         .await;
     assert_eq!(mutations, 1);
-    assert_eq!(
-        failed_write.is_ok(),
-        write_case("mutation-failed")?["expected"]
-            .as_bool()
-            .unwrap()
-    );
+    writes.insert("mutation-failed", failed_write.is_ok());
     assert_eq!(
         sibling_writer
             .execute("{ FixtureEntry { _docID name } }")
@@ -1145,12 +1133,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         )
         .await;
     assert_eq!(mutations, 1);
-    assert_eq!(
-        failed_mailbox.is_ok(),
-        write_case("mutation-failed")?["expected"]
-            .as_bool()
-            .unwrap()
-    );
+    assert_eq!(failed_mailbox.is_ok(), writes["mutation-failed"]);
     assert_eq!(
         sibling_writer
             .execute("{ MailboxItem { _docID title } }")
@@ -1226,6 +1209,29 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .delete_actor_relationship("DatastoreToolSurface", surface_doc, "reader", &sibling_did)
         .await?;
+    let before_revoked_write = sibling_writer
+        .execute("{ FixtureEntry { _docID name } }")
+        .await?;
+    let revoked_write = cached_write
+        .call(serde_json::from_value(
+            json!({"name":"revoked-source-write"}),
+        )?)
+        .await;
+    writes.insert("source-revoked", revoked_write.is_ok());
+    if revoked_write.is_err() {
+        assert_eq!(
+            sibling_writer
+                .execute("{ FixtureEntry { _docID name } }")
+                .await?,
+            before_revoked_write
+        );
+    }
+    for case in gents_lean_vocab::families::household_datastore_write_cached::cases() {
+        let observed = *writes
+            .get(case.input.name.as_str())
+            .with_context(|| format!("scenario never wrote {:?}", case.input))?;
+        case.check(observed);
+    }
     user_access
         .transact_write("test.surface.reselect", |txn| {
             let plan = &initial_surface_plan;
