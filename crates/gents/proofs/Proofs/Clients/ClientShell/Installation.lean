@@ -1,9 +1,13 @@
 namespace ClientInstallation
 
+/-- `released`: the listener has drained every attachment. `closed`: the
+installation's store lock is free as well (the client core has shut down and
+the last reference to its store claim has gone). -/
 inductive Phase where
   | accepting
   | draining
   | released
+  | closed
   deriving DecidableEq, Repr
 
 structure State where
@@ -17,6 +21,8 @@ inductive Action where
   | detach
   | retire
   | release
+  | close
+  | acknowledge
   | replace (startupReserved : Bool)
   deriving DecidableEq, Repr
 
@@ -37,15 +43,21 @@ theorem compatible_host_reuses_regardless_of_build_identity
 /-- The listener owns admission and its store lock. Retirement stops new
 attachments; existing attachments remain counted until their non-cancellable
 operations settle through the connection owner. Only then may shutdown release
-that store. Replacement additionally requires the existing startup lock. These
-locks protect process lifetime, not runtime DID or document authorization. -/
+that store (`close`), and only a closed installation acknowledges the
+retirement: the process that asked for it starts the successor as soon as it
+reads the answer, and a successor that opened the store while this one still
+held it would be refused (`tla/StoreHandoff.tla`, `AckFollowsRelease` and
+`AckedHandoff`; the TLC counterexample to the earlier order is BeginStop, Ack,
+Start, TryLock). Replacement therefore also starts from a closed store, and
+additionally requires the existing startup lock. These locks protect process
+lifetime, not runtime DID or document authorization. -/
 def step (state : State) : Action → Option State
   | .attach =>
       if state.phase = .accepting then
         some { state with attachments := state.attachments + 1 }
       else none
   | .detach =>
-      if state.phase ≠ .released ∧ 0 < state.attachments then
+      if (state.phase = .accepting ∨ state.phase = .draining) ∧ 0 < state.attachments then
         some { state with attachments := state.attachments - 1 }
       else none
   | .retire =>
@@ -54,8 +66,12 @@ def step (state : State) : Action → Option State
       if state.phase = .draining ∧ state.attachments = 0 then
         some { state with phase := .released }
       else none
+  | .close =>
+      if state.phase = .released then some { state with phase := .closed } else none
+  | .acknowledge =>
+      if state.phase = .closed then some state else none
   | .replace reserved =>
-      if state.phase = .released ∧ state.attachments = 0 ∧ reserved = true then
+      if state.phase = .closed ∧ state.attachments = 0 ∧ reserved = true then
         some { state with phase := .accepting }
       else none
 
@@ -81,9 +97,22 @@ theorem draining_refuses_new_attachments (state : State) (h : state.phase = .dra
     step state .attach = none := by
   simp [step, h]
 
-theorem replacement_requires_released_owner (before after : State) (reserved : Bool)
+theorem replacement_requires_closed_owner (before after : State) (reserved : Bool)
     (h : step before (.replace reserved) = some after) :
-    before.phase = .released ∧ before.attachments = 0 ∧ reserved = true := by
+    before.phase = .closed ∧ before.attachments = 0 ∧ reserved = true := by
+  simp only [step] at h
+  split at h <;> simp_all
+
+/-- A retirement is acknowledged only once the installation's store is free. -/
+theorem acknowledgement_requires_closed_store (before after : State)
+    (h : step before .acknowledge = some after) : before.phase = .closed := by
+  simp only [step] at h
+  split at h <;> simp_all
+
+/-- The store closes only after the listener drained, so no attachment can be
+working on it when it is released. -/
+theorem close_requires_drained_listener (before after : State)
+    (h : step before .close = some after) : before.phase = .released := by
   simp only [step] at h
   split at h <;> simp_all
 

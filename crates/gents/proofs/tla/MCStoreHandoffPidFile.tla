@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoffPidFile ----
+EXTENDS StoreHandoff
+
+====
