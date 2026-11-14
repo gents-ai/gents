@@ -24,6 +24,7 @@ hex = "0.4"
 rapidhash = { workspace = true }
 
 [dev-dependencies]
+gents-workspace-hack = { workspace = true }
 crypto.workspace = true
 defra-node.workspace = true
 gents-lens-fixture-add-label = { path = "../gents-lenses/fixture_add_label", default-features = false }

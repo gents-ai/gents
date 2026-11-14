@@ -1,6 +1,7 @@
 use crate::support::*;
 
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -439,71 +440,105 @@ fn place(home: &Path, settings_present: bool, pending: bool) -> Result<()> {
     Ok(())
 }
 
+struct IdentityCase {
+    selection: HomeSelection,
+    key_present: bool,
+    selected: (bool, bool),
+    other: (bool, bool),
+}
+
+async fn observe_identity(case: &IdentityCase, command: &[&str]) -> Result<&'static str> {
+    let fixture = ClientIdentityFixture::new()?;
+    let home = fixture.selected_home(case.selection);
+    place(&home, case.selected.0, case.selected.1)?;
+    let other = match case.selection {
+        HomeSelection::Flag | HomeSelection::Env => {
+            let remembered = remembered_home_path(fixture.user_home.path());
+            fs::create_dir_all(
+                remembered
+                    .parent()
+                    .context("remembered file has a parent")?,
+            )?;
+            let other = fixture.user_home.path().join("remembered");
+            fs::write(&remembered, format!("{}\n", other.display()))?;
+            other
+        }
+        HomeSelection::Remembered => fixture.user_home.path().join(".gents"),
+        HomeSelection::Fallback => fixture.other.path().to_path_buf(),
+    };
+    place(&other, case.other.0, case.other.1)?;
+    let held = if case.key_present {
+        let paths = gents_desktop_core::client::DesktopPaths::from_root(
+            fixture.identities.path().join("cli"),
+        );
+        paths.ensure_root_dirs().await?;
+        gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
+        Some(fs::read(fixture.key())?)
+    } else {
+        None
+    };
+
+    let output = tokio::process::Command::from(fixture.command(command, case.selection, &home)?)
+        .output()
+        .await?;
+
+    let stderr = stderr_of(&output);
+    anyhow::ensure!(
+        output.status.code() != Some(2),
+        "{command:?} did not parse:\n{stderr}"
+    );
+    let after = fs::read(fixture.key()).ok();
+    let refused = stderr.contains(&format!(
+        "This machine has no Gents client identity for {}",
+        home.display()
+    ));
+    Ok(match (held, after) {
+        (Some(before), Some(after)) if before == after && !refused => "load",
+        (None, Some(_)) => "create",
+        (None, None) if refused => "refuse",
+        _ => "neither",
+    })
+}
+
 #[tokio::test]
 async fn every_client_command_decides_its_identity_by_the_selected_home() -> Result<()> {
     use gents_lean_vocab::families::install_repair_client_commands as family;
-    for case in family::cases::<String, String>() {
-        let input = &case.input;
-        let selection = match input.selection.as_str() {
-            "flag" => HomeSelection::Flag,
-            "env" => HomeSelection::Env,
-            "remembered" => HomeSelection::Remembered,
-            "fallback" => HomeSelection::Fallback,
-            other => panic!("unknown home selection {other}"),
-        };
+    let cases = family::cases::<String, String>();
+    let identities = cases
+        .iter()
+        .map(|case| IdentityCase {
+            selection: match case.input.selection.as_str() {
+                "flag" => HomeSelection::Flag,
+                "env" => HomeSelection::Env,
+                "remembered" => HomeSelection::Remembered,
+                "fallback" => HomeSelection::Fallback,
+                other => panic!("unknown home selection {other}"),
+            },
+            key_present: case.input.key_present,
+            selected: (
+                case.input.selected.settings_present,
+                case.input.selected.pending,
+            ),
+            other: (case.input.other.settings_present, case.input.other.pending),
+        })
+        .collect::<Vec<_>>();
+    let mut observations = futures::stream::iter(identities.iter().flat_map(|identity| {
+        RESOLVING_COMMANDS
+            .iter()
+            .map(move |command| observe_identity(identity, command))
+    }))
+    .buffered(std::thread::available_parallelism()?.get());
+    for (case, identity) in cases.iter().zip(&identities) {
         for command in RESOLVING_COMMANDS {
-            let fixture = ClientIdentityFixture::new()?;
-            let home = fixture.selected_home(selection);
-            place(
-                &home,
-                input.selected.settings_present,
-                input.selected.pending,
-            )?;
-            let other = match selection {
-                HomeSelection::Flag | HomeSelection::Env => {
-                    let remembered = remembered_home_path(fixture.user_home.path());
-                    fs::create_dir_all(
-                        remembered
-                            .parent()
-                            .context("remembered file has a parent")?,
-                    )?;
-                    let other = fixture.user_home.path().join("remembered");
-                    fs::write(&remembered, format!("{}\n", other.display()))?;
-                    other
-                }
-                HomeSelection::Remembered => fixture.user_home.path().join(".gents"),
-                HomeSelection::Fallback => fixture.other.path().to_path_buf(),
-            };
-            place(&other, input.other.settings_present, input.other.pending)?;
-            let held = if input.key_present {
-                let paths = gents_desktop_core::client::DesktopPaths::from_root(
-                    fixture.identities.path().join("cli"),
-                );
-                paths.ensure_root_dirs().await?;
-                gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
-                Some(fs::read(fixture.key())?)
-            } else {
-                None
-            };
-
-            let output = tokio::process::Command::from(fixture.command(command, selection, &home)?)
-                .output()
-                .await?;
-
-            let stderr = stderr_of(&output);
-            assert_ne!(output.status.code(), Some(2), "{command:?}:\n{stderr}");
-            let after = fs::read(fixture.key()).ok();
-            let refused = stderr.contains(&format!(
-                "This machine has no Gents client identity for {}",
-                home.display()
-            ));
-            let observed = match (held, after) {
-                (Some(before), Some(after)) if before == after && !refused => "load",
-                (None, Some(_)) => "create",
-                (None, None) if refused => "refuse",
-                _ => "neither",
-            };
-            eprintln!("gents {} with the home by {selection:?}", command.join(" "));
+            let observed = observations
+                .next()
+                .await
+                .context("every command of every case is observed")??;
+            eprintln!(
+                "gents {} with the home by {:?}",
+                command.join(" "),
+                identity.selection
+            );
             case.check(observed.to_owned());
         }
     }
