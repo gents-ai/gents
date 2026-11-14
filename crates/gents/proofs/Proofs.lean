@@ -49,6 +49,7 @@ import Proofs.Shared.RenderedCapture
 import Proofs.Session.DurableLineage
 import Proofs.Session.Operations
 import Proofs.Clients.QueuedSteering
+import Proofs.Clients.SessionSnapshot
 import Proofs.Clients.OperationsDelivery
 import Proofs.Runtime.RuntimeReconcile
 import Proofs.P2P.PairingReconcile

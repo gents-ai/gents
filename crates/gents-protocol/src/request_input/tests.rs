@@ -94,130 +94,82 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
     });
 }
 
-#[test]
-fn agent_new_directory_inheritance_matches_the_model() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
-    assert!(cases.iter().any(|case| case["input"]["cwd"].is_string()));
-    for case in cases {
-        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
-        for (same_node, expected) in [
-            (true, &case["expected_agent_new_local_cwd"]),
-            (false, &case["expected_agent_new_remote_cwd"]),
-        ] {
-            assert_eq!(
-                serde_json::to_value(input.agent_new_cwd(same_node)).unwrap(),
-                *expected,
-                "{}: same node = {same_node}",
-                case["name"]
-            );
-        }
+fn production<T>(wire: &T) -> RequestInput
+where
+    T: serde::Serialize,
+{
+    gents_lean_vocab::production_request_input(wire)
+}
+
+fn authored(input: &RequestInput) -> AuthoredRequestInput {
+    AuthoredRequestInput {
+        selected_skill_ids: input.selected_skill_ids.clone(),
+        captured_context: input.captured_context.clone(),
+        attachments: input.attachments.clone(),
     }
 }
 
 #[test]
-fn captured_input_compatibility_matches_the_executable_owner() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().request_input_cases {
-        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+fn request_input_derivations_follow_the_lean_owner() {
+    gents_lean_vocab::families::request_input_contracts_derivation::replay(|case| {
+        let input = production(&case.input);
+        let has_authored_input = input.has_authored_input(&case.authored_text);
         assert_eq!(
-            input.captured_input_compatible(case["runtime_input_version"].as_u64()),
-            case["expected_captured_input_compatible"]
-                .as_bool()
-                .unwrap(),
-            "{}: runtime input compatibility",
-            case["name"],
+            authored(&input).has_authored_input(&case.authored_text),
+            has_authored_input,
+            "{}: replacement input presence",
+            case.name
         );
-    }
-}
-
-#[test]
-fn goal_assignment_compatibility_matches_the_executable_owner() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().request_input_cases {
-        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+        let native = input.authored_message(&case.authored_text).unwrap();
+        let captures_well_formed = input
+            .captured_context
+            .iter()
+            .all(CapturedContext::is_well_formed);
         assert_eq!(
-            input.goal_assignment_compatible(case["runtime_goal_version"].as_u64()),
-            case["expected_goal_assignment_compatible"]
-                .as_bool()
-                .unwrap(),
-            "{}",
-            case["name"]
+            CapturedContext::from_message(&native).ok(),
+            captures_well_formed.then(|| input.captured_context.clone()),
+            "{}: immutable document codec",
+            case.name
         );
-    }
-}
-
-#[test]
-fn runtime_continuation_inputs_match_the_lean_owner() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().request_input_cases {
-        let name = case["name"].as_str().unwrap();
-        let parent: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
-        let queue = serde_json::from_value(case["continuation_queue"].clone()).unwrap();
-        let goal = serde_json::from_value(case["continuation_goal"].clone()).unwrap();
-        let expected: RequestInput =
-            serde_json::from_value(case["expected_continuation"].clone()).unwrap();
-        assert_eq!(
-            parent.continuation(
+        let queue: RequestQueue = gents_lean_vocab::family::recode(&case.continuation_queue);
+        let goal = case
+            .continuation_goal
+            .as_ref()
+            .map(gents_lean_vocab::family::recode);
+        let edit_queue: RequestQueue = gents_lean_vocab::family::recode(&case.edit_queue);
+        let edit_authored = authored(&production(&case.edit_authored_input));
+        gents_lean_vocab::families::request_input_contracts_derivation::Derived {
+            captured_input_compatible: input.captured_input_compatible(case.runtime_input_version),
+            goal_assignment_compatible: input.goal_assignment_compatible(case.runtime_goal_version),
+            captures_well_formed,
+            attachments_well_formed: input.attachments_well_formed(),
+            has_authored_input,
+            native_input: gents_lean_vocab::family::Json(serde_json::to_value(&native).unwrap()),
+            agent_new_local_cwd: input.agent_new_cwd(true),
+            agent_new_remote_cwd: input.agent_new_cwd(false),
+            continuation: gents_lean_vocab::request_input_wire(&input.continuation(
                 queue,
                 goal,
-                case["continuation_parent_doc_id"].as_str().unwrap()
+                &case.continuation_parent_doc_id,
+            )),
+            fresh_input: gents_lean_vocab::request_input_wire(&input.for_fresh_session()),
+            reissued_input: gents_lean_vocab::request_input_wire(
+                &input.reissued(&case.reissued_source_doc_id),
             ),
-            expected,
-            "{name}"
-        );
-        let expected_fresh: RequestInput =
-            serde_json::from_value(case["expected_fresh_input"].clone()).unwrap();
-        assert_eq!(
-            parent.for_fresh_session(),
-            expected_fresh,
-            "{name}: fresh-session input"
-        );
-        let expected_reissued: RequestInput =
-            serde_json::from_value(case["expected_reissued_input"].clone()).unwrap();
-        assert_eq!(
-            parent.reissued(case["reissued_source_doc_id"].as_str().unwrap()),
-            expected_reissued,
-            "{name}: same-session reissuance"
-        );
-    }
-}
-
-#[test]
-fn lean_request_inputs_decode_without_losing_explicit_issuance_facts() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
-        let input: RequestInput = serde_json::from_value(case["input"].clone())
-            .unwrap_or_else(|error| panic!("{name}: typed input: {error}"));
-        let encoded = serde_json::to_value(&input).unwrap();
-        for (field, value) in case["input"].as_object().unwrap() {
-            if !value.is_null() && value.as_array().is_none_or(|xs| !xs.is_empty()) {
-                if field == "queue" {
-                    let modeled: crate::request_input::RequestQueue =
-                        serde_json::from_value(value.clone()).unwrap();
-                    let decoded = input.queue.as_ref().expect("modeled queue survives decode");
-                    assert_eq!(decoded.delivery, modeled.delivery, "{name}: queue.delivery");
-                    assert_eq!(decoded.position, modeled.position, "{name}: queue.position");
-                    for (key, value) in value.as_object().unwrap() {
-                        if key == "delivery" && modeled.delivery.is_queue() {
-                            assert!(
-                                encoded[field].get(key).is_none(),
-                                "{name}: compact default delivery"
-                            );
-                        } else if !value.is_null() {
-                            assert_eq!(&encoded[field][key], value, "{name}: queue.{key}");
-                        }
-                    }
-                } else {
-                    assert_eq!(&encoded[field], value, "{name}: {field}");
-                }
-            }
+            edited_input: gents_lean_vocab::request_input_wire(&input.edited(
+                &edit_authored,
+                &case.reissued_source_doc_id,
+                edit_queue.clone(),
+            )),
+            edited_from_empty: gents_lean_vocab::request_input_wire(
+                &RequestInput::default().edited(
+                    &authored(&input),
+                    &case.reissued_source_doc_id,
+                    edit_queue,
+                ),
+            ),
         }
-        if let Some(goal) = input.goal_continuation {
-            assert_eq!(
-                encoded["goal_continuation"]["wrapup"], goal.wrapup,
-                "{name}: false is an explicit original issuance fact"
-            );
-        }
-    }
+    });
 }
 
 #[test]
@@ -240,7 +192,7 @@ fn request_input_rejects_legacy_controls_and_incomplete_goal_facts() {
 }
 
 #[test]
-fn signed_request_input_fields_match_lean_bytes() {
+fn signed_request_input_fields_follow_the_lean_encoding() {
     use crate::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
     fn read_length(cursor: &mut &[u8]) -> usize {
@@ -250,8 +202,20 @@ fn signed_request_input_fields_match_lean_bytes() {
         length
     }
 
-    for case in &gents_lean_vocab::lean_contract_snapshot().request_input_cases {
-        let name = case["name"].as_str().unwrap();
+    gents_lean_vocab::families::request_input_contracts_signed_fields::replay(|case| {
+        let decoded = production(&case.input);
+        let encoded = serde_json::to_value(&decoded).unwrap();
+        if decoded
+            .queue
+            .as_ref()
+            .is_some_and(|queue| queue.delivery.is_queue())
+        {
+            assert!(
+                encoded["queue"].get("delivery").is_none(),
+                "{}: compact default delivery",
+                case.name
+            );
+        }
         let mut request = AgentRequestCreate::base(
             crate::request_admission::RequestPurpose::Normal,
             "request-1",
@@ -264,9 +228,9 @@ fn signed_request_input_fields_match_lean_bytes() {
             "2026-08-30T00:00:00Z",
             AgentRequestAdmissionRecord::local_self("did:key:agent"),
         );
-        request.input = serde_json::from_value(case["input"].clone()).unwrap();
-        let expected: Vec<Vec<u8>> =
-            serde_json::from_value(case["canonical_input_fields"].clone()).unwrap();
+        request.input = serde_json::from_value(encoded)
+            .unwrap_or_else(|error| panic!("{}: encoded input decodes: {error}", case.name));
+        assert_eq!(request.input, decoded, "{}: lossless wire", case.name);
         let payload = request.signing_payload();
         let mut cursor = payload.as_slice();
         let count = read_length(&mut cursor);
@@ -278,39 +242,37 @@ fn signed_request_input_fields_match_lean_bytes() {
         }
         assert!(
             cursor.is_empty(),
-            "{name}: trailing signature payload bytes"
+            "{}: trailing signature payload bytes",
+            case.name
         );
         let start = fields
             .iter()
             .position(|field| field == b"input-fields-follow-this-content")
             .unwrap()
             + 1;
-        assert_eq!(
-            &fields[start..start + expected.len()],
-            expected.as_slice(),
-            "{name}: real signing owner must use Lean's typed-input framing"
-        );
-        assert_eq!(fields[start + expected.len()], vec![1], "{name}");
-        assert_eq!(fields[start + expected.len() + 1], b"interactive", "{name}");
-    }
+        let origin = fields
+            .windows(2)
+            .rposition(|pair| pair[0] == [1] && pair[1] == b"interactive")
+            .unwrap_or_else(|| panic!("{}: execution origin follows the input", case.name));
+        gents_lean_vocab::families::request_input_contracts_signed_fields::Signed {
+            canonical_input_fields: fields[start..origin]
+                .iter()
+                .map(|field| field.iter().map(|byte| u64::from(*byte)).collect())
+                .collect(),
+        }
+    });
 }
 
 #[test]
-fn captured_context_structure_matches_the_executable_input_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
-    assert!(cases
-        .iter()
-        .any(|case| case["name"] == "captured-selection"));
-    for case in cases {
-        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
-        assert_eq!(
-            input
-                .captured_context
-                .iter()
-                .all(|context| context.is_well_formed()),
-            case["expected_captures_well_formed"].as_bool().unwrap(),
-            "{}: actual captured-context structural owner",
-            case["name"],
-        );
-    }
+fn generated_queue_sources_parse_and_key_through_the_protocol_owner() {
+    gents_lean_vocab::families::contracts_r6_queue_source::replay(|i| {
+        let parsed = serde_json::from_value::<QueueSource>(serde_json::json!(i.queue_source)).ok();
+        let enqueue = i.action == "enqueue_background_completion";
+        gents_lean_vocab::families::contracts_r6_queue_source::QueueSourceOutput {
+            legal: parsed.is_some() == enqueue,
+            queue_key: parsed
+                .filter(|_| enqueue)
+                .map(|source| source.queue_key(&i.session_key)),
+        }
+    });
 }

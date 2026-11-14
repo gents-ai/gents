@@ -818,8 +818,8 @@ process-tree termination, and bounded output drain for `list_files`, `glob`,
 `ManagedExec.Ownership` models host process ownership after the volatile
 worker is gone: a durable host record's pid and start identity prove
 ownership, a signal is admissible only for a proven-owned running group, and
-a cancellation is reported only for an observed stop. `process_stop_cases`
-carry every observation pair; the restart and orphan classifiers take the
+a cancellation is reported only for an observed stop. The `process_stop_*`
+families carry every observation pair; the restart and orphan classifiers take the
 resulting verdict as input and settle an unobserved stop as `processLost`.
 
 The Lean `pendingSpawn` state is intentionally one step finer than the Rust
@@ -1265,7 +1265,8 @@ Model → conformance → Rust bindings:
 - **Recovery sweeps** — `Proofs/ToolCalls/Recovery/Sweeps/*`, `Proofs/Session/Recovery/Sweeps/Requests.lean`, `Proofs/Inference/Recovery/Sweeps/Inference.lean` (tool calls, session-message
   rows, terminal-parent foreground tools #837, and orphaned native-background
   ownership repair, including retryable completion-notification/wake
-  obligations) → `recovery_sweep_cases`.
+  obligations) → the `recovery_sweeps_*` families, one or more per
+  registered sweep; the plugin-job sweep is `plugin_job_recoveries`.
 - **Partial output (#937, revised by #1571)** —
   `Proofs/Runtime/Background/ToolOutput.lean` reads canonical segments for the exact
   physical tool, independently of volatile executor registries. Generic paging
@@ -1280,7 +1281,7 @@ Model → conformance → Rust bindings:
   generated `completion_continuation_owner` cases pin that outcome.
 - **Wake coalescing** — `Proofs/Session/SessionQueue/*` queue model
   (`background_completion` source, coalesce keys, automated drain) →
-  queue-source rows in `r6_backgrounding_cases`.
+  families `contracts_r6_queue_source` and `contracts_r6_wake_admission`.
 
 ### Compaction
 

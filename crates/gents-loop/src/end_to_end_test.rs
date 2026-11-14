@@ -469,138 +469,94 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
 #[tokio::test]
 async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
     use futures::StreamExt;
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["canonical_dispatch_observation_cases"]
-        .as_array()
-        .unwrap();
-    assert!(!cases.is_empty());
-    assert!(cases.iter().any(|case| case["inputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|input| !input["policy_allows"].as_bool().unwrap())));
-    for case in cases {
-        let inputs = case["inputs"].as_array().unwrap();
-        let expected_results = case["expected"].as_array().unwrap();
-        assert_eq!(inputs.len(), expected_results.len());
-        for (input, expected) in inputs.iter().zip(expected_results) {
-            let may_invoke = expected["may_invoke"].as_bool().unwrap();
-            let policy_allows = input["policy_allows"].as_bool().unwrap();
-            let model = ScriptedModel::new(vec![
-                vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
-                vec![
-                    RawStreamingChoice::Message("done".into()),
-                    RawStreamingChoice::FinalResponse(()),
-                ],
-            ]);
-            let calls = Arc::new(Mutex::new(Vec::new()));
-            let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
-                calls: calls.clone(),
-                policy_allows,
-            })]);
-            let hook = RecordingHook {
-                deny_dispatch: policy_allows && !may_invoke,
-                ..Default::default()
-            };
-            let observed_hook = hook.clone();
-            use crate::rendered_request::scope::{
-                ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
-            };
-            let scope = test_scope(
-                crate::rendered_request::RenderedRequestContext {
-                    request_doc_id: "dispatch-doc".into(),
-                    request_commit_cid: "dispatch-cid".into(),
-                    request_id: "dispatch-request".into(),
-                    node_did: "did:test:agent".into(),
-                    requester_did: "did:test:requester".into(),
-                    agent_did: "general".into(),
-                    session_id: "dispatch-session".into(),
-                    model_name: "scripted".into(),
-                    provider_family: None,
-                },
-                Arc::new(|_| Box::pin(async { Ok(()) })),
+    for case in gents_lean_vocab::families::dispatch_observation_contracts_loop_election::cases() {
+        let input = &case.input;
+        let model = ScriptedModel::new(vec![
+            vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
+            vec![
+                RawStreamingChoice::Message("done".into()),
+                RawStreamingChoice::FinalResponse(()),
+            ],
+        ]);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
+            calls: calls.clone(),
+            policy_allows: input.policy_allows,
+        })]);
+        let hook = RecordingHook {
+            deny_dispatch: !input.hook_elects,
+            ..Default::default()
+        };
+        let observed_hook = hook.clone();
+        use crate::rendered_request::scope::{
+            ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
+        };
+        let scope = test_scope(
+            crate::rendered_request::RenderedRequestContext {
+                request_doc_id: "dispatch-doc".into(),
+                request_commit_cid: "dispatch-cid".into(),
+                request_id: "dispatch-request".into(),
+                node_did: "did:test:agent".into(),
+                requester_did: "did:test:requester".into(),
+                agent_did: "general".into(),
+                session_id: "dispatch-session".into(),
+                model_name: "scripted".into(),
+                provider_family: None,
+            },
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+        );
+        let mut config = test_loop_config();
+        config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
+        let failure = scope_request(scope, async {
+            let stream = crate::loop_stream::run_loop_stream(
+                model,
+                Some(hook),
+                TaggedMessage::unassociated(Message::user("echo hi")),
+                Vec::new(),
+                tools,
+                config,
             );
-            let mut config = test_loop_config();
-            config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
-            let failure = scope_request(scope, async {
-                let stream = crate::loop_stream::run_loop_stream(
-                    model,
-                    Some(hook),
-                    TaggedMessage::unassociated(Message::user("echo hi")),
-                    Vec::new(),
-                    tools,
-                    config,
-                );
-                futures::pin_mut!(stream);
-                let mut failure = None;
-                while let Some(item) = stream.next().await {
-                    match item {
-                        Ok(crate::loop_stream::LoopStreamItem::AuthoredInputReady {
-                            reply,
-                            ..
-                        })
-                        | Ok(crate::loop_stream::LoopStreamItem::SteeringBoundary { reply }) => {
-                            reply.send(Ok(Vec::new())).unwrap();
-                        }
-                        Ok(crate::loop_stream::LoopStreamItem::FinishOrIntake {
-                            reply, ..
-                        }) => {
-                            reply
-                                .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
-                                .ok();
-                        }
-                        Err(error) => {
-                            failure = Some(error);
-                            break;
-                        }
-                        _ => {}
+            futures::pin_mut!(stream);
+            let mut failure = None;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(crate::loop_stream::LoopStreamItem::AuthoredInputReady {
+                        reply, ..
+                    })
+                    | Ok(crate::loop_stream::LoopStreamItem::SteeringBoundary { reply }) => {
+                        reply.send(Ok(Vec::new())).unwrap();
                     }
+                    Ok(crate::loop_stream::LoopStreamItem::FinishOrIntake { reply, .. }) => {
+                        reply
+                            .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
+                            .ok();
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                    _ => {}
                 }
-                failure
-            })
-            .await;
-            assert_eq!(
-                calls.lock().unwrap().len(),
-                usize::from(may_invoke),
-                "{}: {expected}",
-                case["name"]
-            );
-            let recorded = observed_hook.calls();
-            let elections = recorded
-                .iter()
-                .filter(|call| matches!(call, RecordedCall::ToolCall { .. }))
-                .count();
-            let rejections = recorded
-                .iter()
-                .filter(|call| matches!(call, RecordedCall::AdmissionRejected { .. }))
-                .count();
-            if policy_allows {
-                assert_eq!(
-                    failure.is_some(),
-                    !may_invoke,
-                    "{}: {expected}; {failure:?}",
-                    case["name"]
-                );
-                assert_eq!(
-                    (elections, rejections),
-                    (1, 0),
-                    "the test must reach the hook"
-                );
-            } else {
-                assert!(!may_invoke && !expected["running"].as_bool().unwrap());
-                assert!(
-                    failure.is_none(),
-                    "{}: a policy rejection is a tool result, not a loop failure: {failure:?}",
-                    case["name"]
-                );
-                assert_eq!(
-                    (elections, rejections),
-                    (0, 1),
-                    "{}: a rejected call must never reach the dispatch election",
-                    case["name"]
-                );
             }
-        }
+            failure
+        })
+        .await;
+        let recorded = observed_hook.calls();
+        let elections = recorded
+            .iter()
+            .filter(|call| matches!(call, RecordedCall::ToolCall { .. }))
+            .count();
+        let rejections = recorded
+            .iter()
+            .filter(|call| matches!(call, RecordedCall::AdmissionRejected { .. }))
+            .count();
+        let invocations = calls.lock().unwrap().len();
+        case.check(Some(gents_lean_vocab::families::dispatch_observation_contracts_loop_election::LoopElectionOutput {
+            invocations: invocations as u64,
+            loop_failed: failure.is_some(),
+            elections: elections as u64,
+            rejections: rejections as u64,
+        }));
     }
 }
 

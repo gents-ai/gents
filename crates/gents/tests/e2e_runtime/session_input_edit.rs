@@ -2,6 +2,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use gents::runtime::agent::session_commands::run_session_command_reconciler;
+use gents_lean_vocab::families::fold_queue_contracts_input_edit_endpoint as endpoint;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -125,31 +126,65 @@ async fn signed_edit_targets(
     (session_doc_id, agent_did, agent_doc_id, evidence)
 }
 
-fn model_ids(values: &serde_json::Value) -> Vec<u64> {
-    values
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_u64().unwrap())
-        .collect()
+type Case = endpoint::InputEditCaseWire<
+    String,
+    String,
+    String,
+    SessionInputEditOutcome,
+    String,
+    String,
+    String,
+>;
+type ModelEntry = endpoint::EntryWire<String, String, String, String>;
+type ModelCommand = endpoint::CommandWire<String, String, String, String>;
+type ModelAuthority = endpoint::Authority<String>;
+type ModelReceipt = endpoint::Receipt<SessionInputEditOutcome>;
+type Image = endpoint::EndpointImageWire<SessionInputEditOutcome>;
+type Observation = endpoint::EndpointObservation<SessionInputEditOutcome>;
+
+fn observed<O>(observation: Observation) -> O
+where
+    O: serde::de::DeserializeOwned,
+{
+    gents_lean_vocab::family::recode(&Some(observation))
 }
 
-async fn contract_snapshot() -> serde_json::Value {
-    tokio::task::spawn_blocking(gents_lean_contract::load_contract_snapshot)
-        .await
-        .unwrap()
-        .unwrap()
+fn case_of<T>(input: &T) -> Case
+where
+    T: serde::Serialize,
+{
+    gents_lean_vocab::family::recode(input)
 }
 
-async fn lean_edit_case(name: &str) -> serde_json::Value {
-    let contract = contract_snapshot().await;
-    contract["session_input_edit_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == name)
-        .unwrap_or_else(|| panic!("Lean input-edit case {name}"))
-        .clone()
+/// One modeled signed edit: the queue it was authored against, the command,
+/// the author's authority and the model clock the command's validity is read at.
+struct Intent<'a> {
+    pending: &'a [ModelEntry],
+    command: &'a ModelCommand,
+    authority: &'a ModelAuthority,
+    now: u64,
+}
+
+fn own_intent(case: &Case) -> Intent<'_> {
+    Intent {
+        pending: &case.initial.queue.pending,
+        command: &case.command,
+        authority: &case.authority,
+        now: case.now,
+    }
+}
+
+fn history_intent(case: &Case) -> Intent<'_> {
+    let [step] = case.history.as_slice() else {
+        panic!("{}: one recorded history step", case.name);
+    };
+    assert_eq!(step.kind, "apply", "{}", case.name);
+    Intent {
+        pending: &case.initial.queue.pending,
+        command: step.command.as_ref().unwrap(),
+        authority: step.authority.as_ref().unwrap(),
+        now: step.now.unwrap(),
+    }
 }
 
 /// One queued session seeded by the enrolled User through the signed client
@@ -158,6 +193,16 @@ struct SeededSession {
     session_id: String,
     request_ids: RapidHashMap<u64, String>,
     doc_ids: RapidHashMap<u64, String>,
+}
+
+impl SeededSession {
+    fn model_id(&self, native: &str) -> u64 {
+        self.request_ids
+            .iter()
+            .find(|(_, bound)| bound.as_str() == native)
+            .map(|(model, _)| *model)
+            .unwrap_or_else(|| panic!("request {native} has no modeled identity"))
+    }
 }
 
 /// The P2P edit route is gone: every edit is published by its author through
@@ -230,7 +275,7 @@ impl EndpointEdits {
     /// Seed the model's pending entries, in order, as the User's own signed
     /// requests. The model's active request is runtime state the endpoint does
     /// not author; the queue owner's unit conformance binds it.
-    async fn seed(&self, session_id: &str, pending: &[serde_json::Value]) -> SeededSession {
+    async fn seed(&self, session_id: &str, pending: &[ModelEntry]) -> SeededSession {
         let mut seeded = SeededSession {
             session_id: session_id.into(),
             request_ids: RapidHashMap::default(),
@@ -238,9 +283,13 @@ impl EndpointEdits {
         };
         let mut session_doc = None;
         for (arrival, entry) in pending.iter().enumerate() {
-            let id = entry["request_id"].as_u64().unwrap();
-            assert_eq!(entry["requester_id"], 1, "requester 1 is the enrolled User");
-            assert_eq!(entry["fresh"], true);
+            let id = entry.request_id;
+            assert_eq!(
+                entry.requester_id,
+                Some(1),
+                "requester 1 is the enrolled User"
+            );
+            assert!(entry.fresh);
             let request_id = format!("{session_id}-{id}");
             let mut create = AgentRequestCreate::base(
                 RequestPurpose::Normal,
@@ -250,20 +299,20 @@ impl EndpointEdits {
                 &self.agent_did,
                 session_id,
                 format!("message {id}"),
-                entry["execution_origin"].as_str().unwrap(),
+                &entry.execution_origin,
                 (chrono::Utc::now() - chrono::Duration::minutes(1)
                     + chrono::Duration::seconds(arrival as i64))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 AgentRequestAdmissionRecord::client(self.user.did()),
             );
             create.input.queue = Some(RequestQueue {
-                source: serde_json::from_value(entry["source"].clone()).unwrap(),
-                policy: serde_json::from_value(entry["policy"].clone()).unwrap(),
-                delivery: serde_json::from_value(entry["delivery"].clone()).unwrap(),
+                source: serde_json::from_value(serde_json::json!(entry.source)).unwrap(),
+                policy: serde_json::from_value(serde_json::json!(entry.policy)).unwrap(),
+                delivery: serde_json::from_value(serde_json::json!(entry.delivery)).unwrap(),
                 position: None,
                 key: None,
-                queued_after_request_id: entry["queued_after"]
-                    .as_u64()
+                queued_after_request_id: entry
+                    .queued_after
                     .map(|after| format!("{session_id}-{after}")),
                 interrupted_request_id: None,
                 background_completion_wake_version: None,
@@ -300,28 +349,26 @@ impl EndpointEdits {
         seeded
     }
 
-    /// Build the case's signed command for `seeded`, tampering only where the
+    /// Build the intent's signed command for `seeded`, tampering only where the
     /// model's authority says the evidence is invalid.
     async fn command(
         &self,
-        case: &serde_json::Value,
+        intent: &Intent<'_>,
         seeded: &mut SeededSession,
         command_id: &str,
     ) -> SessionInputEdit {
-        let model = &case["command"];
-        let authority = &case["authority"];
-        let pending = case["initial"]["queue"]["pending"]
-            .as_array()
-            .unwrap()
+        let model = intent.command;
+        let authority = intent.authority;
+        let pending = intent
+            .pending
             .iter()
-            .map(|entry| entry["request_id"].as_u64().unwrap())
+            .map(|entry| entry.request_id)
             .collect::<Vec<_>>();
-        let (offset, count) = (
-            model["offset"].as_u64().unwrap() as usize,
-            model["count"].as_u64().unwrap() as usize,
-        );
-        let selected = pending.iter().skip(offset).take(count).collect::<Vec<_>>();
-        let replacements = model["replacements"].as_array().unwrap();
+        let selected = pending
+            .iter()
+            .skip(usize::try_from(model.offset).unwrap())
+            .take(usize::try_from(model.count).unwrap())
+            .collect::<Vec<_>>();
         let mut edit = PendingQueueEdit {
             expected_request_doc_ids: pending
                 .iter()
@@ -331,13 +378,14 @@ impl EndpointEdits {
                 .iter()
                 .map(|id| seeded.doc_ids[id].clone())
                 .collect(),
-            messages: replacements
+            messages: model
+                .replacements
                 .iter()
                 .zip(&selected)
                 .map(|(replacement, id)| PendingMessageEdit {
                     authored_input: None,
                     request_doc_id: seeded.doc_ids[id].clone(),
-                    content: format!("message {}", replacement["request_id"]),
+                    content: format!("message {} intent {}", replacement.request_id, model.digest),
                 })
                 .collect(),
         };
@@ -352,23 +400,22 @@ impl EndpointEdits {
         )
         .await
         .unwrap();
-        edit.expected_request_doc_ids = model_ids(&model["expected"])
+        edit.expected_request_doc_ids = model
+            .expected
             .iter()
             .map(|id| seeded.doc_ids[id].clone())
             .collect();
-        if authority["replacements_valid"] == false {
+        if !authority.replacements_valid {
             native[0].admission.signature[0] ^= 1;
         }
-        for (replacement, create) in replacements.iter().zip(&native) {
-            seeded.request_ids.insert(
-                replacement["request_id"].as_u64().unwrap(),
-                create.request_id.clone(),
-            );
+        for (replacement, create) in model.replacements.iter().zip(&native) {
+            seeded
+                .request_ids
+                .insert(replacement.request_id, create.request_id.clone());
         }
-        let now = case["now"].as_u64().unwrap();
-        let instant = |value: &serde_json::Value| {
-            let value = value.as_u64().unwrap();
-            let offset = chrono::Duration::seconds(value as i64);
+        let now = intent.now;
+        let instant = |value: u64| {
+            let offset = chrono::Duration::seconds(i64::try_from(value).unwrap());
             if value <= now {
                 chrono::Utc::now() - chrono::Duration::hours(1) + offset
             } else {
@@ -389,7 +436,7 @@ impl EndpointEdits {
             requester_did: self.user.did().into(),
             requester_peer_id: None,
             node_did: self.node_did().into(),
-            session_id: if authority["session_owned"] == true {
+            session_id: if authority.session_owned {
                 seeded.session_id.clone()
             } else {
                 format!("{}-foreign", seeded.session_id)
@@ -397,15 +444,15 @@ impl EndpointEdits {
             session_doc_id,
             agent_did,
             agent_doc_id,
-            issued_at: instant(&model["issued_at"]).to_rfc3339(),
-            expires_at: instant(&model["expires_at"]).to_rfc3339(),
+            issued_at: instant(model.issued_at).to_rfc3339(),
+            expires_at: instant(model.expires_at).to_rfc3339(),
             edit,
             replacements: native,
             replacement_evidence,
             signature: Vec::new(),
         };
         command.signature = self.user.sign(&command.signing_payload()).await.unwrap();
-        if authority["signature_valid"] == false {
+        if !authority.signature_valid {
             command.signature[0] ^= 1;
         }
         command
@@ -486,18 +533,12 @@ impl EndpointEdits {
 
     /// Two barrier edits the restarted reconciler must decide prove it swept
     /// past every earlier command.
-    async fn barrier(&self, suffix: &str) {
-        let case = lean_edit_case("local_self_applied").await;
+    async fn barrier(&self, suffix: &str, intent: &Intent<'_>) {
         for index in ["one", "two"] {
             let session = format!("barrier-{suffix}-{index}");
-            let mut seeded = self
-                .seed(
-                    &session,
-                    case["initial"]["queue"]["pending"].as_array().unwrap(),
-                )
-                .await;
+            let mut seeded = self.seed(&session, intent.pending).await;
             let command = self
-                .command(&case, &mut seeded, &format!("barrier-{suffix}-{index}"))
+                .command(intent, &mut seeded, &format!("barrier-{suffix}-{index}"))
                 .await;
             self.publish(&command).await.unwrap();
             let (_, receipt) = self.receipt(&command).await;
@@ -505,14 +546,79 @@ impl EndpointEdits {
         }
     }
 
-    /// The model's pending queue and receipt for `case`, bound to native IDs.
-    fn modeled_pending(&self, seeded: &SeededSession, state: &serde_json::Value) -> Vec<String> {
-        state["queue"]["pending"]
-            .as_array()
-            .unwrap()
+    /// The receipt that answers `command`, if its row holds one signed by the
+    /// node for this exact intent, in the model's identities.
+    async fn answered(
+        &self,
+        seeded: &SeededSession,
+        model: &ModelCommand,
+        command: &SessionInputEdit,
+    ) -> Option<ModelReceipt> {
+        let rows = self.command_rows(&command.command_id).await;
+        assert!(rows.len() <= 1, "one physical command per ID");
+        let raw = rows.first()?["receipt_json"].as_str()?.to_owned();
+        let receipt: SessionInputEditReceipt = serde_json::from_str(&raw).unwrap();
+        receipt.validate_for(command).ok()?;
+        assert!(self
+            .db
+            .node_identity
+            .verify(
+                self.node_did(),
+                &receipt.signing_payload(),
+                &receipt.signature
+            )
+            .await
+            .unwrap());
+        Some(endpoint::Receipt {
+            command_id: model.id,
+            digest: model.digest,
+            outcome: receipt.outcome,
+            request_ids: receipt
+                .request_ids
+                .iter()
+                .map(|id| seeded.model_id(id))
+                .collect(),
+        })
+    }
+
+    async fn queue(&self, seeded: &SeededSession) -> (Vec<u64>, Vec<u64>) {
+        let pending = self
+            .pending(&seeded.session_id)
+            .await
             .iter()
-            .map(|entry| seeded.request_ids[&entry["request_id"].as_u64().unwrap()].clone())
-            .collect()
+            .map(|id| seeded.model_id(id))
+            .collect();
+        let mut terminal = Vec::new();
+        for row in self.session_rows(&seeded.session_id).await {
+            let state: gents_protocol::request_lifecycle::RequestLifecycleState =
+                serde_json::from_value(row["lifecycle_state"].clone()).unwrap();
+            if state.is_terminal() {
+                assert_eq!(row["lifecycle_state"], "superseded", "replaced input");
+                terminal.push(seeded.model_id(row["request_id"].as_str().unwrap()));
+            }
+        }
+        terminal.sort_unstable();
+        (pending, terminal)
+    }
+
+    /// The session's queue and the receipts answering `commands`.
+    async fn image(
+        &self,
+        seeded: &SeededSession,
+        commands: &[(&ModelCommand, &SessionInputEdit)],
+    ) -> Image {
+        let (pending, terminal) = self.queue(seeded).await;
+        let mut receipts = Vec::new();
+        for (model, command) in commands {
+            if let Some(receipt) = self.answered(seeded, model, command).await {
+                receipts.push(receipt);
+            }
+        }
+        Image {
+            pending,
+            terminal,
+            receipts,
+        }
     }
 }
 
@@ -521,116 +627,92 @@ impl EndpointEdits {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn generated_client_edits_publish_concurrently_with_signed_effect_and_receipt() {
     let edits = EndpointEdits::start("input-edit-endpoint").await;
-    let contract = contract_snapshot().await;
-    let cases = contract["session_input_edit_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|case| {
-            case["authority"]["command_identity_unique"] == true
-                && case["authority"]["editor"] == "requester"
-                && case["history"].as_array().unwrap().is_empty()
-                && !case["receipt"].is_null()
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(
-        cases
-            .iter()
-            .map(|case| case["name"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        [
-            "local_self_applied",
-            "expired_rejected",
-            "signature_rejected",
-            "replacement_signature_rejected",
-            "foreign_session_rejected",
-            "stale_queue_rejected",
-        ],
-        "endpoint-authored generated input-edit cases"
-    );
+    let cases = gents_lean_vocab::families::fold_queue_contracts_input_edit_endpoint::cases::<
+        String,
+        String,
+        String,
+        SessionInputEditOutcome,
+        String,
+        String,
+        String,
+    >();
     let mut prepared = Vec::new();
     for case in &cases {
-        let name = case["name"].as_str().unwrap();
-        assert_eq!(case["initial"]["queue"]["folding"], serde_json::json!([]));
+        let input = &case.input;
         let mut seeded = edits
             .seed(
-                &format!("client-{name}"),
-                case["initial"]["queue"]["pending"].as_array().unwrap(),
+                &format!("client-{}", input.name),
+                &input.initial.queue.pending,
             )
             .await;
         let command = edits
-            .command(case, &mut seeded, &format!("edit-{name}"))
+            .command(
+                &own_intent(input),
+                &mut seeded,
+                &format!("edit-{}", input.name),
+            )
             .await;
-        assert_eq!(
-            edits.pending(&seeded.session_id).await,
-            edits.modeled_pending(&seeded, &case["initial"]),
-            "{name}: seeded queue"
-        );
-        prepared.push((case, seeded, command));
+        let before = edits.image(&seeded, &[(&input.command, &command)]).await;
+        prepared.push((seeded, command, before));
     }
     let (_stop, worker) = edits.reconciler().await;
     let published = futures::future::join_all(
         prepared
             .iter()
-            .map(|(_, _, command)| edits.publish(command)),
+            .map(|(_, command, _)| edits.publish(command)),
     )
     .await;
-    for ((case, seeded, command), published) in prepared.iter().zip(published) {
-        let name = case["name"].as_str().unwrap();
-        if case["authority"]["session_owned"] == false {
-            // The command's shape owner refuses a foreign session before
-            // publication, so the runtime never observes it; the model's
-            // rejection leaves the same queue.
-            assert!(published.is_err(), "{name}: foreign session is refused");
-            assert!(edits.command_rows(&command.command_id).await.is_empty());
-            assert_eq!(case["before"]["queue"], case["after"]["queue"]);
-            assert_eq!(
-                edits.pending(&seeded.session_id).await,
-                edits.modeled_pending(seeded, &case["after"]),
-                "{name}: queue state"
-            );
-            continue;
-        }
-        published.unwrap_or_else(|error| panic!("{name}: endpoint publication: {error:#}"));
-        let (_, receipt) = edits.receipt(command).await;
-        let expected = &case["receipt"];
-        assert_eq!(
-            serde_json::to_value(receipt.outcome).unwrap(),
-            expected["outcome"],
-            "{name}: outcome"
-        );
-        assert_eq!(
-            receipt.request_ids,
-            model_ids(&expected["request_ids"])
-                .iter()
-                .map(|id| seeded.request_ids[id].clone())
-                .collect::<Vec<_>>(),
-            "{name}: receipt request IDs"
-        );
-        assert_eq!(
-            edits.pending(&seeded.session_id).await,
-            edits.modeled_pending(seeded, &case["after"]),
-            "{name}: queue state"
-        );
-        for terminal in model_ids(&case["after"]["queue"]["terminal"]) {
-            let Some(doc) = seeded.doc_ids.get(&terminal) else {
-                continue;
-            };
-            let row = wait_row_as(
-                &edits.client,
-                "AgentRequest",
-                "_docID",
-                doc,
-                "lifecycle_state",
-                "",
+    for ((case, (seeded, command, before)), published) in cases.iter().zip(prepared).zip(published)
+    {
+        let input = &case.input;
+        published.unwrap_or_else(|error| panic!("{}: endpoint publication: {error:#}", input.name));
+        edits.receipt(&command).await;
+        let after = edits.image(&seeded, &[(&input.command, &command)]).await;
+        let receipt = edits.answered(&seeded, &input.command, &command).await;
+        case.check(observed(Observation {
+            before,
+            after,
+            receipt,
+        }));
+    }
+    for case in gents_lean_vocab::families::fold_queue_contracts_input_edit_endpoint_refused::cases::<
+        String,
+        String,
+        String,
+        SessionInputEditOutcome,
+        String,
+        String,
+        String,
+    >() {
+        let input = case_of(&case.input);
+        let mut seeded = edits
+            .seed(
+                &format!("client-{}", input.name),
+                &input.initial.queue.pending,
             )
             .await;
-            assert_eq!(
-                row["lifecycle_state"], "superseded",
-                "{name}: replaced input"
-            );
-        }
+        let command = edits
+            .command(
+                &own_intent(&input),
+                &mut seeded,
+                &format!("edit-{}", input.name),
+            )
+            .await;
+        assert!(
+            edits.publish(&command).await.is_err(),
+            "{}: the command shape owner refuses a foreign session",
+            input.name
+        );
+        assert!(edits.command_rows(&command.command_id).await.is_empty());
+        let (pending, terminal) = edits.queue(&seeded).await;
+        case.check(Some(
+            gents_lean_vocab::families::fold_queue_contracts_input_edit_endpoint_refused::EndpointRefusedObservation {
+                after: gents_lean_vocab::families::fold_queue_contracts_input_edit_endpoint_refused::EndpointQueueWire {
+                    pending,
+                    terminal,
+                },
+            },
+        ));
     }
     drop(_stop);
     worker.await.unwrap();
@@ -642,198 +724,256 @@ async fn generated_client_edits_publish_concurrently_with_signed_effect_and_rece
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn same_signed_edit_published_concurrently_applies_and_replays_once() {
     let edits = EndpointEdits::start("same-edit-endpoint").await;
-    let case = lean_edit_case("local_self_applied").await;
-    let replay = lean_edit_case("exact_replay_after_expiry").await;
-    assert_eq!(
-        replay["before"], replay["after"],
-        "exact replay changes nothing"
-    );
-    assert_eq!(
-        replay["receipt"], case["receipt"],
-        "exact replay returns the receipt"
-    );
-    let mut seeded = edits
-        .seed(
-            "same-intent",
-            case["initial"]["queue"]["pending"].as_array().unwrap(),
-        )
-        .await;
-    let command = edits
-        .command(&case, &mut seeded, "same-intent-command")
-        .await;
-    let (left, right) = tokio::join!(edits.publish(&command), edits.publish(&command));
-    assert_eq!(
-        usize::from(left.is_ok()) + usize::from(right.is_ok()),
-        1,
-        "exactly one racing publication is admitted: {left:?} / {right:?}"
-    );
-    assert_eq!(edits.command_rows(&command.command_id).await.len(), 1);
-    let (stop, worker) = edits.reconciler().await;
-    let (raw, receipt) = edits.receipt(&command).await;
-    assert_eq!(receipt.outcome, SessionInputEditOutcome::Applied);
-    assert_eq!(
-        edits.pending(&seeded.session_id).await,
-        edits.modeled_pending(&seeded, &case["after"])
-    );
-    drop(stop);
-    worker.await.unwrap();
-    let before = edits.session_rows(&seeded.session_id).await;
-    assert_eq!(
-        before
-            .iter()
-            .filter(|row| row["request_id"] == command.replacements[0].request_id)
-            .count(),
-        1,
-        "the replacement exists once"
-    );
+    for case in gents_lean_vocab::families::fold_queue_contracts_input_edit_concurrent_replay::cases::<
+        String,
+        String,
+        String,
+        SessionInputEditOutcome,
+        String,
+        String,
+        String,
+    >() {
+        let input = case_of(&case.input);
+        let intent = history_intent(&input);
+        let mut seeded = edits.seed("same-intent", intent.pending).await;
+        let command = edits
+            .command(&intent, &mut seeded, "same-intent-command")
+            .await;
+        let (left, right) = tokio::join!(edits.publish(&command), edits.publish(&command));
+        assert_eq!(
+            usize::from(left.is_ok()) + usize::from(right.is_ok()),
+            1,
+            "exactly one racing publication is admitted: {left:?} / {right:?}"
+        );
+        assert_eq!(edits.command_rows(&command.command_id).await.len(), 1);
+        let (stop, worker) = edits.reconciler().await;
+        let (raw, _) = edits.receipt(&command).await;
+        drop(stop);
+        worker.await.unwrap();
+        let before = edits.image(&seeded, &[(&input.command, &command)]).await;
+        let rows_before = edits.session_rows(&seeded.session_id).await;
+        assert_eq!(
+            rows_before
+                .iter()
+                .filter(|row| row["request_id"] == command.replacements[0].request_id)
+                .count(),
+            1,
+            "the replacement exists once"
+        );
 
-    let (stop, worker) = edits.reconciler().await;
-    edits.barrier("same-intent").await;
-    drop(stop);
-    worker.await.unwrap();
-    let rows = edits.command_rows(&command.command_id).await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["receipt_json"], raw, "replayed receipt is final");
-    assert_eq!(edits.session_rows(&seeded.session_id).await, before);
+        let (stop, worker) = edits.reconciler().await;
+        edits.barrier("same-intent", &intent).await;
+        drop(stop);
+        worker.await.unwrap();
+        let rows = edits.command_rows(&command.command_id).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["receipt_json"], raw, "replayed receipt is final");
+        assert_eq!(edits.session_rows(&seeded.session_id).await, rows_before);
+        let after = edits.image(&seeded, &[(&input.command, &command)]).await;
+        let receipt = edits.answered(&seeded, &input.command, &command).await;
+        case.check(observed(Observation {
+            before,
+            after,
+            receipt,
+        }));
+    }
 }
 
-/// Two different intents racing for one command ID: the model fails closed on
-/// two physical documents, and the endpoint's unique identity ensures only one
-/// ever exists, so that one is decided and the loser's session is untouched.
+/// Two different intents racing for one command ID: the endpoint's unique
+/// identity ensures only one physical document exists, so that one is decided
+/// as a lone fresh command and the loser's session is untouched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn different_edit_intents_racing_for_one_command_id_admit_one() {
     let edits = EndpointEdits::start("racing-edit-endpoint").await;
-    let collision = lean_edit_case("simultaneous_command_identity_collision").await;
-    assert_eq!(collision["before"], collision["after"]);
-    assert!(collision["receipt"].is_null(), "two documents never apply");
-    let case = lean_edit_case("local_self_applied").await;
-    let pending = case["initial"]["queue"]["pending"].as_array().unwrap();
-    let mut left_session = edits.seed("racing-left", pending).await;
-    let mut right_session = edits.seed("racing-right", pending).await;
-    let left = edits
-        .command(&case, &mut left_session, "racing-command")
-        .await;
-    let right = edits
-        .command(&case, &mut right_session, "racing-command")
-        .await;
-    assert_ne!(
-        serde_json::to_value(&left).unwrap(),
-        serde_json::to_value(&right).unwrap()
-    );
-    let right_before = edits.session_rows(&right_session.session_id).await;
-    let left_before = edits.session_rows(&left_session.session_id).await;
-    let (left_published, right_published) =
-        tokio::join!(edits.publish(&left), edits.publish(&right));
-    assert_eq!(
-        usize::from(left_published.is_ok()) + usize::from(right_published.is_ok()),
-        1,
-        "exactly one racing intent is admitted: {left_published:?} / {right_published:?}"
-    );
-    let rows = edits.command_rows("racing-command").await;
-    assert_eq!(rows.len(), 1, "one physical command document");
-    let (winner, winner_session, loser_session, loser_before) = if left_published.is_ok() {
-        (&left, &left_session, &right_session, right_before)
-    } else {
-        (&right, &right_session, &left_session, left_before)
-    };
-    let (stop, worker) = edits.reconciler().await;
-    let (_, receipt) = edits.receipt(winner).await;
-    assert_eq!(
-        serde_json::to_value(receipt.outcome).unwrap(),
-        case["receipt"]["outcome"]
-    );
-    assert_eq!(
-        edits.pending(&winner_session.session_id).await,
-        edits.modeled_pending(winner_session, &case["after"])
-    );
-    edits.barrier("racing").await;
-    drop(stop);
-    worker.await.unwrap();
-    assert_eq!(
-        edits.session_rows(&loser_session.session_id).await,
-        loser_before,
-        "the refused intent has no effect"
-    );
+    for case in gents_lean_vocab::families::fold_queue_contracts_input_edit_racing_intents::cases::<
+        String,
+        String,
+        String,
+        SessionInputEditOutcome,
+        String,
+        String,
+        String,
+    >() {
+        let input = case_of(&case.input);
+        let intent = own_intent(&input);
+        let mut left_session = edits.seed("racing-left", intent.pending).await;
+        let mut right_session = edits.seed("racing-right", intent.pending).await;
+        let left = edits
+            .command(&intent, &mut left_session, "racing-command")
+            .await;
+        let right = edits
+            .command(&intent, &mut right_session, "racing-command")
+            .await;
+        assert_ne!(
+            serde_json::to_value(&left).unwrap(),
+            serde_json::to_value(&right).unwrap()
+        );
+        let left_image = edits.image(&left_session, &[(&input.command, &left)]).await;
+        let right_image = edits
+            .image(&right_session, &[(&input.command, &right)])
+            .await;
+        let right_before = edits.session_rows(&right_session.session_id).await;
+        let left_before = edits.session_rows(&left_session.session_id).await;
+        let (left_published, right_published) =
+            tokio::join!(edits.publish(&left), edits.publish(&right));
+        assert_eq!(
+            usize::from(left_published.is_ok()) + usize::from(right_published.is_ok()),
+            1,
+            "exactly one racing intent is admitted: {left_published:?} / {right_published:?}"
+        );
+        let rows = edits.command_rows("racing-command").await;
+        assert_eq!(rows.len(), 1, "one physical command document");
+        let (winner, winner_session, before, loser_session, loser_before) =
+            if left_published.is_ok() {
+                (
+                    &left,
+                    &left_session,
+                    left_image,
+                    &right_session,
+                    right_before,
+                )
+            } else {
+                (
+                    &right,
+                    &right_session,
+                    right_image,
+                    &left_session,
+                    left_before,
+                )
+            };
+        let (stop, worker) = edits.reconciler().await;
+        edits.receipt(winner).await;
+        edits.barrier("racing", &intent).await;
+        drop(stop);
+        worker.await.unwrap();
+        assert_eq!(
+            edits.session_rows(&loser_session.session_id).await,
+            loser_before,
+            "the refused intent has no effect"
+        );
+        let after = edits
+            .image(winner_session, &[(&input.command, winner)])
+            .await;
+        let receipt = edits.answered(winner_session, &input.command, winner).await;
+        case.check(observed(Observation {
+            before,
+            after,
+            receipt,
+        }));
+    }
 }
 
-/// A later intent reusing an applied command ID in another session: the model
-/// preserves the prior receipt and both queues, and the endpoint refuses the
-/// second physical document outright.
+/// A later intent reusing an applied command ID in another session: the
+/// endpoint refuses the second physical document outright, no receipt answers
+/// it, and the prior receipt and both queues stand.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn late_command_id_twin_in_another_session_is_refused() {
     let edits = EndpointEdits::start("late-twin-endpoint").await;
-    let twin = lean_edit_case("cross_session_collision_preserves_prior_receipt").await;
-    assert_eq!(twin["before"], twin["after"]);
-    assert!(twin["receipt"].is_null());
-    let case = lean_edit_case("local_self_applied").await;
-    let pending = case["initial"]["queue"]["pending"].as_array().unwrap();
-    let mut prior_session = edits.seed("late-prior", pending).await;
-    let mut twin_session = edits.seed("late-twin", pending).await;
-    let prior = edits
-        .command(&case, &mut prior_session, "late-command")
-        .await;
-    edits.publish(&prior).await.unwrap();
-    let (stop, worker) = edits.reconciler().await;
-    let (raw, receipt) = edits.receipt(&prior).await;
-    assert_eq!(receipt.outcome, SessionInputEditOutcome::Applied);
-    let prior_rows = edits.session_rows(&prior_session.session_id).await;
-    let twin_rows = edits.session_rows(&twin_session.session_id).await;
-    let late = edits
-        .command(&case, &mut twin_session, "late-command")
-        .await;
-    assert!(
-        edits.publish(&late).await.is_err(),
-        "a second physical document under an applied command ID is refused"
-    );
-    edits.barrier("late-twin").await;
-    drop(stop);
-    worker.await.unwrap();
-    let rows = edits.command_rows("late-command").await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["receipt_json"], raw, "prior receipt is final");
-    assert_eq!(
-        edits.session_rows(&prior_session.session_id).await,
-        prior_rows
-    );
-    assert_eq!(
-        edits.session_rows(&twin_session.session_id).await,
-        twin_rows
-    );
+    for case in gents_lean_vocab::families::fold_queue_contracts_input_edit_late_twin::cases::<
+        String,
+        String,
+        String,
+        SessionInputEditOutcome,
+        String,
+        String,
+        String,
+    >() {
+        let input = case_of(&case.input);
+        let prior_intent = history_intent(&input);
+        let mut prior_session = edits.seed("late-prior", prior_intent.pending).await;
+        let mut twin_session = edits
+            .seed("late-twin", input.initial.queue.pending.as_slice())
+            .await;
+        let prior = edits
+            .command(&prior_intent, &mut prior_session, "late-command")
+            .await;
+        edits.publish(&prior).await.unwrap();
+        let (stop, worker) = edits.reconciler().await;
+        let (raw, _) = edits.receipt(&prior).await;
+        let before = edits
+            .image(&prior_session, &[(prior_intent.command, &prior)])
+            .await;
+        let prior_rows = edits.session_rows(&prior_session.session_id).await;
+        let twin_rows = edits.session_rows(&twin_session.session_id).await;
+        let late = edits
+            .command(&own_intent(&input), &mut twin_session, "late-command")
+            .await;
+        assert!(
+            edits.publish(&late).await.is_err(),
+            "a second physical document under an applied command ID is refused"
+        );
+        edits.barrier("late-twin", &prior_intent).await;
+        drop(stop);
+        worker.await.unwrap();
+        let rows = edits.command_rows("late-command").await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["receipt_json"], raw, "prior receipt is final");
+        assert_eq!(
+            edits.session_rows(&prior_session.session_id).await,
+            prior_rows
+        );
+        assert_eq!(
+            edits.session_rows(&twin_session.session_id).await,
+            twin_rows
+        );
+        let after = edits
+            .image(&prior_session, &[(prior_intent.command, &prior)])
+            .await;
+        let receipt = edits.answered(&twin_session, &input.command, &late).await;
+        case.check(observed(Observation {
+            before,
+            after,
+            receipt,
+        }));
+    }
 }
 
-/// Republishing the identical signed intent after its receipt: the model
-/// leaves an observed duplicate without effect and the endpoint refuses the
-/// second document, so the receipt and queue are unchanged.
+/// Republishing the identical signed intent after its receipt: the endpoint
+/// refuses the second document, and the recorded receipt answers it unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn identical_edit_republished_after_receipt_is_refused() {
     let edits = EndpointEdits::start("identical-edit-endpoint").await;
-    let observed = lean_edit_case("observed_collision_preserves_prior_receipt").await;
-    assert_eq!(observed["before"], observed["after"]);
-    assert!(observed["receipt"].is_null());
-    let case = lean_edit_case("local_self_applied").await;
-    let mut seeded = edits
-        .seed(
-            "identical",
-            case["initial"]["queue"]["pending"].as_array().unwrap(),
-        )
-        .await;
-    let command = edits.command(&case, &mut seeded, "identical-command").await;
-    edits.publish(&command).await.unwrap();
-    let (stop, worker) = edits.reconciler().await;
-    let (raw, receipt) = edits.receipt(&command).await;
-    assert_eq!(receipt.outcome, SessionInputEditOutcome::Applied);
-    let before = edits.session_rows(&seeded.session_id).await;
-    assert!(
-        edits.publish(&command).await.is_err(),
-        "the identical intent is one command identity"
-    );
-    edits.barrier("identical").await;
-    drop(stop);
-    worker.await.unwrap();
-    let rows = edits.command_rows(&command.command_id).await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["receipt_json"], raw);
-    assert_eq!(edits.session_rows(&seeded.session_id).await, before);
+    for case in
+        gents_lean_vocab::families::fold_queue_contracts_input_edit_identical_republish::cases::<
+            String,
+            String,
+            String,
+            SessionInputEditOutcome,
+            String,
+            String,
+            String,
+        >()
+    {
+        let input = case_of(&case.input);
+        let intent = history_intent(&input);
+        let mut seeded = edits.seed("identical", intent.pending).await;
+        let command = edits
+            .command(&intent, &mut seeded, "identical-command")
+            .await;
+        edits.publish(&command).await.unwrap();
+        let (stop, worker) = edits.reconciler().await;
+        let (raw, _) = edits.receipt(&command).await;
+        let before = edits.image(&seeded, &[(&input.command, &command)]).await;
+        let rows_before = edits.session_rows(&seeded.session_id).await;
+        assert!(
+            edits.publish(&command).await.is_err(),
+            "the identical intent is one command identity"
+        );
+        edits.barrier("identical", &intent).await;
+        drop(stop);
+        worker.await.unwrap();
+        let rows = edits.command_rows(&command.command_id).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["receipt_json"], raw);
+        assert_eq!(edits.session_rows(&seeded.session_id).await, rows_before);
+        let after = edits.image(&seeded, &[(&input.command, &command)]).await;
+        let receipt = edits.answered(&seeded, &input.command, &command).await;
+        case.check(observed(Observation {
+            before,
+            after,
+            receipt,
+        }));
+    }
 }
 
 #[tokio::test]

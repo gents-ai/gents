@@ -113,11 +113,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     assert_background_rows(&access, &request_id, bound, "cancelled").await;
-    let batch = gents_lean_vocab::lean_r6_backgrounding_cases()
-        .iter()
-        .filter(|case| case.group == "budget_batch")
-        .collect::<Vec<_>>();
-    assert!(!batch.is_empty(), "modeled admission schedule");
+    let batch = gents_lean_vocab::families::contracts_r6_admission::cases();
     let ids = (0..batch.len())
         .map(|index| format!("concurrent-budget-{index}"))
         .collect::<Vec<_>>();
@@ -134,7 +130,7 @@ async fn generated_background_budget_uses_accepted_dispatch() {
                     id: id.clone(),
                     call_id: None,
                     function: ToolFunction {
-                        name: case.action.clone(),
+                        name: case.input.action.clone(),
                         arguments: serde_json::from_str(args).unwrap(),
                     },
                     signature: None,
@@ -151,31 +147,47 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     let results = tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let mut results = Vec::with_capacity(ids.len());
         for (id, case) in ids.iter().zip(&batch) {
-            results.push(hook.on_tool_call(&case.action, None, id, args).await);
+            results.push(hook.on_tool_call(&case.input.action, None, id, args).await);
         }
         results
     })
     .await
     .expect("ordered admissions must settle while their children remain running");
     let mut admitted = Vec::new();
-    let mut rejected = 0;
+    let mut attempts = Vec::new();
     for result in results {
         let ToolCallHookAction::Skip { reason } = result else {
             panic!("accepted spawn must return a receipt: {result:?}");
         };
         let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
-        if receipt["status"] == "running" {
+        let live = admitted.len();
+        let legal = receipt["status"] == "running";
+        if legal {
             admitted.push(receipt["tool_call_id"].as_str().unwrap().to_owned());
         } else {
-            assert_eq!(receipt["code"], denied["code"]);
-            rejected += 1;
+            assert_eq!(
+                receipt["current_backgrounded"].as_u64(),
+                Some(live as u64),
+                "{receipt}"
+            );
         }
+        attempts.push((
+            live as u64,
+            gents_lean_vocab::families::contracts_r6_admission::AdmissionOutput {
+                legal,
+                receipt_status: receipt["status"].as_str().map(str::to_owned),
+                error_code: receipt["code"].as_str().map(str::to_owned),
+            },
+        ));
     }
-    assert_eq!(
-        admitted.len(),
-        batch.iter().filter(|case| case.legal).count()
-    );
-    assert_eq!(rejected, batch.iter().filter(|case| !case.legal).count());
+    for case in &batch {
+        let (live, observed) = attempts
+            .iter()
+            .find(|(live, _)| *live == case.input.pre_live_count)
+            .unwrap_or_else(|| panic!("{}: no attempt saw this live count", case.input.name));
+        assert!(*live <= case.input.max_backgrounded, "{}", case.input.name);
+        case.check(observed.clone());
+    }
     let data = access.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}}, await_mode: {{_eq: "background"}}, lifecycle_state: {{_eq: "running"}} }}) {{ _docID tool_call_id }} }}"#,
         gents_store::graphql::escape_graphql_string(&request_id),

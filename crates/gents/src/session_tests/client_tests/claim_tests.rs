@@ -9,7 +9,6 @@ use gents_store::config_client::{ConfigAccess, NodePermission};
 #[tokio::test]
 async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     use gents_session::request::watcher::{DefraWatcher, Watcher};
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let (db, runtime) = serve_client_node(
@@ -180,64 +179,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             request_id
         );
     }
-    let household = gents_lean_vocab::lean_identity_household_cases()
-        .first()
-        .expect("modeled household");
-    let model_user = &household
-        .objects
-        .iter()
-        .find(|object| object.resource == "nodes" && object.id == "home")
-        .expect("modeled Node")
-        .owner;
-    let model_agent = &household
-        .objects
-        .iter()
-        .find(|object| object.resource == "sessions" && object.id == "automated-session")
-        .expect("modeled autonomous session")
-        .owner;
-    let model_sibling = household
-        .relations
-        .iter()
-        .find_map(|relation| {
-            if relation.resource != "agents"
-                || relation.id != "sibling"
-                || relation.relation != "executor"
-            {
-                return None;
-            }
-            match &relation.subject {
-                gents_lean_vocab::LeanIdentitySubject::Actor { actor } => Some(actor),
-                _ => None,
-            }
-        })
-        .expect("modeled sibling executor");
-    let expected_read = |actor: &str| {
-        household
-            .actions
-            .iter()
-            .find_map(|action| match action {
-                gents_lean_vocab::LeanIdentityAction::Check {
-                    actor: checked,
-                    resource,
-                    id,
-                    permission,
-                    expected,
-                } if checked == actor
-                    && resource == "sessions"
-                    && id == "automated-session"
-                    && permission == "read" =>
-                {
-                    Some(*expected)
-                }
-                _ => None,
-            })
-            .expect("modeled autonomous session read")
-    };
-    let reservation = snapshot
-        .goal_client_start_cases
-        .iter()
-        .find(|case| case["name"] == "reserved_session")
-        .expect("modeled autonomous reservation");
+    let mut session_reads: Vec<(&str, bool)> = Vec::new();
     for (binding, signer, other, session_id) in [
         (&first, &first_signer, &second, "first-autonomous-session"),
         (&second, &second_signer, &first, "second-autonomous-session"),
@@ -263,48 +205,32 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         gents_session::request::admission::sign_agent_request_create(signer.as_ref(), &mut request)
             .await
             .unwrap();
-        let doc = reserve_goal_session(&access, &request).await.unwrap();
-        let owners = access
-            .transact_readonly("test.autonomous.session_owner", |txn| {
-                let doc = doc.clone();
-                Box::pin(async move { txn.document_owners("AgentSession", &[doc]).await })
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            owners[0]
-                .owner
-                .as_ref()
-                .is_some_and(|owner| owner.as_str() == binding.agent_did),
-            reservation["reservation"]["agent_is_owner"]
-                .as_bool()
-                .unwrap(),
-            "{session_id} native owner"
-        );
+        reserve_goal_session(&access, &request).await.unwrap();
         let query = format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ session_id }} }}"#,
             gents_store::graphql::escape_graphql_string(session_id),
         );
-        for (observer, modeled_actor) in [
-            (&access, model_agent.as_str()),
-            (&owner, model_user.as_str()),
-        ] {
-            let rows = observer.execute(&query).await.unwrap();
-            let visible = !rows["data"]["AgentSession"].as_array().unwrap().is_empty();
-            assert_eq!(
-                visible,
-                expected_read(modeled_actor),
-                "{session_id} observer {modeled_actor}"
-            );
-        }
         let sibling = ConfigAccess::local_as(node.clone(), other.agent_did.parse().unwrap());
-        let rows = sibling.execute(&query).await.unwrap();
-        let visible = !rows["data"]["AgentSession"].as_array().unwrap().is_empty();
-        assert_eq!(
-            visible,
-            expected_read(model_sibling),
-            "{session_id} sibling observer"
+        for (observer, role) in [(&access, "agent"), (&owner, "user"), (&sibling, "sibling")] {
+            let rows = observer.execute(&query).await.unwrap();
+            session_reads.push((
+                role,
+                !rows["data"]["AgentSession"].as_array().unwrap().is_empty(),
+            ));
+        }
+    }
+    for case in gents_lean_vocab::families::household_automated_session_read::cases() {
+        let reads: Vec<bool> = session_reads
+            .iter()
+            .filter(|(role, _)| *role == case.input.role)
+            .map(|(_, visible)| *visible)
+            .collect();
+        assert!(
+            reads.len() == 2 && reads[0] == reads[1],
+            "both autonomous sessions observe {:?}: {reads:?}",
+            case.input
         );
+        case.check(Some(reads[0]));
     }
     watcher
         .set_agent_identities(vec![first_signer.clone()])

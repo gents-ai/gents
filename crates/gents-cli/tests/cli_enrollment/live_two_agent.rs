@@ -283,76 +283,8 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
         signer, client_did,
         "paired User must sign the Agent creation block"
     );
-    let contract: Value = gents_lean_contract::load_contract_snapshot()?;
-    let household = contract["identity_household_cases"]
-        .as_array()
-        .context("modeled household cases")?
-        .iter()
-        .find(|case| case["name"] == "user-node-agents-mixed-session-ownership-policy-followup")
-        .context("modeled household isolation")?;
-    let own_agent = household["relations"]
-        .as_array()
-        .context("modeled household relations")?
-        .iter()
-        .find(|relation| {
-            relation["resource"] == "sessions"
-                && relation["id"] == "general-session"
-                && relation["relation"] == "working_agent"
-        })
-        .and_then(|relation| relation["subject"]["actor"].as_str())
-        .context("modeled working Agent")?;
-    let modeled_own_update = household["actions"]
-        .as_array()
-        .context("modeled household actions")?
-        .iter()
-        .find(|action| {
-            action["action"] == "check"
-                && action["actor"] == own_agent
-                && action["resource"] == "sessions"
-                && action["id"] == "general-session"
-                && action["permission"] == "update"
-        })
-        .and_then(|action| action["expected"].as_bool())
-        .context("modeled own session update")?;
-    let modeled_foreign_update = household["invoke_session_actions"]
-        .as_array()
-        .context("modeled invoke actions")?
-        .iter()
-        .find(|action| {
-            action["action"] == "check"
-                && action["resource"] == "sessions"
-                && action["id"] == "sibling-session"
-                && action["permission"] == "update"
-        })
-        .and_then(|action| action["expected"].as_bool())
-        .context("modeled foreign session update")?;
-    let administrator_reads = |resource: &str, id: &str| -> Result<bool> {
-        let actions = household["actions"]
-            .as_array()
-            .context("modeled household actions")?;
-        let granted = actions
-            .iter()
-            .position(|action| {
-                action["action"] == "grant"
-                    && action["relation"]["resource"] == "nodes"
-                    && action["relation"]["relation"] == "administrator"
-            })
-            .context("modeled Node administrator grant")?;
-        let administrator = &actions[granted]["relation"]["subject"]["actor"];
-        actions[granted..]
-            .iter()
-            .find(|action| {
-                action["action"] == "check"
-                    && &action["actor"] == administrator
-                    && action["resource"] == resource
-                    && action["id"] == id
-                    && action["permission"] == "read"
-            })
-            .and_then(|action| action["expected"].as_bool())
-            .context("modeled Node administrator read")
-    };
-    let engineer_reads_sessions = administrator_reads("sessions", "sibling-session")?;
-    let engineer_reads_requests = administrator_reads("delivered_requests", "remote-request")?;
+    let mut engineer_reads: Vec<(&str, bool)> = Vec::new();
+    let mut session_updates: Vec<(&str, bool)> = Vec::new();
     let actors = bindings
         .iter()
         .map(|binding| {
@@ -387,18 +319,18 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             escape_graphql_string(request_id),
             escape_graphql_string(session_id),
         )).await?;
-        for (collection, expected) in [
-            ("AgentRequest", engineer_reads_requests),
-            ("AgentSession", engineer_reads_sessions),
+        for (collection, resource) in [
+            ("AgentRequest", "delivered_requests"),
+            ("AgentSession", "sessions"),
         ] {
             let rows = response["data"][collection]
                 .as_array()
                 .with_context(|| format!("{collection} query failed"))?;
-            assert_eq!(
-                rows.len(),
-                usize::from(expected),
+            assert!(
+                rows.len() <= 1,
                 "Engineer (Node administrator) visibility for {collection}: {response}"
             );
+            engineer_reads.push((resource, !rows.is_empty()));
         }
     }
     for (index, binding) in worker_bindings.iter().enumerate() {
@@ -430,10 +362,10 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             }
         }
         for (target, doc_id) in session_docs.iter().enumerate() {
-            let expected = if index == target {
-                modeled_own_update
+            let session = if index == target {
+                "general-session"
             } else {
-                modeled_foreign_update
+                "sibling-session"
             };
             let principal =
                 gents::defra_node::AcpIdentity::Authenticated(binding.agent_did.parse()?);
@@ -447,10 +379,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                     doc_id,
                 )
                 .await?;
-            assert_eq!(
-                allowed, expected,
-                "native document ACP for Agent {index}, session {target}"
-            );
+            session_updates.push((session, allowed));
             let before = workers[target]
                 .execute(&format!(
                     "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{tags}} }}",
@@ -470,7 +399,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 gents_protocol::graphql::extract_mutation_doc_id(response, "AgentSession").is_ok()
             });
             assert_eq!(
-                changed, expected,
+                changed, allowed,
                 "Agent {index} update of session {target}: {updated:?}"
             );
             let after = workers[target]
@@ -486,6 +415,32 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 assert_eq!(actual, tags, "foreign session changed despite denial");
             }
         }
+    }
+    for case in gents_lean_vocab::families::household_live_administrator_read::cases() {
+        let reads: Vec<bool> = engineer_reads
+            .iter()
+            .filter(|(resource, _)| *resource == case.input.resource)
+            .map(|(_, visible)| *visible)
+            .collect();
+        anyhow::ensure!(
+            !reads.is_empty() && reads.iter().all(|visible| *visible == reads[0]),
+            "Engineer reads of {} disagree: {reads:?}",
+            case.input.resource
+        );
+        case.check(Some(reads[0]));
+    }
+    for case in gents_lean_vocab::families::household_live_session_update::cases() {
+        let updates: Vec<bool> = session_updates
+            .iter()
+            .filter(|(session, _)| *session == case.input.id)
+            .map(|(_, allowed)| *allowed)
+            .collect();
+        anyhow::ensure!(
+            !updates.is_empty() && updates.iter().all(|allowed| *allowed == updates[0]),
+            "session updates of {} disagree: {updates:?}",
+            case.input.id
+        );
+        case.check(Some(updates[0]));
     }
     node.shutdown().await?;
     Ok(())

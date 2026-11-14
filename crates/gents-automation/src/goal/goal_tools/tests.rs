@@ -251,14 +251,23 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
 
 #[tokio::test]
 async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
+    let replays =
+        gents_lean_vocab::families::dispatch_observation_contracts_control_replay::cases();
+    for replay in &replays {
+        assert!(
+            replay
+                .input
+                .inputs
+                .iter()
+                .all(|step| step.acknowledged && step.policy_allows),
+            "{}: the control scenario elects acknowledged, allowed attempts",
+            replay.input.name
+        );
+    }
     for case in gents_lean_vocab::families::contracts_goal_create_committed::cases::<
         crate::goal::GoalCreateDisposition,
     >() {
         let goal_case = &case.input;
-        let replay = gents_lean_vocab::lean_canonical_dispatch_observation_cases()
-            .iter()
-            .find(|case| case.name == "won_dispatch_then_replay")
-            .unwrap();
         let args = json!({"objective": goal_case.objective}).to_string();
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
             let mut completion_mutation = None;
@@ -320,18 +329,15 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                         "{action:?}"
                     );
                     let row = fetch_tool_call_row(&hook, &session, "control-call").await;
-                    assert_eq!(
-                        row["lifecycle_state"].as_str() == Some("running"),
-                        replay.expected[0].running,
-                        "{row}"
-                    );
                     let again = hook
                         .on_tool_call("create_goal", None, "control-call", &args)
                         .await;
-                    assert_eq!(
-                        matches!(again, ToolCallHookAction::Continue),
-                        replay.expected[1].may_invoke
-                    );
+                    for replay in &replays {
+                        replay.check(Some(gents_lean_vocab::families::dispatch_observation_contracts_control_replay::ControlReplayOutput {
+                            elected_running: row["lifecycle_state"].as_str() == Some("running"),
+                            replay_may_invoke: matches!(again, ToolCallHookAction::Continue),
+                        }));
+                    }
                     let after = access
                         .transact_readonly("test.hook_control_goal", |txn| {
                             Box::pin(crate::goal::load_canonical_goal_in_txn(

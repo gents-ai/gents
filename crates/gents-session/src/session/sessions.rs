@@ -1253,9 +1253,6 @@ mod relationship_publication_tests {
 mod invoke_session_isolation_tests {
     use std::sync::Arc;
 
-    use gents_lean_vocab::{
-        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
-    };
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity;
 
@@ -1278,6 +1275,8 @@ mod invoke_session_isolation_tests {
         })).await
     }
 
+    type CheckKey<'a> = (&'a str, &'a str, &'a str, &'a str, u64);
+
     async fn visible(access: &ConfigAccess, doc: &str) -> anyhow::Result<bool> {
         let doc = gents_store::graphql::escape_graphql_string(doc);
         let response = access
@@ -1293,47 +1292,7 @@ mod invoke_session_isolation_tests {
     #[tokio::test]
     async fn invoke_only_agent_creates_own_session_without_access_to_other_sessions(
     ) -> anyhow::Result<()> {
-        let model = lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "user-node-agents-mixed-session-ownership-policy-followup")
-            .expect("household model");
-        let modeled_actor = |id: &str| {
-            model
-                .relations
-                .iter()
-                .find_map(|relation| {
-                    if relation.resource == "agents"
-                        && relation.id == id
-                        && relation.relation == "executor"
-                    {
-                        if let LeanIdentitySubject::Actor { actor } = &relation.subject {
-                            return Some(actor.as_str());
-                        }
-                    }
-                    None
-                })
-                .expect("modeled Agent executor")
-        };
-        let caller_model = modeled_actor("general");
-        let target_model = modeled_actor("sibling");
-        let expected = |actor: &str, resource: &str, id: &str, permission: &str| {
-            model
-                .invoke_session_actions
-                .iter()
-                .find_map(|action| match action {
-                    LeanIdentityAction::Check {
-                        actor: a,
-                        resource: r,
-                        id: i,
-                        permission: p,
-                        expected,
-                    } if a == actor && r == resource && i == id && p == permission => {
-                        Some(*expected)
-                    }
-                    _ => None,
-                })
-                .expect("modeled invoke/session observation")
-        };
+        let mut observed: Vec<(CheckKey, bool)> = Vec::new();
         let directory = tempfile::tempdir()?;
         let root_path = directory.path().join("root");
         let root = gents_store::identity::KeyIdentity::load_or_create(&root_path, None)?;
@@ -1353,7 +1312,11 @@ mod invoke_session_isolation_tests {
         let root_context =
             defra_core::RequestContext::default().with_identity(Some(root.did().to_owned()));
         let policy = node
-            .add_dac_policy_with_counter_as(&root_context, &model.policy_yaml, 0)
+            .add_dac_policy_with_counter_as(
+                &root_context,
+                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+                0,
+            )
             .await?;
         let policy_id = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
         node.add_collection_as(
@@ -1424,13 +1387,13 @@ mod invoke_session_isolation_tests {
                 })
             })
             .await?;
-        assert_eq!(
+        observed.push((
+            ("agent", "agents", "sibling", "invoke", 0),
             matches!(
                 invoke.as_slice(),
                 [defra_node::DocumentAccessDecision::Allowed]
             ),
-            expected(caller_model, "agents", "sibling", "invoke")
-        );
+        ));
         let existing = create_session(
             &owner,
             "other-session",
@@ -1447,52 +1410,33 @@ mod invoke_session_isolation_tests {
             target.did(),
         )
         .await?;
-        assert_eq!(
+        observed.push((
+            ("agent", "sessions", "sibling-session", "read", 0),
             visible(&caller_access, &existing).await?,
-            expected(caller_model, "sessions", "sibling-session", "read")
-        );
-        assert_eq!(
+        ));
+        observed.push((
+            ("agent", "sessions", "nested-session", "read", 0),
             visible(&caller_access, &child).await?,
-            expected(caller_model, "sessions", "nested-session", "read")
-        );
-        assert_eq!(
+        ));
+        observed.push((
+            ("sibling", "sessions", "sibling-session", "read", 0),
             visible(&target_access, &existing).await?,
-            expected(target_model, "sessions", "sibling-session", "read")
-        );
-        let reader_cases: Vec<bool> = model
-            .invoke_session_actions
-            .iter()
-            .filter_map(|action| match action {
-                LeanIdentityAction::Check {
-                    actor,
-                    resource,
-                    id,
-                    permission,
-                    expected,
-                } if actor == caller_model
-                    && resource == "sessions"
-                    && id == "sibling-session"
-                    && permission == "read" =>
-                {
-                    Some(*expected)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            reader_cases.len(),
-            3,
-            "modeled direct session reader lifecycle"
-        );
+        ));
         let caller_did = identity::Did::new(caller.did())?;
         owner
             .add_actor_relationship("AgentSession", &existing, "reader", &caller_did)
             .await?;
-        assert_eq!(visible(&caller_access, &existing).await?, reader_cases[1]);
+        observed.push((
+            ("agent", "sessions", "sibling-session", "read", 1),
+            visible(&caller_access, &existing).await?,
+        ));
         owner
             .delete_actor_relationship("AgentSession", &existing, "reader", &caller_did)
             .await?;
-        assert_eq!(visible(&caller_access, &existing).await?, reader_cases[2]);
+        observed.push((
+            ("agent", "sessions", "sibling-session", "read", 2),
+            visible(&caller_access, &existing).await?,
+        ));
         let denied = caller_access.write("test.invoke.unrelated_update", &format!(
             "mutation {{ update_AgentSession(docID: \"{}\", input: {{archived_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}} }}",
             gents_store::graphql::escape_graphql_string(&existing),
@@ -1502,10 +1446,10 @@ mod invoke_session_isolation_tests {
             .ok()
             .and_then(|v| v["data"]["update_AgentSession"].as_array())
             .is_some_and(|rows| !rows.is_empty());
-        assert_eq!(
+        observed.push((
+            ("agent", "sessions", "sibling-session", "update", 0),
             applied,
-            expected(caller_model, "sessions", "sibling-session", "update")
-        );
+        ));
         let unchanged = owner
             .execute(&format!(
                 "{{ AgentSession(filter: {{_docID: {{_eq: \"{}\"}}}}) {{archived_at}} }}",
@@ -1545,6 +1489,22 @@ mod invoke_session_isolation_tests {
             owners[0].owner.as_ref().map(|did| did.as_str()),
             Some(caller.did())
         );
+        for case in gents_lean_vocab::families::household_invoke_session_check::cases() {
+            let check = &case.input;
+            let key = (
+                check.role.as_str(),
+                check.resource.as_str(),
+                check.id.as_str(),
+                check.permission.as_str(),
+                check.occurrence,
+            );
+            let allowed = observed
+                .iter()
+                .find(|(observed, _)| *observed == key)
+                .map(|(_, allowed)| *allowed)
+                .unwrap_or_else(|| panic!("{check:?} was not observed"));
+            case.check(Some(allowed));
+        }
         node.shutdown().await?;
         Ok(())
     }

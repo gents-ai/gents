@@ -57,12 +57,6 @@ async fn document_id(
 
 #[tokio::test]
 async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> Result<()> {
-    let cases = &gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .context("configuration model")?
-        .configuration_compaction_cases;
-    anyhow::ensure!(!cases.is_empty(), "Lean emitted no compaction cases");
     let home = tempfile::tempdir()?;
     let runtime =
         gents_store::identity::KeyIdentity::load_or_create(home.path().join("runtime"), None)?;
@@ -187,65 +181,56 @@ async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> 
             .map_err(anyhow::Error::msg)?,
         user.did()
     );
-    let update = format!(
-        "mutation {{update_CompactionConfig(docID:\"{}\", input:{{threshold:0.25}}) {{_docID}}}}",
-        gents_store::graphql::escape_graphql_string(&a)
-    );
-    let initial_selected = cases
-        .iter()
-        .find(|case| {
-            case["phase"] == "initial"
-                && case["actor"] == "selected"
-                && case["document"] == "compaction-a"
-        })
-        .context("modeled initial compaction")?;
-    let updated_by_selected = match selected_access
-        .write("test.compaction.denied", &update)
-        .await
-    {
-        Ok(denied) => denied["data"]["update_CompactionConfig"]
-            .as_array()
-            .is_some_and(|rows| !rows.is_empty()),
-        Err(error) if error.is_graphql_rejection() => false,
-        Err(error) => return Err(error.into()),
-    };
-    assert_eq!(
-        updated_by_selected,
-        initial_selected["update_expected"]
-            .as_bool()
-            .context("selected update expectation")?
-    );
-    assert_eq!(
-        user_access.execute(query).await?["data"]["CompactionConfig"]
+    for case in gents_lean_vocab::families::household_compaction_update::cases() {
+        let (access, doc) = match (case.input.actor.as_str(), case.input.document.as_str()) {
+            ("selected", "compaction-a") => (&selected_access, &a),
+            other => anyhow::bail!("unmodeled compaction update {other:?}"),
+        };
+        let update = format!(
+            "mutation {{update_CompactionConfig(docID:\"{}\", input:{{threshold:0.25}}) {{_docID}}}}",
+            gents_store::graphql::escape_graphql_string(doc)
+        );
+        let update_expected = match access.write("test.compaction.denied", &update).await {
+            Ok(denied) => denied["data"]["update_CompactionConfig"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty()),
+            Err(error) if error.is_graphql_rejection() => false,
+            Err(error) => return Err(error.into()),
+        };
+        if !update_expected {
+            assert_eq!(
+                user_access.execute(query).await?["data"]["CompactionConfig"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["_docID"] == *doc)
+                    .unwrap()["threshold"],
+                json!(0.75)
+            );
+        }
+        publish(
+            &user_access,
+            vec![(
+                Collection::Compaction,
+                json!({"node_did":runtime.did(), "compaction_id":case.input.document, "threshold":0.6,
+                    "inference_profile_id":"profile"}),
+            )],
+        )
+        .await?;
+        let updated = user_access.execute(query).await?;
+        let owner_update_expected = updated["data"]["CompactionConfig"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|row| row["_docID"] == a)
-            .unwrap()["threshold"],
-        json!(0.75)
-    );
-    publish(
-        &user_access,
-        vec![(
-            Collection::Compaction,
-            json!({"node_did":runtime.did(), "compaction_id":"compaction-a", "threshold":0.6,
-                "inference_profile_id":"profile"}),
-        )],
-    )
-    .await?;
-    let updated = user_access.execute(query).await?;
-    let updated_by_owner = updated["data"]["CompactionConfig"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["_docID"] == a)
-        .is_some_and(|row| row["threshold"] == json!(0.6));
-    assert_eq!(
-        updated_by_owner,
-        initial_selected["owner_update_expected"]
-            .as_bool()
-            .context("owner update expectation")?
-    );
+            .find(|row| row["_docID"] == *doc)
+            .is_some_and(|row| row["threshold"] == json!(0.6));
+        case.check(
+            gents_lean_vocab::families::household_compaction_update::CompactionUpdate {
+                update_expected,
+                owner_update_expected,
+            },
+        );
+    }
     let history = user_access
         .execute(&format!(
             "{{_commits(docID:\"{}\") {{cid height fieldName}}}}",
@@ -272,171 +257,153 @@ async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> 
         user.did()
     );
 
-    for phase in [
-        "initial",
-        "revoked",
-        "unchanged",
-        "rebound",
-        "direct-rebound",
-        "context-revoked",
-        "executor-revoked",
-    ] {
-        match phase {
-            "revoked" => {
-                user_access
-                    .transact_write("test.compaction.revoke", |txn| {
-                        let (a, context_doc) = (&a, &context_doc);
-                        Box::pin(async move {
-                            txn.delete_entity_set_relationship(
-                                "CompactionConfig",
-                                a,
-                                "selected_by",
-                                "configuration",
-                                context_doc,
-                                "selected_by",
-                            )
-                            .await
+    let mut applied_phase = String::from("initial");
+    for case in gents_lean_vocab::families::household_compaction_selection::cases() {
+        let phase = case.input.phase.as_str();
+        if phase != applied_phase {
+            applied_phase = phase.to_owned();
+            match phase {
+                "revoked" => {
+                    user_access
+                        .transact_write("test.compaction.revoke", |txn| {
+                            let (a, context_doc) = (&a, &context_doc);
+                            Box::pin(async move {
+                                txn.delete_entity_set_relationship(
+                                    "CompactionConfig",
+                                    a,
+                                    "selected_by",
+                                    "configuration",
+                                    context_doc,
+                                    "selected_by",
+                                )
+                                .await
+                            })
                         })
-                    })
+                        .await?
+                }
+                "unchanged" => {
+                    publish(
+                        &user_access,
+                        vec![(Collection::AgentContext, context_value("compaction-a"))],
+                    )
                     .await?
-            }
-            "unchanged" => {
-                publish(
-                    &user_access,
-                    vec![(Collection::AgentContext, context_value("compaction-a"))],
-                )
-                .await?
-            }
-            "rebound" => {
-                user_access
-                    .transact_write("test.compaction.restore", |txn| {
-                        let (a, context_doc) = (&a, &context_doc);
-                        Box::pin(async move {
-                            txn.add_entity_set_relationship(
-                                "CompactionConfig",
-                                a,
-                                "selected_by",
-                                "configuration",
-                                context_doc,
-                                "selected_by",
-                            )
-                            .await
+                }
+                "rebound" => {
+                    user_access
+                        .transact_write("test.compaction.restore", |txn| {
+                            let (a, context_doc) = (&a, &context_doc);
+                            Box::pin(async move {
+                                txn.add_entity_set_relationship(
+                                    "CompactionConfig",
+                                    a,
+                                    "selected_by",
+                                    "configuration",
+                                    context_doc,
+                                    "selected_by",
+                                )
+                                .await
+                            })
                         })
-                    })
+                        .await?;
+                    publish(
+                        &user_access,
+                        vec![(Collection::AgentContext, context_value("compaction-b"))],
+                    )
                     .await?;
-                publish(
-                    &user_access,
-                    vec![(Collection::AgentContext, context_value("compaction-b"))],
-                )
-                .await?;
-            }
-            "direct-rebound" => {
-                user_access
-                    .add_actor_relationship("CompactionConfig", &a, "reader", &agent_did)
-                    .await?
-            }
-            "context-revoked" => {
-                user_access
-                    .delete_actor_relationship("CompactionConfig", &a, "reader", &agent_did)
-                    .await?;
-                user_access
-                    .transact_write("test.compaction.revoke_context", |txn| {
-                        let (context_doc, agent_doc) = (&context_doc, &agent_doc);
-                        Box::pin(async move {
-                            txn.delete_entity_set_relationship(
-                                "AgentContext",
-                                context_doc,
-                                "selected_by",
-                                "agents",
-                                agent_doc,
-                                "executor",
-                            )
-                            .await
+                }
+                "direct-rebound" => {
+                    user_access
+                        .add_actor_relationship("CompactionConfig", &a, "reader", &agent_did)
+                        .await?
+                }
+                "context-revoked" => {
+                    user_access
+                        .delete_actor_relationship("CompactionConfig", &a, "reader", &agent_did)
+                        .await?;
+                    user_access
+                        .transact_write("test.compaction.revoke_context", |txn| {
+                            let (context_doc, agent_doc) = (&context_doc, &agent_doc);
+                            Box::pin(async move {
+                                txn.delete_entity_set_relationship(
+                                    "AgentContext",
+                                    context_doc,
+                                    "selected_by",
+                                    "agents",
+                                    agent_doc,
+                                    "executor",
+                                )
+                                .await
+                            })
                         })
-                    })
-                    .await?;
-            }
-            "executor-revoked" => {
-                user_access
-                    .transact_write("test.compaction.restore_context", |txn| {
-                        let (context_doc, agent_doc) = (&context_doc, &agent_doc);
-                        Box::pin(async move {
-                            txn.add_entity_set_relationship(
-                                "AgentContext",
-                                context_doc,
-                                "selected_by",
-                                "agents",
-                                agent_doc,
-                                "executor",
-                            )
-                            .await
+                        .await?;
+                }
+                "executor-revoked" => {
+                    user_access
+                        .transact_write("test.compaction.restore_context", |txn| {
+                            let (context_doc, agent_doc) = (&context_doc, &agent_doc);
+                            Box::pin(async move {
+                                txn.add_entity_set_relationship(
+                                    "AgentContext",
+                                    context_doc,
+                                    "selected_by",
+                                    "agents",
+                                    agent_doc,
+                                    "executor",
+                                )
+                                .await
+                            })
                         })
-                    })
-                    .await?;
-                user_access
-                    .delete_actor_relationship("Agent", &agent_doc, "executor", &agent_did)
-                    .await?;
+                        .await?;
+                    user_access
+                        .delete_actor_relationship("Agent", &agent_doc, "executor", &agent_did)
+                        .await?;
+                }
+                _ => {}
             }
-            _ => {}
         }
-        let phase_cases = cases
-            .iter()
-            .filter(|case| case["phase"] == phase)
-            .collect::<Vec<_>>();
-        anyhow::ensure!(phase_cases.len() == 4, "incomplete Lean cases for {phase}");
-        for case in phase_cases {
-            let (actor, access) = if case["actor"] == "selected" {
-                (selected.did(), &selected_access)
-            } else {
-                (sibling.did(), &sibling_access)
-            };
-            let doc = if case["document"] == "compaction-a" {
-                &a
-            } else {
-                &b
-            };
-            let rows = access.execute(query).await?;
-            let visible = rows["data"]["CompactionConfig"]
-                .as_array()
-                .is_some_and(|rows| rows.iter().any(|row| row["_docID"] == *doc));
-            assert_eq!(
-                visible,
-                case["expected"]
-                    .as_bool()
-                    .context("visibility expectation")?,
-                "{case}"
-            );
-            let guard = SelectedConfiguration::new(
-                node.clone(),
-                identity::Did::new(actor)?,
-                vec![
-                    SelectedConfigurationDocument {
-                        collection: Collection::Agent,
-                        doc_id: agent_doc.clone(),
-                        logical_id: None,
-                    },
-                    SelectedConfigurationDocument {
-                        collection: Collection::AgentContext,
-                        doc_id: context_doc.clone(),
-                        logical_id: None,
-                    },
-                    SelectedConfigurationDocument {
-                        collection: Collection::Compaction,
-                        doc_id: doc.clone(),
-                        logical_id: None,
-                    },
-                ],
-            )
-            .check()
-            .await;
-            assert_eq!(
-                guard.is_ok(),
-                case["guard_expected"]
-                    .as_bool()
-                    .context("guard expectation")?,
-                "{case}: {guard:?}"
-            );
-        }
+        let (actor, access) = if case.input.actor == "selected" {
+            (selected.did(), &selected_access)
+        } else {
+            (sibling.did(), &sibling_access)
+        };
+        let doc = if case.input.document == "compaction-a" {
+            &a
+        } else {
+            &b
+        };
+        let rows = access.execute(query).await?;
+        let visible = rows["data"]["CompactionConfig"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["_docID"] == *doc));
+        let guard = SelectedConfiguration::new(
+            node.clone(),
+            identity::Did::new(actor)?,
+            vec![
+                SelectedConfigurationDocument {
+                    collection: Collection::Agent,
+                    doc_id: agent_doc.clone(),
+                    logical_id: None,
+                },
+                SelectedConfigurationDocument {
+                    collection: Collection::AgentContext,
+                    doc_id: context_doc.clone(),
+                    logical_id: None,
+                },
+                SelectedConfigurationDocument {
+                    collection: Collection::Compaction,
+                    doc_id: doc.clone(),
+                    logical_id: None,
+                },
+            ],
+        )
+        .check()
+        .await;
+        case.check(
+            gents_lean_vocab::families::household_compaction_selection::CompactionVisibility {
+                expected: visible,
+                guard_expected: guard.is_ok(),
+            },
+        );
     }
     node.shutdown().await?;
     Ok(())

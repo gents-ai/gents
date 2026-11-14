@@ -488,10 +488,6 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
 
 #[tokio::test]
 async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request() -> Result<()> {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
     let dir = tempfile::tempdir()?;
     let key_dir = dir.path().to_owned();
     let (owner, runtime) = tokio::task::spawn_blocking(move || -> Result<_> {
@@ -520,7 +516,7 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
     );
     let ctx = defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&ctx, &case.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
     for actor in [agent.did(), sibling.did(), runtime.did()] {
         for permission in [
@@ -611,10 +607,8 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
         profile_id: "profile".into(),
     };
     let sibling_did = identity::Did::new(sibling.did())?;
-    assert!(!case.configuration_plugin_backend_cases.is_empty());
-    for item in &case.configuration_plugin_backend_cases {
-        let revoked = item["revoked"].as_str().unwrap();
-        let target = match revoked {
+    for item in gents_lean_vocab::families::household_plugin_backend_use::cases() {
+        let target = match item.input.revoked.as_str() {
             "profile" => Some(("InferenceProfile", &profile_doc)),
             "backend" => Some(("InferenceBackendMetadata", &backend_doc)),
             "" => None,
@@ -625,23 +619,19 @@ async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request()
                 .delete_actor_relationship(collection, doc, "reader", &agent_did)
                 .await?;
         }
-        let actor = match item["actor"].as_str() {
+        let actor = match item.input.actor.as_deref() {
             Some("agent") => Some(&agent_did),
             Some("sibling") => Some(&sibling_did),
             None => None,
             _ => anyhow::bail!("unknown modeled actor"),
         };
-        assert_eq!(
-            models.resolve(&binding, actor).await.is_ok(),
-            item["expected"].as_bool().unwrap(),
-            "modeled {}",
-            item["name"]
-        );
+        let resolved = models.resolve(&binding, actor).await.is_ok();
         if let Some((collection, doc)) = target {
             access
                 .add_actor_relationship(collection, doc, "reader", &agent_did)
                 .await?;
         }
+        item.check(resolved);
     }
     let endpoint = models.resolve(&binding, Some(&agent_did)).await?;
     let mut session = Session::new(endpoint)?;

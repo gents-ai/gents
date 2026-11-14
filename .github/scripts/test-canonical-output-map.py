@@ -76,26 +76,31 @@ class MappingTests(unittest.TestCase):
         self.assertIn("unknown constructor: Unknown.Action.deleted", self.errors())
 
     def test_execution_export_envelope(self):
-        script = {"name": "script", "kind": "native_execution", "seed": {},
-                  "operations": [{"operation": "dispatch"}],
-                  "expected_observations": [{"accepted": False}]}
-        summary = {"name": "summary", "kind": "trace_summary", "completed": True}
-        mapping.check_execution_export({"canonical_execution_gate_cases": [script, summary]})
+        script = {"input": {"name": "script", "seed": {}, "query_document": 600,
+                            "operations": [{"operation": "dispatch"}]},
+                  "expected": {"observations": [{"accepted": False}]}}
+        gap = {"input": {**script["input"], "name": "gap", "native_gap": "no product transaction"},
+               "expected": script["expected"]}
+
+        def export(scripts, gaps):
+            return {"families": {"native_execution_contracts_script": {"cases": scripts},
+                                 "native_execution_contracts_script_unreached": {"cases": gaps}}}
+
+        mapping.check_execution_export(export([script], [gap]))
         with self.assertRaises(ValueError):
             mapping.check_execution_export([])
-        invalid = [[], [None], [summary], [script, script],
-                   [{**summary, "completed": False}, script],
-                   [{**script, "operations": []}],
-                   [{**script, "operations": [{"operation": 1}]}],
-                   [{**script, "operations": [{"operation": " "}]}],
-                   [{**script, "expected_observations": None}],
-                   [{**script, "expected_observations": [{}]}],
-                   [{**script, "seed": None}],
-                   [{**script, "kind": "unknown"}]]
-        for cases in invalid:
-            with self.subTest(cases=cases), self.assertRaises(ValueError):
-                mapping.check_execution_export({"canonical_execution_gate_cases": cases})
-
+        invalid = [([], [gap]), ([None], [gap]), ([script], []), ([script, script], [gap]),
+                   ([script], [{**gap, "input": {**gap["input"], "native_gap": " "}}]),
+                   ([{**script, "input": {**script["input"], "native_gap": "x"}}], [gap]),
+                   ([{**script, "input": {**script["input"], "operations": []}}], [gap]),
+                   ([{**script, "input": {**script["input"], "operations": [{"operation": 1}]}}], [gap]),
+                   ([{**script, "input": {**script["input"], "operations": [{"operation": " "}]}}], [gap]),
+                   ([{**script, "expected": None}], [gap]),
+                   ([{**script, "expected": {"observations": [{}]}}], [gap]),
+                   ([{**script, "input": {**script["input"], "seed": None}}], [gap])]
+        for scripts, gaps in invalid:
+            with self.subTest(scripts=scripts, gaps=gaps), self.assertRaises(ValueError):
+                mapping.check_execution_export(export(scripts, gaps))
 
 if __name__ == "__main__":
     unittest.main()

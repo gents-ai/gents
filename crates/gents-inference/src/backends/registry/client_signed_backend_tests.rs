@@ -1,3 +1,6 @@
+type ProbeKey = (bool, bool, bool);
+type DiscoveryKey = (bool, bool, bool, bool);
+
 #[tokio::test]
 async fn user_signed_backend_separates_metadata_and_private_credential() -> anyhow::Result<()> {
     use anyhow::Context;
@@ -229,27 +232,16 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         id: metadata["credential_id"].as_str().unwrap().to_owned(),
         version: metadata["credential_version"].as_str().unwrap().to_owned(),
     };
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let moved_allowed = modeled
-        ._backend_credential_cases
-        .iter()
-        .find(|case| case["name"] == "unapproved-destination")
-        .unwrap()["may_use"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(
-        gents_documents::inference_backend::write_inference_backend_document(
-            &access,
-            &moved,
-            &crate::resolved::ProviderProfilePolicy
-        )
-        .await
-        .is_ok(),
-        moved_allowed
-    );
+    let mut probes: Vec<(ProbeKey, bool)> = Vec::new();
+    let mut discovery: Vec<(DiscoveryKey, bool)> = Vec::new();
+    let mut removals: Vec<(ProbeKey, [bool; 3])> = Vec::new();
+    let moved_published = gents_documents::inference_backend::write_inference_backend_document(
+        &access,
+        &moved,
+        &crate::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .is_ok();
     assert_eq!(read().await?, initial);
     runtime_access.write("test.backend.runtime_observation", "mutation { update_InferenceBackendObservation(filter: {backend_id: {_eq: \"backend\"}}, input: {probe_status: \"healthy\"}) { _docID } }").await?;
     backend.auth = gents_documents::BackendAuth::ApiKey {
@@ -270,33 +262,18 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         rotated["data"]["BackendCredential"][0]["secret"]["key"],
         "rotated-private-key"
     );
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let stale_allowed = modeled
-        .backend_probe_cases
-        .iter()
-        .find(|case| {
-            case["same_doc"] == true
-                && case["same_connection"] == false
-                && case["committed"] == true
-        })
-        .unwrap()["published"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(
+    probes.push((
+        (true, false, true),
         crate::backends::registry::set_backend_probe_status_for_connection(
             &node,
             &stale_backend,
             &metadata_doc,
             "unhealthy",
-            chrono::Utc::now()
+            chrono::Utc::now(),
         )
         .await
         .is_ok(),
-        stale_allowed
-    );
+    ));
     assert_eq!(
         read().await?["data"]["InferenceBackendObservation"][0]["probe_status"],
         "healthy"
@@ -319,25 +296,8 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .is_err());
     let agent_did = identity::Did::new(agent.did())?;
     let editor_did = identity::Did::new(editor.did())?;
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let expected = |visible: bool, same_connection: bool| {
-        modeled
-            .backend_discovery_cases
-            .iter()
-            .find(|case| {
-                case["authorized"] == visible
-                    && case["same_doc"] == true
-                    && case["same_connection"] == same_connection
-                    && case["committed"] == true
-            })
-            .unwrap()["published"]
-            .as_bool()
-            .unwrap()
-    };
-    assert!(
+    discovery.push((
+        (false, true, true, true),
         crate::backends::registry::discover_backend_for_actor(
             &node,
             &agent_did,
@@ -345,9 +305,8 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             "backend",
         )
         .await
-        .is_ok()
-            == expected(false, true)
-    );
+        .is_ok(),
+    ));
     assert_eq!(discoveries.load(std::sync::atomic::Ordering::SeqCst), 0);
     node.add_dac_actor_relationship_as(
         &context,
@@ -386,16 +345,60 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         editor.did(),
     )
     .await?;
-    let models = crate::backends::registry::discover_backend_for_actor(
+    let editor_discovery = crate::backends::registry::discover_backend_for_actor(
         &node,
         &editor_did,
         runtime.did(),
         "backend",
     )
-    .await?;
-    assert_eq!(models.len(), 1);
-    assert!(expected(true, true));
+    .await;
+    discovery.push(((true, true, true, true), editor_discovery.is_ok()));
+    assert_eq!(editor_discovery?.len(), 1);
     assert_eq!(discoveries.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let (uncommitted, mutations) =
+        gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            crate::backends::registry::discover_backend_for_actor(
+                &node,
+                &editor_did,
+                runtime.did(),
+                "backend",
+            ),
+        )
+        .await;
+    assert_eq!(mutations, 1);
+    discovery.push(((true, true, true, false), uncommitted.is_ok()));
+    assert_eq!(discoveries.load(std::sync::atomic::Ordering::SeqCst), 2);
+    pause.store(true, std::sync::atomic::Ordering::SeqCst);
+    let reconnect_node = node.clone();
+    let reconnect_actor = editor_did.clone();
+    let reconnect_node_did = runtime.did().to_owned();
+    let mut reconnecting = tokio::spawn(async move {
+        crate::backends::registry::discover_backend_for_actor(
+            &reconnect_node,
+            &reconnect_actor,
+            &reconnect_node_did,
+            "backend",
+        )
+        .await
+    });
+    tokio::select! {
+        () = waiting.notified() => {}
+        result = &mut reconnecting => panic!("discovery ended before provider request: {result:?}"),
+    }
+    backend.auth = gents_documents::BackendAuth::ApiKey {
+        key: "reconnected-private-key".into(),
+    };
+    gents_documents::inference_backend::write_inference_backend_document(
+        &access,
+        &backend,
+        &crate::resolved::ProviderProfilePolicy,
+    )
+    .await?;
+    release.notify_one();
+    discovery.push(((true, true, false, true), reconnecting.await?.is_ok()));
+    pause.store(false, std::sync::atomic::Ordering::SeqCst);
+    let rotated = read().await?;
     let catalog_before =
         read().await?["data"]["InferenceBackendObservation"][0]["catalogs"].clone();
     assert!(
@@ -409,7 +412,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     );
     assert_eq!(
         read().await?["data"]["BackendCredential"][0]["secret"]["key"],
-        "rotated-private-key"
+        "reconnected-private-key"
     );
     pause.store(true, std::sync::atomic::Ordering::SeqCst);
     let racing_node = node.clone();
@@ -437,7 +440,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     )
     .await?;
     release.notify_one();
-    assert_eq!(racing.await?.is_ok(), expected(false, true));
+    discovery.push(((false, true, true, true), racing.await?.is_ok()));
     assert_eq!(
         read().await?["data"]["InferenceBackendObservation"][0]["catalogs"],
         catalog_before
@@ -450,7 +453,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     )
     .await
     .is_err());
-    assert_eq!(discoveries.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(discoveries.load(std::sync::atomic::Ordering::SeqCst), 4);
     let removal =
         gents_documents::DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
             gents_store::collection::Collection::InferenceBackend,
@@ -471,24 +474,52 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         })
         .await;
     assert!(denied.is_err());
-    let denied_case = modeled
-        .backend_removal_cases
-        .iter()
-        .find(|case| {
-            case["authorized"] == false && case["matching"] == true && case["committed"] == true
+    let records = |rows: &serde_json::Value| {
+        [
+            "InferenceBackendMetadata",
+            "InferenceBackendObservation",
+            "BackendCredential",
+        ]
+        .map(|collection| !rows["data"][collection].as_array().unwrap().is_empty())
+    };
+    removals.push(((false, true, true), records(&read().await?)));
+    let bound_metadata = read().await?["data"]["InferenceBackendObservation"][0]["metadata_doc_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let rebind_observation = |metadata: &str| {
+        format!(
+            "mutation {{ update_InferenceBackendObservation(filter: {{backend_id: {{_eq: \"backend\"}}}}, input: {{metadata_doc_id: \"{}\"}}) {{ _docID }} }}",
+            gents_store::graphql::escape_graphql_string(metadata),
+        )
+    };
+    runtime_access
+        .write(
+            "test.backend.unmatched_observation",
+            &rebind_observation("unmatched"),
+        )
+        .await?;
+    let unmatched = access
+        .transact_write("test.backend.remove.unmatched", |txn| {
+            let removal = &removal;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    removal,
+                    &crate::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
-        .unwrap();
-    let retained = read().await?;
-    for (collection, field) in [
-        ("InferenceBackendMetadata", "metadata"),
-        ("InferenceBackendObservation", "observation"),
-        ("BackendCredential", "credential"),
-    ] {
-        assert_eq!(
-            !retained["data"][collection].as_array().unwrap().is_empty(),
-            denied_case[field].as_bool().unwrap()
-        );
-    }
+        .await;
+    removals.push(((true, false, true), records(&read().await?)));
+    assert!(unmatched.is_err());
+    runtime_access
+        .write(
+            "test.backend.matched_observation",
+            &rebind_observation(&bound_metadata),
+        )
+        .await?;
     let (interrupted, applied) =
         gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
@@ -507,27 +538,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .await;
     assert!(interrupted.is_err());
     assert_eq!(applied, 1);
-    let rollback_case = modeled
-        .backend_removal_cases
-        .iter()
-        .find(|case| {
-            case["authorized"] == true && case["matching"] == true && case["committed"] == false
-        })
-        .unwrap();
-    let rolled_back = read().await?;
-    for (collection, field) in [
-        ("InferenceBackendMetadata", "metadata"),
-        ("InferenceBackendObservation", "observation"),
-        ("BackendCredential", "credential"),
-    ] {
-        assert_eq!(
-            !rolled_back["data"][collection]
-                .as_array()
-                .unwrap()
-                .is_empty(),
-            rollback_case[field].as_bool().unwrap()
-        );
-    }
+    removals.push(((true, true, false), records(&read().await?)));
     access
         .transact_write("test.backend.remove", |txn| {
             let removal = &removal;
@@ -541,24 +552,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             })
         })
         .await?;
-    let removed_case = modeled
-        .backend_removal_cases
-        .iter()
-        .find(|case| {
-            case["authorized"] == true && case["matching"] == true && case["committed"] == true
-        })
-        .unwrap();
-    let after = read().await?;
-    for (collection, field) in [
-        ("InferenceBackendMetadata", "metadata"),
-        ("InferenceBackendObservation", "observation"),
-        ("BackendCredential", "credential"),
-    ] {
-        assert_eq!(
-            !after["data"][collection].as_array().unwrap().is_empty(),
-            removed_case[field].as_bool().unwrap()
-        );
-    }
+    removals.push(((true, true, true), records(&read().await?)));
     backend.auth = gents_documents::BackendAuth::Credential {
         id: rotated["data"]["InferenceBackendMetadata"][0]["credential_id"]
             .as_str()
@@ -575,34 +569,46 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         &crate::resolved::ProviderProfilePolicy,
     )
     .await?;
-    assert_eq!(
-        recreated_doc != metadata_doc,
-        modeled.backend_genesis_distinct
-    );
+    let genesis_distinct = recreated_doc != metadata_doc;
     let recreated = read().await?;
-    let replaced_allowed = modeled
-        .backend_probe_cases
-        .iter()
-        .find(|case| {
-            case["same_doc"] == false
-                && case["same_connection"] == true
-                && case["committed"] == true
-        })
-        .unwrap()["published"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(
+    probes.push((
+        (false, true, true),
         crate::backends::registry::set_backend_probe_status_for_connection(
             &node,
             &backend,
             &metadata_doc,
             "healthy",
-            chrono::Utc::now()
+            chrono::Utc::now(),
         )
         .await
         .is_ok(),
-        replaced_allowed
-    );
+    ));
+    probes.push((
+        (true, true, true),
+        crate::backends::registry::set_backend_probe_status_for_connection(
+            &node,
+            &backend,
+            &recreated_doc,
+            "healthy",
+            chrono::Utc::now(),
+        )
+        .await
+        .is_ok(),
+    ));
+    let (uncommitted_probe, probe_mutations) =
+        gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            crate::backends::registry::set_backend_probe_status_for_connection(
+                &node,
+                &backend,
+                &recreated_doc,
+                "unhealthy",
+                chrono::Utc::now(),
+            ),
+        )
+        .await;
+    assert_eq!(probe_mutations, 1);
+    probes.push(((true, true, false), uncommitted_probe.is_ok()));
     assert_ne!(
         recreated["data"]["InferenceBackendMetadata"][0]["creation_nonce"],
         metadata["creation_nonce"]
@@ -623,6 +629,113 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         "InferenceBackendMetadata"
     )
     .is_empty());
+    node.add_dac_actor_relationship_as(
+        &context,
+        "InferenceBackendMetadata",
+        &recreated_doc,
+        "writer",
+        editor.did(),
+    )
+    .await?;
+    pause.store(true, std::sync::atomic::Ordering::SeqCst);
+    let replacing_node = node.clone();
+    let replacing_actor = editor_did.clone();
+    let replacing_node_did = runtime.did().to_owned();
+    let mut replacing = tokio::spawn(async move {
+        crate::backends::registry::discover_backend_for_actor(
+            &replacing_node,
+            &replacing_actor,
+            &replacing_node_did,
+            "backend",
+        )
+        .await
+    });
+    tokio::select! {
+        () = waiting.notified() => {}
+        result = &mut replacing => panic!("discovery ended before provider request: {result:?}"),
+    }
+    access
+        .transact_write("test.backend.replace_during_discovery", |txn| {
+            let removal = &removal;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    removal,
+                    &crate::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await?;
+    let replacement = gents_documents::inference_backend::write_inference_backend_document(
+        &access,
+        &backend,
+        &crate::resolved::ProviderProfilePolicy,
+    )
+    .await?;
+    assert_ne!(replacement, recreated_doc);
+    release.notify_one();
+    discovery.push(((true, false, true, true), replacing.await?.is_ok()));
+    for case in gents_lean_vocab::families::household_backend_destination::cases() {
+        case.check(moved_published);
+    }
+    for case in gents_lean_vocab::families::household_backend_probe::cases() {
+        let key = (
+            case.input.same_doc,
+            case.input.same_connection,
+            case.input.committed,
+        );
+        let observed: Vec<bool> = probes
+            .iter()
+            .filter(|(probe, _)| *probe == key)
+            .map(|(_, published)| *published)
+            .collect();
+        assert!(
+            !observed.is_empty() && observed.iter().all(|published| *published == observed[0]),
+            "probe {key:?}: {observed:?}"
+        );
+        case.check(observed[0]);
+    }
+    for case in gents_lean_vocab::families::household_backend_discovery::cases() {
+        let key = (
+            case.input.authorized,
+            case.input.same_doc,
+            case.input.same_connection,
+            case.input.committed,
+        );
+        let observed: Vec<bool> = discovery
+            .iter()
+            .filter(|(attempt, _)| *attempt == key)
+            .map(|(_, published)| *published)
+            .collect();
+        assert!(
+            !observed.is_empty() && observed.iter().all(|published| *published == observed[0]),
+            "discovery {key:?}: {observed:?}"
+        );
+        case.check(observed[0]);
+    }
+    for case in gents_lean_vocab::families::household_backend_removal::cases() {
+        let key = (
+            case.input.authorized,
+            case.input.matching,
+            case.input.committed,
+        );
+        let [metadata, observation, credential] = removals
+            .iter()
+            .find(|(attempt, _)| *attempt == key)
+            .map(|(_, records)| *records)
+            .unwrap_or_else(|| panic!("removal {key:?} was not observed"));
+        case.check(
+            gents_lean_vocab::families::household_backend_removal::BackendRecords {
+                metadata,
+                observation,
+                credential,
+            },
+        );
+    }
+    for case in gents_lean_vocab::families::household_backend_genesis::cases() {
+        case.check(genesis_distinct);
+    }
     discovery_server.abort();
     node.shutdown().await?;
     Ok(())

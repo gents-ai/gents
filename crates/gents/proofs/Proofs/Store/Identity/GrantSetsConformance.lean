@@ -6,11 +6,6 @@ open Lean Identity.GrantSets
 
 def recipients : List Recipient := [.initUser, .enrolledUser, .defaultAgent, .agent]
 
-def recipientCasesJson : String := (toJson (recipients.map fun r =>
-  Json.mkObj [("recipient", toJson r.name),
-    ("direct", toJson ((directSets r).map GrantSet.name)),
-    ("projected", toJson ((projectedSets r).map GrantSet.name))])).compress
-
 def relationName : Relation → String
   | .admin => "admin"
   | .permission p => p

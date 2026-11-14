@@ -1995,16 +1995,6 @@ impl Backlog {
 #[tokio::test]
 async fn callback_claim_uses_modeled_selected_agent_grants() {
     let backlog = Backlog::registered().await;
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let modeled_agent = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
     let access = super::test_agent_access(&backlog.node);
     let callback = super::documents::load_callback(&backlog.node, "cb-backlog", &backlog.owner)
         .await
@@ -2033,8 +2023,11 @@ async fn callback_claim_uses_modeled_selected_agent_grants() {
     let binding_doc = binding_row["data"]["CallbackBinding"][0]["_docID"]
         .as_str()
         .unwrap();
-    for (index, revoked) in [false, true].into_iter().enumerate() {
-        if revoked {
+    for (index, case) in gents_lean_vocab::families::household_callback_binding_claim::cases()
+        .into_iter()
+        .enumerate()
+    {
+        if case.input.revoked {
             backlog
                 .access
                 .delete_actor_relationship(
@@ -2084,18 +2077,7 @@ async fn callback_claim_uses_modeled_selected_agent_grants() {
             None,
         )
         .await;
-        let expected = case
-            .callback_configuration_cases
-            .iter()
-            .find(|observation| {
-                observation["actor"] == *modeled_agent
-                    && observation["id"] == "binding"
-                    && observation["revoked"] == revoked
-            })
-            .unwrap()["claim_allowed"]
-            .as_bool()
-            .unwrap();
-        assert_eq!(claim.is_ok_and(|value| value.is_some()), expected);
+        case.check(claim.is_ok_and(|value| value.is_some()));
     }
     backlog.node.shutdown().await.unwrap();
 }
@@ -2122,164 +2104,113 @@ async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
             .unwrap()
             .unwrap();
     let ids = backlog.config_ids().await;
-    let pending = CallbackInvocationDoc {
-        invocation_id: "invoke-check".into(),
-        owner_node_did: backlog.owner.clone(),
-        agent_did: super::test_agent_did(),
-        callback_id: binding.callback_id.clone(),
-        configuration_generation: Some(
-            super::documents::configuration_generation(&binding, &source, &callback, &ids).unwrap(),
-        ),
-        claimed_callback: None,
-        input: json!({}),
-        origin: gents_documents::CallbackInvocationOrigin::Event {
-            binding_id: binding.binding_id.clone(),
-            source_collection: source.source_collection.clone(),
-            source_doc_id: "source".into(),
-            source_version: None,
-        },
-        idempotency_key: "invoke-check".into(),
-        caused_by_correlation: None,
-        lifecycle_state: LIFECYCLE_PENDING.into(),
-        attempts: Some(0),
-        action_plan: None,
-        action_journal: None,
-        error: None,
-        claimed_at: None,
-        created_at: None,
-    };
-    let pending = super::documents::create_pending_invocation(&backlog.node, &access, &pending)
-        .await
-        .unwrap();
+    let generation =
+        super::documents::configuration_generation(&binding, &source, &callback, &ids).unwrap();
     let agent_rows = backlog.access.execute("{Agent {_docID}}").await.unwrap();
     let agent_doc = agent_rows["data"]["Agent"][0]["_docID"].as_str().unwrap();
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let expected = |name: &str| {
-        contract
-            .unattended_agent_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["allowed"]
-            .as_bool()
-            .unwrap()
+    let agent_did = identity::Did::new(super::test_agent_did()).unwrap();
+    let set_enabled = |enabled: bool| {
+        let access = &backlog.access;
+        async move {
+            access
+                .write(
+                    "test.callback.agent_enabled",
+                    &format!(
+                        "mutation {{update_Agent(docID:\"{}\",input:{{enabled:{enabled}}}){{_docID}}}}",
+                        gents_store::graphql::escape_graphql_string(agent_doc)
+                    ),
+                )
+                .await
+                .unwrap();
+        }
     };
-    backlog
-        .access
-        .write(
-            "test.callback.disable_agent",
-            &format!(
-                "mutation {{update_Agent(docID:\"{}\",input:{{enabled:false}}){{_docID}}}}",
-                gents_store::graphql::escape_graphql_string(agent_doc)
-            ),
+    let mut executor = true;
+    let mut reader = false;
+    let mut claimed = None;
+    for case in gents_lean_vocab::families::household_unattended_callback_claim::cases() {
+        let name = &case.input.name;
+        let pending = CallbackInvocationDoc {
+            invocation_id: format!("invoke-check-{name}"),
+            owner_node_did: backlog.owner.clone(),
+            agent_did: if case.input.actor_matches {
+                super::test_agent_did()
+            } else {
+                "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH".into()
+            },
+            callback_id: binding.callback_id.clone(),
+            configuration_generation: Some(generation.clone()),
+            claimed_callback: None,
+            input: json!({}),
+            origin: gents_documents::CallbackInvocationOrigin::Event {
+                binding_id: binding.binding_id.clone(),
+                source_collection: source.source_collection.clone(),
+                source_doc_id: format!("source-{name}"),
+                source_version: None,
+            },
+            idempotency_key: format!("invoke-check-{name}"),
+            caused_by_correlation: None,
+            lifecycle_state: LIFECYCLE_PENDING.into(),
+            attempts: Some(0),
+            action_plan: None,
+            action_journal: None,
+            error: None,
+            claimed_at: None,
+            created_at: None,
+        };
+        let pending = super::documents::create_pending_invocation(&backlog.node, &access, &pending)
+            .await
+            .unwrap();
+        set_enabled(case.input.enabled).await;
+        let invoke = case.input.invoke == "allowed";
+        if !invoke && !reader {
+            backlog
+                .access
+                .add_actor_relationship("Agent", agent_doc, "reader", &agent_did)
+                .await
+                .unwrap();
+            reader = true;
+        }
+        if invoke != executor {
+            if invoke {
+                backlog
+                    .access
+                    .add_actor_relationship("Agent", agent_doc, "executor", &agent_did)
+                    .await
+                    .unwrap();
+            } else {
+                backlog
+                    .access
+                    .delete_actor_relationship("Agent", agent_doc, "executor", &agent_did)
+                    .await
+                    .unwrap();
+            }
+            executor = invoke;
+        }
+        let claim = super::claim::claim_invocation(
+            &backlog.node,
+            &access,
+            &backlog.owner,
+            &pending,
+            &callback,
+            None,
+            None,
         )
-        .await
-        .unwrap();
-    let disabled = super::claim::claim_invocation(
-        &backlog.node,
-        &access,
-        &backlog.owner,
-        &pending,
-        &callback,
-        None,
-        None,
-    )
-    .await;
-    assert_eq!(
-        disabled.is_ok_and(|row| row.is_some()),
-        expected("disabled")
-    );
-    backlog
-        .access
-        .write(
-            "test.callback.enable_agent",
-            &format!(
-                "mutation {{update_Agent(docID:\"{}\",input:{{enabled:true}}){{_docID}}}}",
-                gents_store::graphql::escape_graphql_string(agent_doc)
-            ),
-        )
-        .await
-        .unwrap();
-    backlog
-        .access
-        .add_actor_relationship(
-            "Agent",
-            agent_doc,
-            "reader",
-            &identity::Did::new(super::test_agent_did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    backlog
-        .access
-        .delete_actor_relationship(
-            "Agent",
-            agent_doc,
-            "executor",
-            &identity::Did::new(super::test_agent_did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    let denied = super::claim::claim_invocation(
-        &backlog.node,
-        &access,
-        &backlog.owner,
-        &pending,
-        &callback,
-        None,
-        None,
-    )
-    .await;
-    assert_eq!(
-        denied.is_ok_and(|row| row.is_some()),
-        expected("reader_only")
-    );
-    backlog
-        .access
-        .add_actor_relationship(
-            "Agent",
-            agent_doc,
-            "executor",
-            &identity::Did::new(super::test_agent_did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    let claimed = super::claim::claim_invocation(
-        &backlog.node,
-        &access,
-        &backlog.owner,
-        &pending,
-        &callback,
-        None,
-        None,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert!(expected("allowed"));
-    backlog
-        .access
-        .delete_actor_relationship(
-            "Agent",
-            agent_doc,
-            "executor",
-            &identity::Did::new(super::test_agent_did()).unwrap(),
-        )
-        .await
-        .unwrap();
-    backlog
-        .access
-        .write(
-            "test.callback.disable_after_claim",
-            &format!(
-                "mutation {{update_Agent(docID:\"{}\",input:{{enabled:false}}){{_docID}}}}",
-                gents_store::graphql::escape_graphql_string(agent_doc)
-            ),
-        )
-        .await
-        .unwrap();
+        .await;
+        let admitted = claim.as_ref().is_ok_and(|row| row.is_some());
+        if admitted {
+            claimed = claim.unwrap();
+        }
+        case.check(admitted);
+    }
+    let claimed = claimed.unwrap();
+    if executor {
+        backlog
+            .access
+            .delete_actor_relationship("Agent", agent_doc, "executor", &agent_did)
+            .await
+            .unwrap();
+    }
+    set_enabled(false).await;
     let recovered = super::claim::claim_invocation(
         &backlog.node,
         &access,
@@ -2295,99 +2226,9 @@ async fn callback_claim_checks_enabled_and_invoke_only_before_admission() {
     backlog.node.shutdown().await.unwrap();
 }
 
-#[test]
-fn callback_generation_covers_modeled_input_configuration() {
-    let case = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let binding: gents_documents::CallbackBinding = serde_json::from_value(json!({
-        "node_did": "node", "binding_id": "binding", "agent_did": "agent",
-        "event_source_id": "source", "callback_id": "callback", "input_fields": ["name"]
-    }))
-    .unwrap();
-    let source: gents_documents::EventSource = serde_json::from_value(json!({
-        "node_did": "node", "event_source_id": "source", "source_collection": "WorkUnit"
-    }))
-    .unwrap();
-    let callback: gents_documents::Callback = serde_json::from_value(json!({
-        "node_did": "node", "callback_id": "callback",
-        "handler": {"kind": "built_in", "emitter": "create_workspace"}
-    }))
-    .unwrap();
-    let ids = super::documents::CallbackConfigDocIds {
-        binding: "binding-doc".into(),
-        source: "source-doc".into(),
-        callback: "callback-doc".into(),
-    };
-    let observed =
-        super::documents::configuration_generation(&binding, &source, &callback, &ids).unwrap();
-    for observation in &case.callback_generation_cases {
-        let mut changed_binding = binding.clone();
-        let mut changed_source = source.clone();
-        let mut changed_callback = callback.clone();
-        let mut changed_ids = ids.clone();
-        match observation["name"].as_str().unwrap() {
-            "source_filter" => {
-                changed_source.filter = Some("{ name: { _eq: \"changed\" } }".into())
-            }
-            "binding_input" => changed_binding.input_fields.push("status".into()),
-            "callback_handler" => {
-                changed_callback.handler = gents_documents::CallbackHandler::Module {
-                    module_id: "changed".into(),
-                    workspace_agents: None,
-                }
-            }
-            "binding_recreated" => changed_ids.binding = "new-binding".into(),
-            "source_recreated" => changed_ids.source = "new-source".into(),
-            "callback_recreated" => changed_ids.callback = "new-callback".into(),
-            _ => {}
-        }
-        let current = super::documents::configuration_generation(
-            &changed_binding,
-            &changed_source,
-            &changed_callback,
-            &changed_ids,
-        )
-        .unwrap();
-        let actual = observation["source_visible"] == true
-            && observation["observed"].is_string()
-            && observed == current;
-        assert_eq!(
-            actual,
-            observation["allowed"].as_bool().unwrap(),
-            "{}",
-            observation["name"]
-        );
-    }
-}
-
 #[tokio::test]
 async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Result<()> {
     use gents_store::identity::NodeIdentity;
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let modeled_user = &contract
-        .objects
-        .iter()
-        .find(|object| object.id == "home")
-        .unwrap()
-        .owner;
-    let modeled_agent = &contract
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
-    let modeled_sibling = contract
-        .callback_placement_cases
-        .iter()
-        .find(|case| case["revoked"] == false && case["expected"] == false)
-        .unwrap()["actor"]
-        .as_str()
-        .unwrap();
     let db = test_node("callback-placement").await;
     let node = db.node.clone();
     let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
@@ -2426,8 +2267,8 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
             &identity::Did::new(agent.did())?,
         )
         .await?;
-    for case in &contract.callback_placement_cases {
-        if case["revoked"] == true {
+    for case in gents_lean_vocab::families::household_callback_placement::cases() {
+        if case.input.revoked {
             owner
                 .delete_actor_relationship(
                     "RepositoryPlacement",
@@ -2437,8 +2278,7 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
                 )
                 .await?;
         }
-        let modeled_actor = case["actor"].as_str().unwrap();
-        let visible = if modeled_actor == modeled_user {
+        let visible = if case.input.role == "user" {
             assert!(super::documents::load_repository_placement(
                 &owner,
                 "repo",
@@ -2462,17 +2302,16 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
                 })
                 .await?
                 .is_some()
-        } else if modeled_actor == modeled_agent {
+        } else if case.input.role == "agent" {
             super::documents::load_repository_placement(&selected, "repo", root.did(), agent.did())
                 .await?
                 .is_some()
         } else {
-            assert_eq!(modeled_actor, modeled_sibling);
             super::documents::load_repository_placement(&sibling, "repo", root.did(), other.did())
                 .await?
                 .is_some()
         };
-        assert_eq!(visible, case["expected"].as_bool().unwrap());
+        case.check(visible);
     }
     node.shutdown().await?;
     Ok(())
@@ -2482,18 +2321,8 @@ async fn callback_repository_placement_reads_with_selected_agent() -> anyhow::Re
 async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -> anyhow::Result<()>
 {
     use gents_store::identity::NodeIdentity;
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let expected = |name: &str, field: &str| {
-        contract
-            .callback_child_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()[field]
-            .as_bool()
-            .unwrap()
+    let visible = |response: &serde_json::Value, collection: &str| {
+        !response["data"][collection].as_array().unwrap().is_empty()
     };
     let directory = tempfile::tempdir()?;
     let user = gents_store::identity::KeyIdentity::load_or_create(
@@ -2547,13 +2376,8 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
         pending["data"]["CallbackInvocation"][0]["parent_linked"],
         true
     );
-    assert_eq!(
-        !reader.execute(pending_query).await?["data"]["CallbackInvocation"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        expected("commit", "user_read")
-    );
+    let committed_pending_user =
+        visible(&reader.execute(pending_query).await?, "CallbackInvocation");
     gents_store::test_support::relationships::resource_in_txn(
         &agent,
         "CallbackInvocation",
@@ -2565,13 +2389,8 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
     )
     .await?;
     super::documents::create_pending_invocation(&node, &agent, &invocation).await?;
-    assert_eq!(
-        !reader.execute(pending_query).await?["data"]["CallbackInvocation"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        expected("duplicate", "user_read")
-    );
+    let duplicate_pending_user =
+        visible(&reader.execute(pending_query).await?, "CallbackInvocation");
     let result = CallbackResultDoc {
         result_id: "atomic-result".into(),
         invocation_id: "atomic-invocation".into(),
@@ -2591,13 +2410,9 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
         .as_str()
         .unwrap();
     assert_eq!(rows["data"]["CallbackResult"][0]["parent_linked"], true);
-    assert_eq!(
-        !reader.execute(query).await?["data"]["CallbackResult"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        expected("commit", "user_read")
-    );
+    let committed_agent = visible(&rows, "CallbackResult");
+    let committed_user = visible(&reader.execute(query).await?, "CallbackResult");
+    assert_eq!(committed_pending_user, committed_user);
     gents_store::test_support::relationships::resource_in_txn(
         &agent,
         "CallbackResult",
@@ -2609,20 +2424,9 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
     )
     .await?;
     super::documents::create_callback_result(&node, &agent, &result).await?;
-    assert_eq!(
-        !reader.execute(query).await?["data"]["CallbackResult"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        expected("duplicate", "user_read")
-    );
-    assert_eq!(
-        !agent.execute(query).await?["data"]["CallbackResult"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        expected("duplicate", "agent_read")
-    );
+    let duplicate_user = visible(&reader.execute(query).await?, "CallbackResult");
+    assert_eq!(duplicate_pending_user, duplicate_user);
+    let duplicate_agent = visible(&agent.execute(query).await?, "CallbackResult");
 
     let mut aborted = result.clone();
     aborted.result_id = "aborted-result".into();
@@ -2650,13 +2454,22 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
         .await;
     assert!(rolled_back.is_err());
     let query = "{CallbackResult(filter:{invocation_id:{_eq:\"aborted-invocation\"}}){_docID}}";
-    assert_eq!(
-        !agent.execute(query).await?["data"]["CallbackResult"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
-        expected("abort", "agent_read")
-    );
+    let aborted_agent = visible(&agent.execute(query).await?, "CallbackResult");
+    let aborted_user = visible(&reader.execute(query).await?, "CallbackResult");
+    for case in gents_lean_vocab::families::household_callback_child::cases() {
+        let (user_read, agent_read) = match case.input.name.as_str() {
+            "commit" => (committed_user, committed_agent),
+            "duplicate" => (duplicate_user, duplicate_agent),
+            "abort" => (aborted_user, aborted_agent),
+            name => panic!("callback child scenario has no {name} step"),
+        };
+        case.check(
+            gents_lean_vocab::families::household_callback_child::ChildRead {
+                user_read,
+                agent_read,
+            },
+        );
+    }
     node.shutdown().await?;
     Ok(())
 }
@@ -2683,10 +2496,6 @@ async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
             .unwrap()
             .unwrap();
     let ids = backlog.config_ids().await;
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
     let source_rows = backlog
         .access
         .execute("{ EventSource { _docID } }")
@@ -2695,43 +2504,39 @@ async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
     let source_doc = source_rows["data"]["EventSource"][0]["_docID"]
         .as_str()
         .unwrap();
-    for name in [
-        "same",
-        "source_filter",
-        "binding_recreated",
-        "source_recreated",
-        "callback_recreated",
-        "missing",
-        "source_revoked",
-    ] {
-        if name == "source_revoked" {
+    let agent_did = identity::Did::new(super::test_agent_did()).unwrap();
+    for case in gents_lean_vocab::families::household_callback_generation_claim::cases() {
+        let name = case.input.name.as_str();
+        if !case.input.source_visible {
             backlog
                 .access
-                .delete_actor_relationship(
-                    "EventSource",
-                    source_doc,
-                    "reader",
-                    &identity::Did::new(super::test_agent_did()).unwrap(),
-                )
+                .delete_actor_relationship("EventSource", source_doc, "reader", &agent_did)
                 .await
                 .unwrap();
         }
+        let mut observed_binding = binding.clone();
         let mut observed_source = source.clone();
-        if name == "source_filter" {
-            observed_source.filter = Some("{ label: { _eq: \"old\" } }".into());
-        }
+        let mut observed_callback = callback.clone();
         let mut observed_ids = ids.clone();
         match name {
+            "source_filter" => observed_source.filter = Some("{ label: { _eq: \"old\" } }".into()),
+            "binding_input" => observed_binding.input_fields.push("former".into()),
+            "callback_handler" => {
+                observed_callback.handler = gents_documents::CallbackHandler::Module {
+                    module_id: "former".into(),
+                    workspace_agents: None,
+                }
+            }
             "binding_recreated" => observed_ids.binding = "former-binding".into(),
             "source_recreated" => observed_ids.source = "former-source".into(),
             "callback_recreated" => observed_ids.callback = "former-callback".into(),
             _ => {}
         }
-        let generation = (name != "missing").then(|| {
+        let generation = case.input.observed.is_some().then(|| {
             super::documents::configuration_generation(
-                &binding,
+                &observed_binding,
                 &observed_source,
-                &callback,
+                &observed_callback,
                 &observed_ids,
             )
             .unwrap()
@@ -2775,14 +2580,14 @@ async fn callback_claim_rechecks_modeled_source_visibility_and_generation() {
         )
         .await
         .is_ok_and(|claim| claim.is_some());
-        let expected = contract
-            .callback_generation_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["allowed"]
-            .as_bool()
-            .unwrap();
-        assert_eq!(actual, expected, "{name}");
+        if !case.input.source_visible {
+            backlog
+                .access
+                .add_actor_relationship("EventSource", source_doc, "reader", &agent_did)
+                .await
+                .unwrap();
+        }
+        case.check(actual);
     }
     backlog.node.shutdown().await.unwrap();
 }
@@ -2856,21 +2661,14 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
     let module_doc = module_row["data"]["CallbackModule"][0]["_docID"]
         .as_str()
         .unwrap();
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
+    let agent_did = identity::Did::new(super::test_agent_did()).unwrap();
     let mut admitted = None;
-    for name in ["allowed", "changed", "recreated", "unprepared", "revoked"] {
-        if name == "revoked" {
+    for case in gents_lean_vocab::families::household_callback_module_claim::cases() {
+        let name = case.input.name.as_str();
+        if !case.input.visible {
             backlog
                 .access
-                .delete_actor_relationship(
-                    "CallbackModule",
-                    module_doc,
-                    "reader",
-                    &identity::Did::new(super::test_agent_did()).unwrap(),
-                )
+                .delete_actor_relationship("CallbackModule", module_doc, "reader", &agent_did)
                 .await
                 .unwrap();
         }
@@ -2909,7 +2707,7 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
         if name == "changed" {
             prepared.provenance = Some("changed".into());
         }
-        let candidate_plan = (name != "unprepared").then_some("[]");
+        let candidate_plan = case.input.prepared.then_some("[]");
         let claim = super::claim::claim_invocation(
             &backlog.node,
             &access,
@@ -2927,21 +2725,18 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
             candidate_plan,
         )
         .await;
-        let expected = contract
-            .callback_module_claim_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["allowed"]
-            .as_bool()
-            .unwrap();
-        assert_eq!(
-            claim.as_ref().is_ok_and(|value| value.is_some()),
-            expected,
-            "{name}"
-        );
-        if name == "allowed" {
+        if !case.input.visible {
+            backlog
+                .access
+                .add_actor_relationship("CallbackModule", module_doc, "reader", &agent_did)
+                .await
+                .unwrap();
+        }
+        let claimed = claim.as_ref().is_ok_and(|value| value.is_some());
+        if claimed {
             admitted = claim.unwrap();
         }
+        case.check(claimed);
     }
     let admitted = admitted.unwrap();
     assert_eq!(admitted.action_plan.as_deref(), Some("[]"));
@@ -2981,16 +2776,16 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
         })
         .await
         .unwrap();
-    for case in &contract.callback_recovery_configuration_cases {
+    for case in gents_lean_vocab::families::household_callback_recovery_configuration::cases() {
         let mut row = admitted.clone();
-        if case["claimed"] == false {
+        if !case.input.claimed {
             row.lifecycle_state = LIFECYCLE_PENDING.into();
         }
         let selected = super::run::callback_for_recovery(&backlog.node, &row)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(selected.display_name.as_deref(), case["expected"].as_str());
+        case.check(selected.display_name.unwrap_or_default());
     }
     backlog.node.shutdown().await.unwrap();
 }
@@ -3022,19 +2817,6 @@ async fn callback_cursor_waits_for_a_successful_claim() {
             .unwrap()
     }
 
-    let cases = &gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap()
-        .callback_checkpoint_claim_cases;
-    let expected = |claimed: bool| {
-        cases
-            .iter()
-            .find(|case| case["claim_time"] == claimed && case["retained_configuration"] == claimed)
-            .unwrap()["expected"]
-            .as_bool()
-            .unwrap()
-    };
     let backlog = Backlog::registered().await;
     let agent = super::test_agent_access(&backlog.node);
     let seeded = backlog.cursor().await;
@@ -3105,28 +2887,28 @@ async fn callback_cursor_waits_for_a_successful_claim() {
         super::documents::create_pending_invocation(&backlog.node, &agent, &invocation)
             .await
             .unwrap();
-    assert_eq!(
-        checkpoint(&agent, &backlog.owner, through).await,
-        expected(false)
-    );
-    assert_eq!(backlog.cursor().await, seeded);
-    assert!(super::claim::claim_invocation(
-        &backlog.node,
-        &agent,
-        &backlog.owner,
-        &invocation,
-        &callback,
-        None,
-        None
-    )
-    .await
-    .unwrap()
-    .is_some());
-    assert_eq!(
-        checkpoint(&agent, &backlog.owner, through).await,
-        expected(true)
-    );
-    assert_eq!(backlog.cursor().await, through);
+    for case in gents_lean_vocab::families::household_callback_claim_checkpoint::cases() {
+        if case.input.claim_time {
+            assert!(super::claim::claim_invocation(
+                &backlog.node,
+                &agent,
+                &backlog.owner,
+                &invocation,
+                &callback,
+                None,
+                None
+            )
+            .await
+            .unwrap()
+            .is_some());
+        }
+        let advanced = checkpoint(&agent, &backlog.owner, through).await;
+        assert_eq!(
+            backlog.cursor().await,
+            if advanced { through } else { seeded.as_str() }
+        );
+        case.check(advanced);
+    }
     backlog.node.shutdown().await.unwrap();
 }
 

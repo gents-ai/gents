@@ -72,13 +72,12 @@ impl LeanSurface {
 mod generated;
 pub use generated::*;
 
-mod canonical_execution;
-mod canonical_output;
 pub mod canonical_wire;
 pub mod claude_replay;
 pub mod consumer_scan;
 pub mod family;
 mod plugin_job_wire;
+mod request_input_wire;
 mod session_turn_wire;
 mod title;
 
@@ -87,10 +86,8 @@ pub mod families {
     include!(concat!(env!("OUT_DIR"), "/families.rs"));
 }
 
-pub use canonical_execution::*;
-pub use canonical_output::*;
-pub use gents_protocol::request_lifecycle::RequestLifecycleState as LeanRequestExecutionRequestPhase;
 pub use plugin_job_wire::*;
+pub use request_input_wire::*;
 pub use session_turn_wire::*;
 pub use title::*;
 
@@ -122,53 +119,12 @@ where
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
-pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
-    lean_contract_snapshot()
-        .recovery_sweep_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
-}
-
-pub fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {
-    lean_contract_snapshot()
-        .r6_backgrounding_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean R6 backgrounding case {name:?} was not emitted"))
-}
-
-pub fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
-    lean_contract_snapshot()
-        .transcript_conformance_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean transcript case {name:?} was not emitted"))
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct QueueImage {
     pub active: Option<String>,
     pub folding: Vec<String>,
     pub pending: Vec<String>,
     pub terminal: BTreeSet<String>,
-}
-
-impl LeanQueueManagementState {
-    pub fn image(&self, native: impl Fn(u64) -> String) -> QueueImage {
-        let ids = |entries: &[LeanFoldQueueEntry]| {
-            entries
-                .iter()
-                .map(|entry| native(entry.request_id))
-                .collect()
-        };
-        QueueImage {
-            active: self.active.map(&native),
-            folding: ids(&self.folding),
-            pending: ids(&self.pending),
-            terminal: self.terminal.iter().copied().map(&native).collect(),
-        }
-    }
 }
 
 pub fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>) {

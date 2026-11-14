@@ -352,11 +352,79 @@ def vocabularyCoverage : List CoverageEntry :=
       "family"
       "managed_exec_cancel_reply_vocabulary")
       "managed-exec" [Surface.agentFacing]
-  , tagged (consumerWithFollowUp
-      "process_stop_cases"
-      "ProcessStopCases"
-      "Each generated verdict is checked against the native mapping, and the reachable observations (a recorded running group, the same group after the owner's stop, a reused start identity) are produced by real test-owned process groups. A group that survives SIGKILL cannot be constructed on a test host, so stillRunning is checked only through the mapping.")
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_host")
       "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_live_settlement")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "family"
+      "process_stop_owned_process"
+      "Real test-owned process groups produce the reachable observations (a recorded running group, the same group after the owner's stop, a reused start identity). A group that survives SIGKILL cannot be constructed on a test host, so stillRunning is checked only through process_stop_host.")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_unrecorded_cancel")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_client_unverified")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_client_released_native")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_model_cancel_unverified")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_approval_wait_stop")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_unverified_worker")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_unverified_foreground")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_gone_leader")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_later_stop")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_timeout_before_cleanup")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_interrupt_sweep")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_terminal_write_failure")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_failed_handoff_receipt")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_pending_failure")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "process_stop_early_confirmation")
+      "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
       "tool_execution_failure_class_vocabulary")
@@ -1035,6 +1103,10 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "causal_hop_contracts_default_cap")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "causal_hop_contracts_session_target")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -1328,10 +1400,28 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "logical_output_obligation_contracts_gate")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "completion_retry_cases"
-      "completionRetry"
-      "Retry policy and canonical-execution composition are executable Lean witnesses. The native owned loop must still implement retraction-before-retry and immutable acceptance before this is consumer coverage.")
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_pre_stream")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_mid_stream")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_no_visible_output")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_origin_class")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "completion_retry_contracts_retraction_unreached"
+      "model-production-gap: production has no API to attempt these retry-machine actions: a schedule before a durable retraction, an uncommitted retraction, a failure or a schedule after acceptance, and an accepted-tool-failure observation on the retry machine.")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_loop_witness")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "Proofs.Conformance.FleetSlotAccounting"
@@ -1429,10 +1519,9 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_managed_exec_liveness_tool")
       "managed-exec" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "managed_exec_tool_boundary_cases"
-      "ManagedExecToolBoundaryCases"
-      "Drive each generated native-tool route through its actual managed process boundary. Names and processTree flags are not evidence of runtime routing.")
+  , tagged (consumerCoverage
+      "family"
+      "managed_exec_tool_route")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage "family" "pairing_reconcile_supervisor_shutdown_race")
       "pairing-reconcile" [Surface.runtimeInternal]
@@ -1774,13 +1863,36 @@ def caseCoverage : List CoverageEntry :=
       "fold_queue_contracts_publication_script")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "session_input_edit_cases"
-      "SessionInputEditCases"
+      "family"
+      "fold_queue_contracts_input_edit_atomic"
       "The model composes existing authority observations with the queue replacement owner and atomic terminal receipt. Signature validity and session ownership are supplied by their existing native owners; edits are direct client-signed commands, and the command introduces no new authority kind. Native binding must exercise these facts, exact replay and identity collision through the real reconciler. Distinct physical commands sharing an ID are an observed fail-closed barrier, including before application and after a receipt on another session; existing effects and receipts remain intact.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "session_input_edit_cases"
-      "SessionInputEditCases")
+      "family"
+      "fold_queue_contracts_input_edit_endpoint")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_endpoint_refused")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_concurrent_replay")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_racing_intents")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_late_twin")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "fold_queue_contracts_input_edit_identical_republish")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "fold_queue_contracts_input_edit_unreached"
+      "model-production-gap: process_command leaves a command unanswered when another physical command shares its ID, but no production path stores two: the unique command_id index refuses a second local create, and a replicated twin (which DefraDB would keep, resolving a live unique conflict by smallest docID, defradb.rs crates/defra-core/src/merge.rs:101-104) cannot arrive because AgentSessionInputEdit is a managed collection that application pairing refuses and not a replicated protocol collection.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -1824,8 +1936,13 @@ def caseCoverage : List CoverageEntry :=
       "Two observed-identity overlap scripts bind real HTTP transactions against embedded completion publication, including permitted pre-latch phantom survival and post-latch replay. These schedules do not prove arbitrary distributed serialization; exact native queue ordering remains unbound.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_request")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "recovery_sweep_ids"
+      "RecoverySweepIds"
+      "The registered sweep ids are a model registry list. Lean proves every id has a replayed recovery_sweeps_* or plugin_job_recoveries family (sweep_families_cover_registered_sweeps), and periodic_recovery_registry replays the production periodic registry against the model tick; no native test reads the list itself.")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2112,6 +2229,35 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "delegated_finality_served_unreached"
       "model-production-gap: the session-message commit keeps no caller-side knowledge state for a pending read, a foreign receipt or an invalid abort proof, and no attempt counter or retry and failure-report permission, so pending-is-unconfirmed, foreign-receipt, no-proof-of-abort and failure-proof-cannot-undo-child have no production form.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_claim_readiness")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_recovery_receipt")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_agent_new_publication")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "agent_creation_receipt_opening")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_creator_recovery")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_commit_refusal")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "delegated_publication_unreached"
+      "model-production-gap: wrong-physical-session, wrong-physical-agent, missing-creation-receipt, partial-grants and partial-then-recover have no production path (the agent_new commit binds then signs its targets and issues the receipt in one transaction; relation sets are atomic with their markers). Model and production disagree on invoke-denied (model DelegatedPublication.lean:58 commits and :131 denies at claim; production commit.rs:460 refuses the commit), revoked-after-publication (model DelegatedPublicationCases.lean:38 lets the parent revoke; production relationships.rs:147 refuses the parent Agent with NotAuthorized get-collection), and invoke-revoked-at-commit and same-agent-marker-conflict (model DelegatedPublication.lean:126 ends in conflict; production claim.rs:273 reruns a conflicted claim under ConflictRetry, transact_entry.rs:106; observed denied after a concurrent revocation). marker-commit-conflict is inconclusive: a concurrent rewrite of both markers to complete gave a committed claim and no native conflict was shown; a marker reset to pending between the claim check and its commit is untested and is a question for the maintainer.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2429,8 +2575,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_restart_plugin_job")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases")
+      "family"
+      "contracts_r6_native_lifecycle")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -2671,8 +2817,20 @@ def caseCoverage : List CoverageEntry :=
       "goal_client_control_contracts_submission_trace")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_client_start_cases"
-      "GoalClientStartCases")
+      "family"
+      "goal_client_start_contracts_starts")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_start_contracts_replacements")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_start_contracts_reservation")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_start_contracts_opening_provenance")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2764,23 +2922,27 @@ def caseCoverage : List CoverageEntry :=
       "contracts_restart_session_message")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases"
+      "family"
+      "contracts_r6_process_control"
       "The scope comparator preserves absent-versus-empty behavior for retained history. Native signed admission rejects a requester-less local-self request before any hook effect; accepted hook envelopes use a real admitted requester, and a forged requester fails against its immutable physical header.")
       "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_goal_owner_publication")
+      "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases"
+      "family"
+      "contracts_r6_goal_owner_side_effects"
       "Binds all seven completion_continuation_owner cases through accepted native tool output, durable notification and redrive owners. Parent completion is an imported model observation; this consumer does not establish the parent terminalization transition or the separate continuation-publication family.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases"
+      "family"
+      "contracts_r6_wait_dispatch"
       "The generated caller-interrupt observer-completion case derives the completed foreground wait through the tool owner and the unchanged Running background process through the observation owner. The native consumer binds both states and the persisted structured result. This deterministic observer path does not decide the competing request-cancellation winner.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases"
+      "family"
+      "contracts_r6_wait_settlement"
       "The generated caller-interrupt dispatch case supplies the accepted Running foreground wait's cancelled state and unchanged background state; the native test separately asserts exact canonical cancellation text. The observer case supplies the only structured alternative. This finite race check does not establish a deterministic winner or scheduler fairness.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -2792,32 +2954,92 @@ def caseCoverage : List CoverageEntry :=
       "contracts_restart_classification")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_inference")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_tool_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_terminal_parent")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_orphan_classified")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_orphan_registered_session_stop")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_orphan_accepted")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "r6_backgrounding_cases"
-      "R6BackgroundingCases")
+      "family"
+      "recovery_sweeps_orphan_missing_parent")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_orphan_live_worker")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_background_completion")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_session_message")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_task_hook")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_owed_delivery")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_admission")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_recovery_transfer")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_restart")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_queue_source")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_continuation")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_redrive")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_wake_admission")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_wait_boundary")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_acknowledgement")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_r6_crash_boundary")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
@@ -2848,23 +3070,337 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_interrupt_in_flight")
       "background-tools" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "transcript_conformance_cases"
-      "TranscriptConformanceCases"
-      "Native owners cover ordering, model-scripted parallel completion, pair closure, and abandonment. Full coverage needs transaction fault injection for lost-ack duplicate delivery replay and a permissive orphan-result publication owner.")
+  , tagged (consumerWithFollowUp
+      "family"
+      "transcript_cases_native_completion"
+      "Native owners cover ordering, model-scripted parallel completion and pair closure. Full coverage needs transaction fault injection for lost-ack duplicate delivery replay and a permissive orphan-result publication owner.")
       "transcript" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "transcript_conformance_cases"
-      "TranscriptConformanceCases")
+      "family"
+      "transcript_cases_native_abandon")
+      "transcript" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "transcript_cases_snapshot_projection")
       "transcript" [Surface.operatorUi]
   , tagged (consumerCoverage "family" "agent_identity_permission_decide")
       "identity-permission" [Surface.api]
   , tagged (followUpCoverage "family" "agent_identity_permission_selection_unreached"
       "model-production-gap: production has no node-scoped Agent selector over Agent rows to replay; foreign-node, unknown and duplicate DIDs are rejected only by the model before /identity/decide, which receives an already selected DID.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "identity_household_cases"
-      "IdentityHouseholdCases")
+  , tagged (consumerCoverage "family" "household_datastore_tool_revalidation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_cleanup_visible")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_removal_confirmation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_removal_delete_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_installation_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pack_installation_aborted")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_compaction_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_compaction_update")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_runtime_default_account_read")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_checkpoint_arrival")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_target_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_target_tool")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_plugin_backend_use")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_provider_assembly")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_inference_provider_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_plugin_backend_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_runtime_default_choice")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_own_tool_edit")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_dangling_selection_repair")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_operations_deferred_enrollment")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_operations_runtime_status")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_fresh_backend_origin")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_policy_trace")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_grant_trace")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_self_config_trace")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_policy_definition")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_policy_registration")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_automated_session_read")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_invoke_session_check")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_live_session_update")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_live_administrator_read")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_agent_manager_invoke_live")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_self_config_lookup")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_atomic")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_destination")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_discovery")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_probe")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_removal")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_genesis")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_fresh_backend_origin_unreached"
+      "model-production-gap: FreshBackendStore::initialize builds its temporary native Node without HTTP or P2P transport and has no seam that fails its schema commit, so an exposed or uncommitted fresh-store baseline cannot be driven.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_self_config_lookup_unreached"
+      "model-production-gap: native document ACP cannot fence a document replacement between the self-config lookup and its relationship grant, so a lookup whose Agent document changed generation in between cannot be driven.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_runtime_default_account_read_unreached"
+      "model-production-gap: the runtime default-account read always shares the Agent write's transaction snapshot, and its metadata query and delegated read check are answered by the same native ACP state, so a different snapshot or a failed native read of a runtime-visible row is not produced by any served-node fixture.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_client_goal_transaction_actor")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_client_goal_actor_fence")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_client_goal_graph_handoff")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_desktop_reset")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_managed_client_handoff")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_plugin_profile")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_plugin_delete")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_credential_publication")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_session_tool_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_grant_projection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_grant_group")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_grant_hierarchy")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_session_tool_access_unreached"
+      "model-production-gap: the session tool reads as the managed Agent, and managed-Agent signing never resolves native DAC bypass.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_unattended_receipt_unreached"
+      "model-production-gap: production has no native transaction-scoped receipt witness, so no owner observes a receipt as absent, pending, admitted or unavailable or chooses create, retire-pending, advance or hold from it.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_tool_grant_projection_unreached"
+      "model-production-gap: no production path holds a second selected source for one Agent and permission: an Agent selects one Tools document through one Context, a Tools edit changes every selecting Agent, and only the schema purpose projects patch-collection; no managed Agent is ever the Node's native owner.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_tool_grant_group_unreached"
+      "model-production-gap: no production purpose other than schema projects patch-collection, and no production Tools edit forms one tool group spanning two Agents.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_tool_grant_rebinding_unreached"
+      "model-production-gap: every rebinding case starts from an other-purpose source for patch-collection, which no production purpose projects.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_destructive_decision")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_fresh_backend_reopen")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_signed_create_collections")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_signed_delete_collections")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ordinary_client_mutation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_held_client_signer")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_immutable")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_signed_write_retry")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_observation_authority")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_metadata_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_userset_native_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_selection_manager")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_node_manager")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_node_manager_link_revocation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_agent_manager_link_revocation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_agent_manager_invoke_native")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_configuration_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_cursor_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_pairing_overlay")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_fresh_backend_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_affected")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ux_datastore")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_datastore_tool_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_claim_recorded")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_binding_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_callback_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_event_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_generation_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_placement")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_child")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_module_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_recovery_configuration")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_claim_checkpoint")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_grants_configuration")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_binding_rebound")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_rebound_checkpoint")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_rebound_cursor")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_event_rebound_cursor_unreached"
+      "model-production-gap: model and production disagree: checkpoint_prefix (crates/gents-documents/src/event_consumer.rs:411-414) refuses a checkpoint by anyone other than the selected Agent, while Identity.Automation.checkpointTaskArrival (Proofs/Store/Identity/Automation.lean:152-156) gates only on reading the request and the case passes cursorWritable=true for the former Agent; production is the safe side and the fix belongs in Lean first (maintainer, security pass #3683).")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ordinary_receipt_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_stale_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_cursor_rebind")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_cursor_move")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_generation_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_source_generation_projection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_execution_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_execution_projection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_module_reader")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_rebound_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_group_state")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_schedule_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_schedule_write")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_receipt_session")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_receipt_delivery")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_callback_module_claim_unreached"
+      "model-production-gap: claim_invocation commits the module plan and the claim in its own transaction; no production path aborts that transaction after a valid module plan has been prepared, so an aborted module claim cannot be driven.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_mcp_service_lookup")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_mcp_service_native_policy")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ux_create_embedded")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ux_create_remote")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tools_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_skill_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_documents_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_documents_unavailable")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_session_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_session_unavailable")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_removal")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_configuration_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_node_binding")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_projection_binding")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_fresh_backend_admission_unreached"
+      "model-production-gap: a fresh-store admission cannot observe a missing or broken private binding; FreshBackendStore::initialize installs the private legacy schema itself, and a store whose binding is absent or altered is refused only on reopen (household_fresh_backend_reopen).")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_destructive_decision_unreached"
+      "model-production-gap: production has no complete-inventory read; every Gents read is filtered by document ACP for its actor, so InventoryRead has only AcpFiltered and a destructive decision over a complete inventory cannot be driven.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_selection_references")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_userset_retry_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_inference_self_config_update")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_inference_self_config_manager")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_inference_self_config_backend_manager")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_credential_binding")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_credential_reference_version")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_outcome_reader_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_automated_request_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_operation_source_projection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_operation_collection_get")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_operation_document_delete")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_source_change_schema")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_source_change_plugin_delete")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_source_change_preview")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_grantor_embedded")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tool_grantor_http")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_managed_tool_identity")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_operations_health_access")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_datastore_write_confirmation")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_datastore_write_cached")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_credential_native")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "session_publication_task")
       "identity-permission" [Surface.runtimeInternal]
@@ -2890,29 +3426,72 @@ def caseCoverage : List CoverageEntry :=
       "Bind modeled acquire, full-capacity refusal and release to the slot-owned Rust capacity scheduler. No request parks a worker while waiting on another session.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "canonical_execution_gate_cases"
-      "CanonicalExecutionGateCases"
-      "Generated native scripts bind transactional lease, publication, recovery and tool owners. Title scripts bind signed parent-only admission, own claim/begin, renewal, Complete/Partial/retracted audit closure, retry coordinates, terminal-parent isolation and purpose denial. Rows marked nativeGap retain explicit replication or unmaterialized-input premises; trace summaries and finite cases do not establish the application's universal invariants in Rust.")
+      "family"
+      "native_execution_contracts_script"
+      "Generated native scripts bind transactional lease, publication, recovery and tool owners. Title scripts bind signed parent-only admission, own claim/begin, renewal, Complete/Partial/retracted audit closure, retry coordinates, terminal-parent isolation and purpose denial. Finite scripts do not establish the application's universal invariants in Rust.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_renewal_under_held_gate")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_tool_append_deadline")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_foreground_dispatch_prefix")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_background_handoff")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_parent_terminal")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_watcher_dispatch")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_timeout")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_reasoning_only")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "native_execution_contracts_title_crash_recovery")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (followUpCoverage "family" "native_execution_contracts_script_unreached"
+      "model-production-gap: these scripts need a product transaction production lacks: the resume-to-active recovery primitive, a split tool close and delivery, a bridge background receipt with a late result, a candidate spawned-child document, or unmaterialized tool and header inputs on a title request; each names its premise in native_gap.")
+      "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "dispatch_observation_contracts_spawned_target")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_dispatch_observation_cases"
-      "CanonicalDispatchObservationCases")
+      "family"
+      "dispatch_observation_contracts_hook_receipt")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_dispatch_observation_cases"
-      "CanonicalDispatchObservationCases")
+      "family"
+      "dispatch_observation_contracts_owned_receipt")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_dispatch_observation_cases"
-      "CanonicalDispatchObservationCases")
+      "family"
+      "dispatch_observation_contracts_owned_policy_settlement")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
-      "canonical_dispatch_observation_cases"
-      "CanonicalDispatchObservationCases")
+      "family"
+      "dispatch_observation_contracts_loop_election")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "dispatch_observation_contracts_control_replay")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
@@ -3402,12 +3981,27 @@ def caseCoverage : List CoverageEntry :=
 
   , tagged (consumerCoverage "family" "contracts_runtime_reconcile_selection")
       "runtime-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
-      "Canonical input serde only. Signed canonical_input_fields/bytes, context whitelist, title materialization and verified goal receipt checks need the migrated admission/signing owners.")
+  , tagged (consumerCoverage "family" "request_input_contracts_derivation")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "request_input_cases" "RequestInputCases")
+  , tagged (consumerCoverage "family" "request_input_contracts_signed_fields")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "request_input_cases" "RequestInputCases")
+  , tagged (consumerCoverage "family" "request_input_contracts_provider")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_provider_refusal")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_goal_claim_binding")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_claim_queue_candidate")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_workspace_source")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_edit_directory")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_replacement")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_admitted_capture")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "request_input_contracts_published_capture")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "session_reply_preview_observation")
       "request-lifecycle" [Surface.runtimeInternal]

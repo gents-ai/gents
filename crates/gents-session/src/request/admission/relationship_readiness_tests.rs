@@ -56,29 +56,77 @@ async fn set_pending(
         .unwrap();
 }
 
-#[tokio::test]
-async fn visible_request_is_not_claimed_until_both_relationship_sets_are_published() {
-    exercise_readiness(false).await;
-}
+type ReadinessCase = gents_lean_vocab::family::Case<
+    gents_lean_vocab::families::delegated_publication_claim_readiness::CaseInput,
+    gents_lean_vocab::families::delegated_publication_claim_readiness::ReadinessOutput,
+>;
 
 #[tokio::test]
-async fn same_agent_client_waits_for_both_relationship_sets() {
-    exercise_readiness(true).await;
+async fn claim_readiness_follows_the_delegated_publication_model() {
+    let mut runs: [Vec<ReadinessCase>; 2] = [Vec::new(), Vec::new()];
+    for case in gents_lean_vocab::families::delegated_publication_claim_readiness::cases() {
+        let same_agent = case.input.parent_agent == case.input.target_agent;
+        runs[usize::from(same_agent)].push(case);
+    }
+    for (same_agent, cases) in [false, true].into_iter().zip(runs) {
+        exercise_readiness(same_agent, cases).await;
+    }
 }
 
-async fn exercise_readiness(same_agent: bool) {
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let partial = snapshot
-        .delegated_publication_cases
+fn publishes_every_relation(
+    input: &gents_lean_vocab::families::delegated_publication_claim_readiness::CaseInput,
+) -> bool {
+    input
+        .actions
         .iter()
-        .find(|case| case["name"] == "visible-before-publication-complete")
-        .unwrap();
-    let published = snapshot
-        .delegated_publication_cases
-        .iter()
-        .find(|case| case["name"] == "published")
-        .unwrap();
-    assert_eq!(partial["expected_target_read"], true);
+        .rfind(|action| action.kind == "publish")
+        .is_some_and(|action| {
+            [
+                action.session_parent,
+                action.session_worker,
+                action.request_parent,
+                action.request_session,
+                action.request_worker,
+            ]
+            .into_iter()
+            .all(|granted| granted == Some(true))
+        })
+}
+
+async fn observe_readiness(
+    agent_access: &ConfigAccess,
+    author_access: &ConfigAccess,
+    admission: &ClientClaimAdmission,
+    request: &AgentRequest,
+    request_doc: &str,
+) -> gents_lean_vocab::families::delegated_publication_claim_readiness::ReadinessOutput {
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{ _docID relationships_pending }} }}"#,
+        gents_store::graphql::escape_graphql_string(request_doc)
+    );
+    let visible = agent_access.execute(&query).await.unwrap();
+    let authored = author_access.execute(&query).await.unwrap();
+    gents_lean_vocab::families::delegated_publication_claim_readiness::ReadinessOutput {
+        target_read: !visible["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        request_pending: authored["data"]["AgentRequest"][0]["relationships_pending"]
+            .as_bool()
+            .unwrap(),
+        claim: match decision(agent_access, admission, request).await {
+            ClientClaimAuthorization::Allowed => "claimed",
+            ClientClaimAuthorization::Denied => "denied",
+            ClientClaimAuthorization::Unavailable => "unavailable",
+        }
+        .into(),
+    }
+}
+
+async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
+    let (published, partial): (Vec<_>, Vec<_>) = cases
+        .into_iter()
+        .partition(|case| publishes_every_relation(&case.input));
     let home = tempfile::tempdir().unwrap();
     let db = gents_inference::test_support::test_db(
         "exercise-readiness-relationship-sets",
@@ -250,11 +298,17 @@ async fn exercise_readiness(same_agent: bool) {
         .await
         .unwrap();
     let admission = admission.expect("client claim readiness admission");
-    assert_eq!(partial["expected_claim"], "unavailable");
-    assert_eq!(
-        decision(&agent_access, &admission, &request).await,
-        ClientClaimAuthorization::Unavailable
-    );
+    let observed = observe_readiness(
+        &agent_access,
+        &author_access,
+        &admission,
+        &request,
+        &request_doc,
+    )
+    .await;
+    for case in &partial {
+        case.check(observed.clone());
+    }
     if same_agent {
         let mut without_admission = RequestLifecycle::new_with_execution_binding(
             node.clone(),
@@ -347,11 +401,17 @@ async fn exercise_readiness(same_agent: bool) {
     crate::request::lifecycle::complete_client_request_relationships(&author_access, &request_doc)
         .await
         .unwrap();
-    assert_eq!(published["expected_claim"], "claimed");
-    assert_eq!(
-        decision(&agent_access, &admission, &request).await,
-        ClientClaimAuthorization::Allowed
-    );
+    let observed = observe_readiness(
+        &agent_access,
+        &author_access,
+        &admission,
+        &request,
+        &request_doc,
+    )
+    .await;
+    for case in &published {
+        case.check(observed.clone());
+    }
     assert!(matches!(
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
