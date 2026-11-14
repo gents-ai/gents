@@ -41,6 +41,11 @@ on:
         required: false
         type: string
         default: ""
+      archive_transfer:
+        description: How slices receive the test archive on this run only (artifact or host); empty uses GENTS_CI_ARCHIVE_TRANSFER.
+        required: false
+        type: string
+        default: ""
 
 # A run in progress finishes; GitHub keeps only the newest waiting run per
 # group, so a branch that is pushed every few minutes still gets results.
@@ -132,6 +137,7 @@ jobs:
           GATE_ONLY: ${{ inputs.only }}
           GATE_PORTABLE_RUNNER: ${{ inputs.portable_runner || vars.GENTS_CI_PORTABLE_RUNNER }}
           GATE_PORTABLE_SHARDS: ${{ inputs.portable_shards || vars.GENTS_CI_PORTABLE_SHARDS }}
+          GATE_ARCHIVE_TRANSFER: ${{ inputs.archive_transfer || vars.GENTS_CI_ARCHIVE_TRANSFER }}
           GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
           # Inside a stack only the top is tested in full: lower layers may be
           # intentionally red. A pull request into the default branch always is.
@@ -444,6 +450,9 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.archives) }}
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+    # With `host` transfer, the slices run where the archive was written.
+    outputs:
+      runs_on: ${{ steps.archive.outputs.runs_on }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -459,15 +468,19 @@ jobs:
         run: .github/scripts/setup-nextest.sh
 
       - name: Build the ${{ matrix.archive }} test archive
+        id: archive
         run: make gate-run JOB="build:${{ matrix.archive }}"
 
       - name: Upload the ${{ matrix.archive }} test archive
+        if: matrix.transfer != 'host'
         uses: actions/upload-artifact@v7
         with:
-          name: gents-tests-${{ matrix.archive }}-${{ github.run_attempt }}
+          name: gents-tests-${{ matrix.archive }}
           path: ${{ runner.temp }}/gents-tests
           if-no-files-found: error
           compression-level: 0
+          # Re-running failed slices needs the run's archive; a rebuilt one replaces it.
+          overwrite: true
           retention-days: 1
 
       - name: Show Rust build cache stats
@@ -483,7 +496,7 @@ jobs:
     name: test (${{ matrix.archive }} ${{ matrix.index }}/${{ matrix.count }})
     needs: [plan, build]
     if: contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: ${{ matrix.transfer == 'host' && fromJSON(needs.build.outputs.runs_on) || matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
@@ -507,9 +520,10 @@ jobs:
         run: .github/scripts/setup-nextest.sh
 
       - name: Download the ${{ matrix.archive }} test archive
+        if: matrix.transfer != 'host'
         uses: actions/download-artifact@v7
         with:
-          name: gents-tests-${{ matrix.archive }}-${{ github.run_attempt }}
+          name: gents-tests-${{ matrix.archive }}
           path: ${{ runner.temp }}/gents-tests
 
       - name: Run slice ${{ matrix.index }} of ${{ matrix.count }}

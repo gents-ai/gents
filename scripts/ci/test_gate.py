@@ -187,6 +187,31 @@ class Shards(unittest.TestCase):
             with self.assertRaises(SystemExit, msg=value):
                 sharded(value, everything=True)
 
+    def test_slices_receive_the_archive_by_artifact_unless_kept_on_the_host(self):
+        self.assertEqual({entry["transfer"] for entry in sharded(4, everything=True)["shards"]}, {"artifact"})
+        os.environ["GATE_ARCHIVE_TRANSFER"] = "host"
+        try:
+            selection = sharded(4, everything=True)
+            self.assertEqual({entry["transfer"] for entry in selection["archives"] + selection["shards"]}, {"host"})
+            os.environ["GATE_ARCHIVE_TRANSFER"] = "nfs"
+            with self.assertRaises(SystemExit):
+                sharded(4, everything=True)
+        finally:
+            del os.environ["GATE_ARCHIVE_TRANSFER"]
+
+    def test_a_kept_archive_is_found_by_run_not_attempt(self):
+        saved = {name: os.environ.get(name) for name in ("GITHUB_ACTIONS", "RUNNER_TEMP", "GITHUB_RUN_ID")}
+        os.environ.update(GITHUB_ACTIONS="true", RUNNER_TEMP="/runner/_temp", GITHUB_RUN_ID="42")
+        try:
+            self.assertEqual(gate.archive_dir("host"), gate.HOST_ARCHIVES / "42")
+            self.assertEqual(gate.archive_dir("artifact"), Path("/runner/_temp/gents-tests"))
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
     def test_a_shard_job_names_its_slice(self):
         selection = sharded(3, everything=True)
         with self.assertRaises(SystemExit):

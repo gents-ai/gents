@@ -17,7 +17,9 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -262,6 +264,21 @@ def runner(kind):
     return STUDIO
 
 
+def archive_transfer():
+    """GATE_ARCHIVE_TRANSFER: how slices receive the archive.
+
+    `artifact` (the default) uploads it to GitHub and every slice downloads it,
+    which works on any runner. `host` keeps it in the build runner's
+    ~/.cache/gents-tests and runs every slice on that host, through a runner
+    label equal to the host's short hostname (each minisforum runner carries
+    one); the minisforums moved 3.2 GB to and from GitHub at about 7 MB/s.
+    """
+    value = os.environ.get("GATE_ARCHIVE_TRANSFER", "").strip() or "artifact"
+    if value not in ("artifact", "host"):
+        fail(f"GATE_ARCHIVE_TRANSFER must be artifact or host, got {value!r}")
+    return value
+
+
 def portable_shards():
     """GATE_PORTABLE_SHARDS: 0 or empty keeps one job per portable group."""
     raw = os.environ.get("GATE_PORTABLE_SHARDS", "").strip()
@@ -327,10 +344,11 @@ def plan(files, members, everything=False, only=None, tier="full"):
         if archived:
             # At most one slice per crate with tests, so every slice runs some.
             count = min(count, len([package for package in archived if package not in NO_TESTS]))
-            archives.append({"archive": ARCHIVE, "runs_on": runner("portable"),
+            transfer = archive_transfer()
+            archives.append({"archive": ARCHIVE, "runs_on": runner("portable"), "transfer": transfer,
                              "packages": " ".join(archived), "timeout": 60})
             shards = [{"archive": ARCHIVE, "index": index, "count": count, "runs_on": runner("portable"),
-                       "timeout": 60} for index in range(1, count + 1)]
+                       "transfer": transfer, "timeout": 60} for index in range(1, count + 1)]
     if only:
         jobs = {job: wanted and job in only for job, wanted in jobs.items()}
         matrix = [entry for entry in matrix if f"test:{entry['group']}" in only]
@@ -592,13 +610,37 @@ def run_test(selection, name):
 SUMMARY = re.compile(r"^\s*Summary \[\s*([\d.]+)s\] (\d+) tests? run: (.*)$")
 
 
-def archive_dir():
-    """Where `build:` writes the archive and `shard:` reads it (the workflow's artifact directory)."""
+HOST_ARCHIVES = Path.home() / ".cache" / "gents-tests"
+HOST_ARCHIVE_DAYS = 1
+
+
+def archive_dir(transfer="artifact"):
+    """Where `build:` writes the archive and `shard:` reads it: the workflow's
+    artifact directory, or with `host` transfer a directory per run that the
+    host's runners (one account) share."""
     if os.environ.get("GATE_ARCHIVE_DIR"):
         return Path(os.environ["GATE_ARCHIVE_DIR"])
     if os.environ.get("GITHUB_ACTIONS") and os.environ.get("RUNNER_TEMP"):
+        if transfer == "host":
+            # Per run, not attempt: re-running failed slices reuses the build.
+            return HOST_ARCHIVES / os.environ["GITHUB_RUN_ID"]
         return Path(os.environ["RUNNER_TEMP"]) / "gents-tests"
     return ROOT / "target" / "gents-tests"
+
+
+def hand_off_on_host(entry):
+    """Remove other runs' archives older than HOST_ARCHIVE_DAYS and pin the
+    slices to this host (`runs_on` output of the build job)."""
+    cutoff = time.time() - HOST_ARCHIVE_DAYS * 86400
+    for stale in HOST_ARCHIVES.glob("*"):
+        if stale.is_dir() and stale.stat().st_mtime < cutoff:
+            shutil.rmtree(stale, ignore_errors=True)
+    host = socket.gethostname().split(".")[0]
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a") as handle:
+            handle.write(f"runs_on={json.dumps(entry['runs_on'] + [host])}\n")
+    print(f"gate: the {entry['archive']} slices run on {host}", flush=True)
 
 
 def nextest(arguments, cwd=ROOT, label=None, expect=None):
@@ -668,7 +710,7 @@ def run_build(selection, name):
         subprocess.run(["git", "worktree", "prune"], cwd=ROOT, check=False)
         if not sh(["git", "worktree", "add", "--detach", str(source), "HEAD"]):
             return
-    output = archive_dir()
+    output = archive_dir(entry.get("transfer", "artifact"))
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f"{name}.tar.zst"
     features = [PACKAGE_FEATURES[package] for package in packages
@@ -705,11 +747,15 @@ def run_build(selection, name):
         print(f"::error::{problem}", flush=True)
     results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
                     f"{total} tests listed, {ignored} ignored", time.time() - started))
+    if not problems and entry.get("transfer") == "host":
+        hand_off_on_host(entry)
 
 
 def run_shard(selection, name, index=None):
     """Run one slice of an archive against this checkout; without an index, all of it."""
-    archive = archive_dir() / f"{name}.tar.zst"
+    transfer = next((entry.get("transfer", "artifact") for entry in selection["shards"]
+                     if entry["archive"] == name), "artifact")
+    archive = archive_dir(transfer) / f"{name}.tar.zst"
     arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
     label = f"shard {name}"
     if index is not None:
