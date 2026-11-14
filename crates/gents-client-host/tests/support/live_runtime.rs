@@ -41,7 +41,10 @@ mod live_undo;
 const WAIT: Duration = Duration::from_secs(30);
 
 impl Attachment {
-    async fn retire(mut self) -> Result<()> {
+    /// Retirement is acknowledged before the serving installation has closed
+    /// its store, so the next installation opens only after the store owner
+    /// releases it.
+    async fn retire(mut self, paths: &DesktopPaths) -> Result<()> {
         let build = self
             .installation_build
             .as_ref()
@@ -63,6 +66,12 @@ impl Attachment {
             self.wait_for_exit().await.success(),
             "retired attachment failed"
         );
+        tokio::time::timeout(
+            WAIT,
+            gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir()),
+        )
+        .await
+        .context("the retired installation did not release its store")??;
         Ok(())
     }
 }
@@ -275,6 +284,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     };
     let mut client = Attachment::start_with_binary(&paths, &binary).await;
     let mut updates = Attachment::start_with_binary(&paths, &binary).await;
+    let mut replaced = None;
     let result = async {
         client.try_call(1, "client_connect_local", json!({"nodeHome": home})).await?;
         client.try_call(2, "client_enroll_local", json!({"nodeHome": home})).await?;
@@ -350,7 +360,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             super::runtime_replacement::Fixture {
                 root, home:&home, binary:&binary, node_did:node, agent_did:&agent,
                 session, client_did:&client_did, original_doc_id:row.doc_id.as_deref().context("original request document")?, access:&access,
-            }.replace_and_verify(&mut runtime, &mut client, &mut updates, &mut id).await?;
+            }.replace_and_verify(&mut runtime, &mut client, &mut updates, &mut id).await.map(|serving| replaced = Some(serving))?;
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
         }
         if goal {
@@ -460,7 +470,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         Ok::<_, anyhow::Error>((session.to_owned(), projection))
     }.await;
     updates.close().await;
-    let retired = client.retire().await;
+    let retired = client.retire(&paths).await;
     let result = match result {
         Ok((session, projection)) => {
             retired?;
@@ -498,7 +508,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             }
             .await;
             restarted_updates.close().await;
-            restarted.retire().await?;
+            restarted.retire(&paths).await?;
             retained
         }
         Err(error) => {
@@ -519,6 +529,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         Ok(Some(_)) => Ok(()),
         Err(error) => Err(error.into()),
     };
+    let stopped = match replaced {
+        Some(replacement) => stopped.and(replacement.retire().await),
+        None => stopped,
+    };
     let drained = tokio::time::timeout(WAIT, drain)
         .await
         .context("runtime output cleanup deadline")
@@ -526,6 +540,10 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     result.and(released).and(stopped).and(drained)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each live journey adds its own optional configuration fixture"
+)]
 async fn configure(
     client: &mut Attachment,
     id: &mut u32,
