@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: ""
+      portable_shards:
+        description: Build the portable groups once and run their tests as this many slices on this run only; empty uses GENTS_CI_PORTABLE_SHARDS, 0 keeps one job per group.
+        required: false
+        type: string
+        default: ""
 
 # A run in progress finishes; GitHub keeps only the newest waiting run per
 # group, so a branch that is pushed every few minutes still gets results.
@@ -76,6 +81,8 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       jobs: ${{ steps.plan.outputs.jobs }}
       tests: ${{ steps.plan.outputs.tests }}
+      archives: ${{ steps.plan.outputs.archives }}
+      shards: ${{ steps.plan.outputs.shards }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -124,6 +131,7 @@ jobs:
             && 'true' || env.GATE_EVERYTHING }}
           GATE_ONLY: ${{ inputs.only }}
           GATE_PORTABLE_RUNNER: ${{ inputs.portable_runner || vars.GENTS_CI_PORTABLE_RUNNER }}
+          GATE_PORTABLE_SHARDS: ${{ inputs.portable_shards || vars.GENTS_CI_PORTABLE_SHARDS }}
           GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
           # Inside a stack only the top is tested in full: lower layers may be
           # intentionally red. A pull request into the default branch always is.
@@ -423,6 +431,118 @@ jobs:
         if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
         run: .github/scripts/host-runtime-service.sh verify
 
+  # With GATE_PORTABLE_SHARDS set, the portable groups' crates compile once
+  # here into a nextest archive; `shard` runs slices of it and compiles nothing.
+  build:
+    name: build (${{ matrix.archive }})
+    needs: [plan, repository-guard]
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'build:portable')
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.archives) }}
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
+      - uses: ./.github/actions/rust-runner
+
+      - name: Install cargo-nextest
+        run: .github/scripts/setup-nextest.sh
+
+      - name: Build the ${{ matrix.archive }} test archive
+        run: make gate-run JOB="build:${{ matrix.archive }}"
+
+      - name: Upload the ${{ matrix.archive }} test archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-tests-${{ matrix.archive }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gents-tests
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
+  shard:
+    name: test (${{ matrix.archive }} ${{ matrix.index }}/${{ matrix.count }})
+    needs: [plan, build]
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.shards) }}
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
+      - uses: ./.github/actions/rust-runner
+        with:
+          lean: "true"
+
+      - name: Install cargo-nextest
+        run: .github/scripts/setup-nextest.sh
+
+      - name: Download the ${{ matrix.archive }} test archive
+        uses: actions/download-artifact@v7
+        with:
+          name: gents-tests-${{ matrix.archive }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gents-tests
+
+      - name: Run slice ${{ matrix.index }} of ${{ matrix.count }}
+        run: make gate-run JOB="shard:${{ matrix.archive }}:${{ matrix.index }}"
+
+      - name: Upload the slice's JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-junit-${{ matrix.archive }}-${{ matrix.index }}-of-${{ matrix.count }}-${{ github.run_attempt }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Collect migration lens diagnostics on failure
+        if: failure()
+        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
+
+      - name: Upload migration lens diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-migration-lenses-${{ github.sha }}-${{ matrix.index }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gents-migration-lenses
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
   desktop-packages:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.jobs), 'ts-packages')
@@ -622,6 +742,8 @@ jobs:
       - lint
       - contract
       - test
+      - build
+      - shard
       - desktop-packages
       - desktop-ui
       - desktop-ui-bombadil

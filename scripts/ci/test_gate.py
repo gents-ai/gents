@@ -102,7 +102,7 @@ class Selection(unittest.TestCase):
         # A path that classifies as inert runs only the always-on jobs, so every
         # script a plan-selected job or the runner setup calls must select work.
         jobs = workflow_jobs(CI)
-        sources = [jobs[name] for name in set(gate.WORKFLOW_JOBS.values()) | {"test"}]
+        sources = [jobs[name] for name in set(gate.WORKFLOW_JOBS.values()) | set(gate.MATRIX_JOBS)]
         sources += [(gate.ROOT / ".github/actions/rust-runner/action.yml").read_text(),
                     Path(gate.__file__).read_text()]
         referenced = {path for text in sources for path in SCRIPT.findall(text)}
@@ -131,13 +131,82 @@ class Selection(unittest.TestCase):
         selection = select(everything=True, only={"lint", "test:cli"})
         self.assertEqual(selection["jobs"], ["lint", "test:cli"])
         self.assertEqual(list(groups(selection)), ["cli"])
+        self.assertEqual(selection["archives"], [])
+
+
+def sharded(count, *files, **options):
+    os.environ["GATE_PORTABLE_SHARDS"] = str(count)
+    try:
+        return select(*files, **options)
+    finally:
+        del os.environ["GATE_PORTABLE_SHARDS"]
+
+
+def archived(selection):
+    return [package for entry in selection["archives"] for package in entry["packages"].split()]
+
+
+class Shards(unittest.TestCase):
+    PORTABLE = [package for group in gate.GROUPS if group.runner == "portable" for package in group.packages]
+
+    def test_the_portable_groups_build_once_and_run_as_slices(self):
+        selection = sharded(4, everything=True)
+        self.assertEqual(set(groups(selection)), {"runtime", "cli", "desktop"})
+        self.assertEqual(archived(selection), self.PORTABLE)
+        self.assertEqual([(entry["index"], entry["count"]) for entry in selection["shards"]],
+                         [(1, 4), (2, 4), (3, 4), (4, 4)])
+        self.assertIn("build:portable", selection["jobs"])
+        self.assertIn("shard:portable", selection["jobs"])
+        self.assertFalse(any(job in selection["jobs"] for job in ("test:foundation", "test:store", "test:session")))
+
+    def test_zero_or_unset_keeps_one_job_per_group(self):
+        for selection in (select(everything=True), sharded(0, everything=True)):
+            self.assertEqual(set(groups(selection)), {group.name for group in gate.GROUPS})
+            self.assertEqual((selection["archives"], selection["shards"]), ([], []))
+
+    def test_never_more_slices_than_crates_with_tests(self):
+        selection = sharded(6, "crates/gents-store/src/graphql.rs", tier="draft")
+        self.assertEqual(archived(selection), ["gents-store"])
+        self.assertEqual(len(selection["shards"]), 1)
+        compile_only = sharded(6, "crates/gents-core-packs/src/lib.rs", tier="draft")
+        self.assertEqual(archived(compile_only), ["gents-core-packs"])
+        self.assertEqual(compile_only["shards"], [])
+        self.assertIn("build:portable", compile_only["jobs"])
+        self.assertNotIn("shard:portable", compile_only["jobs"])
+
+    def test_only_selects_portable_groups_or_the_whole_archive(self):
+        session = sharded(4, everything=True, only={"test:session"})
+        self.assertEqual(archived(session), gate.GROUPS[2].packages)
+        self.assertEqual(session["jobs"], ["build:portable", "shard:portable"])
+        whole = sharded(4, everything=True, only={"shard:portable", "test:cli"})
+        self.assertEqual(archived(whole), self.PORTABLE)
+        self.assertEqual(list(groups(whole)), ["cli"])
+
+    def test_the_slice_count_must_be_a_small_whole_number(self):
+        for value in ("-1", "four", "1.5", "33"):
+            with self.assertRaises(SystemExit, msg=value):
+                sharded(value, everything=True)
+
+    def test_a_shard_job_names_its_slice(self):
+        selection = sharded(3, everything=True)
+        with self.assertRaises(SystemExit):
+            gate.run_shard(selection, "portable", 4)
+
+    def test_a_binary_holding_the_build_checkout_path_is_unrelocatable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "src"
+            portable = Path(directory) / "portable"
+            portable.write_bytes(b"\0" + str(source / "target/debug/build/x/out").encode() + b"\0")
+            pinned = Path(directory) / "pinned"
+            pinned.write_bytes(b"\0" + str(source / "crates/gents-pack").encode() + b"\0")
+            self.assertEqual(gate.unrelocatable([portable, pinned], source), ["pinned"])
 
 
 class Verdict(unittest.TestCase):
     """The `gate` job: `needs` as GitHub passes it, for the plans each event makes."""
 
     def needs(self, selection, **results):
-        names = set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | {"test"}
+        names = set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | set(gate.MATRIX_JOBS)
         selected = {gate.workflow_job(job) for job in selection["jobs"]}
         needs = {name: {"result": "success" if name in selected or name in gate.ALWAYS else "skipped",
                         "outputs": {}} for name in names}
@@ -150,7 +219,7 @@ class Verdict(unittest.TestCase):
         listed = re.search(r"^  gate:\n(?:    .*\n)*?    needs:\n((?:      - \S+\n)+)", CI, flags=re.M)
         self.assertIsNotNone(listed)
         needs = set(re.findall(r"- (\S+)", listed.group(1)))
-        self.assertEqual(needs, set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | {"test"})
+        self.assertEqual(needs, set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | set(gate.MATRIX_JOBS))
         self.assertEqual(set(workflow_jobs(CI)) - {"gate"}, needs)
         self.assertEqual(gate.verdict({name: {"result": "success"} for name in needs - {"lint"}}),
                          ["lint: missing from the gate job's needs", "plan: produced no plan"])
@@ -163,6 +232,9 @@ class Verdict(unittest.TestCase):
             "draft": select("crates/gents-store/src/graphql.rs", tier="draft"),
             "frontend": select("packages/gents-desktop-ui/src/index.ts"),
             "everything (push, merge queue, dispatch)": select(everything=True),
+            "everything, sharded": sharded(4, everything=True),
+            "draft, sharded": sharded(4, "crates/gents-store/src/graphql.rs", tier="draft"),
+            "compile only, sharded": sharded(4, "crates/gents-core-packs/src/lib.rs", tier="draft"),
         }
         for event, selection in plans.items():
             self.assertEqual(gate.verdict(self.needs(selection)), [], event)
@@ -173,6 +245,13 @@ class Verdict(unittest.TestCase):
             problems = gate.verdict(self.needs(selection, **{job: "skipped"}))
             self.assertEqual(len(problems), 1, job)
             self.assertIn(f"{job}: the plan selected", problems[0])
+
+    def test_a_selected_build_or_shard_that_was_skipped_fails(self):
+        selection = sharded(4, everything=True)
+        for job in ("build", "shard"):
+            problems = gate.verdict(self.needs(selection, **{job: "skipped"}))
+            self.assertEqual(problems, [f"{job}: the plan selected {job}:portable but it was skipped"], job)
+        self.assertEqual(gate.verdict(self.needs(selection, shard="failure")), ["shard: failure"])
 
     def test_a_job_the_plan_left_out_may_be_skipped_but_not_fail(self):
         selection = select("docs/upgrade-from-rc1.md")
