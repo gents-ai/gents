@@ -98,7 +98,9 @@ test("configuration returns to a responsive new session", async ({ page }) => {
   for (let pass = 0; pass < 5; pass++) {
     await page.getByRole("link", { name: "Active node", exact: true }).click();
     await expect(page.getByTestId("agent-screen")).toBeVisible();
-    await page.getByRole("link", { name: "New session", exact: true }).first().click();
+    /* the rail's hover panel opens over the rail on its own timer; while it
+       shows, its link is the one under the pointer */
+    await page.getByRole("link", { name: "New session", exact: true }).last().click();
     await expect(page.getByTestId("session-screen")).toBeVisible();
     await composer(page).click();
     await composer(page).fill(`Navigation ${pass}`);
