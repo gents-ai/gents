@@ -275,10 +275,6 @@ mod tests {
 
     #[test]
     fn modeled_binding_cases_match_private_resolver() {
-        let modeled = gents_lean_vocab::lean_identity_household_cases()
-            .iter()
-            .find(|case| case.name == "configuration-explicit-grants")
-            .expect("configuration contract");
         let credential = BackendCredential {
             credential_id: "credential".into(),
             node_did: "node".into(),
@@ -289,37 +285,19 @@ mod tests {
                 key: "private".into(),
             },
         };
-        for name in [
-            "authorized",
-            "foreign-node",
-            "unapproved-destination",
-            "rotated-credential",
-        ] {
-            let case = modeled
-                ._backend_credential_cases
-                .iter()
-                .find(|case| case["name"] == name)
-                .expect("modeled binding case");
-            let node = if name == "foreign-node" {
-                "other"
-            } else {
-                "node"
-            };
-            let endpoint = if name == "unapproved-destination" {
-                "https://other.example"
-            } else {
+        gents_lean_vocab::families::household_backend_credential_binding::replay(|case| {
+            let node = if case.same_node { "node" } else { "other" };
+            let endpoint = if case.destination_approved {
                 "https://provider.example"
-            };
-            let version = if name == "rotated-credential" {
-                "rotation-2"
             } else {
-                "rotation-1"
+                "https://other.example"
             };
-            assert_eq!(
-                credential.matches_binding(node, "provider", endpoint, version),
-                case["may_use"].as_bool().expect("modeled result"),
-                "{name}"
-            );
-        }
+            let version = if case.credential_version_matches {
+                "rotation-1"
+            } else {
+                "rotation-2"
+            };
+            credential.matches_binding(node, "provider", endpoint, version)
+        });
     }
 }

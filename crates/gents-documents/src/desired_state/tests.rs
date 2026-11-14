@@ -2190,13 +2190,39 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                             })
                         })
                         .await;
-                    let updated = response.is_ok_and(|response| {
+                    let mut updated = response.is_ok_and(|response| {
                         !gents_protocol::graphql::graphql_rows_from_response(
                             &response,
                             "update_ProjectionAcpBinding",
                         )
                         .is_empty()
                     });
+                    if !updated {
+                        let raw_access = ConfigAccess::Graphql(
+                            GraphqlEndpoint::as_principal(
+                                format!("http://{address}/api/v0/graphql"),
+                                actor.did(),
+                            )
+                            .with_client_signing_capability(actor.client_signing_capability()?)?,
+                        );
+                        let native = raw_access.write("test.projection.denied", &format!(
+                            "mutation {{ update_ProjectionAcpBinding(docID: \"{}\", input: {{policy_id: \"{}\"}}) {{_docID}} }}",
+                            escape_graphql_string(&doc), escape_graphql_string(&value),
+                        )).await;
+                        updated = match native {
+                            Ok(value) => !gents_protocol::graphql::graphql_rows_from_response(
+                                &value,
+                                "update_ProjectionAcpBinding",
+                            )
+                            .is_empty(),
+                            Err(error)
+                                if error.is_permission_denied() || error.is_graphql_rejection() =>
+                            {
+                                false
+                            }
+                            Err(error) => return Err(error.into()),
+                        };
+                    }
                     if !updated {
                         assert_eq!(
                             creator_access.execute(query).await?,

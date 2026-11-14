@@ -261,12 +261,17 @@ def eventReboundCursor : Family ActorInput Nat where
   inputs := actorInputs [siblingDid]
   model := reboundCursor
 
-/-- model-production-gap: `checkpoint_prefix` checkpoints only as the
-consumer's currently selected Agent and refuses any other actor (`event
-consumer selected Agent changed before checkpoint`), while
-`checkpointTaskArrival` gates only on reading the request. The owner and the
-former Agent read the old request, so the model advances their cursor where
-production refuses the checkpoint. -/
+/-- model-production-gap: model and production disagree. Production
+`checkpoint_prefix` (crates/gents-documents/src/event_consumer.rs:411-414)
+refuses a checkpoint by any actor other than the consumer's currently selected
+Agent (`event consumer selected Agent changed before checkpoint`), while
+`Identity.Automation.checkpointTaskArrival`
+(Proofs/Store/Identity/Automation.lean:152-156) gates only on reading the
+request, and `reboundCursor` passes `cursorWritable = true` for the former
+Agent. The model therefore advances the owner's and the former Agent's cursor
+where production refuses. Production is the safe side; this is an authority
+model, so the fix belongs in Lean first, for the maintainer and the security
+pass (#3683). -/
 @[conformance_family]
 def eventReboundCursorUnreached : Family ActorInput Nat where
   inputs := actorInputs [userDid, agentDid]

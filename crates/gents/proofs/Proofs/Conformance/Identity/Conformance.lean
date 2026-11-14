@@ -198,12 +198,6 @@ def managedToolIdentityCases : List (Option ClaimedDid × String × Option Strin
   , (some (.key "malformed"), "runtime", some "not-a-nonce")
   , (none, "runtime", some creationA) ]
 
-def managedToolIdentityCaseJson : Option ClaimedDid × String × Option String → Json
-  | (claimed, nodeKey, creation) => Json.mkObj
-    [("claimed", (claimed.map ClaimedDid.json).getD Json.null), ("node_key", toJson nodeKey),
-     ("creation_nonce", toJson creation),
-     ("allowed", toJson (Configuration.managedToolIdentityAllowed renderedDerivation
-        ((claimed.map ClaimedDid.render).getD "") nodeKey creation))]
 
 namespace HouseholdFixture
 open Household
@@ -694,29 +688,7 @@ def inferenceProviderCaseJson (name actor revoked : String) : Json :=
     ("expected", toJson (Configuration.providerConfigurationVisible state actor
       Configuration.inferenceProviderDocuments))]
 
-def inferenceUsersetCaseJson (name actor revoked : String) (direct : Bool) : Json :=
-  let withDirect := if direct then apply Configuration.inferenceUsersetFixture
-    (.grant ⟨"configuration", "sampling", "reader", .actor "agent"⟩)
-    else Configuration.inferenceUsersetFixture
-  let state := if revoked == "profile" then apply withDirect (.revoke
-      ⟨"configuration", "profile", "selected_by", .entitySet "agents" "agent-doc" "executor"⟩)
-    else if revoked == "sampling" then apply withDirect (.revoke
-      ⟨"configuration", "sampling", "selected_by", .entitySet "configuration" "profile" "selected_by"⟩)
-    else if revoked == "executor" then apply withDirect (.revoke
-      ⟨"agents", "agent-doc", "executor", .actor "agent"⟩)
-    else withDirect
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
-    ("document", toJson "sampling"), ("direct", toJson direct), ("expected", toJson
-      (Household.allowed 8 state actor "configuration" "sampling" "read"))]
 
-def retryUsersetCaseJson (name actor : String) (revokeExecution : Bool) : Json :=
-  let state := if revokeExecution then apply Configuration.inferenceUsersetFixture (.revoke
-      ⟨"configuration", "execution", "selected_by", .entitySet "configuration" "profile" "selected_by"⟩)
-    else Configuration.inferenceUsersetFixture
-  Json.mkObj [("name", toJson name), ("actor", toJson actor),
-    ("revoked", toJson (if revokeExecution then "execution" else "")),
-    ("document", toJson "retry"), ("direct", toJson false),
-    ("expected", toJson (Household.allowed 8 state actor "configuration" "retry" "read"))]
 
 def compactionUsersetCaseJson (phase actor document : String) : Json :=
   let initial := Configuration.compactionSelectionFixture
@@ -755,12 +727,6 @@ def taskTargetCaseJson (name actor document transition : String) : Json :=
   Json.mkObj [("name", toJson name), ("actor", toJson actor), ("document", toJson document),
     ("transition", toJson transition), ("expected", toJson (Household.allowed 8 state actor "configuration" document "read"))]
 
-def toolReferencesCaseJson (name : String) (references : Configuration.ToolSelectionReferences) : Json :=
-  Json.mkObj [("name", toJson name), ("agents_enabled", toJson references.agentsEnabled),
-    ("targets", toJson references.targets), ("services", toJson references.services),
-    ("surfaces", toJson references.surfaces),
-    ("expected", Json.mkObj ((Configuration.toolSelectionReferences references).map
-      fun (collection, ids) => (collection, toJson ids)))]
 
 def pluginProfileCaseJson (name : String) (actor : Option String) (revoked : Bool) : Json :=
   let state := if revoked then apply Configuration.inferenceUsersetFixture (.revoke
@@ -821,10 +787,6 @@ def datastoreToolUseCaseJson (name : String)
     ("expected", toJson (Configuration.cachedDatastoreToolUsable
       visible enabled selected declarationMatches))]
 
-def datastoreWriteCaseJson (name : String) (sourceValid responseConfirmed commit : Bool) : Json :=
-  Json.mkObj [("name", toJson name), ("source_valid", toJson sourceValid),
-    ("response_confirmed", toJson responseConfirmed), ("commit", toJson commit),
-    ("expected", toJson (Configuration.cachedDatastoreWriteCommitted sourceValid responseConfirmed commit))]
 
 def pluginDeleteCase (name : String) (installed selected managed pinnedSame : Bool) : Json :=
   let root : Configuration.PluginDeleteRoot := ⟨"team/worker", "digest-a"⟩
@@ -1059,78 +1021,6 @@ def toolGrantorHousehold : State :=
   { objects := [⟨"configuration", "tools-doc", userDid⟩],
     relations := [⟨"configuration", "tools-doc", "writer", .actor agentDid⟩], enrolled := [] }
 
-def toolGrantorCaseJson (grantor : String) (committed : Bool) : Json :=
-  let initial : Configuration.ToolGrantProjection := { admins := [userDid] }
-  let result := Configuration.configureToolGrantGroup initial toolGrantorHousehold
-    schemaToolSources grantor true committed
-  Json.mkObj [("grantor", toJson grantor), ("committed", toJson committed),
-    ("sources", toJson (schemaToolSources.map toolSourceJson)),
-    ("objects", toJson (toolGrantorHousehold.objects.map objectJson)),
-    ("relations", toJson (toolGrantorHousehold.relations.map relationJson)),
-    ("admins", toJson initial.admins),
-    ("expected_enabled", toJson (result.enabled.map toolSourceJson)),
-    ("expected_grants", toJson (result.grants.map toolSourceJson))]
-
-def toolSourceChangeCaseJson (name : String) (present delete authorized : Bool) : Json :=
-  Json.mkObj [("name", toJson name), ("present", toJson present),
-    ("delete", toJson delete), ("authorized", toJson authorized),
-    ("allowed", toJson (Configuration.sourceChangeAllowed present delete authorized))]
-
-def toolOperationCaseJson (name : String) (schema history goal create selfConfig pack : Bool) (category : String) : Json :=
-  let surface : ToolPolicy.Surface :=
-    { ToolPolicy.ContractCases.secureMinimal with
-      schemaManagement := schema
-      sessionHistory := history
-      goalTools := goal
-      goalCreate := create
-      selfConfig := selfConfig
-      queryTools := .none
-      writeTools := .none
-      selfConfigCategories := if category == "all" then .all else if category == "none" then .none
-        else .only {category} (fun _ => ()) }
-  Json.mkObj [("name", toJson name), ("schema", toJson schema), ("history", toJson history),
-    ("goal", toJson goal), ("create", toJson create), ("self_config", toJson selfConfig),
-    ("category", toJson category), ("pack", toJson pack),
-    ("query", toJson false), ("write", toJson false),
-    ("sources", toJson ((Configuration.toolOperationSources surface pack).map fun (purpose, permission) =>
-      Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
-
-def datastoreOperationCaseJson (name : String) (query write : Bool) : Json :=
-  let scope : ToolPolicy.EndpointScope (String × String) (Finset String) :=
-    .only {("tool", "collection")} (fun _ => ∅)
-  let surface : ToolPolicy.Surface :=
-    { ToolPolicy.ContractCases.secureMinimal with
-      queryTools := if query then scope else .none
-      writeTools := if write then scope else .none }
-  Json.mkObj [("name", toJson name), ("schema", toJson false), ("history", toJson false),
-    ("goal", toJson false), ("create", toJson false), ("self_config", toJson false),
-    ("category", toJson "none"), ("pack", toJson false),
-    ("query", toJson query), ("write", toJson write),
-    ("sources", toJson ((Configuration.toolOperationSources surface false).map fun (purpose, permission) =>
-      Json.mkObj [("purpose", toJson purpose), ("permission", toJson permission)]))]
-
-def toolOperationCases : List Json :=
-  [toolOperationCaseJson "none" false false false false false false "none",
-   toolOperationCaseJson "schema" true false false false false false "none",
-   toolOperationCaseJson "session-history" false true false false false false "none",
-   toolOperationCaseJson "goal" false false true false false false "none",
-   toolOperationCaseJson "goal-create-without-goal" false false false true false false "none",
-   toolOperationCaseJson "goal-and-create" false false true true false false "none",
-   toolOperationCaseJson "self-config-without-categories" false false false false true true "none",
-   toolOperationCaseJson "self-config-all" false false false false true false "all",
-   toolOperationCaseJson "self-config-agent" false false false false true false "agent",
-   toolOperationCaseJson "self-config-node" false false false false true false "node",
-   toolOperationCaseJson "self-config-tools" false false false false true false "tools",
-   toolOperationCaseJson "self-config-profile" false false false false true false "profile",
-   toolOperationCaseJson "self-config-backend" false false false false true false "backend",
-   toolOperationCaseJson "self-config-mcp-service" false false false false true false "mcp_service",
-   toolOperationCaseJson "self-config-automation" false false false false true false "automation",
-   toolOperationCaseJson "pack-independent" false false false false true true "backend",
-   toolOperationCaseJson "schema-and-pack-overlap" true false false false true true "all",
-   toolOperationCaseJson "all" true true true true true true "all",
-   datastoreOperationCaseJson "datastore-query" true false,
-   datastoreOperationCaseJson "datastore-write" false true,
-   datastoreOperationCaseJson "datastore-overlap" true true]
 
 theorem tools_writer_cannot_grant_itself_schema_authority :
     let initial : Configuration.ToolGrantProjection := { admins := [userDid] }
@@ -1312,19 +1202,6 @@ def pluginBackendCase (name : String) (actor : Option String) (revoked : String)
   Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
     ("expected", toJson (Configuration.pluginBackendMayUse state actor))]
 
-def inferenceSelfConfigCase (phase actor document : String) : Json :=
-  let state := if phase == "before" then Configuration.inferenceUsersetFixture
-    else if phase == "revoked" then Household.apply Configuration.inferenceSelfConfigFixture
-      (.revoke ⟨"agents", "agent-doc", "config_writer", .actor "agent"⟩)
-    else if phase == "direct-after-revoke" then Household.apply
-      (Household.apply Configuration.inferenceSelfConfigFixture
-        (.grant ⟨"configuration", "execution", "writer", .actor "agent"⟩))
-      (.revoke ⟨"agents", "agent-doc", "config_writer", .actor "agent"⟩)
-    else Configuration.inferenceSelfConfigFixture
-  Json.mkObj [("phase", toJson phase), ("actor", toJson actor), ("document", toJson document),
-    ("manager_expected", toJson (Household.mayManage state actor
-      ⟨"configuration", document, "selected_by", .entitySet "configuration" "profile" "selected_by"⟩)),
-    ("expected", toJson (Household.allowed 8 state actor "configuration" document "update"))]
 
 def json : Json := Json.mkObj
   [("name", toJson "configuration-explicit-grants"),
@@ -1391,8 +1268,6 @@ def json : Json := Json.mkObj
       sessionToolCaseJson "shared" true false false, sessionToolCaseJson "foreign" true false false,
       sessionToolCaseJson "owned" false false false, sessionToolCaseJson "foreign" false true true,
       sessionToolCaseJson "foreign" false true false])),
-   ("tool_grantor_cases", toJson ([toolGrantorCaseJson userDid true,
-      toolGrantorCaseJson agentDid true, toolGrantorCaseJson userDid false])),
    ("own_tool_edit_cases", toJson ownToolEditCases),
    ("dangling_selection_repair_cases", toJson ([
       danglingRepairCaseJson "user" ⟨true, true, .acpFiltered⟩ true,
@@ -1400,15 +1275,6 @@ def json : Json := Json.mkObj
       danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ true,
       danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ false,
       danglingRepairCaseJson "user" ⟨false, true, .acpFiltered⟩ true])),
-   ("tool_source_change_cases", toJson ([
-      toolSourceChangeCaseJson "present-noop" true false false,
-      toolSourceChangeCaseJson "absent-noop" false true false,
-      toolSourceChangeCaseJson "add-denied" false false false,
-      toolSourceChangeCaseJson "delete-denied" true true false,
-      toolSourceChangeCaseJson "add-allowed" false false true,
-      toolSourceChangeCaseJson "delete-allowed" true true true])),
-   ("tool_operation_cases", toJson toolOperationCases),
-   ("managed_tool_identity_cases", toJson (managedToolIdentityCases.map managedToolIdentityCaseJson)),
    ("policy_yaml", toJson policyYaml),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson ([] : List String)),
@@ -1437,35 +1303,6 @@ def json : Json := Json.mkObj
         inferenceProviderCaseJson "sibling" "sibling" ""] ++
        ["profile", "sampling", "execution", "retry", "compaction", "summary-profile"].map
         fun id => inferenceProviderCaseJson ("revoked-" ++ id) "agent" id)),
-   ("configuration_userset_cases", toJson
-      [inferenceUsersetCaseJson "selected" "agent" "" false,
-       inferenceUsersetCaseJson "sibling" "sibling" "" false,
-       inferenceUsersetCaseJson "parent-owner" "profile-owner" "" false,
-       inferenceUsersetCaseJson "profile-revoked" "agent" "profile" false,
-       inferenceUsersetCaseJson "sampling-revoked" "agent" "sampling" false,
-       inferenceUsersetCaseJson "executor-revoked" "agent" "executor" false,
-       inferenceUsersetCaseJson "direct-reader-survives" "agent" "sampling" true,
-       retryUsersetCaseJson "retry-selected" "agent" false,
-       retryUsersetCaseJson "retry-sibling" "sibling" false,
-       retryUsersetCaseJson "retry-revoked" "agent" true]),
-   ("configuration_inference_self_config_cases", toJson
-      [inferenceSelfConfigCase "before" "agent" "execution",
-       inferenceSelfConfigCase "granted" "agent" "profile",
-       inferenceSelfConfigCase "granted" "agent" "context",
-       inferenceSelfConfigCase "granted" "agent" "tools",
-       inferenceSelfConfigCase "granted" "agent" "execution",
-       inferenceSelfConfigCase "granted" "agent" "new-execution",
-       inferenceSelfConfigCase "granted" "sibling" "execution",
-       inferenceSelfConfigCase "before" "agent" "backend-metadata",
-       inferenceSelfConfigCase "granted" "agent" "backend-metadata",
-       inferenceSelfConfigCase "granted" "sibling" "backend-metadata",
-       inferenceSelfConfigCase "revoked" "agent" "backend-metadata",
-       inferenceSelfConfigCase "revoked" "agent" "execution",
-       inferenceSelfConfigCase "revoked" "agent" "new-execution",
-       inferenceSelfConfigCase "revoked" "agent" "profile",
-       inferenceSelfConfigCase "revoked" "agent" "context",
-       inferenceSelfConfigCase "revoked" "agent" "tools",
-       inferenceSelfConfigCase "direct-after-revoke" "agent" "execution"]),
    ("configuration_compaction_cases", toJson
       ((["initial", "revoked", "unchanged", "rebound", "direct-rebound", "context-revoked", "executor-revoked"] : List String).flatMap fun phase =>
         (["selected", "sibling"] : List String).flatMap fun actor =>
@@ -1484,13 +1321,6 @@ def json : Json := Json.mkObj
        taskTargetCaseJson "target-unrelated" "agent-b" "target" "initial",
        taskTargetCaseJson "target-revoked" "agent-a" "target" "target-revoked"]),
 
-   ("configuration_tool_reference_cases", toJson
-      [toolReferencesCaseJson "empty" ⟨false, [], [], []⟩,
-       toolReferencesCaseJson "disabled-target" ⟨false, ["target"], [], []⟩,
-       toolReferencesCaseJson "independent-sets" ⟨true, ["target-a", "target-b"],
-         ["service-a", "service-b"], ["surface-a", "surface-b"]⟩,
-       toolReferencesCaseJson "duplicates" ⟨true, ["target", "target"],
-         ["service", "service"], ["surface", "surface"]⟩]),
    ("configuration_plugin_profile_cases", toJson
       [pluginProfileCaseJson "selected" (some "agent") false,
        pluginProfileCaseJson "sibling" (some "sibling") false,
@@ -1521,13 +1351,7 @@ def json : Json := Json.mkObj
        datastoreToolUseCaseJson "disabled" true false true true,
        datastoreToolUseCaseJson "deselected" true true false true,
        datastoreToolUseCaseJson "changed" true true true false]),
-   ("configuration_datastore_write_cases", toJson
-      [datastoreWriteCaseJson "committed" true true true,
-       datastoreWriteCaseJson "mutation-failed" true false false,
-       datastoreWriteCaseJson "unconfirmed" true false true,
-       datastoreWriteCaseJson "source-revoked" false true true]),
    ("unattended_receipt_cases", toJson Identity.UnattendedReceipt.cases),
-   ("outcome_reader_cases", Automation.outcomeReaderCasesJson),
    ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
       checks withReader ++ [actionJson withReader (.grant writer)] ++ checks withWriter ++
       [actionJson withWriter (.revoke writer)] ++ checks withoutWriter ++
