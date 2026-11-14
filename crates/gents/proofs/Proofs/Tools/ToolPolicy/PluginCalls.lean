@@ -150,6 +150,67 @@ theorem compute_allowance_is_bounded (declared remaining : Nat) (stopped : Bool)
       computeAllowance declared remaining stopped ≤ remaining := by
   cases stopped <;> simp [computeAllowance, Nat.min_le_left, Nat.min_le_right]
 
+/-- The store's epoch deadline that carries a compute allowance: whole tick
+periods, rounded up, so the guest never gets less than its allowance and at
+most one period more. A zero allowance is a deadline of the current epoch,
+which traps at the guest's next epoch check.
+
+External premise (afterburner's shared epoch VM, pinned by Gents): the epoch
+deadline is a number of ticks, and one process-wide ticker thread advances the
+epoch by one each time its `period` sleep ends. A sleep ends no earlier than
+its period and arbitrarily later under scheduling or timer coalescing, so the
+allowance is counted in wake-ups, not in elapsed time (`wakeCountedEpoch`):
+with every wake `late` past its period, `allowanceTicks a p` ticks last
+`allowanceTicks a p * (p + late)`, unbounded in `late`. The stop is late, never
+lost. The ticker owns the fix: advancing the epoch to the whole periods
+elapsed since it started (`catchUpEpoch`) bounds the stop by the allowance plus
+one period and one late wake, whatever every other wake did
+(`tla/GuestAllowance.tla`, `MCGuestAllowance` and `MCGuestAllowanceWakeCounted`). -/
+def allowanceTicks (allowance period : Nat) : Nat :=
+  (allowance + period - 1) / period
+
+theorem allowance_ticks_cover_the_allowance (allowance period : Nat) (h : 0 < period) :
+    allowance ≤ allowanceTicks allowance period * period := by
+  unfold allowanceTicks
+  have := Nat.div_add_mod (allowance + period - 1) period
+  have := Nat.mod_lt (allowance + period - 1) h
+  rw [Nat.mul_comm]
+  omega
+
+theorem allowance_ticks_add_less_than_a_period (allowance period : Nat) (h : 0 < period) :
+    allowanceTicks allowance period * period < allowance + period := by
+  unfold allowanceTicks
+  have := Nat.div_mul_le_self (allowance + period - 1) period
+  omega
+
+theorem no_allowance_is_no_ticks (period : Nat) : allowanceTicks 0 period = 0 := by
+  unfold allowanceTicks
+  rcases Nat.eq_zero_or_pos period with h | h
+  · simp [h]
+  · exact Nat.div_eq_of_lt (by omega)
+
+/-- The shipped ticker: each wake adds one to the epoch, whenever it happens. -/
+def wakeCountedEpoch (wakes : List Nat) : Nat := wakes.length
+
+/-- The proposed ticker: a wake at `elapsed` (time since the ticker started)
+sets the epoch to the whole periods elapsed, and never moves it back. -/
+def catchUpEpoch (period : Nat) : List Nat → Nat
+  | [] => 0
+  | elapsed :: earlier => max (catchUpEpoch period earlier + 1) (elapsed / period)
+
+/-- Counting wake-ups: wakes `period + late` apart reach epoch `n` only after
+`n * (period + late)`, so lateness on every wake stretches an allowance by the
+allowance's tick count times that lateness. -/
+theorem wake_counted_epoch_ignores_elapsed_time (period late n : Nat) :
+    wakeCountedEpoch ((List.range n).reverse.map fun k => (k + 1) * (period + late)) = n := by
+  simp [wakeCountedEpoch]
+
+/-- Catching up: after its latest wake the epoch is at least the whole
+periods elapsed by then, however late any wake was. -/
+theorem catch_up_epoch_tracks_elapsed_time (period elapsed : Nat) (earlier : List Nat) :
+    elapsed / period ≤ catchUpEpoch period (elapsed :: earlier) :=
+  le_max_right _ _
+
 def chargedCompute (rounds : List (Nat × Nat)) : Nat :=
   (rounds.map Prod.fst).sum
 

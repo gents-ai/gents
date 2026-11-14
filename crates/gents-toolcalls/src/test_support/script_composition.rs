@@ -123,13 +123,19 @@ pub async fn session_tool_rows(
 }
 
 pub async fn guest_stopped(digest: &str, within: std::time::Duration) {
-    tokio::time::timeout(within, async {
-        while crate::plugin::host_calls::live::count(digest) != 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the guest still occupies its worker thread");
+    tokio::time::timeout(within, guest_released(digest))
+        .await
+        .expect("the guest still occupies its worker thread");
+}
+
+/// Resolves once no guest of `digest` occupies a worker thread.
+pub async fn guest_released(digest: &str) {
+    crate::plugin::host_calls::live::released(digest).await;
+}
+
+/// The compute allowance of each running guest of `digest`.
+pub async fn guest_allowances(digest: &str) -> Vec<std::time::Duration> {
+    crate::plugin::host_calls::live::started(digest).await
 }
 
 pub fn spinning_wat(name: &str, host_calls: bool) -> String {
@@ -190,11 +196,10 @@ pub async fn spawn_spinner(
     )
     .await;
     let id = receipt["tool_call_id"].as_str().unwrap().to_owned();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while crate::plugin::host_calls::live::count(&digest) == 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        crate::plugin::host_calls::live::started(&digest),
+    )
     .await
     .expect("the guest started");
     (fixture, executions, id, digest, home)

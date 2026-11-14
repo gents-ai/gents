@@ -284,6 +284,21 @@ def computeAllowances : Family AllowanceInput AllowanceOutput where
     (0, 10, false)].map fun (declared, remaining, stopped) => { declared, remaining, stopped }
   model := fun i => { computeAllowance := computeAllowance i.declared i.remaining i.stopped }
 
+structure TicksInput where
+  allowanceMs : Nat
+  periodMs : Nat
+  deriving ToJson
+
+structure TicksOutput where
+  ticks : Nat
+  deriving ToJson
+
+@[conformance_family]
+def allowanceTickCounts : Family TicksInput TicksOutput where
+  inputs := [(5000, 10), (0, 10), (1, 10), (10, 10), (11, 10), (3600000, 10)].map
+    fun (allowanceMs, periodMs) => { allowanceMs, periodMs }
+  model := fun i => { ticks := allowanceTicks i.allowanceMs i.periodMs }
+
 structure SleepInput where
   milliseconds : Nat
   remaining : Nat
