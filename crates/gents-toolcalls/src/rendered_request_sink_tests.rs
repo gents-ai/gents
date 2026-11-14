@@ -1071,16 +1071,54 @@ fn agent_loop_turn(fixture: &CaptureFixture, turn: usize) -> RenderedCompletionR
     rendered
 }
 
+struct StoredTurn {
+    wire: std::collections::BTreeSet<String>,
+    first_leaf: Option<String>,
+    decoded: (Value, Value),
+}
+
+async fn read_stored_turn(
+    access: &gents_store::config_client::ConfigAccess,
+    capture_key: &str,
+) -> StoredTurn {
+    let row = stored_capture(access, capture_key).await;
+    let stored = row["request_json"].as_str().unwrap();
+    let wire = manifest_entries(access, stored, "request_body")
+        .await
+        .into_iter()
+        .map(|(_, key, _)| key)
+        .collect();
+    let leaves = manifest_entries(access, stored, "provenance_payload").await;
+    let first_leaf = (leaves.len() >= 3).then(|| leaves[0].1.clone());
+    let decoded = gents_inference::rendered_request::decode_capture_pair(
+        access,
+        gents_inference::rendered_request::CAPTURE_VERSION,
+        stored,
+    )
+    .await
+    .unwrap();
+    StoredTurn {
+        wire,
+        first_leaf,
+        decoded,
+    }
+}
+
+/// Stored blocks and capture rows are immutable, so every turn's row is read
+/// back after the last capture; only the block delta of each capture is
+/// observed between captures.
+const STORED_TURN_READS_IN_FLIGHT: usize = 8;
+
 #[tokio::test]
 async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
+    use futures::StreamExt;
+
     let fixture = CaptureFixture::new().await;
     let node = fixture.db.node.clone();
     let access = fixture.access();
     let sink = fixture.sink();
     let mut stored = std::collections::BTreeMap::new();
-    let mut first_provenance_leaf = None;
-    let mut checked_turns = 0;
-    let mut previous_wire = std::collections::BTreeSet::new();
+    let mut captured = Vec::new();
     for turn in 0..64 {
         let rendered = agent_loop_turn(&fixture, turn);
         sink.capture(rendered.clone()).await.unwrap();
@@ -1095,17 +1133,28 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
             .map(|(_, len)| len)
             .sum();
         stored = after;
+        captured.push((rendered, new_blocks, new_bytes));
+    }
+    let reads = futures::stream::iter(
+        captured
+            .iter()
+            .map(|(rendered, _, _)| read_stored_turn(&access, &rendered.capture_key)),
+    )
+    .buffered(STORED_TURN_READS_IN_FLIGHT)
+    .collect::<Vec<_>>()
+    .await;
 
-        let row = stored_capture(&access, &rendered.capture_key).await;
-        let wire = manifest_entries(
-            &access,
-            row["request_json"].as_str().unwrap(),
-            "request_body",
-        )
-        .await
-        .into_iter()
-        .map(|(_, key, _)| key)
-        .collect::<std::collections::BTreeSet<_>>();
+    let mut first_provenance_leaf = None;
+    let mut checked_turns = 0;
+    let mut previous_wire = std::collections::BTreeSet::new();
+    for (turn, ((rendered, new_blocks, new_bytes), read)) in
+        captured.into_iter().zip(reads).enumerate()
+    {
+        let StoredTurn {
+            wire,
+            first_leaf,
+            decoded,
+        } = read;
         if turn > 0 {
             let fresh = wire.difference(&previous_wire).count();
             assert!(
@@ -1114,13 +1163,6 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
             );
         }
         previous_wire = wire;
-        let leaves = manifest_entries(
-            &access,
-            row["request_json"].as_str().unwrap(),
-            "provenance_payload",
-        )
-        .await;
-        let first_leaf = (leaves.len() >= 3).then(|| leaves[0].1.clone());
         // Each turn appends ~3.6 KiB of wire content, repeated in the
         // native trace once it is retained; the remainder is the rewritten
         // tail leaves and right manifest spines of both payloads.
@@ -1143,13 +1185,7 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
         }
         first_provenance_leaf = first_leaf;
         assert_eq!(
-            gents_inference::rendered_request::decode_capture_pair(
-                &access,
-                gents_inference::rendered_request::CAPTURE_VERSION,
-                row["request_json"].as_str().unwrap(),
-            )
-            .await
-            .unwrap(),
+            decoded,
             (
                 gents_inference::rendered_request::canonical_json(&rendered.request_json),
                 gents_inference::rendered_request::canonical_json(

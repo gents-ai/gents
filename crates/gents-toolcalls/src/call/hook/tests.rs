@@ -863,65 +863,73 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
 async fn hook_interrupts_cancel_only_their_own_calls_as_the_lean_model_says() {
     use gents_lean_vocab::families::hook_interrupt_scope::Interrupted;
 
-    for (index, case) in gents_lean_vocab::families::hook_interrupt_scope::cases()
-        .into_iter()
-        .enumerate()
-    {
-        let node_db = gents_inference::test_support::test_db(
-            &format!("hook-interrupt-scope-{index}"),
-            gents_session::test_support::no_lifecycle_plugins(),
-        )
-        .await;
-        let node = node_db.node.clone();
-        let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-        let mut hooks = Vec::new();
-        for (label, calls) in [
-            ("own", case.input.own_calls),
-            ("other", case.input.other_calls),
-        ] {
-            let hook = signed_hook(&node, FailurePolicy::default()).await;
-            assert!(matches!(
-                hook.on_completion_call(&user_text_message(label), &[])
-                    .await,
-                HookAction::Continue
-            ));
-            let session = hook.session_id().await.expect("hook session");
-            bind_interruptible_request(&hook, &format!("req-{label}"), &session, deadline).await;
-            let mut ids = Vec::new();
-            for call in 0..calls {
-                let id = format!("internal-{label}-{call}");
-                accept_hook_tool_call(&hook, &id, "slow", "{}", None).await;
-                assert!(matches!(
-                    hook.on_tool_call("slow", None, &id, "{}").await,
-                    ToolCallHookAction::Continue
-                ));
-                ids.push(id);
-            }
-            hooks.push((hook, session, ids));
-        }
-        let cancelled = hooks[0].0.cancel_in_flight_tool_calls().await.unwrap();
-        let mut states = Vec::new();
-        for (hook, session, ids) in &hooks {
-            let mut observed = Vec::new();
-            for id in ids {
-                let row = fetch_tool_call_row(hook, session, id).await;
-                observed.push(
-                    row.get("lifecycle_state")
-                        .and_then(|value| value.as_str())
-                        .expect("tool call lifecycle state")
-                        .to_owned(),
-                );
-            }
-            states.push(observed);
-        }
-        let other_states = states.pop().unwrap();
-        let own_states = states.pop().unwrap();
-        case.check(Interrupted {
-            cancelled: u64::try_from(cancelled).unwrap(),
-            own_states,
-            other_states,
-        });
+    let node_db = gents_inference::test_support::test_db(
+        "hook-interrupt-scope",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let cases = gents_lean_vocab::families::hook_interrupt_scope::cases();
+    let mut hooks = Vec::new();
+    for _ in &cases {
+        hooks.push([
+            signed_hook(&node, FailurePolicy::default()).await,
+            signed_hook(&node, FailurePolicy::default()).await,
+        ]);
     }
+    futures::future::join_all(cases.into_iter().zip(hooks).enumerate().map(
+        |(index, (case, [own, other]))| async move {
+            let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+            let mut hooks = Vec::new();
+            for (hook, label, calls) in [
+                (own, "own", case.input.own_calls),
+                (other, "other", case.input.other_calls),
+            ] {
+                assert!(matches!(
+                    hook.on_completion_call(&user_text_message(label), &[])
+                        .await,
+                    HookAction::Continue
+                ));
+                let session = hook.session_id().await.expect("hook session");
+                let request = format!("req-{label}-{index}");
+                bind_interruptible_request(&hook, &request, &session, deadline).await;
+                let mut ids = Vec::new();
+                for call in 0..calls {
+                    let id = format!("internal-{label}-{index}-{call}");
+                    accept_hook_tool_call(&hook, &id, "slow", "{}", None).await;
+                    assert!(matches!(
+                        hook.on_tool_call("slow", None, &id, "{}").await,
+                        ToolCallHookAction::Continue
+                    ));
+                    ids.push(id);
+                }
+                hooks.push((hook, session, ids));
+            }
+            let cancelled = hooks[0].0.cancel_in_flight_tool_calls().await.unwrap();
+            let mut states = Vec::new();
+            for (hook, session, ids) in &hooks {
+                let mut observed = Vec::new();
+                for id in ids {
+                    let row = fetch_tool_call_row(hook, session, id).await;
+                    observed.push(
+                        row.get("lifecycle_state")
+                            .and_then(|value| value.as_str())
+                            .expect("tool call lifecycle state")
+                            .to_owned(),
+                    );
+                }
+                states.push(observed);
+            }
+            let other_states = states.pop().unwrap();
+            let own_states = states.pop().unwrap();
+            case.check(Interrupted {
+                cancelled: u64::try_from(cancelled).unwrap(),
+                own_states,
+                other_states,
+            });
+        },
+    ))
+    .await;
 }
 
 #[tokio::test]

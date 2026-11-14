@@ -432,11 +432,10 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     // terminal rendering (53 in the failing run). The child is now gated
     // by a release FILE (portable: no flock — separate-process flock -u
     // cannot release the child fd, and macOS lacks flock): it prints
-    // "live", then polls for the release file's existence in a bounded
-    // loop, so the mid-run observation is deterministic. The parent writes
-    // the release file only after its assertions; if an assertion fails,
-    // the bounded loop expires and the child's tool timeout reaps it. No
-    // post-release byte arithmetic is asserted.
+    // "live", then waits for the release file without a bound of its own,
+    // so the mid-run observation holds however long the parent takes under
+    // load. The parent writes the release file only after its assertions;
+    // if an assertion fails, the child's tool timeout reaps it. No post-release byte arithmetic is asserted.
     let release_path = tempdir.path().join("release-gate");
     std::fs::create_dir_all(tempdir.path()).expect("tempdir exists");
     // POSIX-safe single-quoted path (tempdir paths contain no single
@@ -449,12 +448,12 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     // an empty `args` as a shell string; the identical-shape sleep command
     // worked at combinedc3984a342, so the inline while compound is the
     // remaining variable). The script content is the same gate: print
-    // live, bounded wait for the release file, print done.
+    // live, wait for the release file, print done.
     let script_path = tempdir.path().join("gate-child.sh");
     std::fs::write(
         &script_path,
         format!(
-            "#!/bin/sh\nprintf live\ni=0\nwhile [ ! -e '{release}' ] && [ \"$i\" -lt 200 ]; do\n  sleep 0.05\n  i=$((i+1))\ndone\nprintf done\n",
+            "#!/bin/sh\nprintf live\nwhile [ ! -e '{release}' ]; do\n  sleep 0.05\ndone\nprintf done\n",
             release = release_path.display()
         ),
     )
