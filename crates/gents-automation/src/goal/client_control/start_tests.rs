@@ -100,11 +100,24 @@ async fn drive_start(case: &StartInput<String>) -> bool {
             .await
             .unwrap();
     }
-    let (user, access, foreign, foreign_access) = if case.name == "foreign_requester" {
-        (foreign, foreign_access, user, access)
+    let revoked_relation = if !case.requester_authorized
+        || case.authority_version != case.committed_authority_version
+    {
+        Some("administrator")
+    } else if !case.requester_may_invoke || case.invoke_version != case.committed_invoke_version {
+        Some("session_writer")
     } else {
-        (user, access, foreign, foreign_access)
+        None
     };
+    let revoked_during_processing = case.authority_version != case.committed_authority_version
+        || case.invoke_version != case.committed_invoke_version;
+    let delegated_authority = revoked_relation == Some("administrator");
+    let (user, access, foreign, foreign_access) =
+        if case.name == "foreign_requester" || revoked_relation.is_some() {
+            (foreign, foreign_access, user, access)
+        } else {
+            (user, access, foreign, foreign_access)
+        };
     let agent_did = |agent: u64| {
         if agent == 4 {
             other_binding.agent_did.clone()
@@ -119,7 +132,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
             .title
             .as_ref()
             .map(gents_lean_vocab::family::recode::<_, SessionTitle>);
-        let foreign_owner = session.scope.requester != Some(1);
+        let foreign_owner = session.scope.requester != Some(1) || delegated_authority;
         let (requester, session_access) = if foreign_owner {
             (foreign.did(), &foreign_access)
         } else {
@@ -221,6 +234,7 @@ async fn drive_start(case: &StartInput<String>) -> bool {
     let signed_session_doc_id = if let Some(session) = session_before.as_ref().filter(|session| {
         session.session.requester_did.as_deref() == Some(user.did())
             || case.name == "foreign_requester"
+            || delegated_authority
     }) {
         session.doc_id.clone()
     } else {
@@ -637,7 +651,32 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         node.shutdown().await.expect("node shutdown");
         return published;
     }
+    if delegated_authority {
+        foreign_access
+            .add_actor_relationship(
+                "Agent",
+                &command.agent_doc_id,
+                "administrator",
+                &::identity::Did::new(user.did()).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
     let doc_id = persist_command(&access, &command).await;
+    let revoke = |relation: &'static str| {
+        let foreign_access = &foreign_access;
+        let agent_doc = &command.agent_doc_id;
+        let requester = ::identity::Did::new(user.did()).unwrap();
+        async move {
+            foreign_access
+                .delete_actor_relationship("Agent", agent_doc, relation, &requester)
+                .await
+                .unwrap();
+        }
+    };
+    if let (Some(relation), false) = (revoked_relation, revoked_during_processing) {
+        revoke(relation).await;
+    }
     if case.name == "authority_unavailable" {
         let result = ConfigApplyTxn::with_read_storage_failure(
             "AgentSessionGoalControl",
@@ -651,7 +690,27 @@ async fn drive_start(case: &StartInput<String>) -> bool {
         node.shutdown().await.expect("node shutdown");
         return published;
     }
-    let published = if case.commit && (!case.signature_valid || !case.first_request_valid) {
+    let published = if let (Some(relation), true) = (revoked_relation, revoked_during_processing) {
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut processing = Box::pin(ConfigApplyTxn::with_embedded_before_commit_pause(
+            reached.clone(),
+            release.clone(),
+            process_command(&node, &identity, &doc_id, selected_identity),
+        ));
+        tokio::select! {
+            _ = reached.notified() => {}
+            result = &mut processing => panic!("{}: processing did not reach its commit boundary: {result:?}", case.name),
+        }
+        revoke(relation).await;
+        release.notify_one();
+        let result = processing.await;
+        let outcome = receipt(&access, &doc_id)
+            .await
+            .map(|receipt| receipt.outcome);
+        assert!(result.is_err() || outcome.is_some(), "{}", case.name);
+        matches!(outcome, Some(GoalControlOutcome::Applied { .. }))
+    } else if case.commit && (!case.signature_valid || !case.first_request_valid) {
         assert_eq!(
             process_command(&node, &identity, &doc_id, selected_identity)
                 .await

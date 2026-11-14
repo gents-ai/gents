@@ -223,24 +223,9 @@ def startOutput (i : StartInput) : StartOutput :=
   let c := i.toCase
   { published := (start? c.before i.requested.toModel c.objective c.budget c.facts c.commit).isSome }
 
-def revokedInTransaction : List String :=
-  ["requester_revoked", "concurrent_revocation", "invocation_revoked",
-    "concurrent_invocation_revocation"]
-
 @[conformance_family]
 def starts : Family StartInput StartOutput where
-  inputs := (cases.filter fun c => !revokedInTransaction.contains c.name).map StartInput.ofCase
-  model := startOutput
-
-/-- model-production-gap: these four cases revoke the requester's session
-authority or its permission to invoke the selected Agent inside the processing
-transaction, or commit that revocation concurrently with it. No production
-scenario commits a revocation inside or concurrently with the transaction of
-`process_command`, so they are not replayed; the maintainer recorded them as a
-known gap on 2026-11-13 (gents-ai/gents#3772). -/
-@[conformance_family]
-def startsUnreached : Family StartInput StartOutput where
-  inputs := (cases.filter fun c => revokedInTransaction.contains c.name).map StartInput.ofCase
+  inputs := cases.map StartInput.ofCase
   model := startOutput
 
 structure AssignmentWire where
