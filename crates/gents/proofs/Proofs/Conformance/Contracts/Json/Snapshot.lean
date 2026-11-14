@@ -26,6 +26,7 @@ import Proofs.Conformance.SessionOrigin
 import Proofs.Conformance.MailboxContent
 import Proofs.Conformance.ManualRequest
 import Proofs.Conformance.PendingRejection
+import Proofs.Conformance.TranscriptCases
 import Proofs.Conformance.ManagedExecSpawn
 import Proofs.Conformance.PluginBind
 import Proofs.Conformance.OperatorProtection
@@ -425,14 +426,9 @@ def snapshotRecoveryCasesJson : String :=
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"causal_hop_default_max_request_hop\":"
-      ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"transcript_conformance_cases\":"
-      ++ jsonArray
-        (transcriptConformanceCases.map transcriptCaseJson) ++ ","
 
 
 def snapshotJson : String :=

@@ -35,8 +35,6 @@ use support::{build_request, first_optional_row, first_row, test_db, BACKEND_ID,
 mod compaction_gate;
 #[path = "conformance/coverage.rs"]
 mod coverage;
-#[path = "conformance/enrollment.rs"]
-mod enrollment;
 #[path = "conformance/eval.rs"]
 mod eval;
 #[path = "conformance/interrupts_manual.rs"]

@@ -127,14 +127,6 @@ pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
         .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
 }
 
-pub fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
-    lean_contract_snapshot()
-        .transcript_conformance_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean transcript case {name:?} was not emitted"))
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct QueueImage {
     pub active: Option<String>,

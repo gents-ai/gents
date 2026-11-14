@@ -186,34 +186,6 @@ def toolOutputCanonicalSource : Family ToolOutputInput ToolOutputObservation whe
     | some c => { state := c.expectedState, payload := c.expectedPayload.map (·.map UInt8.toNat) }
     | none => { state := none, payload := none }
 
-def transcriptCaseJson (witness : TranscriptCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"group\":" ++ jsonString witness.group ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"action_call_ids\":" ++ jsonArray (witness.actionCallIds.map toString) ++ ","
-    ++ "\"action_logical_result_ids\":"
-      ++ jsonArray (witness.actionLogicalResultIds.map toString) ++ ","
-    ++ "\"action_payload_hashes\":"
-      ++ jsonArray (witness.actionPayloadHashes.map toString) ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal ++ ","
-    ++ "\"pre_message_count\":" ++ toString witness.preMessageCount ++ ","
-    ++ "\"post_message_count\":" ++ toString witness.postMessageCount ++ ","
-    ++ "\"pre_tool_call_count\":" ++ toString witness.preToolCallCount ++ ","
-    ++ "\"post_tool_call_count\":" ++ toString witness.postToolCallCount ++ ","
-    ++ "\"pre_in_flight_count\":" ++ toString witness.preInFlightCount ++ ","
-    ++ "\"post_in_flight_count\":" ++ toString witness.postInFlightCount ++ ","
-    ++ "\"assistant_sequence\":" ++ toString witness.assistantSequence ++ ","
-    ++ "\"result_sequence\":" ++ toString witness.resultSequence ++ ","
-    ++ "\"logical_result_id\":" ++ toString witness.logicalResultId ++ ","
-    ++ "\"payload_hash\":" ++ toString witness.payloadHash ++ ","
-    ++ "\"expected_pair_closed\":" ++ boolString witness.expectedPairClosed ++ ","
-    ++ "\"expected_ordered\":" ++ boolString witness.expectedOrdered ++ ","
-    ++ "\"expected_duplicate_reused_sequence\":"
-      ++ boolString witness.expectedDuplicateReusedSequence ++ ","
-    ++ "\"expected_strong_drain\":" ++ boolString witness.expectedStrongDrain
-    ++ "}"
-
 deriving instance Lean.ToJson for ToolExecution.AwaitMode
 deriving instance Lean.ToJson for Background.Interrupt.Disposition
 

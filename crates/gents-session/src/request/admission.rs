@@ -1677,6 +1677,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unconfigured_node_hop_cap_follows_the_lean_default() {
+        let node_db = gents_inference::test_support::test_db(
+            "unconfigured-node-hop-cap",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let node_did = node_db.node_identity.did().to_string();
+        gents_documents::test_support::ensure_test_node(&node, &node_did).await;
+        for case in gents_lean_vocab::families::causal_hop_contracts_default_cap::cases() {
+            let cap = super::max_request_hop(&node, &node_did).await.unwrap();
+            assert_ne!(
+                cap,
+                gents_protocol::request_lifecycle::RequestHopCapObservation::Unavailable,
+                "{}: the runtime reads its own Node",
+                case.input.name
+            );
+            case.check(cap.bound().map(u64::from));
+        }
+        node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn pending_rejection_selection_matches_lean() {
         let dir = tempfile::tempdir().unwrap();
         let node_db = gents_inference::test_support::test_db(

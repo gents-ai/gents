@@ -512,30 +512,6 @@ structure ReadToolOutputCanonicalSourceReconstruction where
 
 end R4cWitnesses
 
-structure TranscriptCase where
-  name : String
-  group : String
-  action : String
-  actionCallIds : List Nat
-  actionLogicalResultIds : List Nat
-  actionPayloadHashes : List Nat
-  legal : Bool
-  preMessageCount : Nat
-  postMessageCount : Nat
-  preToolCallCount : Nat
-  postToolCallCount : Nat
-  preInFlightCount : Nat
-  postInFlightCount : Nat
-  assistantSequence : Nat
-  resultSequence : Nat
-  logicalResultId : Nat
-  payloadHash : Nat
-  expectedPairClosed : Bool
-  expectedOrdered : Bool
-  expectedDuplicateReusedSequence : Bool
-  expectedStrongDrain : Bool
-  deriving Repr
-
 def boolString (value : Bool) : String :=
   if value then "true" else "false"
 
