@@ -18,7 +18,7 @@ pub use core::{
     ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
     EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
     InferenceTarget, LocalHomeAccessError, P2PHealth, P2PHealthStatus, RefreshedRequestProjection,
-    RetainedGoalSubmission, StoreRefresh,
+    RetainedGoalSubmission, StoreRefresh, CLIENT_START_STALL_TIMEOUT,
 };
 
 pub use mutations::{apply_config_components_on, patch_config_components_on, set_default_agent_on};

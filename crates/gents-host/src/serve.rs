@@ -543,7 +543,15 @@ async fn serve_foreground(
     } else {
         None
     };
-    let store_lock = gents_store::local::home::lock_store(&home_dir, &data_dir)?;
+    // A previous runtime of this home that is still shutting down is awaited
+    // for as long as its own shutdown may take.
+    let store_lock = gents_store::local::home::acquire_store(
+        &home_dir,
+        &data_dir,
+        gents::runtime::shutdown::agent_drain_budget()
+            .saturating_add(gents::runtime::shutdown::node_close_budget()),
+    )
+    .await?;
     let backend_store_key =
         gents_store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
     let protected_backend = gents_store::local::backend_protection::ProtectedBackendStore::open(
@@ -1161,6 +1169,15 @@ async fn serve_foreground(
     if home_watch::home_replaced(&home_dir, home_identity).await {
         home_watch::exit_home_gone(&home_dir);
     }
+    // Declared before the drain, so a process that opens this home while it
+    // runs (a supervisor's or a desktop's next start) waits for the release
+    // instead of being refused (Lean `StoreHandoff.decide`). The release
+    // itself is this process ending its claim.
+    drop(
+        store_lifetime
+            .as_ref()
+            .and_then(gents_store::config_client::ConfigAccess::begin_store_release),
+    );
     let runtime_result = gents::runtime::shutdown::observe_stage(
         "agent_drain",
         gents::runtime::shutdown::agent_drain_budget(),

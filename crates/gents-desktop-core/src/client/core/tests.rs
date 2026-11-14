@@ -60,10 +60,6 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     }
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "retries a file lock on a blocking-pool thread; the lock has no release notification"
-)]
 async fn cancelled_shutdown_waiter_claim_observations() -> Vec<bool> {
     let mut observed = Vec::new();
     let temp = tempfile::tempdir().expect("temporary desktop home");
@@ -107,28 +103,118 @@ async fn cancelled_shutdown_waiter_claim_observations() -> Vec<bool> {
     observed.push(gents_store::local::home::lock_store(&home, &data).is_err());
 
     pause.allow_access_release.notify_one();
-    let retry_home = home.clone();
-    let retry_data = data.clone();
-    let reacquired = tokio::task::spawn_blocking(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            match gents_store::local::home::lock_store(&retry_home, &retry_data) {
-                Ok(lock) => return lock,
-                Err(_) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => panic!(
-                    "shutdown did not release the claim: {}",
-                    gents_protocol::error_chain::ErrorChain(&error)
-                ),
-            }
-        }
-    })
-    .await
-    .expect("store lock probe panicked");
+    // The shutdown declared its release, so the opener waits on the lock.
+    let reacquired = gents_store::local::home::acquire_store(&home, &data, Duration::from_secs(10))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "shutdown did not release the claim: {}",
+                gents_protocol::error_chain::ErrorChain(&error)
+            )
+        });
     drop(reacquired);
     observed.push(gents_store::local::home::lock_store(&home, &data).is_err());
     observed
+}
+
+/// `tla/StoreHandoff.tla`: BeginStop, Start, TryLock, Read. A client that
+/// opens the store while its predecessor is between native shutdown and the
+/// release of its claim (the seam below holds it there) found it held and was
+/// refused with "already using"; it now finds the release declared, waits,
+/// and starts once the predecessor's shutdown has released the store, and
+/// that shutdown reports done only then.
+#[tokio::test]
+async fn a_client_opened_while_its_predecessor_closes_waits_for_the_release() {
+    let temp = tempfile::tempdir().expect("temporary desktop home");
+    let paths = DesktopPaths::from_root(temp.path().join("client"));
+    let outgoing = Arc::new(
+        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
+            .await
+            .expect("start the outgoing client"),
+    );
+    let pause = Arc::new(ShutdownTestPause {
+        node_shutdown_started: Notify::new(),
+        allow_node_shutdown: Notify::new(),
+        node_shutdown_returned: Notify::new(),
+        allow_access_release: Notify::new(),
+    });
+    *outgoing.shutdown_test_pause.lock().await = Some(Arc::clone(&pause));
+    let stopping = Arc::clone(&outgoing);
+    let shutdown = tokio::spawn(async move { stopping.shutdown().await });
+    pause.node_shutdown_started.notified().await;
+    pause.allow_node_shutdown.notify_one();
+    pause.node_shutdown_returned.notified().await;
+
+    let attempt = gents_store::local::home::try_store(paths.root(), paths.node_data_dir())
+        .expect("inspect the held store");
+    let gents_store::local::home::StoreAttempt::Wait(held) = attempt else {
+        panic!("a closing client must be awaited, not refused: {attempt:?}");
+    };
+    assert_eq!(held.holder_pid, Some(std::process::id()));
+    let incoming = tokio::spawn(ClientCore::start_with_paths_and_options(
+        paths.clone(),
+        ClientCoreOptions::local_only(),
+    ));
+
+    pause.allow_access_release.notify_one();
+    shutdown
+        .await
+        .expect("shutdown owner")
+        .expect("outgoing shutdown");
+    let incoming = Arc::new(
+        incoming
+            .await
+            .expect("incoming start task")
+            .expect("the incoming client starts once the store is released"),
+    );
+    drop(outgoing);
+    incoming.shutdown().await.expect("incoming shutdown");
+    let reopened = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
+        .expect("a finished shutdown has released the store");
+    drop(reopened);
+}
+
+/// Quit and reopen without waiting: each reopen starts once the previous
+/// client has begun to shut down (the seam observes that start and then lets
+/// the shutdown run freely), and is never refused.
+#[tokio::test]
+#[ignore = "a hundred client starts; run by name"]
+async fn quit_and_reopen_a_hundred_times_is_never_refused() {
+    let temp = tempfile::tempdir().expect("temporary desktop home");
+    let paths = DesktopPaths::from_root(temp.path().join("client"));
+    let mut current = Arc::new(
+        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
+            .await
+            .expect("first start"),
+    );
+    for iteration in 0..100 {
+        let pause = Arc::new(ShutdownTestPause {
+            node_shutdown_started: Notify::new(),
+            allow_node_shutdown: Notify::new(),
+            node_shutdown_returned: Notify::new(),
+            allow_access_release: Notify::new(),
+        });
+        *current.shutdown_test_pause.lock().await = Some(Arc::clone(&pause));
+        let quitting = Arc::clone(&current);
+        let quit = tokio::spawn(async move { quitting.shutdown().await });
+        pause.node_shutdown_started.notified().await;
+        pause.allow_node_shutdown.notify_one();
+        pause.allow_access_release.notify_one();
+        let reopened = ClientCore::start_with_paths_and_options(
+            paths.clone(),
+            ClientCoreOptions::local_only(),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "reopen {iteration} was refused: {}",
+                gents_protocol::error_chain::ErrorChain(error.as_ref())
+            )
+        });
+        quit.await.expect("quit task").expect("quit");
+        current = Arc::new(reopened);
+    }
+    current.shutdown().await.expect("last quit");
 }
 
 #[tokio::test]
