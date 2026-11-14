@@ -236,4 +236,23 @@ example : ((apply? (initial .active) (initial .active).revision "revision-after"
     (facts .active true true)).map (·.execution)) = some (initial .paused).execution := by
   native_decide
 
+structure ResumeReaderInput where
+  reader : String
+  before : GoalSnapshot
+  deriving ToJson
+
+structure ResumeReaderOutput where
+  readable : Bool
+  deriving ToJson
+
+/-- After a client idle resume of the paused `before` Goal is answered by the
+runtime command owner, each reader reads the published continuation request
+on the served node. -/
+@[conformance_family]
+def resumeReaders : Family ResumeReaderInput ResumeReaderOutput where
+  inputs := GoalAutomation.ClientControl.resumeReaders.map
+    (⟨·, GoalSnapshot.ofModel (initial .paused)⟩)
+  model := fun i => ⟨Identity.Household.allowed 5 GoalAutomation.ClientControl.resumedSession
+    i.reader "delivered_requests" "continuation" "read"⟩
+
 end Conformance.GoalClientControlContracts

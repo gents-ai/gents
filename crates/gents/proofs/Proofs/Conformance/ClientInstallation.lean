@@ -31,6 +31,8 @@ inductive ActionKind where
   | detach
   | retire
   | release
+  | close
+  | acknowledge
   | replace
   deriving ToJson
 
@@ -46,6 +48,8 @@ def ActionWire.toAction (action : ActionWire) : Action :=
   | .detach => .detach
   | .retire => .retire
   | .release => .release
+  | .close => .close
+  | .acknowledge => .acknowledge
   | .replace => .replace action.startupReserved
 
 structure StateWire where
@@ -82,7 +86,8 @@ private def replaceAct (startupReserved : Bool) : ActionWire :=
   { kind := .replace, startupReserved }
 
 private def actionWires : List ActionWire :=
-  [act .attach, act .detach, act .retire, act .release, replaceAct false, replaceAct true]
+  [act .attach, act .detach, act .retire, act .release, act .close, act .acknowledge,
+    replaceAct false, replaceAct true]
 
 private def actionTraces : List (List ActionWire) :=
   actionWires.flatMap fun first => actionWires.flatMap fun second =>
@@ -90,11 +95,12 @@ private def actionTraces : List (List ActionWire) :=
 
 private def retirementInput : TraceInput :=
   { phase := .accepting, attachments := 2,
-    trace := [act .retire, act .attach, replaceAct true, act .detach, act .release,
-      act .detach, act .release, replaceAct false, replaceAct true] }
+    trace := [act .retire, act .attach, act .acknowledge, replaceAct true, act .detach,
+      act .release, act .acknowledge, act .detach, act .release, act .close, act .acknowledge,
+      replaceAct false, replaceAct true] }
 
 private def generatedInputs : List TraceInput :=
-  [Phase.accepting, .draining, .released].flatMap fun phase =>
+  [Phase.accepting, .draining, .released, .closed].flatMap fun phase =>
     (List.range 3).flatMap fun attachments =>
       actionTraces.map fun trace => { phase, attachments, trace }
 

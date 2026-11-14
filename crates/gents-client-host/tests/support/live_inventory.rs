@@ -43,7 +43,7 @@ impl Inventory {
         let seed_prompts = (0..COUNT)
             .collect::<Vec<_>>()
             .chunks(8)
-            .map(|indices| edit_prompt(indices))
+            .map(edit_prompt)
             .collect::<Vec<_>>();
         let next_prompt = edit_prompt(&[COUNT]);
         let repeated = COUNT + 1;

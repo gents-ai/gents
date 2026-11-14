@@ -41,7 +41,9 @@ mod live_undo;
 const WAIT: Duration = Duration::from_secs(30);
 
 impl Attachment {
-    async fn retire(mut self) -> Result<()> {
+    /// The serving installation answers the retirement only once it has
+    /// released its store, so the store is free when the attachment exits.
+    async fn retire(mut self, paths: &DesktopPaths) -> Result<()> {
         let build = self
             .installation_build
             .as_ref()
@@ -62,6 +64,10 @@ impl Attachment {
         ensure!(
             self.wait_for_exit().await.success(),
             "retired attachment failed"
+        );
+        drop(
+            gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
+                .context("the retired installation acknowledged before releasing its store")?,
         );
         Ok(())
     }
@@ -275,6 +281,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     };
     let mut client = Attachment::start_with_binary(&paths, &binary).await;
     let mut updates = Attachment::start_with_binary(&paths, &binary).await;
+    let mut replaced = None;
     let result = async {
         client.try_call(1, "client_connect_local", json!({"nodeHome": home})).await?;
         client.try_call(2, "client_enroll_local", json!({"nodeHome": home})).await?;
@@ -290,7 +297,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
+        let configured_from = active_generation(&deployment, node).context("the serving runtime reports its active generation")?;
         configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref(), fault.as_ref(), replacement).await?;
+        if goal || !gates.is_empty() {
+            wait_configuration_active(&mut client, &mut updates, &mut id, node, configured_from).await?;
+        }
         let opening = if steering || replacement { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
         let receipt = if goal_steering {
             client.try_call(id, "desktop_goal_control", json!({"request":{"nodeDid":node,"agentDid":agent,"action":{"kind":"create","objective":opening,"tokenBudget":"16000"}}})).await?
@@ -346,7 +357,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             super::runtime_replacement::Fixture {
                 root, home:&home, binary:&binary, node_did:node, agent_did:&agent,
                 session, client_did:&client_did, original_doc_id:row.doc_id.as_deref().context("original request document")?, access:&access,
-            }.replace_and_verify(&mut runtime, &mut client, &mut updates, &mut id).await?;
+            }.replace_and_verify(&mut runtime, &mut client, &mut updates, &mut id).await.map(|serving| replaced = Some(serving))?;
             projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["turnState"] == "completed").await?;
         }
         if goal {
@@ -456,7 +467,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         Ok::<_, anyhow::Error>((session.to_owned(), projection))
     }.await;
     updates.close().await;
-    let retired = client.retire().await;
+    let retired = client.retire(&paths).await;
     let result = match result {
         Ok((session, projection)) => {
             retired?;
@@ -494,7 +505,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             }
             .await;
             restarted_updates.close().await;
-            restarted.retire().await?;
+            restarted.retire(&paths).await?;
             retained
         }
         Err(error) => {
@@ -502,18 +513,34 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             Err(error)
         }
     };
+    // Cleanup runs on every path; the journey's own error is reported first.
+    let mut released = Ok(());
     for gate in &mut gates {
-        gate.release().await?;
+        let outcome = gate.release().await;
+        if released.is_ok() {
+            released = outcome;
+        }
     }
-    if !replacement {
-        stop(&mut runtime).await?;
-    }
-    tokio::time::timeout(WAIT, drain)
+    let stopped = match runtime.try_wait() {
+        Ok(None) => stop(&mut runtime).await,
+        Ok(Some(_)) => Ok(()),
+        Err(error) => Err(error.into()),
+    };
+    let stopped = match replaced {
+        Some(replacement) => stopped.and(replacement.retire().await),
+        None => stopped,
+    };
+    let drained = tokio::time::timeout(WAIT, drain)
         .await
-        .context("runtime output cleanup deadline")???;
-    result
+        .context("runtime output cleanup deadline")
+        .and_then(|joined| joined?);
+    result.and(released).and(stopped).and(drained)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each live journey adds its own optional configuration fixture"
+)]
 async fn configure(
     client: &mut Attachment,
     id: &mut u32,
@@ -553,7 +580,13 @@ async fn configure(
     }
     let mut document = json!({"node":{"node_did":node},"agents":[selected],"inference_backends":[backend],"inference_profiles":[profile]});
     if replacement {
-        document["inference_executions"] = json!([{"node_did":node,"execution_id":"native-live-replacement-budget","max_total_tokens":8192}]);
+        document["inference_execution"] =
+            serde_json::to_value([gents_documents::InferenceExecution {
+                node_did: node.to_owned(),
+                execution_id: "native-live-replacement-budget".to_owned(),
+                max_total_tokens: Some(8192),
+                ..Default::default()
+            }])?;
     }
     if goal {
         document["contexts"] = json!([{"node_did":node,"context_id":"native-live-goal-context","tools_id":"native-live-goal-tools","system_prompt":"Answer ordinary requests briefly. When the Goal is resumed, fulfill its objective and call update_goal with status complete. Do not create another Goal."}]);
@@ -600,6 +633,10 @@ async fn configure(
     if let Some(undo) = undo {
         undo.configure(&mut document, node)?;
     }
+    // Decoded through the contract type, so a stale fixture field fails here
+    // with the field's name rather than as the runtime's refusal.
+    let document: gents_documents::PackConfig = serde_json::from_value(document)
+        .context("live fixture configuration differs from the PackConfig contract")?;
     client
         .try_call(
             *id,
@@ -608,6 +645,53 @@ async fn configure(
         )
         .await?;
     *id += 1;
+    Ok(())
+}
+
+fn active_generation(snapshot: &Value, node: &str) -> Option<u64> {
+    snapshot["client"]["deployments"]
+        .as_array()?
+        .iter()
+        .find(|row| row["nodeDid"] == node)?["nodeReadiness"]["activeGeneration"]
+        .as_u64()
+}
+
+/// The runtime reconciles a committed configuration after its control
+/// debounce, and router admission checks only that a generation's selected
+/// documents are still visible, so input submitted before the next generation
+/// is active runs with the previous tool surface. These journeys change their
+/// Agent's resolved configuration, so the next generation always differs.
+async fn wait_configuration_active(
+    client: &mut Attachment,
+    updates: &mut Attachment,
+    id: &mut u32,
+    node: &str,
+    before: u64,
+) -> Result<()> {
+    wait_client(
+        client,
+        updates,
+        id,
+        "desktop_client_snapshot",
+        json!({}),
+        |snapshot| {
+            let Some(row) = snapshot["client"]["deployments"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["nodeDid"] == node))
+            else {
+                return false;
+            };
+            let readiness = &row["nodeReadiness"];
+            readiness["activeGeneration"]
+                .as_u64()
+                .is_some_and(|active| active > before)
+                && readiness["routerGeneration"] == readiness["activeGeneration"]
+                && row["runtime"]["reconcilePhase"] == "idle"
+                && row["chatSafe"] == true
+        },
+    )
+    .await
+    .context("the runtime did not activate the applied configuration")?;
     Ok(())
 }
 

@@ -219,6 +219,24 @@ See `../README.md` for how this fits the broader formal-verification model.
   waits on the `pending_native` write-attempt event, a projection the attempt
   may skip once it holds a terminal outcome; `LostWakeup` drops permit
   semantics, the lost wakeup an enable-then-check wait avoids.
+- `StoreHandoff` — handing one local store (a client installation's, the
+  desktop's or a runtime's home) from the process that holds it to the next
+  process that opens it. The store is excluded by an OS advisory lock that
+  the kernel drops when its holder exits; the lock file carries the holder's
+  pid and, once it begins to stop, its declaration that it is releasing. The
+  holder serves, may begin to stop, releases and acknowledges the stop,
+  retire or quit; it may crash or wedge. Each acquirer tries the lock once,
+  reads the declaration of a held lock and waits (bounded by its own
+  deadline) or is refused naming the holder (Lean `StoreHandoff.decide`; the
+  holder's order is Lean `ClientInstallation.step`). `NeverTwoHolders`,
+  `AckFollowsRelease`, `AckedHandoff`, `RefusalNamesLiveHolder`,
+  `CrashedHolderNeverBlocks`, `AcquirerSettles`, `WaiterTakesReleasedStore`
+  and `StopAcknowledged` hold in the green model. RED: `Current` is the code
+  before the fix (retire answered on acceptance, nothing declared, every
+  held lock refused) and breaks `AckedHandoff`; `AckBeforeRelease` breaks
+  `AckFollowsRelease`; `RefuseStopping` breaks `RefusalNamesLiveHolder`;
+  `UnboundedWait` breaks `AcquirerSettles`; `PidFile` breaks
+  `CrashedHolderNeverBlocks`.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -414,6 +432,17 @@ EXPECTED to report the violation named in their config:
 ./scripts/run-tlc.sh MCPackUxWatchUnbounded
 ```
 
+For StoreHandoff — the green model checks clean; the five diagnostics are
+EXPECTED to report the violation named in their config:
+```bash
+./scripts/run-tlc.sh MCStoreHandoff
+./scripts/run-tlc.sh MCStoreHandoffCurrent
+./scripts/run-tlc.sh MCStoreHandoffAckBeforeRelease
+./scripts/run-tlc.sh MCStoreHandoffRefuseStopping
+./scripts/run-tlc.sh MCStoreHandoffUnboundedWait
+./scripts/run-tlc.sh MCStoreHandoffPidFile
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -519,6 +548,12 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCNativeCompletionHandshakeUnarmedAdvance.cfg` | as green, `RequireArmed = FALSE` | `AdvanceFollowsArm` intentionally VIOLATED: DriverPause, DriverAdvance before the caller is polled (`ObservableWithoutRealTime` fails on the same schedule) | 44 distinct states before counterexample; 81 generated | 6 | <1s (OpenJDK 26) |
 | `MCNativeCompletionHandshakeTelemetrySignal.cfg` | as green, `ObserveTelemetry = TRUE` | `ObservableWithoutRealTime` intentionally VIOLATED: SuppressRecord, DriverAdvance, CallerExpire leaves the awaited event unemitted | 45 distinct states; 94 generated | 10 | <1s (OpenJDK 26) |
 | `MCNativeCompletionHandshakeLostWakeup.cfg` | as green, `PermitSemantics = FALSE` | `ObservableWithoutRealTime` intentionally VIOLATED: CallerExpire lands before DriverWait and never wakes it | 48 distinct states; 99 generated | 10 | <1s (OpenJDK 26) |
+| `MCStoreHandoff.cfg` | `Acquirers = {a1, a2}`, `CanCrash`, `CanHang`, every guard on | Passes `TypeOK`, `NeverTwoHolders`, `AckFollowsRelease`, `AckedHandoff`, `RefusalNamesLiveHolder`, `CrashedHolderNeverBlocks`, `AcquirerSettles`, `WaiterTakesReleasedStore`, `StopAcknowledged` | 835 distinct states; 1,327 generated | 12 | <1s (OpenJDK 17, 4 workers) |
+| `MCStoreHandoffCurrent.cfg` | `AckAfterRelease = MarkReleasing = WaitOnReleasing = FALSE` | `AckedHandoff` intentionally VIOLATED: BeginStop, Ack, Start(a1), TryLock(a1) finds the acknowledged holder still holding the store | 85 distinct states before counterexample; 128 generated | 6 | <1s |
+| `MCStoreHandoffAckBeforeRelease.cfg` | as green, `AckAfterRelease = FALSE` | `AckFollowsRelease` intentionally VIOLATED: BeginStop, Ack | 51 distinct states before counterexample; 69 generated | 6 | <1s |
+| `MCStoreHandoffRefuseStopping.cfg` | as green, `MarkReleasing = WaitOnReleasing = FALSE` | `RefusalNamesLiveHolder` intentionally VIOLATED: BeginStop, Start(a1), TryLock(a1), Read(a1) refuses a stopping holder | 79 distinct states before counterexample; 119 generated | 7 | <1s |
+| `MCStoreHandoffUnboundedWait.cfg` | as green, `BoundedWait = FALSE` | `AcquirerSettles` intentionally VIOLATED: a2 waits on the stopping holder, the holder crashes, a1 takes the store and a2 waits forever | 657 distinct states; 1,050 generated | 11 | <1s |
+| `MCStoreHandoffPidFile.cfg` | as green, `KernelReleasesOnExit = FALSE` | `CrashedHolderNeverBlocks` intentionally VIOLATED: Crash, Start(a1), TryLock(a1) | 65 distinct states before counterexample; 92 generated | 6 | <1s |
 | `MCRuntimeConnectionStaleGeneration.cfg` | as green, `GenerationCheck = FALSE` | `StaleNoticeInert` intentionally VIOLATED: the replaced source's queued notice moves the new source's status | 220 distinct states before counterexample; 603 generated | — | <1s |
 | `MCRuntimeConnectionEarlyReady.cfg` | as green, `ArmBeforeReady = FALSE` | `ConnectedAfterArmedSnapshot` intentionally VIOLATED: ready before any subscription is armed, snapshot, Connected | 911 distinct states before counterexample; 2,844 generated | — | <1s |
 | `MCWindowIndependence.cfg` | `Windows = {w1, w2}`, `Nodes = {n1, n2}`, `MaxWrites = 2`, `MaxSwitch = 3`, per-window fallback, cancel on switch | Passes `TypeOK`, `NoCrossDelivery`, `Converges`, `WatchFollowsSelection` | 126,444 distinct states; 753,497 generated | 20 | 10s |

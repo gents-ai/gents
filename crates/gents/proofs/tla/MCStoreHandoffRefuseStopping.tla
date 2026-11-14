@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoffRefuseStopping ----
+EXTENDS StoreHandoff
+
+====

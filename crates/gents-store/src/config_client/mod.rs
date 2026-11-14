@@ -626,6 +626,14 @@ impl ConfigAccess {
         }
     }
 
+    /// See [`LocalConfigAccess::begin_store_release`].
+    pub fn begin_store_release(&self) -> Option<crate::local::home::StoreRelease> {
+        match self {
+            Self::Local(local) => local.begin_store_release(),
+            Self::Graphql(_) => None,
+        }
+    }
+
     pub fn claimed_local(node: Arc<Node>, claim: crate::local::home::StoreLock) -> Result<Self> {
         Ok(Self::Local(Box::new(LocalConfigAccess::claimed(
             node, claim,

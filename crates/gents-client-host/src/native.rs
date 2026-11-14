@@ -102,15 +102,15 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
             interrupt.cancel();
         }
     });
-    let result = listener
-        .serve_until_idle(
-            Arc::new(ClientHost::for_installation(core.clone(), build)),
-            stop,
-        )
-        .await;
+    let host = Arc::new(ClientHost::for_installation(core.clone(), build));
+    let result = listener.serve_until_idle(host.clone(), stop).await;
     signal.abort();
     let _ = signal.await;
+    // The core's shutdown returns once its store lock is released, and only a
+    // closed installation answers the retirement that stopped it (Lean
+    // `ClientInstallation` `close`, then `acknowledge`).
     let closed = core.shutdown().await;
+    host.acknowledge_retirement(&closed).await;
     result.and(closed)
 }
 
@@ -179,7 +179,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
             retire_installation(&paths, &previous).await?;
             gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir()).await?;
             gents_protocol::client_installation::State {
-                phase: gents_protocol::client_installation::Phase::Released,
+                phase: gents_protocol::client_installation::Phase::Closed,
                 attachments: 0,
             }.step(gents_protocol::client_installation::Action::Replace { startup_reserved: true })
                 .context("client installation replacement was refused")?;

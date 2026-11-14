@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoff ----
+EXTENDS StoreHandoff
+
+====

@@ -1,0 +1,4 @@
+---- MODULE MCStoreHandoffUnboundedWait ----
+EXTENDS StoreHandoff
+
+====

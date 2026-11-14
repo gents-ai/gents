@@ -5,6 +5,7 @@ fn store_lock_contention_classifies_through_every_owner_wrapper() {
     let held = || super::StoreLockHeld {
         home: "/h".into(),
         holder_pid: Some(7),
+        releasing: false,
     };
     let held_by = |error: anyhow::Error| {
         super::store_lock_held(error.context("opening the store").as_ref())
@@ -1094,4 +1095,154 @@ fn archive_moves_the_bootstrap_reservation_with_the_store() {
     assert!(!home.join(BOOTSTRAP_CONSUMED_FILE_NAME).exists());
     assert!(home.join(SERVICE_UPDATES_DIR_NAME).join("receipt").exists());
     assert!(home.join("data.lock").exists());
+}
+
+#[tokio::test]
+async fn an_opener_waits_for_a_declared_release_and_refuses_a_serving_holder() {
+    let temp = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let held = lock_store(temp.path(), &data).unwrap();
+
+    let refused = acquire_store(temp.path(), &data, std::time::Duration::from_secs(30))
+        .await
+        .unwrap_err();
+    let HomeError::LockHeld(refused) = refused else {
+        panic!("a serving holder is refused: {refused:?}");
+    };
+    assert!(!refused.releasing);
+    assert_eq!(refused.holder_pid, Some(std::process::id()));
+    assert!(refused.to_string().contains("is already using"));
+
+    held.declare_releasing().unwrap();
+    assert!(matches!(
+        try_store(temp.path(), &data).unwrap(),
+        StoreAttempt::Wait(_)
+    ));
+    let released = held.release_notice();
+    let opener = tokio::spawn({
+        let home = temp.path().to_path_buf();
+        let data = data.clone();
+        async move { acquire_store(&home, &data, std::time::Duration::from_secs(30)).await }
+    });
+    drop(held);
+    released.released().await;
+    let reopened = opener.await.unwrap().unwrap();
+    assert!(matches!(
+        try_store(temp.path(), &data).unwrap(),
+        StoreAttempt::Refused(_)
+    ));
+    drop(reopened);
+}
+
+#[tokio::test]
+async fn a_holder_still_releasing_at_the_openers_deadline_is_reported_as_shutting_down() {
+    let temp = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let held = lock_store(temp.path(), &data).unwrap();
+    held.declare_releasing().unwrap();
+    let past_deadline = acquire_store(temp.path(), &data, std::time::Duration::ZERO)
+        .await
+        .unwrap_err();
+    let HomeError::LockHeld(past_deadline) = past_deadline else {
+        panic!("a holder still releasing at the deadline is reported: {past_deadline:?}");
+    };
+    assert!(past_deadline.releasing);
+    assert_eq!(past_deadline.holder_pid, Some(std::process::id()));
+    assert!(past_deadline.to_string().contains("still shutting down"));
+    drop(held);
+}
+
+#[tokio::test]
+async fn a_release_notice_resolves_only_after_the_lock_is_free() {
+    let temp = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let held = lock_store(temp.path(), &data).unwrap();
+    let released = held.release_notice();
+    let observed = tokio::spawn({
+        let home = temp.path().to_path_buf();
+        let data = data.clone();
+        async move {
+            released.released().await;
+            lock_store(&home, &data).map(drop)
+        }
+    });
+    drop(held);
+    observed.await.unwrap().unwrap();
+}
+
+const HOLDER_CHILD: &str = "GENTS_STORE_HANDOFF_HOLDER_CHILD";
+
+/// A holder that dies without releasing (killed while it serves) never
+/// excludes the next opener: the kernel drops the OS lock with the process.
+#[tokio::test]
+async fn a_holder_that_dies_without_releasing_leaves_the_store_free() {
+    let temp = tempfile::tempdir().unwrap();
+    let data = temp.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "local::home::tests::store_handoff_holder_child",
+            "--nocapture",
+            "--include-ignored",
+        ])
+        .env(HOLDER_CHILD, temp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines =
+        tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(child.stdout.take().unwrap()));
+    while let Some(line) = lines.next_line().await.unwrap() {
+        if line == "holding" {
+            break;
+        }
+    }
+    let StoreAttempt::Refused(held) = try_store(temp.path(), &data).unwrap() else {
+        panic!("the child serves the store");
+    };
+    assert_eq!(held.holder_pid, child.id());
+    child.kill().await.unwrap();
+    drop(lock_store(temp.path(), &data).expect("a dead holder keeps nothing"));
+}
+
+#[test]
+#[ignore = "the holder process of a_holder_that_dies_without_releasing_leaves_the_store_free"]
+fn store_handoff_holder_child() {
+    use std::io::{BufRead as _, Write as _};
+    let Some(home) = std::env::var_os(HOLDER_CHILD) else {
+        return;
+    };
+    let home = std::path::PathBuf::from(home);
+    let _held = lock_store(&home, &home.join("data")).unwrap();
+    println!("holding");
+    std::io::stdout().flush().unwrap();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+}
+
+/// Lean `StoreHandoff.decide`, replayed against real lock files: a free store,
+/// one held by a serving holder, and one whose holder declared its release.
+#[test]
+fn generated_store_handoff_decisions_match_the_lock_owner() {
+    gents_lean_vocab::families::store_handoff_decisions::replay(|i| {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let held = i.held.then(|| lock_store(temp.path(), &data).unwrap());
+        if i.releasing {
+            held.as_ref().unwrap().declare_releasing().unwrap();
+        }
+        let decision = match try_store(temp.path(), &data).unwrap() {
+            StoreAttempt::Acquired(_) => "acquire",
+            StoreAttempt::Wait(_) => "wait",
+            StoreAttempt::Refused(_) => "refuse",
+        };
+        drop(held);
+        decision.to_owned()
+    });
 }

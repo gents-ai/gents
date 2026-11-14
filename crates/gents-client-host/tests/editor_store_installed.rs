@@ -126,8 +126,11 @@ async fn retire(paths: &DesktopPaths) -> Result<()> {
             acknowledged,
             "disposable installation retirement was not acknowledged"
         );
-        gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir())
-            .await?;
+        // The installation answers only once its store is free.
+        drop(gents_store::local::home::lock_store(
+            paths.root(),
+            paths.node_data_dir(),
+        )?);
         Ok::<_, anyhow::Error>(())
     })
     .await

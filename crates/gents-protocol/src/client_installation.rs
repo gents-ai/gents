@@ -5,6 +5,8 @@ pub enum Phase {
     Accepting,
     Draining,
     Released,
+    /// The installation's store lock is free as well.
+    Closed,
 }
 
 /// Attachment counts are snapshots of the listener's existing task set. This
@@ -21,6 +23,8 @@ pub enum Action {
     Detach,
     Retire,
     Release,
+    Close,
+    Acknowledge,
     Replace { startup_reserved: bool },
 }
 
@@ -44,16 +48,21 @@ impl State {
             Action::Attach if self.phase == Phase::Accepting => {
                 next.attachments = self.attachments.checked_add(1)?;
             }
-            Action::Detach if self.phase != Phase::Released && self.attachments > 0 => {
+            Action::Detach
+                if matches!(self.phase, Phase::Accepting | Phase::Draining)
+                    && self.attachments > 0 =>
+            {
                 next.attachments -= 1;
             }
             Action::Retire if self.phase == Phase::Accepting => next.phase = Phase::Draining,
             Action::Release if self.phase == Phase::Draining && self.attachments == 0 => {
                 next.phase = Phase::Released;
             }
+            Action::Close if self.phase == Phase::Released => next.phase = Phase::Closed,
+            Action::Acknowledge if self.phase == Phase::Closed => {}
             Action::Replace {
                 startup_reserved: true,
-            } if self.phase == Phase::Released && self.attachments == 0 => {
+            } if self.phase == Phase::Closed && self.attachments == 0 => {
                 next.phase = Phase::Accepting;
             }
             _ => return None,
@@ -90,6 +99,8 @@ mod tests {
             "detach" => Action::Detach,
             "retire" => Action::Retire,
             "release" => Action::Release,
+            "close" => Action::Close,
+            "acknowledge" => Action::Acknowledge,
             "replace" => Action::Replace { startup_reserved },
             other => panic!("unknown modeled action {other}"),
         }
