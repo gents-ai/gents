@@ -437,12 +437,24 @@ impl Terminal {
         endpoint: &str,
         model: &str,
     ) -> Result<()> {
+        self.answer_scanned_inference_until(endpoint, model, SHELL_UP)
+            .await
+    }
+
+    /// As [`Self::answer_scanned_inference`], returning once `until` is printed instead of
+    /// the shell, without consuming it.
+    pub(super) async fn answer_scanned_inference_until(
+        &mut self,
+        endpoint: &str,
+        model: &str,
+        until: &str,
+    ) -> Result<()> {
         self.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         self.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
         self.answer("Server base URL", endpoint).await?;
         self.answer("part of a name", model).await?;
         let deadline = Instant::now() + RUNTIME_UP;
-        let prompts = ["Reasoning effort", "Temperature", "Top-p", SHELL_UP];
+        let prompts = ["Reasoning effort", "Temperature", "Top-p", until];
         loop {
             let next = {
                 let transcript = self.transcript.lock().expect("transcript lock");
@@ -458,7 +470,7 @@ impl Terminal {
                     .min()
             };
             if let Some((offset, index)) = next {
-                if prompts[index] == SHELL_UP {
+                if prompts[index] == until {
                     return Ok(());
                 }
                 self.cursor += offset + prompts[index].len();
@@ -467,7 +479,7 @@ impl Terminal {
             }
             ensure!(
                 !self.drained.load(Ordering::SeqCst),
-                "setup closed before opening the shell: {}",
+                "setup closed before printing {until:?}: {}",
                 self.transcript()
             );
             tokio::time::timeout_at(deadline, self.changes.notified())
