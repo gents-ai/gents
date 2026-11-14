@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "suites/cli_adapter_interop_roundtrip.rs"]
 mod cli_adapter_interop_roundtrip;
 #[path = "suites/cli_background.rs"]

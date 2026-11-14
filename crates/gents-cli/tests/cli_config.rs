@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "suites/cli_config_agent.rs"]
 mod cli_config_agent;
 #[path = "suites/cli_config_apply_e2e.rs"]

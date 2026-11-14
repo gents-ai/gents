@@ -1,6 +1,6 @@
 # App pairing acceptance contract
 
-Run `CARGO_INCREMENTAL=0 cargo test -p gents-cli --test cli_enrollment -- --nocapture`.
+Run `CARGO_INCREMENTAL=0 cargo test -p gents-cli --test integration cli_enrollment:: -- --nocapture`.
 
 The runtime starts through `gents init` and `gents runtime server`. The app starts
 through the same `ClientCore` used by desktop and iOS. Enrollment consumes the

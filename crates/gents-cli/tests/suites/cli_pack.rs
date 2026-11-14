@@ -1341,7 +1341,7 @@ fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
     let fixture = wire_fixture(true)?;
     let output = std::process::Command::new(std::env::current_exe()?)
         .args([
-            "cli_pack::wire_sources_in_fixture_home",
+            "cli_offline::cli_pack::wire_sources_in_fixture_home",
             "--exact",
             "--include-ignored",
             "--nocapture",
@@ -1499,7 +1499,7 @@ fn release_starter_fixture(
 fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -> Result<()> {
     let output = std::process::Command::new(std::env::current_exe()?)
         .args([
-            "cli_pack::core_packs_in_fixture_home",
+            "cli_offline::cli_pack::core_packs_in_fixture_home",
             "--exact",
             "--include-ignored",
             "--nocapture",

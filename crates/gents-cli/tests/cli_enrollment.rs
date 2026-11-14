@@ -14,7 +14,7 @@ mod live_plugin_denial;
 #[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_two_agent.rs"]
 mod live_two_agent;
-mod support;
+use crate::support;
 use support::*;
 
 use std::fs;

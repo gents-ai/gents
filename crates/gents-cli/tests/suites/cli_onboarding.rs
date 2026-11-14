@@ -517,7 +517,7 @@ const FIRST_RUN_GRAPHQL_ENV: &str = "GENTS_TEST_FIRST_RUN_GRAPHQL";
 fn first_run_step(user_home: &Path, home: &Path, step: &str, graphql: &str) -> Result<()> {
     let output = Command::new(std::env::current_exe()?)
         .args([
-            "cli_onboarding::desktop_first_run_in_fixture_home",
+            "cli_offline::cli_onboarding::desktop_first_run_in_fixture_home",
             "--exact",
             "--include-ignored",
             "--nocapture",
