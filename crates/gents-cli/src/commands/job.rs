@@ -285,9 +285,12 @@ pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
         &access,
         &home,
         &actor,
-        &args.selector,
-        args.name.as_deref(),
-        args.agent.as_deref(),
+        &promote::PromoteRequest {
+            selector: &args.selector,
+            name: args.name.as_deref(),
+            agent: args.agent.as_deref(),
+        },
+        &promote::javy_command(),
         &mut |step| {
             if text {
                 println!("{}", step.name());

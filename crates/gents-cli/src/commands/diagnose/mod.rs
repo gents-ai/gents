@@ -37,11 +37,16 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    let schema_checks = diagnose_schema_presence(&access).await;
-    let bundle_result = build_config_export_bundle(&access, &node_did).await;
+    let (schema_checks, bundle_result, runtime_row, readiness_row, accounts) = tokio::join!(
+        diagnose_schema_presence(&access),
+        build_config_export_bundle(&access, &node_did),
+        load_runtime_row(&access, &node_did),
+        gents_host::readiness::load_node_readiness(&access, &node_did),
+        gents_inference::auth::credential::list_accounts(&access, &node_did),
+    );
     let config_load_error = bundle_result.as_ref().err().map(ToString::to_string);
     let bundle = bundle_result.ok();
-    let runtime_row = match load_runtime_row(&access, &node_did).await {
+    let runtime_row = match runtime_row {
         Ok(Some(row)) => row,
         Ok(None) => Value::Null,
         Err(error) => json!({
@@ -49,7 +54,6 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
     let live_runtime = graphql_reachable && runtime_row.get("node_did").is_some();
-    let readiness_row = gents_host::readiness::load_node_readiness(&access, &node_did).await;
     let (runtime_node_readiness, runtime_node_readiness_check) = match readiness_row {
         Ok(row) => match project_node_readiness_summary(row.as_ref(), &node_did) {
             ProjectedNodeReadinessSummary::Observed(summary) => {
@@ -129,7 +133,6 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
-    let accounts = gents_inference::auth::credential::list_accounts(&access, &node_did).await;
     let runtime_probes = match &access {
         gents_store::config_client::ConfigAccess::Graphql(endpoint) => {
             crate::commands::status::load_runtime_backend_probes(endpoint, &node_did).await
@@ -209,14 +212,22 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let principal_present = bundle.is_some();
 
     let chatgpt_provider = gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    let mut chatgpt_auth_check = match gents_inference::auth::credential::resolve_oauth_credential(
-        &access,
-        &node_did,
-        chatgpt_provider,
-        gents_inference::auth::credential::AccountPick::ProviderDefault,
-    )
-    .await
-    {
+    let xai_provider = gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+    let claude_provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+    let credential = |provider| {
+        gents_inference::auth::credential::resolve_oauth_credential(
+            &access,
+            &node_did,
+            provider,
+            gents_inference::auth::credential::AccountPick::ProviderDefault,
+        )
+    };
+    let (chatgpt_credential, xai_credential, claude_credential) = tokio::join!(
+        credential(chatgpt_provider),
+        credential(xai_provider),
+        credential(claude_provider),
+    );
+    let mut chatgpt_auth_check = match chatgpt_credential {
         Ok(Some(credential))
             if gents_inference::auth::credential::token_is_fresh(
                 credential.access_token_expires_at,
@@ -258,15 +269,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
 
-    let xai_provider = gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
-    let mut xai_auth_check = match gents_inference::auth::credential::resolve_oauth_credential(
-        &access,
-        &node_did,
-        xai_provider,
-        gents_inference::auth::credential::AccountPick::ProviderDefault,
-    )
-    .await
-    {
+    let mut xai_auth_check = match xai_credential {
         Ok(Some(credential))
             if gents_inference::auth::credential::token_is_fresh(
                 credential.access_token_expires_at,
@@ -306,15 +309,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
 
-    let claude_provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
-    let mut claude_auth_check = match gents_inference::auth::credential::resolve_oauth_credential(
-        &access,
-        &node_did,
-        claude_provider,
-        gents_inference::auth::credential::AccountPick::ProviderDefault,
-    )
-    .await
-    {
+    let mut claude_auth_check = match claude_credential {
         Ok(Some(credential))
             if gents_inference::auth::credential::token_is_fresh(
                 credential.access_token_expires_at,

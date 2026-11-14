@@ -13,15 +13,18 @@ use crate::cli::args::{PackFetchArgs, PackPublishArgs, PackSearchArgs};
 
 const REGISTRY_TOKEN_ENV_VAR: &str = "GENTS_REGISTRY_TOKEN";
 
-pub(crate) fn resolve_registry_token(explicit: Option<&str>) -> Option<String> {
+pub(crate) fn environment_registry_token() -> Option<String> {
+    std::env::var(REGISTRY_TOKEN_ENV_VAR).ok()
+}
+
+pub(crate) fn resolve_registry_token(
+    explicit: Option<&str>,
+    environment: Option<String>,
+) -> Option<String> {
     explicit
         .map(str::to_owned)
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var(REGISTRY_TOKEN_ENV_VAR)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
+        .or_else(|| environment.filter(|value| !value.trim().is_empty()))
 }
 
 pub(crate) fn read_stdin_line(what: &str) -> Result<String> {
@@ -180,7 +183,7 @@ pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+    use std::sync::{Arc, Mutex};
 
     use axum::extract::{Path as AxumPath, Query, State};
     use axum::http::{HeaderMap, StatusCode};
@@ -193,67 +196,30 @@ pub(crate) mod tests {
     pub(crate) const FAKE_PASSWORD: &str = "demo-pass";
     pub(crate) const FAKE_TOKEN: &str = "demo-token";
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarGuard {
-        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-        _lock: MutexGuard<'static, ()>,
-    }
-
-    impl EnvVarGuard {
-        fn clear(vars: &[&'static str]) -> Self {
-            let lock = env_lock().lock().expect("env lock poisoned");
-            let saved = vars
-                .iter()
-                .map(|name| (*name, std::env::var_os(name)))
-                .collect();
-            for name in vars {
-                std::env::remove_var(name);
-            }
-            Self { saved, _lock: lock }
-        }
-
-        fn set(&self, name: &'static str, value: &str) {
-            assert!(
-                self.saved.iter().any(|(saved, _)| *saved == name),
-                "{name} was not cleared by this guard, so its value would not be restored"
-            );
-            unsafe { std::env::set_var(name, value) };
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            for (name, value) in &self.saved {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-
     #[test]
     fn a_saved_login_is_the_last_token_source() {
-        let guard = EnvVarGuard::clear(&[REGISTRY_TOKEN_ENV_VAR]);
         let home = tempfile::tempdir().unwrap();
         let registry = "https://registry.example";
-        let resolve = |explicit| {
-            super::super::account::resolve_publish_token(explicit, registry, home.path())
+        let resolve = |explicit, environment: Option<&str>| {
+            super::super::account::select_publish_token(
+                explicit,
+                environment.map(str::to_owned),
+                registry,
+                home.path(),
+            )
         };
-        let error = resolve(None).unwrap_err();
+        let error = resolve(None, None).unwrap_err();
         assert!(
             format!("{error:#}").contains("gents config pack login"),
             "{error:#}"
         );
         gents_pack::pack::registry::credentials::set(home.path(), registry, "gcpat_saved").unwrap();
-        assert_eq!(resolve(None).unwrap(), "gcpat_saved");
-        guard.set(REGISTRY_TOKEN_ENV_VAR, "gcpat_env");
-        assert_eq!(resolve(None).unwrap(), "gcpat_env");
-        assert_eq!(resolve(Some("gcpat_flag")).unwrap(), "gcpat_flag");
+        assert_eq!(resolve(None, None).unwrap(), "gcpat_saved");
+        assert_eq!(resolve(None, Some("gcpat_env")).unwrap(), "gcpat_env");
+        assert_eq!(
+            resolve(Some("gcpat_flag"), Some("gcpat_env")).unwrap(),
+            "gcpat_flag"
+        );
     }
 
     pub(crate) type YankRequest = (String, String, String, bool, String);
