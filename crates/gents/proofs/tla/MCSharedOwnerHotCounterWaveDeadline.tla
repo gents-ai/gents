@@ -1,0 +1,4 @@
+---- MODULE MCSharedOwnerHotCounterWaveDeadline ----
+EXTENDS SharedOwnerHotCounter
+
+====

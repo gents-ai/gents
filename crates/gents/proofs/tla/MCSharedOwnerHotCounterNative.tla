@@ -1,0 +1,4 @@
+---- MODULE MCSharedOwnerHotCounterNative ----
+EXTENDS SharedOwnerHotCounter
+
+====

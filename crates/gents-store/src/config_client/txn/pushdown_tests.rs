@@ -437,10 +437,12 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
 }
 
 /// Two concurrent read-then-insert transactions on one unique key leave one
-/// row. `transact_local_write` serializes writers through the per-node mutation
-/// gate, so the second read always sees the first commit: the read is the
-/// guard on this path and the unique index is not reached. Same pinned
-/// DefraDB rev as `duplicate_unique_key_errors_and_propagated_error_rolls_back`.
+/// row. The per-node mutation gate admits both at once (it has
+/// `MUTATION_WRITE_GATE_CAPACITY` permits), so both may read the key absent;
+/// the later commit then aborts on the conflict and the owner reruns its
+/// callback, whose read finds the committed row (`tla/SharedOwnerHotCounter
+/// .tla`). Same pinned DefraDB rev as
+/// `duplicate_unique_key_errors_and_propagated_error_rolls_back`.
 #[tokio::test]
 async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
     let node = disposable_node().await?;
@@ -536,6 +538,12 @@ async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
     Ok((home, node))
 }
 
+/// Every acknowledged increment is durable with its receipt, a returned
+/// conflict applied nothing, and every call returns (`tla/SharedOwnerHotCounter
+/// .tla`: `TestAccounting`, `EveryCallSettles`). A wave has no wall-clock
+/// bound: the owner bounds attempts and each native phase, not the time the
+/// host takes to schedule them (`WaveDeadline` fails with every safety
+/// property holding), so a hang surfaces as the owner's phase-timeout error.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
     let (_home, node) = node().await?;
@@ -580,15 +588,10 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
             });
         }
         next_writer += width as i64;
-        let observations = tokio::time::timeout(Duration::from_secs(60), async {
-            let mut observations = Vec::new();
-            while let Some(worker) = workers.join_next().await {
-                observations.extend(worker??);
-            }
-            Ok::<_, anyhow::Error>(observations)
-        })
-        .await
-        .context("shared owner writers stalled")??;
+        let mut observations = Vec::new();
+        while let Some(worker) = workers.join_next().await {
+            observations.extend(worker??);
+        }
         assert_eq!(observations.len(), width * 8);
         let accepted = observations.iter().filter(|row| row.1).count();
         assert!(accepted > 0, "at least one hot-counter update commits");
@@ -629,6 +632,10 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
 
 /// Native API experiment: bypass the Gents gate only here to measure the
 /// database's own admission and commit behavior for overlapping transactions.
+/// The round asserts progress, not time: first-committer-wins commits at
+/// least one writer of every round of single-attempt transactions
+/// (`tla/SharedOwnerHotCounter.tla`, `Native`: `RoundProgress`), and a round
+/// that ends with none fails with each writer's phase.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() -> Result<()> {
     let (_home, node) = node().await?;
@@ -637,39 +644,45 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
     let started = Instant::now();
     let active = Arc::new(AtomicUsize::new(0));
     let maximum = Arc::new(AtomicUsize::new(0));
+    let phases = Arc::new(std::sync::Mutex::new(vec!["waiting"; 64]));
     for writer in 0..64 {
         let node = node.clone();
         let barrier = barrier.clone();
         let active = active.clone();
         let maximum = maximum.clone();
+        let phases = phases.clone();
         workers.spawn(async move {
+            let phase = |name| phases.lock().unwrap_or_else(|e| e.into_inner())[writer] = name;
             barrier.wait().await;
             let transaction = node.begin_transaction_guard(false).await?;
+            phase("begun");
             let current = active.fetch_add(1, Ordering::SeqCst) + 1;
             maximum.fetch_max(current, Ordering::SeqCst);
             tokio::task::yield_now().await;
             let response = transaction.execute(&format!("mutation {{ create_WriterReceipt(input: {{writer: {writer}, iteration: 0}}) {{_docID}} }}")).await;
             anyhow::ensure!(!response.has_errors(), "native write: {:?}", response.errors);
+            phase("committing");
             let committed = match transaction.commit().await {
                 Ok(()) => true,
                 Err(query::TransactionError::Conflict(_)) => false,
                 Err(error) => return Err(error.into()),
             };
+            phase(if committed { "committed" } else { "conflict" });
             active.fetch_sub(1, Ordering::SeqCst);
             Ok::<_, anyhow::Error>(committed.then_some(writer as i64))
         });
     }
-    let committed = tokio::time::timeout(Duration::from_secs(60), async {
-        let mut committed = BTreeSet::new();
-        while let Some(worker) = workers.join_next().await {
-            if let Some(writer) = worker?? {
-                committed.insert(writer);
-            }
+    let mut committed = BTreeSet::new();
+    while let Some(worker) = workers.join_next().await {
+        if let Some(writer) = worker?? {
+            committed.insert(writer);
         }
-        Ok::<_, anyhow::Error>(committed)
-    })
-    .await
-    .context("native concurrent writers stalled")??;
+    }
+    anyhow::ensure!(
+        !committed.is_empty(),
+        "a native round ended with no commit; writer phases: {:?}",
+        phases.lock().unwrap_or_else(|e| e.into_inner())
+    );
     let rows = ConfigAccess::local(node.clone())
         .execute("{ WriterReceipt {writer} }")
         .await?;
@@ -680,7 +693,6 @@ async fn native_c64_distinct_writers_expose_conflicts_without_partial_commits() 
         .collect();
     assert_eq!(observed, committed);
     assert_eq!(receipts.len(), committed.len());
-    assert!(!committed.is_empty());
     assert!(
         maximum.load(Ordering::SeqCst) > 1,
         "native transactions did not overlap"
