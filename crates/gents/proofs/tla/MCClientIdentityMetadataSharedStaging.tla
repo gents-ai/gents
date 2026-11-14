@@ -1,0 +1,4 @@
+---- MODULE MCClientIdentityMetadataSharedStaging ----
+EXTENDS ClientIdentityMetadata
+
+====
