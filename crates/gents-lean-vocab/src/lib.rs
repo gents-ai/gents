@@ -119,8 +119,6 @@ where
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct QueueImage {
     pub active: Option<String>,
