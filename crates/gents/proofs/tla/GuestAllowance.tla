@@ -58,9 +58,10 @@ VARIABLES
   started,    \* when the store was created with its deadline
   deadline,   \* the store's epoch deadline
   cancelled,  \* the invocation was cancelled (its async side dropped)
-  released    \* the worker returned and released its thread
+  released,   \* the worker returned and released its thread
+  cancelSaw   \* ghost: the guest's phase when the cancel arrived
 
-vars == <<now, epoch, wakeAt, guest, started, deadline, cancelled, released>>
+vars == <<now, epoch, wakeAt, guest, started, deadline, cancelled, released, cancelSaw>>
 
 Max(a, b) == IF a > b THEN a ELSE b
 
@@ -73,6 +74,7 @@ TypeOK ==
   /\ deadline \in Nat
   /\ cancelled \in BOOLEAN
   /\ released \in BOOLEAN
+  /\ cancelSaw \in {"none", "compiling", "running", "trapped"}
 
 Init ==
   /\ now = 0
@@ -83,6 +85,7 @@ Init ==
   /\ deadline = 0
   /\ cancelled = FALSE
   /\ released = FALSE
+  /\ cancelSaw = "none"
 
 TrapDue == guest = "running" /\ EpochChecked /\ epoch >= deadline
 
@@ -94,14 +97,14 @@ Advance ==
   /\ ~TrapDue
   /\ guest = "compiling" => now + 1 <= MaxCompile
   /\ now' = now + 1
-  /\ UNCHANGED <<epoch, wakeAt, guest, started, deadline, cancelled, released>>
+  /\ UNCHANGED <<epoch, wakeAt, guest, started, deadline, cancelled, released, cancelSaw>>
 
 \* The ticker's sleep ends: `increment_epoch` once, or catch up to elapsed time.
 Wake ==
   /\ now >= wakeAt
   /\ epoch' = IF CatchUp THEN Max(epoch + 1, now \div P) ELSE epoch + 1
   /\ wakeAt' = now + P
-  /\ UNCHANGED <<now, guest, started, deadline, cancelled, released>>
+  /\ UNCHANGED <<now, guest, started, deadline, cancelled, released, cancelSaw>>
 
 \* `run_command_raw`: the store is created after compiling, with its deadline.
 StartGuest ==
@@ -109,25 +112,27 @@ StartGuest ==
   /\ guest' = "running"
   /\ started' = now
   /\ deadline' = epoch + A
-  /\ UNCHANGED <<now, epoch, wakeAt, cancelled, released>>
+  /\ UNCHANGED <<now, epoch, wakeAt, cancelled, released, cancelSaw>>
 
 Trap ==
   /\ TrapDue
   /\ guest' = "trapped"
-  /\ UNCHANGED <<now, epoch, wakeAt, started, deadline, cancelled, released>>
+  /\ UNCHANGED <<now, epoch, wakeAt, started, deadline, cancelled, released, cancelSaw>>
 
 \* The worker returns; whatever occupied the thread is dropped.
 Release ==
   /\ guest = "trapped"
   /\ ~released
   /\ released' = TRUE
-  /\ UNCHANGED <<now, epoch, wakeAt, guest, started, deadline, cancelled>>
+  /\ UNCHANGED <<now, epoch, wakeAt, guest, started, deadline, cancelled, cancelSaw>>
 
 \* Cancellation drops the async side. The guest never calls the host, so
-\* the revoked allowance never reaches its store.
+\* the revoked allowance never reaches its store. Nothing orders the cancel
+\* against the allowance: it may arrive after the guest already stopped.
 Cancel ==
   /\ ~cancelled
   /\ cancelled' = TRUE
+  /\ cancelSaw' = guest
   /\ UNCHANGED <<now, epoch, wakeAt, guest, started, deadline, released>>
 
 Next == Advance \/ Wake \/ StartGuest \/ Trap \/ Release \/ Cancel
@@ -146,4 +151,8 @@ ReleaseFollowsStop == released => guest = "trapped"
 
 \* No stop is lost: every guest is stopped and its worker released.
 EveryGuestReleased == <>released
+
+(* What the test assumed, refuted by `MCGuestAllowanceCancelLate`: that a   *)
+(* cancel always finds the guest still computing.                          *)
+CancelFindsGuestRunning == cancelled => cancelSaw \in {"compiling", "running"}
 ====

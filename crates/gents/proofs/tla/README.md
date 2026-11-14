@@ -226,7 +226,8 @@ See `../README.md` for how this fits the broader formal-verification model.
   `MCGuestAllowanceWakeCounted` (the shipped ticker, one increment per wake,
   every wake late) fails `StopsAtAllowance` and `WakeCountedNotLost` shows
   that stop is late, not lost; `Punctual` holds with on-time wakes;
-  `Unchecked` (no epoch checks in loops) never stops the guest.
+  `Unchecked` (no epoch checks in loops) never stops the guest;
+  `CancelLate` shows a cancel can find the guest already stopped.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
