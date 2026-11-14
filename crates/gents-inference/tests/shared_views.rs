@@ -1,5 +1,3 @@
-#![cfg(feature = "test-fixtures")]
-
 use gents_documents::views::tasks::TaskList;
 use gents_protocol::document_query::{fields::task, Create, Delete, Input, Query};
 use gents_protocol::views::View;

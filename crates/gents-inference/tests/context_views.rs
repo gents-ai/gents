@@ -1,5 +1,3 @@
-#![cfg(feature = "test-fixtures")]
-
 use anyhow::{Context, Result};
 use gents_inference::views::context::{ContextCalls, ContextCursor};
 use gents_protocol::document_query::{fields::inference_call, Create, Input};

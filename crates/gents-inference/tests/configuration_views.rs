@@ -1,5 +1,3 @@
-#![cfg(feature = "test-fixtures")]
-
 use gents_documents::views::config::{
     AgentContextList, AgentTargetList, CompactionConfigList, DatastoreToolSurfaceList,
     DefaultAgentSelectionList, NodeList, PageList, PluginSourceList, SkillList, ToolsList,

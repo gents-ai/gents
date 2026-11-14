@@ -1,5 +1,3 @@
-#![cfg(feature = "test-fixtures")]
-
 use gents_documents::views::agents::AgentList;
 use gents_inference::test_support::signed_test_node_without_agent;
 use gents_store::config_client::ConfigAccess;
