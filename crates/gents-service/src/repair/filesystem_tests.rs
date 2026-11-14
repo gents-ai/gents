@@ -241,3 +241,109 @@ async fn a_readable_key_names_the_chmod_and_moves_nothing() {
         other => panic!("expected an insecure-key refusal, got {other:?}"),
     }
 }
+
+use super::conformance::Steps;
+
+/// The service's facts when its definition names `served`, whose node runs.
+fn serving(
+    served: &Path,
+    chosen: gents_protocol::operations::install_repair::HomeState,
+) -> super::ServiceFacts {
+    use gents_protocol::operations::install_repair::{RepairOperation, ServiceMove};
+    super::ServiceFacts {
+        definition_home: Some(served.to_path_buf()),
+        executable_present: true,
+        log_current: true,
+        job_loaded: true,
+        job_running: true,
+        job_failed: false,
+        port: super::port::PortObservation::NotListening,
+        home: chosen,
+        was_serving: false,
+        service_move: ServiceMove::BeforeSetup,
+        node_version: None,
+        foreign_program: false,
+        managed_update: false,
+        drain_supported: false,
+        previous_version: None,
+        served_home_present: true,
+        operation: RepairOperation::Run,
+        holder: crate::native_service::ServiceHolder::Another {
+            home: Some(served.to_path_buf()),
+            definition: None,
+        },
+    }
+}
+
+/// Settles with no service manager, so any change to the service fails the
+/// repair instead of reaching the machine's own.
+async fn settle_answered(
+    home: &Path,
+    facts: &super::ServiceFacts,
+    answer: gents_protocol::operations::install_repair::RepairAnswer,
+) -> (anyhow::Result<super::RepairReceipt>, Steps) {
+    let mut steps = Steps(Vec::new());
+    let receipt = super::settle(
+        &gents_protocol::operations::install_repair::HomeChoice {
+            home: home.to_path_buf(),
+            explicit: true,
+        },
+        facts,
+        false,
+        super::Asked {
+            interactive: true,
+            answer,
+        },
+        None,
+        None,
+        None,
+        &super::ServiceProgram::new(super::current_program),
+        &mut steps,
+    )
+    .await;
+    (receipt, steps)
+}
+
+/// `gents --home X`, answered "Start over" on a broken X while the service
+/// ran another home's node, asked the service manager to stop that node on
+/// X's behalf; the manager refused and the answer never reached setup.
+#[tokio::test]
+async fn starting_over_leaves_the_service_of_another_home_alone() {
+    use gents_protocol::operations::install_repair::{
+        HomeState, RepairAnswer, RepairOutcome, RepairStep,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let (home, served) = (temp.path().join("chosen"), temp.path().join("served"));
+    fs::create_dir_all(home.join("data")).unwrap();
+    complete(&served);
+    let facts = serving(&served, HomeState::MissingSettings);
+    let (receipt, steps) = settle_answered(&home, &facts, RepairAnswer::SetAside).await;
+    let receipt = receipt.unwrap();
+    assert!(
+        matches!(receipt.outcome, RepairOutcome::NeedsSetup),
+        "{:?}",
+        receipt.outcome
+    );
+    assert_eq!(steps.0, [RepairStep::SetAsideFolder]);
+    assert!(!home.exists());
+    assert!(served.join("init.json").is_file());
+}
+
+#[tokio::test]
+async fn continuing_a_setup_leaves_the_service_of_another_home_alone() {
+    use gents_protocol::operations::install_repair::{HomeState, RepairAnswer, RepairOutcome};
+    let temp = tempfile::tempdir().unwrap();
+    let (home, served) = (temp.path().join("chosen"), temp.path().join("served"));
+    complete(&home);
+    complete(&served);
+    let facts = serving(&served, HomeState::UnfinishedSetup);
+    let (receipt, steps) = settle_answered(&home, &facts, RepairAnswer::ContinueSetup).await;
+    let receipt = receipt.unwrap();
+    assert!(
+        matches!(receipt.outcome, RepairOutcome::NeedsSetup),
+        "{:?}",
+        receipt.outcome
+    );
+    assert!(steps.0.is_empty(), "{:?}", steps.0);
+    assert!(home.join("init.json").is_file());
+}

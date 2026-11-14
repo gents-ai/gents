@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::native_service::{
-    CommandRunner, NativeServiceConfig, NativeServiceManager, StartOutcome,
+    CommandRunner, NativeServiceConfig, NativeServiceManager, ServiceHolder, StartOutcome,
 };
 
 use crate::repair::port::{observe_port, read_initialized_did, PortObservation, ServedIdentity};
@@ -34,6 +34,8 @@ pub struct ServiceFacts {
     pub previous_version: Option<semver::Version>,
     pub served_home_present: bool,
     pub operation: RepairOperation,
+    /// Whose job the service manager holds under the label, from its record.
+    pub holder: ServiceHolder,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,7 +111,11 @@ pub enum ServiceAction {
     RewriteDefinition,
 }
 
+/// `InstallRepair.servicePlan`
 pub fn plan_service(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
+    if !facts.holder.may_change() && facts.operation != RepairOperation::Repoint {
+        return Vec::new();
+    }
     let serves_this_node = matches!(
         facts.port,
         PortObservation::Gents {
@@ -184,6 +190,22 @@ pub fn plan_service(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
     actions
 }
 
+/// `InstallRepair.setupServicePlan`
+pub fn plan_before_setup(facts: &ServiceFacts, chosen: &Path) -> Vec<ServiceAction> {
+    if !facts.holder.may_change() {
+        return Vec::new();
+    }
+    let could_open_chosen = facts
+        .definition_home
+        .as_deref()
+        .is_none_or(|home| home == chosen);
+    if (facts.job_loaded || facts.job_running) && could_open_chosen {
+        vec![ServiceAction::StopStale]
+    } else {
+        Vec::new()
+    }
+}
+
 pub async fn gather_facts(
     manager: &NativeServiceManager,
     chosen: &Path,
@@ -222,11 +244,16 @@ pub async fn gather_facts(
             previous_version: None,
             served_home_present: false,
             operation: RepairOperation::Run,
+            holder: ServiceHolder::Free,
         };
         let Some(installed_home) = installed_home else {
             facts.job_loaded = manager.job_loaded()?;
+            if facts.job_loaded {
+                facts.holder = manager.holder()?;
+            }
             return Ok((facts, None));
         };
+        facts.holder = manager.holder()?;
         let owner = NativeServiceManager::new(NativeServiceConfig {
             home: installed_home,
             ..config

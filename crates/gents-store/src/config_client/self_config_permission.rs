@@ -15,7 +15,7 @@ pub enum AgentSelfConfigPermissionError {
     AgentUnavailable,
     #[error("Agent identity lookup returned an invalid response")]
     InvalidResponse,
-    #[error(transparent)]
+    #[error("{0}")]
     Access(#[from] ConfigClientError),
 }
 

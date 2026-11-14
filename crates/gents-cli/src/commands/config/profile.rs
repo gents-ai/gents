@@ -38,7 +38,16 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
         &args.profile,
     )?;
     let output = match args.account.as_deref() {
-        None => list_candidates(&access, &node_did, &args.profile, &slots).await?,
+        None => {
+            list_candidates(
+                &access,
+                &gents_service::home_state::resolve_home_dir(args.home.as_deref()),
+                &node_did,
+                &args.profile,
+                &slots,
+            )
+            .await?
+        }
         Some(account) => {
             set_account(
                 &access,
@@ -73,12 +82,13 @@ pub(crate) fn bound_slots(
 
 async fn list_candidates(
     access: &ConfigAccess,
+    home: &std::path::Path,
     node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
-        let identity = gents_service::home_state::load_client_identity().await?;
+        let identity = gents_service::home_state::client_identity_for(home).await?;
         crate::commands::accounts::request_usage_reads(
             &identity,
             graphql,
@@ -924,9 +934,15 @@ mod tests {
     async fn set_account_without_an_account_lists_the_candidates() {
         let (access, b_backend, _) = seeded().await;
         with_agents(&access).await;
-        let output = list_candidates(&access, DID, "p-original", &[])
-            .await
-            .unwrap();
+        let output = list_candidates(
+            &access,
+            std::path::Path::new("/unused"),
+            DID,
+            "p-original",
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(output["profile"], json!("p-original"));
         assert_eq!(
             output["account"],

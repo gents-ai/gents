@@ -17,7 +17,7 @@ const DEFERRED_COLLECTIONS: [&str; 6] = [
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeferredOperationError {
-    #[error(transparent)]
+    #[error("{0}")]
     Config(#[from] ConfigClientError),
     #[error(transparent)]
     Graphql(#[from] gents_protocol::graphql::GraphqlError),

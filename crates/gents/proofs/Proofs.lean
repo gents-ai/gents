@@ -1,4 +1,5 @@
 import Proofs.Store.StorageFailure
+import Proofs.Store.AccessClassification
 import Proofs.Store.Views
 import Proofs.Store.Identity.RelationshipReplay
 import Proofs.Shared.Basic
@@ -153,3 +154,4 @@ import Proofs.Session.Request.PreclaimBoundary
 
 import Proofs.Clients.InstallRepair
 import Proofs.Clients.RepairBackups
+import Proofs.Clients.DesktopConnect

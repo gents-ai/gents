@@ -57,6 +57,7 @@ custom-protocol = ["tauri/custom-protocol"]
 native-e2e = ["gents-desktop-bridge/native-e2e"]
 
 [dev-dependencies]
+gents-service = { workspace = true, features = ["test-home-guard"] }
 gents = { path = "../../../crates/gents", features = ["test-home-guard"] }
 axum = "0.8"
 gents-lean-vocab.workspace = true

@@ -1022,6 +1022,285 @@ fn test_fixtures_fence_flags_production_and_default_enablement() {
     }
 }
 
+/// The feature that cuts a test build off the machine's service manager
+/// (`gents_service::native_service::isolation`). The per-user service label
+/// is not per `HOME`, so a `gents` a test spawns with a temporary `HOME`
+/// otherwise addresses the user's own node: on 2026-11-13 test binaries
+/// stopped the maintainer's nodes through it.
+const SERVICE_ISOLATION: (&str, &str) = ("gents-service", "test-home-guard");
+
+struct Workspace {
+    inherited: toml::Table,
+    members: BTreeMap<String, (String, toml::Table)>,
+}
+
+impl Workspace {
+    fn load(root: &Path) -> Self {
+        let workspace = toml_file(&root.join("Cargo.toml"));
+        let inherited = workspace["workspace"]
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .unwrap_or_default();
+        let members = workspace["workspace"]["members"]
+            .as_array()
+            .expect("workspace members")
+            .iter()
+            .map(|member| {
+                let member = member.as_str().expect("member path").to_owned();
+                let manifest = toml_file(&root.join(&member).join("Cargo.toml"));
+                let name = manifest["package"]["name"]
+                    .as_str()
+                    .expect("package name")
+                    .to_owned();
+                (name, (member, manifest))
+            })
+            .collect();
+        Self { inherited, members }
+    }
+
+    /// Every dependency entry of `manifest` in the tables of `kind`, with the
+    /// package it names and the features it enables (inherited ones included).
+    fn entries(&self, manifest: &toml::Table, kind: &str) -> Vec<(String, String, Vec<String>)> {
+        let mut tables = vec![manifest.get(kind)];
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            tables.extend(targets.values().map(|target| target.get(kind)));
+        }
+        if kind == "workspace.dependencies" {
+            tables = vec![manifest
+                .get("workspace")
+                .and_then(|workspace| workspace.get("dependencies"))];
+        }
+        let features = |value: Option<&toml::Value>| {
+            value
+                .and_then(|value| value.get("features"))
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        tables
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_table)
+            .flat_map(|table| table.iter())
+            .map(|(key, specification)| {
+                let mut enabled = features(Some(specification));
+                if specification
+                    .get("workspace")
+                    .and_then(toml::Value::as_bool)
+                    == Some(true)
+                {
+                    enabled.extend(features(self.inherited.get(key)));
+                }
+                (
+                    key.clone(),
+                    package_name(key, specification, &self.inherited),
+                    enabled,
+                )
+            })
+            .collect()
+    }
+
+    /// Whether enabling `features` of `package` enables the service isolation.
+    fn isolates(&self, package: &str, features: &[String]) -> bool {
+        self.isolates_from(package, features, &mut BTreeSet::new())
+    }
+
+    fn isolates_from(
+        &self,
+        package: &str,
+        features: &[String],
+        seen: &mut BTreeSet<(String, String)>,
+    ) -> bool {
+        features.iter().any(|feature| {
+            if (package, feature.as_str()) == SERVICE_ISOLATION {
+                return true;
+            }
+            if !seen.insert((package.to_owned(), feature.clone())) {
+                return false;
+            }
+            let Some((_, manifest)) = self.members.get(package) else {
+                return false;
+            };
+            let dependencies = self.entries(manifest, "dependencies");
+            manifest
+                .get("features")
+                .and_then(|table| table.get(feature))
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .any(|entry| match entry.split_once('/') {
+                    Some((dependency, enabled)) => {
+                        let dependency = dependency.trim_end_matches('?');
+                        dependencies
+                            .iter()
+                            .find(|(key, _, _)| key == dependency)
+                            .is_some_and(|(_, target, _)| {
+                                self.isolates_from(target, &[enabled.to_owned()], seen)
+                            })
+                    }
+                    None if entry.starts_with("dep:") => false,
+                    None => self.isolates_from(package, &[entry.to_owned()], seen),
+                })
+        })
+    }
+
+    /// Workspace members `package` builds against, transitively.
+    fn reaches(&self, package: &str, target: &str) -> bool {
+        let mut pending = vec![package.to_owned()];
+        let mut seen = BTreeSet::new();
+        while let Some(next) = pending.pop() {
+            if next == target {
+                return true;
+            }
+            if !seen.insert(next.clone()) {
+                continue;
+            }
+            if let Some((_, manifest)) = self.members.get(&next) {
+                pending.extend(dependency_names(manifest, &self.inherited));
+            }
+        }
+        false
+    }
+}
+
+/// Sites that would enable the service isolation in a production build: a
+/// normal, build or workspace dependency enabling it, or a feature other than
+/// a test feature (`test-home-guard`, `test-fixtures`) that does.
+fn service_isolation_leaks(workspace: &Workspace) -> Vec<String> {
+    let mut leaks = Vec::new();
+    for (name, (member, manifest)) in &workspace.members {
+        for kind in [
+            "dependencies",
+            "build-dependencies",
+            "workspace.dependencies",
+        ] {
+            for (key, package, features) in workspace.entries(manifest, kind) {
+                if workspace.isolates(&package, &features) {
+                    leaks.push(format!("{member}/Cargo.toml [{kind}] {key}"));
+                }
+            }
+        }
+        for feature in manifest
+            .get("features")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flat_map(|table| table.keys())
+        {
+            let test_feature = matches!(feature.as_str(), "test-home-guard" | "test-fixtures");
+            if !test_feature && workspace.isolates(name, std::slice::from_ref(feature)) {
+                leaks.push(format!("{member}/Cargo.toml [features] {feature}"));
+            }
+        }
+    }
+    leaks
+}
+
+#[test]
+fn service_isolation_stays_test_only() {
+    let workspace = Workspace::load(&repo_root());
+    assert!(
+        workspace.isolates("gents-service", &["test-home-guard".to_owned()]),
+        "the service isolation feature is gents-service's test-home-guard"
+    );
+    let leaks = service_isolation_leaks(&workspace);
+    assert!(
+        leaks.is_empty(),
+        "a production build would never reach the service manager; enable gents-service's `test-home-guard` only from [dev-dependencies] or a test feature:\n{}",
+        leaks.join("\n")
+    );
+}
+
+/// Every package whose tests can reach the service manager, by building
+/// against gents-service or by spawning the `gents` binary, builds it with
+/// the isolation through its dev-dependencies, so that the `gents` its tests
+/// spawn is cut off from the machine's service manager too.
+#[test]
+fn tests_reaching_the_service_manager_are_isolated() {
+    let root = repo_root();
+    let workspace = Workspace::load(&root);
+    let mut unisolated = Vec::new();
+    for (name, (member, manifest)) in &workspace.members {
+        let mut sources = Vec::new();
+        for directory in ["src", "tests", "benches", "examples"] {
+            let directory = root.join(member).join(directory);
+            if directory.is_dir() {
+                all_rust_sources(&directory, &mut sources);
+            }
+        }
+        let spawns_gents = sources.iter().any(|path| {
+            std::fs::read_to_string(path).is_ok_and(|text| text.contains("CARGO_BIN_EXE_gents\""))
+        });
+        if !spawns_gents && !workspace.reaches(name, SERVICE_ISOLATION.0) {
+            continue;
+        }
+        let isolated = workspace
+            .entries(manifest, "dev-dependencies")
+            .iter()
+            .any(|(_, package, features)| workspace.isolates(package, features));
+        if !isolated {
+            unisolated.push(format!(
+                "{member}: its tests reach the service manager; add `{} = {{ workspace = true, features = [\"{}\"] }}` (or a test feature enabling it) to its [dev-dependencies]",
+                SERVICE_ISOLATION.0, SERVICE_ISOLATION.1
+            ));
+        }
+    }
+    assert!(unisolated.is_empty(), "{}", unisolated.join("\n"));
+}
+
+#[test]
+fn service_isolation_fence_flags_production_enablement() {
+    let workspace = |manifests: &[(&str, &str)]| Workspace {
+        inherited: toml::Table::new(),
+        members: manifests
+            .iter()
+            .map(|(name, manifest)| {
+                let manifest: toml::Table = format!("[package]\nname = \"{name}\"\n{manifest}")
+                    .parse()
+                    .expect("parse manifest");
+                ((*name).to_owned(), ((*name).to_owned(), manifest))
+            })
+            .collect(),
+    };
+    let service = ("gents-service", "[features]\ntest-home-guard = []");
+    let leaking = workspace(&[
+        service,
+        (
+            "host",
+            "[dependencies]\ngents-service = { path = \"x\" }\n[features]\nfixtures = [\"gents-service/test-home-guard\"]\ntest-fixtures = [\"gents-service/test-home-guard\"]",
+        ),
+        (
+            "cli",
+            "[dependencies]\nhost = { path = \"h\", features = [\"test-fixtures\"] }",
+        ),
+    ]);
+    assert_eq!(
+        service_isolation_leaks(&leaking),
+        [
+            "cli/Cargo.toml [dependencies] host",
+            "host/Cargo.toml [features] fixtures"
+        ]
+    );
+    let fenced = workspace(&[
+        service,
+        (
+            "host",
+            "[dependencies]\ngents-service = { path = \"x\" }\n[features]\ntest-fixtures = [\"gents-service/test-home-guard\"]",
+        ),
+        (
+            "cli",
+            "[dependencies]\nhost = { path = \"h\" }\n[dev-dependencies]\nhost = { path = \"h\", features = [\"test-fixtures\"] }",
+        ),
+    ]);
+    assert!(service_isolation_leaks(&fenced).is_empty());
+    assert!(fenced.isolates("host", &["test-fixtures".to_owned()]));
+    assert!(fenced.reaches("cli", "gents-service"));
+}
+
 const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents-inference/src/auth/credential";
 
 const REMOVED_OAUTH_PICKERS: &[&str] = &[
@@ -2012,7 +2291,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-toolcalls/src/plugin/application_write/mod.rs", 1),
     ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
     ("crates/gents-documents/src/desired_state/plan.rs", 1),
-    ("crates/gents-store/src/config_client/retry.rs", 3),
+    ("crates/gents-store/src/config_client/retry.rs", 2),
     ("crates/gents-store/src/config_client/schema_install.rs", 2),
     ("crates/gents-tools/src/builtin/defra_query/mod.rs", 1),
     ("crates/gents/src/eval/documents.rs", 3),

@@ -1290,6 +1290,10 @@ def caseCoverage : List CoverageEntry :=
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
+      "contracts_self_config_agent_resolution")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
       "contracts_self_config_sibling_tools")
       "self-config" [Surface.agentFacing]
   , tagged (followUpCoverage

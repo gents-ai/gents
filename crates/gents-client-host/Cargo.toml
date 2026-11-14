@@ -56,6 +56,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+gents-service = { workspace = true, features = ["test-home-guard"] }
 gents = { path = "../gents", features = ["test-fixtures"] }
 defra-node.workspace = true
 chrono.workspace = true

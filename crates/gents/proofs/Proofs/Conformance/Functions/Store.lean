@@ -1,6 +1,7 @@
 import Proofs.Store.Identity.GrantSets
 import Proofs.Store.Identity.EnrollmentGrant
 import Proofs.Store.SchemaInstall
+import Proofs.Store.AccessClassification
 import Proofs.Conformance.Family
 
 namespace Identity.GrantSets
@@ -28,3 +29,11 @@ deriving instance Lean.ToJson for Live, Decision
 attribute [conformance_function] decide requestAdmitted
 
 end SchemaInstall
+
+namespace AccessClassification
+
+deriving instance Lean.ToJson for Classification, Failure, Erasure, StoreWrapper, ViewWrapper
+
+attribute [conformance_function] storeWrapped viewWrapped
+
+end AccessClassification
