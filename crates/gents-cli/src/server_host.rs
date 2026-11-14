@@ -9,6 +9,10 @@ use crate::cli::{Cli, Command};
 #[derive(Debug, Clone)]
 pub struct ProvisionOptions {
     pub home: PathBuf,
+    /// The caller's desktop root. Provisioning writes the CLI client key that
+    /// becomes the new home's administrator under the root this process
+    /// resolves, so a caller holding another root is refused.
+    pub desktop_root: PathBuf,
     pub node_name: String,
     pub tool_ceiling: ToolCeilingArg,
     pub tool_root: Option<PathBuf>,
@@ -39,6 +43,20 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
             .map(|path| path.to_string_lossy().into_owned());
         gents_service::home_state::write_init_config(&options.home, &stored)?;
         return Ok(());
+    }
+
+    let resolved = gents_service::home_state::cli_identity_paths()?;
+    let held =
+        gents_desktop_core::client::DesktopPaths::from_root(&options.desktop_root).cli_client();
+    if resolved.root() != held.root() {
+        anyhow::bail!(
+            "provisioning {} would keep its administrator key in {}, but the caller's desktop root keeps it in {}; start this process with {} set to {}",
+            options.home.display(),
+            resolved.root().display(),
+            held.root().display(),
+            gents_desktop_core::client::DESKTOP_HOME_ENV,
+            options.desktop_root.display(),
+        );
     }
 
     let tool_package = match options.tool_ceiling {

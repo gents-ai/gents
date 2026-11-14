@@ -569,26 +569,60 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
     Ok(())
 }
 
+async fn provision_as_the_desktop(home: PathBuf, desktop_root: PathBuf) -> Result<()> {
+    let root = home.with_file_name("root");
+    fs::create_dir_all(&root)?;
+    gents_server::server_host::ensure_standard_home(
+        &gents_store::test_support::runtime_handle(),
+        gents_server::server_host::ProvisionOptions {
+            home,
+            desktop_root,
+            node_name: "Forge".to_owned(),
+            tool_ceiling: gents_service::args::ToolCeilingArg::Readwrite,
+            tool_root: Some(fs::canonicalize(root)?),
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            default_packs: true,
+        },
+    )
+    .await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "run by desktop_first_run_without_inference_sets_up_the_engineer in the fixture's HOME"]
+async fn provisioning_refuses_a_desktop_root_the_process_does_not_resolve() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let user_home = tempdir.path();
+    first_run_step(user_home, &user_home.join(".gents"), "foreign-root", "")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "run by the first-run tests in the fixture's HOME"]
 async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let home = PathBuf::from(std::env::var_os(FIRST_RUN_HOME_ENV).context("fixture home")?);
     let step = std::env::var(FIRST_RUN_STEP_ENV).context("fixture step")?;
+    let resolved = gents_desktop_core::client::DesktopPaths::discover()?;
     if step == "provision" {
-        let root = home.with_file_name("root");
-        fs::create_dir_all(&root)?;
-        return gents_server::server_host::ensure_standard_home(
-            &gents_store::test_support::runtime_handle(),
-            gents_server::server_host::ProvisionOptions {
-                home,
-                node_name: "Forge".to_owned(),
-                tool_ceiling: gents_service::args::ToolCeilingArg::Readwrite,
-                tool_root: Some(fs::canonicalize(root)?),
-                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
-                default_packs: true,
-            },
-        )
-        .await;
+        return provision_as_the_desktop(home, resolved.root().to_path_buf()).await;
+    }
+    if step == "foreign-root" {
+        let foreign = home.with_file_name("another-desktop");
+        let refusal = provision_as_the_desktop(home.clone(), foreign.clone())
+            .await
+            .expect_err("a desktop root this process does not resolve is refused");
+        let refusal = format!("{refusal:#}");
+        anyhow::ensure!(
+            refusal.contains(gents_desktop_core::client::DESKTOP_HOME_ENV)
+                && refusal.contains(&foreign.display().to_string()),
+            "the refusal does not name the root to start with: {refusal}"
+        );
+        anyhow::ensure!(
+            !resolved.cli_client().root().exists() && !foreign.exists(),
+            "a refused provisioning wrote a client key"
+        );
+        anyhow::ensure!(
+            gents_service::home_state::read_init_config(&home)?.is_none(),
+            "a refused provisioning initialized the home"
+        );
+        return Ok(());
     }
     let graphql = std::env::var(FIRST_RUN_GRAPHQL_ENV).context("fixture graphql")?;
     let stored = gents_service::home_state::read_init_config(&home)?.context("initialized home")?;
