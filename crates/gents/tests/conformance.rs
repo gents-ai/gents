@@ -24,7 +24,7 @@ mod support;
 use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
-use gents_lean_vocab::{lean_contract_snapshot, lean_recovery_sweep_cases};
+use gents_lean_vocab::lean_contract_snapshot;
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
     fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
@@ -57,8 +57,13 @@ mod startup_readiness;
 mod streaming_compaction;
 
 #[tokio::test]
-async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
-    recovery_sweeps::generated_recovery_sweep_cases_drive_startup_recovery_contract().await;
+async fn generated_request_recovery_cases_drive_request_owner() {
+    recovery_sweeps::generated_request_recovery_cases_drive_request_owner().await;
+}
+
+#[tokio::test]
+async fn generated_inference_recovery_cases_drive_inference_owner() {
+    recovery_sweeps::generated_inference_recovery_cases_drive_inference_owner().await;
 }
 
 #[tokio::test]

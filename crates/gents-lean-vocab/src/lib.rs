@@ -119,12 +119,6 @@ where
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
-pub fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
-    lean_contract_snapshot()
-        .recovery_sweep_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean recovery sweep case {name:?} was not emitted"))
 }
 
 #[derive(Debug, PartialEq, Eq)]

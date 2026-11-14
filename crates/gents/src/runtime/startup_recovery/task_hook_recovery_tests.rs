@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents_documents::{TaskHook, TaskHookPhase};
-use gents_lean_vocab::lean_recovery_sweep_cases;
 use gents_session::request::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
@@ -400,17 +399,10 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
 
 #[tokio::test]
 async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
-    let cases = lean_recovery_sweep_cases()
-        .iter()
-        .filter(|case| case.collection == "TaskHookRecord")
-        .collect::<Vec<_>>();
-    assert!(!cases.is_empty());
     let fixture = Fixture::new().await;
-    for case in cases {
-        let observation = case
-            .task_hook_observation
-            .as_deref()
-            .expect("task hook observation");
+    for case in gents_lean_vocab::families::recovery_sweeps_task_hook::cases() {
+        let input = &case.input;
+        let observation = input.task_hook_observation.as_str();
         let resolved = matches!(observation, "terminal" | "hidden" | "unavailable");
         let hidden_agent = if observation == "hidden" {
             Some(fixture.other_agent().await)
@@ -418,7 +410,7 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
             None
         };
         let selected_agent = hidden_agent.as_ref().unwrap_or(&fixture.agent_identity);
-        let live = case.execution_registered.expect("live premise");
+        let live = input.execution_registered;
         let dir = tempfile::tempdir().expect("case directory");
         let log = dir.path().join("cleanup.log");
         let (doc_id, owner) = if resolved {
@@ -465,7 +457,7 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
         let handle = store
             .begin(record(
                 &doc_id,
-                &case.name,
+                &input.name,
                 fixture.did(),
                 selected_agent.did(),
                 dir.path(),
@@ -479,35 +471,44 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
             .unwrap();
         handle.work_started().await.unwrap();
         let held = live.then_some(handle);
-        let report = recover_task_hook_records(
-            &fixture.node,
-            fixture.did(),
-            if observation == "unavailable" {
-                &[]
+        assert_eq!(
+            if store.list().is_empty() {
+                "released"
             } else {
-                std::slice::from_ref(selected_agent)
+                "running"
             },
-            &store,
-        )
-        .await
-        .unwrap();
+            input.pre_state,
+            "{}",
+            input.name
+        );
+        let identities: &[Arc<dyn NodeIdentity>] = if observation == "unavailable" {
+            &[]
+        } else {
+            std::slice::from_ref(selected_agent)
+        };
+        let first = recover_task_hook_records(&fixture.node, fixture.did(), identities, &store)
+            .await
+            .unwrap();
         store.wait_for_recoveries().await;
-        let recorded = !store.list().is_empty();
-        assert_eq!(
-            if recorded { "running" } else { "released" },
-            case.terminal_state,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            report,
-            case.measure_before - case.measure_after,
-            "{}",
-            case.name
-        );
-        assert_eq!(log_lines(&log).len(), report, "{}", case.name);
+        let terminal_state = if store.list().is_empty() {
+            "released"
+        } else {
+            "running"
+        };
+        let second = recover_task_hook_records(&fixture.node, fixture.did(), identities, &store)
+            .await
+            .unwrap();
+        store.wait_for_recoveries().await;
+        assert_eq!(log_lines(&log).len(), first + second, "{}", input.name);
         drop(held);
         drop(owner);
+        case.check(
+            gents_lean_vocab::families::recovery_sweeps_task_hook::Swept {
+                terminal_state: terminal_state.to_owned(),
+                measure_before: u64::try_from(first).expect("a recovery count fits u64"),
+                measure_after: u64::try_from(second).expect("a recovery count fits u64"),
+            },
+        );
     }
 }
 

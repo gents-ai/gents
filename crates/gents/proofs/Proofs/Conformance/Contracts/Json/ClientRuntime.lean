@@ -1054,38 +1054,6 @@ def compactionCursor : Family CompactionCursorInput (Option Nat) where
   inputs := Compaction.compactionCursorCases.map fun c => { compacted := c.compacted }
   model := fun i => Compaction.findCursor Compaction.cursorFixture i.compacted
 
-def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"sweep_id\":" ++ jsonString witness.sweepId ++ ","
-    ++ "\"collection\":" ++ jsonString witness.collection ++ ","
-    ++ "\"rust_function\":" ++ jsonString witness.rustFunction ++ ","
-    ++ "\"cadence\":" ++ jsonString witness.cadence ++ ","
-    ++ "\"implementation_status\":"
-      ++ jsonString witness.implementationStatus ++ ","
-    ++ "\"pre_state\":" ++ jsonString witness.preState ++ ","
-    ++ "\"terminal_state\":" ++ jsonString witness.terminalState ++ ","
-    ++ "\"measure_before\":" ++ toString witness.measureBefore ++ ","
-    ++ "\"measure_after\":" ++ toString witness.measureAfter ++ ","
-    ++ "\"deadline_expired\":" ++ jsonOptionalBool witness.deadlineExpired ++ ","
-    ++ "\"parent_live\":" ++ jsonOptionalBool witness.parentLive ++ ","
-    ++ "\"parent_interrupted\":" ++ jsonOptionalBool witness.parentInterrupted ++ ","
-    ++ "\"parent_terminal\":" ++ jsonOptionalBool witness.parentTerminal ++ ","
-    ++ "\"task_hook_observation\":" ++ jsonOptionalString witness.taskHookObservation ++ ","
-    ++ "\"execution_registered\":"
-      ++ jsonOptionalBool witness.executionRegistered ++ ","
-    ++ "\"process_outcome\":" ++ jsonOptionalString witness.processOutcome ++ ","
-    ++ "\"owner_task_deleted\":"
-      ++ jsonOptionalBool witness.ownerTaskDeleted ++ ","
-    ++ "\"owner_session_stopped\":"
-      ++ jsonOptionalBool witness.ownerSessionStopped ++ ","
-    ++ "\"recovery_cause\":" ++ jsonOptionalString witness.recoveryCause ++ ","
-    ++ "\"notification_reason\":"
-      ++ jsonOptionalString witness.notificationReason ++ ","
-    ++ "\"deadline_audit_ref\":"
-    ++ jsonString witness.deadlineAuditRef
-    ++ "}"
-
 deriving instance Lean.ToJson for QueuedSteering.AgentMessageOutcome
 deriving instance Lean.ToJson for QueuedSteering.FoldedBindingCase
 

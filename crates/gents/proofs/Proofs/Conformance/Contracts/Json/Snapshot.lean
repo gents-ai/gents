@@ -13,6 +13,7 @@ import Proofs.Conformance.DatastoreProtection
 import Proofs.Conformance.Identity.DelegatedPublicationRecovery
 import Proofs.Conformance.SelfConfigStructured
 import Proofs.Conformance.Recovery.PeriodicRegistry
+import Proofs.Conformance.Recovery.Sweeps
 import Proofs.Conformance.ProcessControlTerminal
 import Proofs.Conformance.ProcessStop
 import Proofs.Conformance.ToolCallTimeoutAfterSweep
@@ -413,9 +414,6 @@ def snapshotRuntimeCasesJson : String :=
 
 def snapshotRecoveryCasesJson : String :=
   ""
-    ++ "\"recovery_sweep_cases\":"
-      ++ jsonArray
-        (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
     ++ "\"recovery_sweep_ids\":"
       ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
 

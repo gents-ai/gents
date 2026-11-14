@@ -1932,8 +1932,13 @@ def caseCoverage : List CoverageEntry :=
       "Two observed-identity overlap scripts bind real HTTP transactions against embedded completion publication, including permitted pre-latch phantom survival and post-latch replay. These schedules do not prove arbitrary distributed serialization; exact native queue ordering remains unbound.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_request")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "recovery_sweep_ids"
+      "RecoverySweepIds"
+      "The registered sweep ids are a model registry list. Lean proves every id has a replayed recovery_sweeps_* or plugin_job_recoveries family (sweep_families_cover_registered_sweeps), and periodic_recovery_registry replays the production periodic registry against the model tick; no native test reads the list itself.")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -2916,28 +2921,52 @@ def caseCoverage : List CoverageEntry :=
       "contracts_restart_classification")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_inference")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_tool_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_terminal_parent")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_orphan_classified")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_orphan_registered_session_stop")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_sweep_cases"
-      "RecoverySweepCases")
+      "family"
+      "recovery_sweeps_orphan_accepted")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_orphan_missing_parent")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_orphan_live_worker")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_background_completion")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_session_message")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_task_hook")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "recovery_sweeps_owed_delivery")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
