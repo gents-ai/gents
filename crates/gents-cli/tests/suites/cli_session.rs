@@ -7,51 +7,33 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn session_list_and_show_include_request_count() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    let root = tempdir.path().join("infra").join("agents").join("default");
-    fs::create_dir_all(&home_dir)?;
+#[test]
+fn session_list_and_show_include_request_count() -> Result<()> {
+    with_shared_served_home(|served| async move {
+        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+        let root = tempdir.path().join("infra").join("agents").join("default");
+        let (home_dir, graphql, node_did) = (
+            served.home_dir.clone(),
+            served.graphql.clone(),
+            served.node_did.clone(),
+        );
+        wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
-    let model_name = format!("mock-session-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
-    let port = allocate_port()?;
-    let agent_name = format!("cli-session-{}", Uuid::new_v4().simple());
-    let graphql = graphql_url(port);
+        run_cli_text(
+            &home_dir,
+            &["config", "export", "--root", &root.to_string_lossy()],
+        )?;
+        let config = read_json_file(&root.join("pack_config.json"))?;
+        let agent_did = config["default_agent_selection"]
+            .get("default_agent_did")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("missing default_agent_did after export"))?
+            .to_string();
 
-    let init = run_init_json(
-        &home_dir,
-        &[
-            "--node-name",
-            &agent_name,
-            "--model-name",
-            &model_name,
-            "--inference-url",
-            mock_endpoint.endpoint(),
-        ],
-    )?;
-    let node_did = node_did_from_init(&init)?;
-    let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
-
-    run_cli_text(
-        &home_dir,
-        &["config", "export", "--root", &root.to_string_lossy()],
-    )?;
-    let config = read_json_file(&root.join("pack_config.json"))?;
-    let agent_did = config["default_agent_selection"]
-        .get("default_agent_did")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("missing default_agent_did after export"))?
-        .to_string();
-
-    let session_id = format!("session-{}", Uuid::new_v4().simple());
-    for mutation in [
-        format!(
-            r#"mutation {{
+        let session_id = format!("session-{}", Uuid::new_v4().simple());
+        for mutation in [
+            format!(
+                r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{}",
                     node_did: "{}",
@@ -59,12 +41,12 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
                     created_at: "2026-06-12T10:00:00Z"
                 }}) {{ _docID }}
             }}"#,
-            escape_graphql_string(&session_id),
-            escape_graphql_string(&node_did),
-            escape_graphql_string(&agent_did),
-        ),
-        format!(
-            r#"mutation {{
+                escape_graphql_string(&session_id),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&agent_did),
+            ),
+            format!(
+                r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{}",
                     node_did: "{}",
@@ -74,13 +56,13 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
                     created_at: "2026-06-12T10:01:00Z"
                 }}) {{ _docID }}
             }}"#,
-            escape_graphql_string(&format!("{session_id}-request-a")),
-            escape_graphql_string(&node_did),
-            escape_graphql_string(&agent_did),
-            escape_graphql_string(&session_id),
-        ),
-        format!(
-            r#"mutation {{
+                escape_graphql_string(&format!("{session_id}-request-a")),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&agent_did),
+                escape_graphql_string(&session_id),
+            ),
+            format!(
+                r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{}",
                     node_did: "{}",
@@ -90,67 +72,68 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
                     created_at: "2026-06-12T10:02:00Z"
                 }}) {{ _docID }}
             }}"#,
-            escape_graphql_string(&format!("{session_id}-request-b")),
-            escape_graphql_string(&node_did),
-            escape_graphql_string(&agent_did),
-            escape_graphql_string(&session_id),
-        ),
-    ] {
-        graphql_query(&graphql, &mutation).await?;
-    }
+                escape_graphql_string(&format!("{session_id}-request-b")),
+                escape_graphql_string(&node_did),
+                escape_graphql_string(&agent_did),
+                escape_graphql_string(&session_id),
+            ),
+        ] {
+            graphql_query(&graphql, &mutation).await?;
+        }
 
-    let list = run_cli_json(
-        &home_dir,
-        &[
-            "sessions",
-            "list",
-            "--graphql",
-            &graphql,
-            "--output",
-            "json",
-        ],
-    )?;
-    let list_row = list
-        .get("items")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|row| row.get("session_id").and_then(Value::as_str) == Some(&session_id))
-        })
-        .ok_or_else(|| anyhow!("session list did not include {session_id}: {list}"))?;
-    assert_eq!(
-        list_row.get("request_count").and_then(Value::as_u64),
-        Some(2)
-    );
+        let list = run_cli_json(
+            &home_dir,
+            &[
+                "sessions",
+                "list",
+                "--graphql",
+                &graphql,
+                "--output",
+                "json",
+            ],
+        )?;
+        let list_row = list
+            .get("items")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|row| row.get("session_id").and_then(Value::as_str) == Some(&session_id))
+            })
+            .ok_or_else(|| anyhow!("session list did not include {session_id}: {list}"))?;
+        assert_eq!(
+            list_row.get("request_count").and_then(Value::as_u64),
+            Some(2)
+        );
 
-    let show = run_cli_json(
-        &home_dir,
-        &["sessions", "show", "--graphql", &graphql, &session_id],
-    )?;
-    assert_eq!(
-        show.get("session_id").and_then(Value::as_str),
-        Some(session_id.as_str())
-    );
-    assert_eq!(show.get("request_count").and_then(Value::as_u64), Some(2));
+        let show = run_cli_json(
+            &home_dir,
+            &["sessions", "show", "--graphql", &graphql, &session_id],
+        )?;
+        assert_eq!(
+            show.get("session_id").and_then(Value::as_str),
+            Some(session_id.as_str())
+        );
+        assert_eq!(show.get("request_count").and_then(Value::as_u64), Some(2));
 
-    let show_by_flag = run_cli_json(
-        &home_dir,
-        &[
-            "sessions",
-            "show",
-            "--graphql",
-            &graphql,
-            "--id",
-            &session_id,
-        ],
-    )?;
-    assert_eq!(
-        show_by_flag.get("session_id").and_then(Value::as_str),
-        Some(session_id.as_str())
-    );
+        let show_by_flag = run_cli_json(
+            &home_dir,
+            &[
+                "sessions",
+                "show",
+                "--graphql",
+                &graphql,
+                "--id",
+                &session_id,
+            ],
+        )?;
+        assert_eq!(
+            show_by_flag.get("session_id").and_then(Value::as_str),
+            Some(session_id.as_str())
+        );
 
-    Ok(())
+        Ok(())
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

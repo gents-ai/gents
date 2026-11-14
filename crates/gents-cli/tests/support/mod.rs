@@ -7,6 +7,7 @@ pub mod mocks;
 pub mod pack_preview;
 pub mod ports;
 pub mod process;
+pub mod shared_home;
 pub mod waits;
 
 pub use fs::{
@@ -33,6 +34,7 @@ pub use process::{
     spawn_server_with_ready_json, spawn_server_with_ready_json_recovering, wait_for_port,
     ServeProcess,
 };
+pub use shared_home::{with_shared_served_home, SharedServedHome};
 pub use waits::{
     canonical_tool_result_text, wait_for_completed_inference_agents, wait_for_completed_tool_calls,
     wait_for_request, wait_for_request_lifecycle_state, wait_for_runtime_quiescence,

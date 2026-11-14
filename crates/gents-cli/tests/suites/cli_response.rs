@@ -1,8 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
-use std::fs;
-use std::path::PathBuf;
-use std::time::Duration;
 use uuid::Uuid;
 
 use gents_protocol::output::{
@@ -16,51 +13,6 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use crate::support::graphql::graphql_mutation_with_variables;
 use crate::support::*;
 
-struct ResponseTestRuntime {
-    _tempdir: tempfile::TempDir,
-    home_dir: PathBuf,
-    _mock_endpoint: MockModelEndpoint,
-    _serve: ServeProcess,
-    graphql: String,
-    node_did: String,
-}
-
-async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&home_dir)?;
-
-    let model_name = format!("mock-response-{label}-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
-    let agent_name = format!("cli-response-{label}-{}", Uuid::new_v4().simple());
-    let init = run_init_json(
-        &home_dir,
-        &[
-            "--node-name",
-            &agent_name,
-            "--model-name",
-            &model_name,
-            "--inference-url",
-            mock_endpoint.endpoint(),
-        ],
-    )?;
-    let node_did = node_did_from_init(&init)?;
-    let port = allocate_port()?;
-    let graphql = graphql_url(port);
-    let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-
-    Ok(ResponseTestRuntime {
-        _tempdir: tempdir,
-        home_dir,
-        _mock_endpoint: mock_endpoint,
-        _serve: serve,
-        graphql,
-        node_did,
-    })
-}
-
 struct MaterializedResponse<'a> {
     request_id: &'a str,
     session_id: &'a str,
@@ -71,7 +23,7 @@ struct MaterializedResponse<'a> {
 }
 
 async fn create_fixture_request(
-    runtime: &ResponseTestRuntime,
+    runtime: &SharedServedHome,
     request_id: &str,
     session_id: &str,
     lifecycle_state: RequestLifecycleState,
@@ -96,7 +48,7 @@ async fn create_fixture_request(
 }
 
 async fn stamp_terminal_message(
-    runtime: &ResponseTestRuntime,
+    runtime: &SharedServedHome,
     request_doc_id: &str,
     message_doc_id: &str,
     lifecycle_state: RequestLifecycleState,
@@ -127,7 +79,7 @@ async fn stamp_terminal_message(
 }
 
 async fn insert_materialized_response(
-    runtime: &ResponseTestRuntime,
+    runtime: &SharedServedHome,
     fixture: MaterializedResponse<'_>,
 ) -> Result<String> {
     use gents_protocol::output::rows::{
@@ -278,7 +230,7 @@ async fn insert_materialized_response(
     Ok(message_doc_id)
 }
 
-fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Value> {
+fn response_show(runtime: &SharedServedHome, request_id: &str) -> Result<Value> {
     run_cli_json(
         &runtime.home_dir,
         &[
@@ -293,7 +245,7 @@ fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Valu
     )
 }
 
-fn response_wait(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Value> {
+fn response_wait(runtime: &SharedServedHome, request_id: &str) -> Result<Value> {
     run_cli_json(
         &runtime.home_dir,
         &[
@@ -313,7 +265,7 @@ fn response_wait(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Valu
 }
 
 fn response_wait_failure(
-    runtime: &ResponseTestRuntime,
+    runtime: &SharedServedHome,
     request_id: &str,
     timeout_secs: &str,
 ) -> Result<String> {
@@ -336,7 +288,7 @@ fn response_wait_failure(
 }
 
 async fn assert_invalid_terminal_selection(
-    runtime: &ResponseTestRuntime,
+    runtime: &SharedServedHome,
     request_id: &str,
 ) -> Result<()> {
     let shown = response_show(runtime, request_id)?;
@@ -358,286 +310,287 @@ async fn assert_invalid_terminal_selection(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn response_show_hydrates_materialized_content_like_response_wait() -> Result<()> {
-    let runtime = start_response_runtime("hydrate").await?;
-    let request_id = format!("response-hydrate-{}", Uuid::new_v4().simple());
-    let session_id = format!("session-hydrate-{}", Uuid::new_v4().simple());
-    let durable_content = format!("durable answer {}", Uuid::new_v4().simple());
-    let durable_reasoning = format!("durable reasoning {}", Uuid::new_v4().simple());
+#[test]
+fn response_show_hydrates_materialized_content_like_response_wait() -> Result<()> {
+    with_shared_served_home(|runtime| async move {
+        let request_id = format!("response-hydrate-{}", Uuid::new_v4().simple());
+        let session_id = format!("session-hydrate-{}", Uuid::new_v4().simple());
+        let durable_content = format!("durable answer {}", Uuid::new_v4().simple());
+        let durable_reasoning = format!("durable reasoning {}", Uuid::new_v4().simple());
 
-    insert_materialized_response(
-        &runtime,
-        MaterializedResponse {
-            request_id: &request_id,
-            session_id: &session_id,
-            message_content: Some(&durable_content),
-            message_reasoning: &durable_reasoning,
-            lifecycle_state: RequestLifecycleState::Completed,
-            stamp_terminal_selection: true,
-        },
-    )
-    .await?;
+        insert_materialized_response(
+            runtime,
+            MaterializedResponse {
+                request_id: &request_id,
+                session_id: &session_id,
+                message_content: Some(&durable_content),
+                message_reasoning: &durable_reasoning,
+                lifecycle_state: RequestLifecycleState::Completed,
+                stamp_terminal_selection: true,
+            },
+        )
+        .await?;
 
-    let shown = response_show(&runtime, &request_id)?;
-    let waited = run_cli_json(
-        &runtime.home_dir,
-        &[
-            "utils",
-            "debug",
-            "response",
-            "wait",
-            "--graphql",
-            &runtime.graphql,
-            "--timeout-secs",
-            "5",
-            "--poll-secs",
-            "1",
-            &request_id,
-        ],
-    )?;
-    let shown_envelope = &shown["output"];
-    let waited_envelope = &waited["output"];
-    assert_eq!(
-        shown_envelope.get("kind").and_then(Value::as_str),
-        Some("terminal_message")
-    );
-    assert_eq!(shown_envelope, waited_envelope);
-    let shown_presentation = &shown_envelope["presentation"];
-    assert_eq!(
-        shown_presentation
-            .get("body_markdown")
-            .and_then(Value::as_str),
-        Some(durable_content.as_str())
-    );
-    assert_eq!(
-        shown_presentation
-            .get("reasoning_markdown")
-            .and_then(Value::as_str),
-        Some(durable_reasoning.as_str())
-    );
+        let shown = response_show(runtime, &request_id)?;
+        let waited = run_cli_json(
+            &runtime.home_dir,
+            &[
+                "utils",
+                "debug",
+                "response",
+                "wait",
+                "--graphql",
+                &runtime.graphql,
+                "--timeout-secs",
+                "5",
+                "--poll-secs",
+                "1",
+                &request_id,
+            ],
+        )?;
+        let shown_envelope = &shown["output"];
+        let waited_envelope = &waited["output"];
+        assert_eq!(
+            shown_envelope.get("kind").and_then(Value::as_str),
+            Some("terminal_message")
+        );
+        assert_eq!(shown_envelope, waited_envelope);
+        let shown_presentation = &shown_envelope["presentation"];
+        assert_eq!(
+            shown_presentation
+                .get("body_markdown")
+                .and_then(Value::as_str),
+            Some(durable_content.as_str())
+        );
+        assert_eq!(
+            shown_presentation
+                .get("reasoning_markdown")
+                .and_then(Value::as_str),
+            Some(durable_reasoning.as_str())
+        );
 
-    let shown_request = &shown["request"];
-    assert_eq!(
-        shown_request.get("request_id").and_then(Value::as_str),
-        Some(request_id.as_str())
-    );
-    assert_eq!(
-        shown_request.get("session_id").and_then(Value::as_str),
-        Some(session_id.as_str())
-    );
-    assert_eq!(
-        shown_request.get("lifecycle_state").and_then(Value::as_str),
-        Some(RequestLifecycleState::Completed.as_str())
-    );
-    assert_eq!(
-        shown_envelope
-            .pointer("/header/request_doc_id")
-            .and_then(Value::as_str),
-        shown_request.get("request_doc_id").and_then(Value::as_str),
-        "header must be selected for the terminal request"
-    );
-    assert_eq!(
-        shown_envelope
-            .pointer("/header/session_id")
-            .and_then(Value::as_str),
-        Some(session_id.as_str())
-    );
-    assert_eq!(
-        shown_envelope
-            .pointer("/header/role")
-            .and_then(Value::as_str),
-        Some("assistant")
-    );
-    assert_eq!(
-        shown_envelope
-            .pointer("/header/outcome")
-            .and_then(Value::as_str),
-        Some("complete")
-    );
-    assert_eq!(
-        shown_envelope
-            .pointer("/message/role")
-            .and_then(Value::as_str),
-        Some("assistant")
-    );
+        let shown_request = &shown["request"];
+        assert_eq!(
+            shown_request.get("request_id").and_then(Value::as_str),
+            Some(request_id.as_str())
+        );
+        assert_eq!(
+            shown_request.get("session_id").and_then(Value::as_str),
+            Some(session_id.as_str())
+        );
+        assert_eq!(
+            shown_request.get("lifecycle_state").and_then(Value::as_str),
+            Some(RequestLifecycleState::Completed.as_str())
+        );
+        assert_eq!(
+            shown_envelope
+                .pointer("/header/request_doc_id")
+                .and_then(Value::as_str),
+            shown_request.get("request_doc_id").and_then(Value::as_str),
+            "header must be selected for the terminal request"
+        );
+        assert_eq!(
+            shown_envelope
+                .pointer("/header/session_id")
+                .and_then(Value::as_str),
+            Some(session_id.as_str())
+        );
+        assert_eq!(
+            shown_envelope
+                .pointer("/header/role")
+                .and_then(Value::as_str),
+            Some("assistant")
+        );
+        assert_eq!(
+            shown_envelope
+                .pointer("/header/outcome")
+                .and_then(Value::as_str),
+            Some("complete")
+        );
+        assert_eq!(
+            shown_envelope
+                .pointer("/message/role")
+                .and_then(Value::as_str),
+            Some("assistant")
+        );
 
-    Ok(())
+        Ok(())
+    })
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
-    let runtime = start_response_runtime("missing").await?;
+#[test]
+fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
+    with_shared_served_home(|runtime| async move {
+        let loading_request_id = format!("response-loading-{}", Uuid::new_v4().simple());
+        let loading_session_id = format!("session-loading-{}", Uuid::new_v4().simple());
+        insert_materialized_response(
+            runtime,
+            MaterializedResponse {
+                request_id: &loading_request_id,
+                session_id: &loading_session_id,
+                message_content: Some(""),
+                message_reasoning: "",
+                lifecycle_state: RequestLifecycleState::Completed,
+                stamp_terminal_selection: false,
+            },
+        )
+        .await?;
+        let loading = response_show(runtime, &loading_request_id)?;
+        assert_eq!(
+            loading.pointer("/output/kind").and_then(Value::as_str),
+            Some("loading"),
+            "terminal request without a selection must observe loading"
+        );
+        assert_eq!(
+            loading
+                .pointer("/request/lifecycle_state")
+                .and_then(Value::as_str),
+            Some(RequestLifecycleState::Completed.as_str())
+        );
+        let loading_wait_error = response_wait_failure(runtime, &loading_request_id, "1")?;
+        assert!(
+            loading_wait_error.contains("did not reach a terminal state within 1s"),
+            "wait must report the materialization timeout, got: {loading_wait_error}"
+        );
+        assert!(loading_wait_error.contains(&loading_request_id));
 
-    let loading_request_id = format!("response-loading-{}", Uuid::new_v4().simple());
-    let loading_session_id = format!("session-loading-{}", Uuid::new_v4().simple());
-    insert_materialized_response(
-        &runtime,
-        MaterializedResponse {
-            request_id: &loading_request_id,
-            session_id: &loading_session_id,
-            message_content: Some(""),
-            message_reasoning: "",
-            lifecycle_state: RequestLifecycleState::Completed,
-            stamp_terminal_selection: false,
-        },
-    )
-    .await?;
-    let loading = response_show(&runtime, &loading_request_id)?;
-    assert_eq!(
-        loading.pointer("/output/kind").and_then(Value::as_str),
-        Some("loading"),
-        "terminal request without a selection must observe loading"
-    );
-    assert_eq!(
-        loading
-            .pointer("/request/lifecycle_state")
-            .and_then(Value::as_str),
-        Some(RequestLifecycleState::Completed.as_str())
-    );
-    let loading_wait_error = response_wait_failure(&runtime, &loading_request_id, "1")?;
-    assert!(
-        loading_wait_error.contains("did not reach a terminal state within 1s"),
-        "wait must report the materialization timeout, got: {loading_wait_error}"
-    );
-    assert!(loading_wait_error.contains(&loading_request_id));
+        let text_request_id = format!("response-text-only-{}", Uuid::new_v4().simple());
+        let text_session_id = format!("session-text-only-{}", Uuid::new_v4().simple());
+        insert_materialized_response(
+            runtime,
+            MaterializedResponse {
+                request_id: &text_request_id,
+                session_id: &text_session_id,
+                message_content: Some("preserve this partial output"),
+                message_reasoning: "",
+                lifecycle_state: RequestLifecycleState::Completed,
+                stamp_terminal_selection: true,
+            },
+        )
+        .await?;
+        let text_shown = response_show(runtime, &text_request_id)?;
+        assert_eq!(
+            text_shown.pointer("/output/kind").and_then(Value::as_str),
+            Some("terminal_message")
+        );
+        assert_eq!(
+            text_shown
+                .pointer("/output/presentation/body_markdown")
+                .and_then(Value::as_str),
+            Some("preserve this partial output")
+        );
+        assert!(
+            text_shown
+                .pointer("/output/presentation/reasoning_markdown")
+                .is_none_or(Value::is_null),
+            "text-only terminal output must not fabricate empty reasoning"
+        );
 
-    let text_request_id = format!("response-text-only-{}", Uuid::new_v4().simple());
-    let text_session_id = format!("session-text-only-{}", Uuid::new_v4().simple());
-    insert_materialized_response(
-        &runtime,
-        MaterializedResponse {
-            request_id: &text_request_id,
-            session_id: &text_session_id,
-            message_content: Some("preserve this partial output"),
-            message_reasoning: "",
-            lifecycle_state: RequestLifecycleState::Completed,
-            stamp_terminal_selection: true,
-        },
-    )
-    .await?;
-    let text_shown = response_show(&runtime, &text_request_id)?;
-    assert_eq!(
-        text_shown.pointer("/output/kind").and_then(Value::as_str),
-        Some("terminal_message")
-    );
-    assert_eq!(
-        text_shown
+        let reasoning_request_id = format!("response-reasoning-{}", Uuid::new_v4().simple());
+        let reasoning_session_id = format!("session-reasoning-{}", Uuid::new_v4().simple());
+        insert_materialized_response(
+            runtime,
+            MaterializedResponse {
+                request_id: &reasoning_request_id,
+                session_id: &reasoning_session_id,
+                message_content: None,
+                message_reasoning: "preserve this reasoning-only output",
+                lifecycle_state: RequestLifecycleState::Completed,
+                stamp_terminal_selection: true,
+            },
+        )
+        .await?;
+        let reasoning_wait = response_wait(runtime, &reasoning_request_id)?;
+        assert_eq!(
+            reasoning_wait
+                .pointer("/output/presentation/body_markdown")
+                .and_then(Value::as_str),
+            Some("")
+        );
+        assert_eq!(
+            reasoning_wait
+                .pointer("/output/presentation/reasoning_markdown")
+                .and_then(Value::as_str),
+            Some("preserve this reasoning-only output")
+        );
+
+        let scoped_request_id = format!("response-scoped-{}", Uuid::new_v4().simple());
+        let scoped_session_id = format!("session-scoped-{}", Uuid::new_v4().simple());
+        let scoped_message_doc_id = insert_materialized_response(
+            runtime,
+            MaterializedResponse {
+                request_id: &scoped_request_id,
+                session_id: &scoped_session_id,
+                message_content: Some("belongs to the scoped request only"),
+                message_reasoning: "",
+                lifecycle_state: RequestLifecycleState::Completed,
+                stamp_terminal_selection: true,
+            },
+        )
+        .await?;
+        let mismatched_request_id = format!("response-mismatched-{}", Uuid::new_v4().simple());
+        let mismatched_session_id = format!("session-mismatched-{}", Uuid::new_v4().simple());
+        let mismatched_doc_id = create_fixture_request(
+            runtime,
+            &mismatched_request_id,
+            &mismatched_session_id,
+            RequestLifecycleState::Completed,
+        )
+        .await?;
+        stamp_terminal_message(
+            runtime,
+            &mismatched_doc_id,
+            &scoped_message_doc_id,
+            RequestLifecycleState::Completed,
+        )
+        .await?;
+        assert_invalid_terminal_selection(runtime, &mismatched_request_id).await?;
+
+        let interrupted_request_id = format!("response-interrupted-{}", Uuid::new_v4().simple());
+        let interrupted_session_id = format!("session-interrupted-{}", Uuid::new_v4().simple());
+        insert_materialized_response(
+            runtime,
+            MaterializedResponse {
+                request_id: &interrupted_request_id,
+                session_id: &interrupted_session_id,
+                message_content: Some(""),
+                message_reasoning: "",
+                lifecycle_state: RequestLifecycleState::Interrupted,
+                stamp_terminal_selection: true,
+            },
+        )
+        .await?;
+        let interrupted_show = response_show(runtime, &interrupted_request_id)?;
+        assert_eq!(
+            interrupted_show
+                .pointer("/request/lifecycle_state")
+                .and_then(Value::as_str),
+            Some(RequestLifecycleState::Interrupted.as_str())
+        );
+        assert_eq!(
+            interrupted_show
+                .pointer("/output/kind")
+                .and_then(Value::as_str),
+            Some("terminal_message")
+        );
+        assert!(interrupted_show
             .pointer("/output/presentation/body_markdown")
-            .and_then(Value::as_str),
-        Some("preserve this partial output")
-    );
-    assert!(
-        text_shown
-            .pointer("/output/presentation/reasoning_markdown")
-            .is_none_or(Value::is_null),
-        "text-only terminal output must not fabricate empty reasoning"
-    );
+            .and_then(Value::as_str)
+            .is_some_and(str::is_empty));
+        let interrupted_wait = response_wait(runtime, &interrupted_request_id)?;
+        assert_eq!(
+            interrupted_wait
+                .pointer("/request/lifecycle_state")
+                .and_then(Value::as_str),
+            Some(RequestLifecycleState::Interrupted.as_str())
+        );
+        assert_eq!(
+            interrupted_wait
+                .pointer("/output/presentation/body_markdown")
+                .and_then(Value::as_str),
+            Some("")
+        );
 
-    let reasoning_request_id = format!("response-reasoning-{}", Uuid::new_v4().simple());
-    let reasoning_session_id = format!("session-reasoning-{}", Uuid::new_v4().simple());
-    insert_materialized_response(
-        &runtime,
-        MaterializedResponse {
-            request_id: &reasoning_request_id,
-            session_id: &reasoning_session_id,
-            message_content: None,
-            message_reasoning: "preserve this reasoning-only output",
-            lifecycle_state: RequestLifecycleState::Completed,
-            stamp_terminal_selection: true,
-        },
-    )
-    .await?;
-    let reasoning_wait = response_wait(&runtime, &reasoning_request_id)?;
-    assert_eq!(
-        reasoning_wait
-            .pointer("/output/presentation/body_markdown")
-            .and_then(Value::as_str),
-        Some("")
-    );
-    assert_eq!(
-        reasoning_wait
-            .pointer("/output/presentation/reasoning_markdown")
-            .and_then(Value::as_str),
-        Some("preserve this reasoning-only output")
-    );
-
-    let scoped_request_id = format!("response-scoped-{}", Uuid::new_v4().simple());
-    let scoped_session_id = format!("session-scoped-{}", Uuid::new_v4().simple());
-    let scoped_message_doc_id = insert_materialized_response(
-        &runtime,
-        MaterializedResponse {
-            request_id: &scoped_request_id,
-            session_id: &scoped_session_id,
-            message_content: Some("belongs to the scoped request only"),
-            message_reasoning: "",
-            lifecycle_state: RequestLifecycleState::Completed,
-            stamp_terminal_selection: true,
-        },
-    )
-    .await?;
-    let mismatched_request_id = format!("response-mismatched-{}", Uuid::new_v4().simple());
-    let mismatched_session_id = format!("session-mismatched-{}", Uuid::new_v4().simple());
-    let mismatched_doc_id = create_fixture_request(
-        &runtime,
-        &mismatched_request_id,
-        &mismatched_session_id,
-        RequestLifecycleState::Completed,
-    )
-    .await?;
-    stamp_terminal_message(
-        &runtime,
-        &mismatched_doc_id,
-        &scoped_message_doc_id,
-        RequestLifecycleState::Completed,
-    )
-    .await?;
-    assert_invalid_terminal_selection(&runtime, &mismatched_request_id).await?;
-
-    let interrupted_request_id = format!("response-interrupted-{}", Uuid::new_v4().simple());
-    let interrupted_session_id = format!("session-interrupted-{}", Uuid::new_v4().simple());
-    insert_materialized_response(
-        &runtime,
-        MaterializedResponse {
-            request_id: &interrupted_request_id,
-            session_id: &interrupted_session_id,
-            message_content: Some(""),
-            message_reasoning: "",
-            lifecycle_state: RequestLifecycleState::Interrupted,
-            stamp_terminal_selection: true,
-        },
-    )
-    .await?;
-    let interrupted_show = response_show(&runtime, &interrupted_request_id)?;
-    assert_eq!(
-        interrupted_show
-            .pointer("/request/lifecycle_state")
-            .and_then(Value::as_str),
-        Some(RequestLifecycleState::Interrupted.as_str())
-    );
-    assert_eq!(
-        interrupted_show
-            .pointer("/output/kind")
-            .and_then(Value::as_str),
-        Some("terminal_message")
-    );
-    assert!(interrupted_show
-        .pointer("/output/presentation/body_markdown")
-        .and_then(Value::as_str)
-        .is_some_and(str::is_empty));
-    let interrupted_wait = response_wait(&runtime, &interrupted_request_id)?;
-    assert_eq!(
-        interrupted_wait
-            .pointer("/request/lifecycle_state")
-            .and_then(Value::as_str),
-        Some(RequestLifecycleState::Interrupted.as_str())
-    );
-    assert_eq!(
-        interrupted_wait
-            .pointer("/output/presentation/body_markdown")
-            .and_then(Value::as_str),
-        Some("")
-    );
-
-    Ok(())
+        Ok(())
+    })
 }
