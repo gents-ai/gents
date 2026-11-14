@@ -7,16 +7,20 @@ export RUSTUP_HOME="$rustup_home" CARGO_HOME="$cargo_home"
 export PATH="$cargo_home/bin:$PATH"
 mkdir -p "$rustup_home"
 
-# Serialize shared rustup installation across runner slots, like setup-elan.sh.
+# Serialize shared rustup installation across runner slots, like setup-elan.sh:
+# flock on Linux, lockf on macOS.
 if [[ "${GENTS_RUST_INSTALL_LOCKED:-0}" != "1" ]]; then
-  if ! command -v lockf >/dev/null 2>&1; then
-    echo "::error::macOS Rust setup requires lockf to serialize shared rustup installation."
-    exit 1
-  fi
   script_dir="$(cd "$(dirname "$0")" && pwd)"
-  exec lockf -k "$rustup_home/.gents-install.lock" \
-    env GENTS_RUST_INSTALL_LOCKED=1 \
-    "$script_dir/$(basename "$0")" "$@"
+  lock_file="$rustup_home/.gents-install.lock"
+  if command -v flock >/dev/null 2>&1; then
+    exec flock "$lock_file" env GENTS_RUST_INSTALL_LOCKED=1 \
+      "$script_dir/$(basename "$0")" "$@"
+  elif command -v lockf >/dev/null 2>&1; then
+    exec lockf -k "$lock_file" env GENTS_RUST_INSTALL_LOCKED=1 \
+      "$script_dir/$(basename "$0")" "$@"
+  fi
+  echo "::error::Rust setup requires flock or lockf to serialize shared rustup installation."
+  exit 1
 fi
 
 if ! command -v rustup >/dev/null 2>&1; then

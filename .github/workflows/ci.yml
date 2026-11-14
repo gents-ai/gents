@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: ""
+      portable_runner:
+        description: JSON runner label list for the portable test groups on this run only; empty uses GENTS_CI_PORTABLE_RUNNER.
+        required: false
+        type: string
+        default: ""
 
 # A run in progress finishes; GitHub keeps only the newest waiting run per
 # group, so a branch that is pushed every few minutes still gets results.
@@ -118,7 +123,7 @@ jobs:
             ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group')
             && 'true' || env.GATE_EVERYTHING }}
           GATE_ONLY: ${{ inputs.only }}
-          GATE_PORTABLE_RUNNER: ${{ vars.GENTS_CI_PORTABLE_RUNNER }}
+          GATE_PORTABLE_RUNNER: ${{ inputs.portable_runner || vars.GENTS_CI_PORTABLE_RUNNER }}
           GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
           # Inside a stack only the top is tested in full: lower layers may be
           # intentionally red. A pull request into the default branch always is.
