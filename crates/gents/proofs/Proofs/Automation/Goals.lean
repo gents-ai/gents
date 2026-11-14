@@ -319,6 +319,58 @@ theorem completed_wrapup_is_one_shot
     decide .budgetLimited terminal true false true activity true retries true true = .none := by
   simp [decide]
 
+/-- A completed wrap-up turn ends the wrap-up before its `wrapupCompleted`
+latch is written. The Goal source writes that latch in a later transaction of
+the step that observes the completed turn (and only while it is polled), so a
+reconciler that reads the Goal in between still sees `wrapupCompleted = false`;
+the decision must not depend on that write. `tla/GoalWrapup.tla`
+(`MCGoalWrapupNoWrapupGuard`) shows the second wrap-up when it does (#3810). -/
+theorem completed_wrapup_child_never_repeats
+    (budget activity : Bool) (retries : Nat) (requested completed : Bool) :
+    decide .budgetLimited .completed true false budget activity true retries
+      requested completed = .none := by
+  cases requested <;> cases completed <;> simp [decide]
+
+/-- One exhaustion yields at most one wrap-up decision: either the over-budget
+turn of an active Goal, or a budget-limited Goal whose latest request is not
+the wrap-up and whose wrap-up is still owed. Together with the claim CAS and
+the keyed child of `GoalAutomation.ClaimedPublication`, this is the
+`OneWrapupPerParent` and `NeverAfterCompletedWrapup` premise of
+`tla/GoalWrapup.tla`. -/
+theorem wrapup_requires_owed_exhaustion
+    (status : Status) (terminal : RequestTerminal)
+    (idle child budget activity requestWrapup : Bool) (retries : Nat)
+    (requested completed : Bool)
+    (h : decide status terminal idle child budget activity requestWrapup retries
+      requested completed = .wrapup) :
+    idle = true ∧ child = false ∧
+      ((status = .active ∧ budget = true) ∨
+        (status = .budgetLimited ∧ requested = true ∧ completed = false ∧
+          requestWrapup = false)) := by
+  unfold decide at h
+  repeat' (split at h)
+  all_goals (cases idle <;> cases child <;> simp_all)
+
+/-- The budget latch is one-shot: an exhausted Goal cannot be exhausted again,
+and a finished wrap-up cannot finish again. -/
+theorem budget_exhaustion_latches_once (state post : State)
+    (h : step? state .budgetExhausted = some post) :
+    step? post .budgetExhausted = none := by
+  simp only [step?] at h
+  split at h
+  · cases h
+    simp [step?]
+  · simp at h
+
+theorem wrapup_finishes_once (state post : State)
+    (h : step? state .wrapupFinished = some post) :
+    step? post .wrapupFinished = none := by
+  simp only [step?] at h
+  split at h
+  · cases h
+    simp [step?]
+  · simp at h
+
 def chargedTokens (prompt output cachedRead : Nat) : Nat :=
   prompt - cachedRead + output
 
