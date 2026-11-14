@@ -6,20 +6,83 @@ use serde_json::{Map, Number, Value};
 
 const CHECKED_IN_SCHEMA: &str = include_str!("../families.schema.json");
 
-fn live_schema() -> BTreeMap<&'static str, BTreeMap<&'static str, Value>> {
-    let snapshot = crate::lean_contract_snapshot();
-    let functions = snapshot.families.iter().map(|(key, family)| {
-        let shape = serde_json::json!({ "input": family.input, "output": family.output });
-        (key.as_str(), shape)
-    });
-    let vocabularies = snapshot
-        .family_vocabularies
-        .iter()
-        .map(|(key, vocabulary)| (key.as_str(), vocabulary.clone()));
+type Schema<'a> = BTreeMap<&'static str, BTreeMap<&'a str, Value>>;
+
+fn schema<'a>(
+    functions: impl Iterator<Item = (&'a str, &'a Value, &'a Value)>,
+    vocabularies: impl Iterator<Item = (&'a str, &'a Value)>,
+) -> Schema<'a> {
+    let functions = functions
+        .map(|(key, input, output)| (key, serde_json::json!({ "input": input, "output": output })));
+    let vocabularies = vocabularies.map(|(key, vocabulary)| (key, vocabulary.clone()));
     BTreeMap::from([
         ("functions", functions.collect()),
         ("vocabularies", vocabularies.collect()),
     ])
+}
+
+fn live_schema() -> Schema<'static> {
+    let snapshot = crate::lean_contract_snapshot();
+    schema(
+        snapshot
+            .families
+            .iter()
+            .map(|(key, family)| (key.as_str(), &family.input, &family.output)),
+        snapshot
+            .family_vocabularies
+            .iter()
+            .map(|(key, vocabulary)| (key.as_str(), vocabulary)),
+    )
+}
+
+fn render(schema: &Schema<'_>) -> String {
+    let kinds: Vec<String> = schema
+        .iter()
+        .map(|(kind, families)| {
+            let families: Vec<String> = families
+                .iter()
+                .map(|(key, shape)| format!("  {key:?}: {shape}"))
+                .collect();
+            format!(" {kind:?}: {{\n{}\n }}", families.join(",\n"))
+        })
+        .collect();
+    format!("{{\n{}\n}}\n", kinds.join(",\n"))
+}
+
+/// The `families.schema.json` text for an undecoded snapshot. Regeneration
+/// derives it from the snapshot it writes the decoders from, so it needs no
+/// test binary built against those decoders; `family_schema_is_current`
+/// renders the decoded snapshot through the same `render`.
+pub fn render_family_schema(snapshot: &Value) -> Result<String, String> {
+    let object = |key: &str| {
+        snapshot
+            .get(key)
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("snapshot has no {key} object"))
+    };
+    let families = object("families")?;
+    let vocabularies = object("family_vocabularies")?;
+    fn shape<'a>(key: &str, family: &'a Value, side: &str) -> Result<&'a Value, String> {
+        family
+            .get(side)
+            .ok_or_else(|| format!("family {key} has no {side}"))
+    }
+    let functions = families
+        .iter()
+        .map(|(key, family)| {
+            Ok((
+                key.as_str(),
+                shape(key, family, "input")?,
+                shape(key, family, "output")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(render(&schema(
+        functions.into_iter(),
+        vocabularies
+            .iter()
+            .map(|(key, vocabulary)| (key.as_str(), vocabulary)),
+    )))
 }
 
 fn assert_shape_is_checked_in(kind: &str, key: &str) {
@@ -29,7 +92,7 @@ fn assert_shape_is_checked_in(kind: &str, key: &str) {
         live_schema()[kind].get(key),
         checked_in[kind].get(key),
         "family {key} changed shape in Lean; regenerate families.schema.json with \
-         GENTS_WRITE_FAMILY_SCHEMA=1 cargo test -p gents-lean-vocab family_schema"
+         make lean-regen"
     );
 }
 
@@ -288,18 +351,28 @@ mod tests {
 
     const SCHEMA_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/families.schema.json");
 
-    fn render(schema: &BTreeMap<&str, BTreeMap<&str, Value>>) -> String {
-        let kinds: Vec<String> = schema
-            .iter()
-            .map(|(kind, families)| {
-                let families: Vec<String> = families
-                    .iter()
-                    .map(|(key, shape)| format!("  {key:?}: {shape}"))
-                    .collect();
-                format!(" {kind:?}: {{\n{}\n }}", families.join(",\n"))
-            })
-            .collect();
-        format!("{{\n{}\n}}\n", kinds.join(",\n"))
+    #[test]
+    fn an_undecoded_snapshot_renders_the_decoded_schema() {
+        let snapshot = serde_json::json!({
+            "families": {
+                "b_family": {"input": {"struct": "In", "fields": [["x", "nat"]]}, "output": "bool", "cases": []},
+                "a_family": {"input": "string", "output": {"list": "int"}, "cases": [{"input": "x", "expected": [1]}]},
+            },
+            "family_vocabularies": {"v": {"values": ["one", "two"]}},
+            "other_root_field": [],
+        });
+        let functions = [
+            ("a_family", &snapshot["families"]["a_family"]),
+            ("b_family", &snapshot["families"]["b_family"]),
+        ];
+        let decoded = render(&schema(
+            functions
+                .iter()
+                .map(|(key, family)| (*key, &family["input"], &family["output"])),
+            [("v", &snapshot["family_vocabularies"]["v"])].into_iter(),
+        ));
+        assert_eq!(render_family_schema(&snapshot).unwrap(), decoded);
+        assert!(render_family_schema(&serde_json::json!({"families": {}})).is_err());
     }
 
     #[test]
