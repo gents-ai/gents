@@ -1,6 +1,6 @@
 use gents_fs_runner::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 
-mod support;
+use crate::support;
 use support::{run_json, unique_root};
 
 #[test]

@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use support::{run_glob, run_grep, unique_root};
 
 #[test]
