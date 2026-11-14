@@ -43,6 +43,7 @@ import Proofs.Conformance.PluginHostCalls
 import Proofs.Conformance.CallbackAdmission
 import Proofs.Conformance.GoalResetAccount
 import Proofs.Conformance.WakeRedriveSweep
+import Proofs.Conformance.StreamBatch
 import Proofs.Conformance.ToolAdmission
 import Proofs.Conformance.StartupPublication
 import Proofs.Conformance.RequestRepairScope

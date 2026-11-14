@@ -15,6 +15,7 @@ import Proofs.Inference.Scheduling
 import Proofs.Session.Request
 import Proofs.Session.RequestExecutionLease
 import Proofs.Runtime.InferenceCall
+import Proofs.Runtime.StreamBatch
 import Proofs.Shared.AccountRotation
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Shared.TextNormalization
