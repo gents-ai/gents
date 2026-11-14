@@ -8,23 +8,55 @@ name: Core packs
 # paths, so one job builds the set every platform embeds.
 
 on:
+  push:
+    branches: [main]
   pull_request:
     paths:
       - "core-packs/**"
       - "crates/gents-core-packs/**"
       - "crates/gents-pack/**"
+      - "crates/gents-toolcalls/src/plugin/**"
+      - "crates/gents-cli/src/commands/pack/**"
+      - "crates/gents-cli/src/commands/afterburner_build.rs"
+      - "Makefile"
+      - "rust-toolchain.toml"
       - ".github/workflows/core-packs.yml"
   workflow_dispatch:
+    inputs:
+      runner:
+        description: JSON runner label list for this run only; empty uses GENTS_CI_PORTABLE_RUNNER, then the container on the Linux release runner.
+        required: false
+        type: string
+        default: ""
+      fresh:
+        description: Build the CLI and every plugin from source instead of restoring cached outputs.
+        required: false
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      runner:
+        required: false
+        type: string
+        default: ""
+      # A release embeds what this run uploads; it builds from source.
+      fresh:
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
-# One runner builds the packs for half an hour; a newer push to the same pull
-# request supersedes the build it queued behind. Release callers keep their own run.
+# A newer push to a pull request cancels its running build: a warm rerun is
+# cheap. On main a started run finishes and only the newest waiting run is
+# kept. Release callers each keep their own run.
 concurrency:
-  group: core-packs-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+  group: >-
+    core-packs-${{ (github.event_name == 'pull_request' ||
+    (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_INCREMENTAL: "0"
@@ -35,8 +67,15 @@ jobs:
   build:
     name: Build and test core packs
     timeout-minutes: 150
-    runs-on: [self-hosted, Linux, X64, workstation-1]
-    container: rust:1-bookworm
+    # GENTS_CI_PORTABLE_RUNNER (a JSON label list) moves the job to a Linux
+    # build runner, where it runs on the host; the release runner it falls
+    # back to also serves inference, so there it stays in a container.
+    runs-on: ${{ fromJSON(inputs.runner || vars.GENTS_CI_PORTABLE_RUNNER || '["self-hosted","Linux","X64","workstation-1"]') }}
+    container: ${{ (inputs.runner || vars.GENTS_CI_PORTABLE_RUNNER) == '' && 'rust:1-bookworm' || '' }}
+    env:
+      CORE_PACK_TOOL: target/core-packs-tool/gents
+      # Caps the per-runner Cargo target tree a self-hosted host keeps.
+      CORE_PACKS_TARGET_MAX_GIB: ${{ vars.CORE_PACKS_TARGET_MAX_GIB || '60' }}
     defaults:
       run:
         shell: bash
@@ -52,19 +91,119 @@ jobs:
       - name: Install build and suite dependencies
         run: |
           set -euo pipefail
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential clang cmake git jq libclang-dev libssl-dev \
-            nodejs pkg-config protobuf-compiler python3
+          packages=(build-essential clang cmake git jq libclang-dev libssl-dev
+            nodejs pkg-config protobuf-compiler python3)
+          if [[ "$(id -u)" == 0 ]]; then
+            apt-get update
+            apt-get install -y --no-install-recommends "${packages[@]}"
+          elif sudo -n true 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          else
+            missing=()
+            for tool in clang cmake git jq node pkg-config protoc python3; do
+              command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+            done
+            if (( ${#missing[@]} )); then
+              echo "::error::The runner account cannot install packages and lacks: ${missing[*]}"
+              exit 1
+            fi
+          fi
+
+      # Every key names the platform the outputs run on; the plugin key also
+      # names the checkout path, which compiled plugins embed.
+      - name: Compute cache keys
+        id: keys
+        run: |
+          set -euo pipefail
+          . /etc/os-release
+          echo "platform=${ID}-${VERSION_ID:-rolling}-$(uname -m)" >> "$GITHUB_OUTPUT"
+          echo "checkout=$(printf '%s' "$GITHUB_WORKSPACE" | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      # The CLI's inputs: a hit is the binary this commit's sources build.
+      - name: Restore the CLI built from these sources
+        id: cli
+        if: ${{ !inputs.fresh }}
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CORE_PACK_TOOL }}
+          key: >-
+            core-packs-cli-v1-${{ steps.keys.outputs.platform }}-${{ hashFiles(
+            'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', '.cargo/**',
+            'crates/**', 'third_party/**') }}
+
+      # A self-hosted host keeps a Cargo target tree per runner process, so a
+      # changed CLI relinks only what the change touched; elsewhere the
+      # dependency cache restores compiled dependencies.
+      - name: Select the Cargo target tree
+        if: steps.cli.outputs.cache-hit != 'true'
+        id: target
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_ENVIRONMENT" == self-hosted && ! -f /.dockerenv ]]; then
+            root="$HOME/.cache/gents-core-packs-target"
+            dir="$root/$(printf '%s' "$RUNNER_NAME" | tr -c 'A-Za-z0-9._-' '_')"
+            mkdir -p "$dir"
+            used_gib=$(( $(du -sk "$dir" | cut -f1) / 1024 / 1024 ))
+            if (( used_gib >= CORE_PACKS_TARGET_MAX_GIB )); then
+              echo "Emptying $dir: ${used_gib} GiB reached the ${CORE_PACKS_TARGET_MAX_GIB} GiB cap"
+              rm -rf "$dir" && mkdir -p "$dir"
+            fi
+            echo "dir=$dir" >> "$GITHUB_OUTPUT"
+            echo "persistent=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=$GITHUB_WORKSPACE/target" >> "$GITHUB_OUTPUT"
+            echo "persistent=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore compiled CLI dependencies
+        if: steps.cli.outputs.cache-hit != 'true' && steps.target.outputs.persistent != 'true' && !inputs.fresh
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: core-packs-${{ steps.keys.outputs.platform }}
+          cache-workspace-crates: "false"
+          cache-bin: "false"
 
       - name: Build the CLI that builds the packs
-        run: make fast-dev-cli
+        if: steps.cli.outputs.cache-hit != 'true'
+        env:
+          CARGO_TARGET_DIR: ${{ steps.target.outputs.dir }}
+        run: |
+          set -euo pipefail
+          make fast-dev-cli
+          mkdir -p "$(dirname "$CORE_PACK_TOOL")"
+          cp "$CARGO_TARGET_DIR/fast-dev/gents" "$CORE_PACK_TOOL"
+
+      # Plugin builds stamp each artifact with its source digest and builder;
+      # the pack build skips a plugin whose stamp matches. The key covers the
+      # packs, the build driver and the toolchain, so an exact hit is trusted.
+      - name: Restore built plugins
+        id: plugins
+        if: ${{ !inputs.fresh }}
+        uses: actions/cache@v5
+        with:
+          path: |
+            core-packs/*/target
+            core-packs/*/plugins/*/target
+            core-packs/*/plugins/*.afb
+          key: >-
+            core-packs-plugins-v1-${{ steps.keys.outputs.platform }}-${{ steps.keys.outputs.checkout }}-${{ hashFiles(
+            'core-packs/**', 'crates/gents-pack/**', 'crates/gents-cli/src/commands/pack/**',
+            'crates/gents-cli/src/commands/afterburner_build.rs', 'Cargo.lock') }}
+          restore-keys: |
+            core-packs-plugins-v1-${{ steps.keys.outputs.platform }}-${{ steps.keys.outputs.checkout }}-
+
+      # An older entry keeps Cargo's compiled dependencies, but its stamps may
+      # come from another build driver: every plugin goes back through Cargo.
+      - name: Distrust stamps restored from another build
+        if: steps.plugins.outputs.cache-hit != 'true'
+        run: find core-packs -name gents-build.stamp -delete
 
       - name: Build core packs
-        run: make core-packs CORE_PACK_TOOL=target/fast-dev/gents
+        run: make core-packs CORE_PACK_TOOL="$CORE_PACK_TOOL"
 
       - name: Test core packs
-        run: make core-packs-test CORE_PACK_TOOL=target/fast-dev/gents
+        run: make core-packs-test CORE_PACK_TOOL="$CORE_PACK_TOOL"
 
       - uses: actions/upload-artifact@v7
         with:
