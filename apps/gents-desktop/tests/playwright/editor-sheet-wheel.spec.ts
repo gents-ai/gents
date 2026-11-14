@@ -19,6 +19,16 @@ function openFor(scope: Locator, label: string) {
     .first();
 }
 
+/* a sheet enters from 2.5rem right, transparent, under data-starting-style.
+   While that style holds its box is still, so a click aimed then lands 2.5rem
+   right of its target once the slide runs: press only once it has arrived */
+async function shown(sheet: Locator) {
+  await expect(sheet).not.toHaveAttribute("data-starting-style");
+  await sheet.evaluate((el) =>
+    Promise.allSettled(el.getAnimations().map((animation) => animation.finished)),
+  );
+}
+
 async function stackTwoSheets(page: Page) {
   await page.setViewportSize({ width: 1280, height: 520 });
   await gotoHarness(page);
@@ -32,9 +42,11 @@ async function stackTwoSheets(page: Page) {
   const sheets = page.locator("[data-slot=sheet-content]");
   await expect(sheets).toHaveCount(1);
   const below = sheets.first();
+  await shown(below);
   await openFor(below, "Backend").click();
   await expect(sheets).toHaveCount(2);
   const top = sheets.last();
+  await shown(top);
   return { below, top };
 }
 
