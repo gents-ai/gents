@@ -326,6 +326,11 @@ fn write_attempt_capture_sees_a_callsite_first_reached_on_an_unsubscribed_thread
     assert_eq!(lock(&events).len(), 1);
 }
 
+/// Property: each write attempt through the transaction owner emits exactly
+/// one write-attempt event, in the awaited flow of the attempt, at DEBUG for a
+/// clean known no-op commit and INFO for a mutation. Capture relies on
+/// `enable_scoped_event_capture`, since tracing's process-wide callsite
+/// interest would otherwise depend on which test thread reached it first.
 #[tokio::test]
 async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -2484,6 +2489,9 @@ async fn assert_native_transaction_abandoned(
     );
 }
 
+/// Property: a cancelled embedded callback commits none of its writes, releases
+/// the per-node mutation gate, and still emits its one write-attempt event as
+/// cancelled before the owner returns.
 #[tokio::test]
 async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());

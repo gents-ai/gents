@@ -416,6 +416,12 @@ async fn failed_background_wake_sweep_follows_the_lean_redrive_model() {
     }
 }
 
+/// Property: a failed background wake is not redriven before its persisted
+/// backoff (`background_wake_next_retry_at` of its terminal time and retry
+/// count): neither the live runtime nor a sweep inside the window creates a
+/// retry successor. And the requesting user sees the background-completion
+/// notification of the claimed successor, observed on the collection that
+/// changes when its session link is published (`AgentMessage`).
 #[tokio::test]
 async fn failed_background_wake_waits_for_persisted_backoff() {
     let db = test_db("lifecycle-background-wake-backoff").await;
