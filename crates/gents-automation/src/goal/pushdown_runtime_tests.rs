@@ -777,15 +777,15 @@ async fn usage_limited_goal_after_failed_request(
     )
     .await
     .expect("set goal");
-    let (mut source, _snapshot_tx) = source_for_agent(db, agent).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
-            .await
-            .is_err()
-    );
-    let goal = load_goal_as(access, db.node_identity.did())
-        .await
-        .expect("goal exists");
+    let (source, _snapshot_tx) = source_for_agent(db, agent).await;
+    let goal = reconcile_goal_once(
+        &source,
+        access,
+        db.node_identity.did(),
+        agent,
+        "usage-limited request",
+    )
+    .await;
     (goal.parsed_status() == Some(GoalStatus::UsageLimited))
         .then_some(goal.last_failure)
         .flatten()
@@ -1324,6 +1324,30 @@ async fn wait_for_goal_transition_as(
             } => goal,
         }
     }).await.unwrap_or_else(|_| panic!("goal transition did not complete: {description}"))
+}
+
+/// Runs the source's per-goal reconcile step (`build_intent`, which its
+/// rescan calls) on the current Goal and awaits it. A fixed `next_fire`
+/// window would stand in for that step and end first on a loaded host
+/// (`tla/GoalWrapup.tla`, `MCGoalWrapupWindow`).
+async fn reconcile_goal_once(
+    source: &GoalSource,
+    access: &ConfigAccess,
+    node_did: &str,
+    agent: &Arc<dyn NodeIdentity>,
+    description: &str,
+) -> crate::goal::GoalDocument {
+    let actor: identity::Did = agent.did().parse().expect("agent DID");
+    let observed = load_goal_as(access, node_did).await.expect("Goal exists");
+    assert!(
+        source
+            .build_intent(&actor, observed)
+            .await
+            .unwrap_or_else(|error| panic!("reconcile {description}: {error:#}"))
+            .is_none(),
+        "{description}: the reconcile step must not fire a continuation"
+    );
+    load_goal_as(access, node_did).await.expect("Goal exists")
 }
 
 #[expect(
@@ -3497,14 +3521,22 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         CancellationToken::new(),
     )
     .with_rescan_interval(Duration::from_secs(3600));
-    let pass = Duration::from_millis(300);
-    assert!(tokio::time::timeout(pass, source.next_fire())
-        .await
-        .is_err());
+    // The source's first rescan tick is immediate and moves the Goal to
+    // usage_limited; await that transition instead of a fixed window.
+    wait_for_goal_transition_as(
+        &access,
+        &db.node,
+        db.node_identity.did(),
+        &mut source,
+        "usage limit before the database update",
+        |goal| goal.parsed_status() == Some(GoalStatus::UsageLimited),
+    )
+    .await;
     assert_eq!(
         goal_and_children(&db, &access).await,
         (Some(GoalStatus::UsageLimited), 0)
     );
+    let pass = Duration::from_millis(300);
     let goal_collection_id = gents_store::subscription_source::collection_ids(&db.node, ["Goal"])
         .unwrap()
         .remove(0);
@@ -3565,15 +3597,15 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
     .await
     .expect("set goal");
 
-    let (mut source, _snapshot_tx) = source_for_agent(&db, &agent).await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
-            .await
-            .is_err()
-    );
-    let goal = load_goal_as(&access, db.node_identity.did())
-        .await
-        .expect("goal exists");
+    let (source, _snapshot_tx) = source_for_agent(&db, &agent).await;
+    let goal = reconcile_goal_once(
+        &source,
+        &access,
+        db.node_identity.did(),
+        &agent,
+        "OpenRouter credits exhaustion",
+    )
+    .await;
     assert_eq!(goal.parsed_status(), Some(GoalStatus::UsageLimited));
     assert!(goal
         .last_failure
@@ -4367,15 +4399,18 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
         (Process::Ready, Some(Reason::BackendTemporarilyUnavailable)),
     ] {
         publish_node_readiness_for_agent(&db, process, reason, agent.did()).await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(300), source.next_fire())
-                .await
-                .is_err(),
-            "{process:?}/{reason:?}: an unready behavior must not receive a continuation"
-        );
-        let waiting =
-            serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap())
-                .unwrap();
+        let description = format!("{process:?}/{reason:?}: an unready behavior");
+        let waiting = serde_json::to_value(
+            reconcile_goal_once(
+                &source,
+                &access,
+                db.node_identity.did(),
+                &agent,
+                &description,
+            )
+            .await,
+        )
+        .unwrap();
         assert!(
             waiting["last_failure"]
                 .as_str()
@@ -4393,14 +4428,18 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
                 "{process:?}/{reason:?}: {field}"
             );
         }
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), source.next_fire())
-                .await
-                .is_err()
-        );
         assert_eq!(
-            serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap())
-                .unwrap(),
+            serde_json::to_value(
+                reconcile_goal_once(
+                    &source,
+                    &access,
+                    db.node_identity.did(),
+                    &agent,
+                    &description,
+                )
+                .await
+            )
+            .unwrap(),
             waiting,
             "{process:?}/{reason:?}: an unchanged wait must not rewrite the Goal"
         );
@@ -4408,10 +4447,8 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     }
 
     publish_node_readiness_for_agent(&db, Process::Ready, None, agent.did()).await;
-    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("goal source timed out after readiness recovered")
-        .expect("goal continuation intent");
+    // The source's first rescan tick is immediate, so this needs no deadline.
+    source.next_fire().await.expect("goal continuation intent");
     let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].session_id, SESSION);
@@ -4521,17 +4558,18 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
         Reason::RuntimeConfigurationInvalid.public_message(),
     )
     .await;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(300), source.next_fire())
-            .await
-            .is_err(),
-        "stale readiness must not re-issue a rejected child"
-    );
+    let waiting = reconcile_goal_once(
+        &source,
+        &access,
+        db.node_identity.did(),
+        &agent,
+        "stale readiness must not re-issue a rejected child",
+    )
+    .await;
     assert_eq!(
         goal_children_from_access(&access).await.len(),
         children.len()
     );
-    let waiting = load_goal_as(&access, db.node_identity.did()).await.unwrap();
     assert_eq!(waiting.parsed_status(), Some(GoalStatus::Active));
     assert_eq!(waiting.infrastructure_retry_count.unwrap_or_default(), 0);
     assert!(waiting
