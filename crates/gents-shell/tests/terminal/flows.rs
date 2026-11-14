@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use tui_test::CellColor;
 
-use crate::assert_restored;
-use crate::pty::{cursor_at, cursor_hidden, text_on_background, Shell};
+use super::assert_restored;
+use super::pty::{cursor_at, cursor_hidden, text_on_background, Shell};
 
 const FOCUS: &str = "#7fc29b";
 // `MENU` alone would match the jump bar's `MENUS` header.
