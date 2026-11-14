@@ -258,6 +258,10 @@ pub(super) fn confirm_cached_datastore_tool(
     Ok(())
 }
 
+/// The reserved projection and filter field read from a document's
+/// signatures, never from a stored field.
+pub const SIGNER_FIELD: &str = "_signer";
+
 /// One bound read tool: one collection, a fixed projection, optional filter
 /// fills. The model never names the collection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
@@ -269,9 +273,11 @@ pub struct QueryToolDecl {
     #[schemars(default)]
     pub description: String,
     /// Projection allowlist; omit `fields` at call time to return all of these.
+    /// `_signer` is the DID that signed every commit of the document, or null.
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional))]
     #[schemars(default)]
     pub fields: Vec<String>,
+    /// Exact-match filters; `_signer` keeps documents that DID signed.
     #[cfg_attr(
         feature = "typescript",
         ts(as = "Option<Vec<WriteToolField>>", optional)

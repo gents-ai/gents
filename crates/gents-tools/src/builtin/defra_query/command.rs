@@ -134,6 +134,49 @@ pub async fn execute_command(
     args: &QueryParams,
     scope: &CollectionScope,
 ) -> Result<Value> {
+    execute_command_with_signers(access, args, scope, None).await
+}
+
+/// Which signers a bounded read shows or keeps, read from each document's
+/// commits in the same transaction as its rows.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SignerSelection {
+    pub(crate) project: bool,
+    pub(crate) only: Option<String>,
+}
+
+impl SignerSelection {
+    pub(crate) fn is_active(&self) -> bool {
+        self.project || self.only.is_some()
+    }
+
+    async fn apply(&self, access: &dyn ConfigRead, rows: &mut Vec<Value>) -> Result<()> {
+        let ids = rows
+            .iter()
+            .map(|row| row["_docID"].as_str().context("row has no document ID"))
+            .collect::<Result<Vec<_>>>()?;
+        let signers = gents_store::identity::document_signers(access, &ids).await?;
+        rows.retain(|row| {
+            let signer = row["_docID"].as_str().and_then(|id| signers[id].as_deref());
+            self.only.as_deref().is_none_or(|only| signer == Some(only))
+        });
+        if self.project {
+            for row in rows.iter_mut() {
+                let signer = row["_docID"].as_str().and_then(|id| signers[id].clone());
+                row[gents_documents::SIGNER_FIELD] = json!(signer);
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(crate) async fn execute_command_with_signers(
+    access: &dyn ConfigRead,
+    args: &QueryParams,
+    scope: &CollectionScope,
+    signers: Option<&SignerSelection>,
+) -> Result<Value> {
+    let signers = signers.filter(|selection| selection.is_active());
     let mut argv = args.argv.iter().map(String::as_str).collect::<Vec<_>>();
     if argv.last() == Some(&"--help") {
         argv.pop();
@@ -153,6 +196,10 @@ pub async fn execute_command(
     );
     let command = argv[0];
     query_help(Some(command))?;
+    ensure!(
+        signers.is_none() || command == "find",
+        "signers are read only by find"
+    );
     let collection = args.collection.as_deref().ok_or_else(|| {
         CollectionDiscoveryError(format!("collection is required; {COLLECTION_GUIDANCE}"))
     })?;
@@ -319,6 +366,12 @@ pub async fn execute_command(
     }
     let mut rows = response["data"][collection].clone();
     ensure!(rows.is_array(), "DefraDB returned no collection result");
+    let scanned_count = rows.as_array().map_or(0, Vec::len);
+    if let Some(selection) = signers {
+        selection
+            .apply(access, rows.as_array_mut().expect("rows are an array"))
+            .await?;
+    }
     if let Some(page) = field_page {
         let rows = rows.as_array().unwrap();
         ensure!(
@@ -354,6 +407,9 @@ pub async fn execute_command(
     }
     if command == "search" {
         result["ranking"] = json!("bm25");
+    }
+    if signers.is_some() {
+        result["scanned_count"] = json!(scanned_count);
     }
     Ok(result)
 }

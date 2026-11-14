@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::{json, Map, Value};
 
-use gents_documents::QueryToolDecl;
+use gents_documents::{QueryToolDecl, SIGNER_FIELD};
 use gents_loop::tool::{Tool, ToolDefinition};
 use gents_store::config_client::ConfigAccess;
 
@@ -101,7 +101,7 @@ impl BoundedQueryTool {
                 .iter()
                 .map(|field| field.name.as_str()),
         ) {
-            if !fields.contains(field) {
+            if field != SIGNER_FIELD && !fields.contains(field) {
                 bail!("field `{field}` is absent from `{}`", self.decl.collection);
             }
         }
@@ -134,6 +134,13 @@ impl BoundedQueryTool {
         let schema: ::schema::CollectionVersion = serde_json::from_value(version)?;
         self.model_filter_fields()
             .map(|field| {
+                if field.name == SIGNER_FIELD {
+                    let mut shape = json!({"type": "string"});
+                    shape["description"] = json!(
+                        "Keep only documents this DID signed: every commit of the document carries its signature."
+                    );
+                    return Ok((field.name.clone(), shape));
+                }
                 let native = schema
                     .fields
                     .iter()
@@ -293,7 +300,9 @@ impl BoundedQueryTool {
                 );
             };
             ensure!(
-                field == "_docID" || self.decl.fields.iter().any(|allowed| allowed == field),
+                field == "_docID"
+                    || (field != SIGNER_FIELD
+                        && self.decl.fields.iter().any(|allowed| allowed == field)),
                 "tool `{}` cannot order by `{field}`; allowed: {}",
                 self.decl.tool_name,
                 self.decl.fields.join(", ")
@@ -480,11 +489,37 @@ impl Tool for BoundedQueryTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         self.ensure_well_formed()?;
-        let fields = self.resolve_projection(&args.0)?;
-        let filter = self.resolve_filter(&args.0)?;
+        let mut fields = self.resolve_projection(&args.0)?;
+        let mut filter = self.resolve_filter(&args.0)?;
         let limit = self.resolve_limit(&args.0)?;
         let offset = self.resolve_offset(&args.0)?;
         let order = self.resolve_order(&args.0)?;
+        let only = filter
+            .as_mut()
+            .and_then(Value::as_object_mut)
+            .and_then(|filter| filter.remove(SIGNER_FIELD))
+            .map(|only| {
+                only["_eq"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| anyhow!("filter `{SIGNER_FIELD}` must be a DID string"))
+            })
+            .transpose()?;
+        let signers = super::command::SignerSelection {
+            project: fields.iter().any(|field| field == SIGNER_FIELD),
+            only,
+        };
+        if filter
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(Map::is_empty)
+        {
+            filter = None;
+        }
+        fields.retain(|field| field != SIGNER_FIELD);
+        if fields.is_empty() {
+            fields.push("_docID".into());
+        }
         let params = DefraQueryParams {
             collection: self.decl.collection.clone(),
             filter,
@@ -512,6 +547,7 @@ impl Tool for BoundedQueryTool {
                     |txn| {
                         let command = &command;
                         let scope = &scope;
+                        let signers = &signers;
                         Box::pin(async move {
                             if let Some(surface_scope) = &self.surface_scope {
                                 let surface = self
@@ -526,7 +562,13 @@ impl Tool for BoundedQueryTool {
                                     )
                                     .await?;
                             }
-                            super::execute_command(txn, command, scope).await
+                            super::command::execute_command_with_signers(
+                                txn,
+                                command,
+                                scope,
+                                Some(signers),
+                            )
+                            .await
                         })
                     },
                 )
@@ -560,6 +602,7 @@ impl Tool for BoundedQueryTool {
                     .transact_readonly("bounded_application_query", |txn| {
                         let command = &command;
                         let scope = &scope;
+                        let signers = &signers;
                         Box::pin(async move {
                             surface_scope
                                 .revalidate(
@@ -568,25 +611,46 @@ impl Tool for BoundedQueryTool {
                                     &gents_documents::SurfaceToolDecl::Query(self.decl.clone()),
                                 )
                                 .await?;
-                            super::execute_command(txn, command, scope).await
+                            super::command::execute_command_with_signers(
+                                txn,
+                                command,
+                                scope,
+                                Some(signers),
+                            )
+                            .await
                         })
                     })
                     .await?
             }
-            (_, None) => super::execute_command(&self.access, &command, &scope).await?,
+            (_, None) => {
+                super::command::execute_command_with_signers(
+                    &self.access,
+                    &command,
+                    &scope,
+                    Some(&signers),
+                )
+                .await?
+            }
         };
         let mut payload = result;
         let count = payload["returned_count"].as_u64().unwrap_or(0);
         if payload.get("results").is_some() {
             payload["count"] = json!(count);
         }
+        let scanned = payload
+            .as_object_mut()
+            .and_then(|payload| payload.remove("scanned_count"))
+            .and_then(|scanned| scanned.as_u64())
+            .unwrap_or(count);
         // A full page may be the last one; the next offset says where the
         // following page starts and the caller stops at the first short one.
-        if count as u32 == limit && args.0.get("field_page").is_none() {
-            payload["next_offset"] = json!(offset + count as u32);
+        // A signer filter applies after the page is read, so the page it
+        // filtered still says where the next one starts.
+        if scanned as u32 == limit && args.0.get("field_page").is_none() {
+            payload["next_offset"] = json!(offset + scanned as u32);
             payload["limit_note"] = json!(format!(
                 "Result set hit the {limit}-row cap; continue with offset {} or narrow the filter.",
-                offset + count as u32
+                offset + scanned as u32
             ));
         }
         gents_session::session::output_render::render(
@@ -676,6 +740,138 @@ mod tests {
             }
             case.check(result.is_ok());
         }
+    }
+
+    #[tokio::test]
+    async fn signer_reads_follow_the_document_signer_model() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        node.add_collection("type SignedNote { label: String step: Int }")
+            .await
+            .unwrap();
+        let reader = gents_store::test_support::test_identity("signer-reader");
+        let other = gents_store::test_support::test_identity("signer-other");
+        let reader_did = gents_store::identity::NodeIdentity::did(&reader).to_owned();
+        let other_did = gents_store::identity::NodeIdentity::did(&other).to_owned();
+        let access_for = |writer: &str| match writer {
+            "reader" => {
+                ConfigAccess::local_as(node.clone(), ::identity::Did::new(&reader_did).unwrap())
+            }
+            "other" => {
+                ConfigAccess::local_as(node.clone(), ::identity::Did::new(&other_did).unwrap())
+            }
+            "unsigned" => ConfigAccess::local(node.clone()),
+            other => panic!("unknown writer {other}"),
+        };
+        let histories = [
+            ("unsigned", vec!["unsigned"]),
+            ("by_reader", vec!["reader"]),
+            ("by_other", vec!["other"]),
+            ("reader_then_reader", vec!["reader", "reader"]),
+            ("reader_then_other", vec!["reader", "other"]),
+            ("other_then_reader", vec!["other", "reader"]),
+            ("reader_then_unsigned", vec!["reader", "unsigned"]),
+        ];
+        for (label, writers) in &histories {
+            let mut doc_id = None::<String>;
+            for (step, writer) in writers.iter().enumerate() {
+                let mutation = match &doc_id {
+                    None => format!(
+                        r#"mutation {{ add_SignedNote(input: {{label: "{label}", step: {step}}}) {{ _docID }} }}"#
+                    ),
+                    Some(id) => format!(
+                        r#"mutation {{ update_SignedNote(filter: {{_docID: {{_eq: "{id}"}}}}, input: {{step: {step}}}) {{ _docID }} }}"#
+                    ),
+                };
+                let response = access_for(writer)
+                    .transact_write("test.signed_note", |txn| {
+                        let mutation = &mutation;
+                        Box::pin(async move { txn.execute(mutation).await })
+                    })
+                    .await
+                    .unwrap();
+                doc_id.get_or_insert_with(|| {
+                    gents_store::graphql::created_doc_id(&response, "SignedNote")
+                        .unwrap()
+                        .to_owned()
+                });
+            }
+        }
+        let tool = BoundedQueryTool::new(
+            ConfigAccess::local(node.clone()),
+            QueryToolDecl {
+                tool_name: "read_signed_notes".into(),
+                collection: "SignedNote".into(),
+                description: String::new(),
+                fields: vec!["label".into(), SIGNER_FIELD.into()],
+                filter_fields: vec![
+                    WriteToolField {
+                        name: "label".into(),
+                        required: true,
+                        fill: None,
+                    },
+                    WriteToolField {
+                        name: SIGNER_FIELD.into(),
+                        required: false,
+                        fill: None,
+                    },
+                ],
+            },
+        );
+        tool.validate_schema().await.unwrap();
+        let name_of = |did: &Value| match did.as_str() {
+            None => None,
+            Some(did) if did == reader_did => Some("reader".to_owned()),
+            Some(did) if did == other_did => Some("other".to_owned()),
+            Some(did) => panic!("unexpected signer {did}"),
+        };
+        for case in
+            gents_lean_vocab::families::document_signer_read::cases::<String, String, String>()
+        {
+            let label = case.input.history.as_str();
+            let mut args = Map::from_iter([("label".to_owned(), json!(label))]);
+            let unfiltered: Value =
+                serde_json::from_str(&tool.call(BoundedQueryParams(args.clone())).await.unwrap())
+                    .unwrap();
+            assert_eq!(unfiltered["count"], 1, "{unfiltered}");
+            let signer = name_of(&unfiltered["results"][0][SIGNER_FIELD]);
+            match case.input.filter.as_str() {
+                "none" => {}
+                "reader" => {
+                    args.insert(SIGNER_FIELD.into(), json!(reader_did));
+                }
+                "other" => {
+                    args.insert(SIGNER_FIELD.into(), json!(other_did));
+                }
+                filter => panic!("unknown filter {filter}"),
+            }
+            let filtered: Value =
+                serde_json::from_str(&tool.call(BoundedQueryParams(args)).await.unwrap()).unwrap();
+            case.check(gents_lean_vocab::families::document_signer_read::Read {
+                returned: filtered["count"] == 1,
+                signer,
+            });
+        }
+        node.shutdown().await.expect("shut down test node");
+    }
+
+    #[test]
+    fn a_create_cannot_write_the_signer() {
+        let declaration = gents_documents::WriteToolDecl {
+            notification: None,
+            tool_name: "add_note".into(),
+            collection: "SignedNote".into(),
+            description: String::new(),
+            fields: vec![WriteToolField {
+                name: SIGNER_FIELD.into(),
+                required: false,
+                fill: None,
+            }],
+            output_obligation: None,
+        };
+        assert_eq!(
+            declaration.validate().unwrap_err().to_string(),
+            "field[0] _signer is read from the document's signature and cannot be written"
+        );
     }
 
     async fn node_with_findings() -> Arc<EmbeddedNode> {

@@ -7,6 +7,7 @@ use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 pub mod agent;
+mod document_signer;
 mod enrollment_approval;
 mod enrollment_grant;
 mod error;
@@ -23,6 +24,7 @@ pub use agent::{
     provision_agent_identity_for_agent, resolve_agent_identity, AgentAdmissionObservationError,
     AgentProvisionError, ObservedDocumentPermissions, RuntimeAgentProof,
 };
+pub use document_signer::{document_signers, DocumentSignerError};
 pub use enrollment_approval::{
     approve_enrollment, grant_as_approver, verify_pending_client_request, ApprovalStep,
     EnrollmentApproval, EnrollmentApprovalError,

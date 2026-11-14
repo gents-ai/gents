@@ -153,6 +153,7 @@ pub(crate) use surface_tool::{
 };
 pub use surface_tool::{
     merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
+    SIGNER_FIELD,
 };
 pub use surface_tool::{validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource};
 pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
