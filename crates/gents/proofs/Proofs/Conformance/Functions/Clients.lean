@@ -4,6 +4,7 @@ import Proofs.Clients.ClientShell.Settings
 import Proofs.Clients.ClientShell.SyncHealth
 import Proofs.Clients.ServiceLifecycle
 import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Store
 
 namespace ClientChatReadiness
 
@@ -31,7 +32,7 @@ namespace RuntimeConnectionObservation
 
 deriving instance Lean.ToJson for Event, SnapshotOutcome, Origin
 
-attribute [conformance_function] armedEvent armedAfter snapshotEvent reconnects
+attribute [conformance_function] armedEvent armedAfter snapshotEvent failedSnapshot reconnects
 
 end RuntimeConnectionObservation
 

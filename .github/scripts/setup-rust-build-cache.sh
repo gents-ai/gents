@@ -92,28 +92,46 @@ echo "Using SCCACHE_DIR=${SCCACHE_DIR}"
 echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
 sccache --version
 # Never recycle a shared host daemon here; its supervisor owns it. On macOS
-# that is the checked-in launchd service. On Linux it is the systemd unit
-# GENTS_SCCACHE_UNIT when the host installs one; otherwise the server starts
-# on demand under the runner account and its own idle timeout ends it.
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  service_domain="gui/$(id -u)/com.source.gents.sccache"
-  if ! launchctl print "${service_domain}" 2>/dev/null | grep -q 'state = running'; then
-    echo "::error::Host sccache launchd service is not running (${service_domain})."
-    exit 1
+# that is the checked-in launchd service, a LaunchAgent, so it exists only
+# while the runner user has a GUI login session: a WindowServer crash or a
+# logout removes it (and the host's live Gents node with it), and the job must
+# say so rather than build uncached on a host that has lost its session. On
+# Linux it is the systemd unit GENTS_SCCACHE_UNIT when the host installs one;
+# otherwise the server starts on demand under the runner account.
+cache_unavailable() {
+  local message="$1 Builds here stop until this is fixed; rerun the failed jobs afterwards."
+  echo "::error title=Runner compiler cache unavailable on $(hostname -s)::${message}"
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    printf '### Runner compiler cache unavailable on %s\n\n%s\n' "$(hostname -s)" "${message}" >> "${GITHUB_STEP_SUMMARY}"
   fi
+  exit 1
+}
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  user_domain="gui/$(id -u)"
+  service_domain="${user_domain}/com.source.gents.sccache"
+  if ! launchctl print "${user_domain}" >/dev/null 2>&1; then
+    cache_unavailable "$(id -un) has no GUI login session on $(hostname -s), so its LaunchAgents (the sccache service, the live Gents node) are gone. This usually follows a WindowServer crash. A person must log in as $(id -un) at the console or over Screen Sharing, or restart the host so it logs in automatically."
+  elif ! service_print="$(launchctl print "${service_domain}" 2>/dev/null)"; then
+    cache_unavailable "The sccache LaunchAgent ${service_domain} is not loaded on $(hostname -s). A person must load it as $(id -un): launchctl bootstrap ${user_domain} ~/Library/LaunchAgents/com.source.gents.sccache.plist (installed from .github/runner/)."
+  elif ! grep -q 'state = running' <<<"${service_print}"; then
+    cache_unavailable "The sccache LaunchAgent ${service_domain} is loaded but not running on $(hostname -s). A person must start it as $(id -un): launchctl kickstart ${service_domain}, then read ~/Library/Logs/gents-sccache.stderr.log if it stops again."
+  fi
+  repair="restart it as $(id -un): launchctl kickstart -k ${service_domain}, and read ~/Library/Logs/gents-sccache.log"
 else
   sccache_unit="${GENTS_SCCACHE_UNIT:-gents-sccache.service}"
   if command -v systemctl >/dev/null 2>&1 && systemctl cat "${sccache_unit}" >/dev/null 2>&1; then
     if ! systemctl is-active --quiet "${sccache_unit}"; then
-      echo "::error::Host sccache systemd unit is not active (${sccache_unit})."
-      exit 1
+      cache_unavailable "The sccache systemd unit ${sccache_unit} is not active on $(hostname -s). A person must start it: systemctl start ${sccache_unit}."
     fi
-  elif ! sccache --show-stats >/dev/null 2>&1; then
-    sccache --start-server
+    repair="restart it: systemctl restart ${sccache_unit}"
+  else
+    if ! sccache --show-stats >/dev/null 2>&1; then
+      sccache --start-server
+    fi
+    repair="check that $(id -un) can run sccache --start-server with SCCACHE_DIR=${SCCACHE_DIR}"
   fi
 fi
 if ! sccache --show-stats >/dev/null 2>&1; then
-  echo "::error::Host sccache server is unavailable; repair its service before running runner builds."
-  exit 1
+  cache_unavailable "The sccache server does not answer on $(hostname -s). A person must ${repair}."
 fi
 echo "Reusing the host sccache server."

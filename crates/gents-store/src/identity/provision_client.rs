@@ -12,7 +12,7 @@ pub enum RemoteAgentProvisionError {
     UnsafeEndpoint,
     #[error("runtime endpoint has no GraphQL path")]
     MissingGraphqlPath,
-    #[error(transparent)]
+    #[error("{0}")]
     Authorization(#[from] ConfigClientError),
     #[error("agent identity request failed")]
     Request(#[from] reqwest::Error),

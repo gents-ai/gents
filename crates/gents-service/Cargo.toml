@@ -52,5 +52,6 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 libc = "0.2"
 
 [dev-dependencies]
+gents-service = { path = ".", features = ["test-home-guard"] }
 gents-lean-vocab.workspace = true
 gents = { path = "../gents", features = ["test-home-guard"] }

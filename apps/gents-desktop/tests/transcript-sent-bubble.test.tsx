@@ -373,6 +373,7 @@ describe("a send drawn only once it is saved", () => {
     expect(row).toHaveLength(1);
     expect(row[0]).toHaveTextContent("Sent from here");
     expect(row[0]).toHaveTextContent((await attachmentMetadata(notes)).name);
+    await waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
     await act(async () => f.reply.resolve(acceptedChat(f.send.mock.calls[0][0])));
     await f.sent;
   });

@@ -583,4 +583,103 @@ theorem disable_materializes_nothing (profiles : List String) (c : AgentCatalog)
   simp [materializedAgent, enabledAfter, AgentRequest.writesEnabled, AgentOperation.normalize,
     disableFields]
 
+/-! ## Commit: resolution, and what waits for inference -/
+
+/-- How an admitted request's result resolves, decided before it commits.
+
+Decision (maintainer, 2026-11-13, desktop first run on #3670): a node is set
+up before any inference provider exists. `init` writes its inference backend
+disabled, and its Engineer is enabled, named, prompted and given its tools
+then, by the CLI and the desktop alike. So resolution is not part of
+admission (`agentAdmission`), and a result whose only failure is
+`disabledBackend` commits: whether it can serve is decided when inference is
+configured or when a request selects it. Until then it materializes no session
+(`deferred_materializes_nothing`) and no request can use it
+(`deferred_agent_serves_no_request`; the runtime's snapshot never lists it as
+runnable, `ApplyReconcile.rejected_configuration_not_runnable`). Any other
+failure (a missing or foreign context, profile or backend, or a disabled
+candidate) is the request's own, and the commit is refused. A result left
+disabled is not resolved. -/
+inductive CandidateResolution where
+  | resolved
+  | deferred
+  | refused
+  | notEnabled
+  deriving DecidableEq, Repr
+
+def candidateResolution (candidate : Configuration.Registry) (node target : String)
+    (enabled : Bool) : CandidateResolution :=
+  if !enabled then .notEnabled
+  else match Configuration.resolveAgent candidate node target with
+    | .ok _ => .resolved
+    | .error .disabledBackend => .deferred
+    | .error _ => .refused
+
+def CandidateResolution.commits : CandidateResolution → Bool
+  | .refused => false
+  | _ => true
+
+/-- The resolution of request `r`'s result, which is enabled as
+`enabledAfter` says. -/
+def requestResolution (c : AgentCatalog) (r : AgentRequest)
+    (candidate : Configuration.Registry) (node : String) : CandidateResolution :=
+  candidateResolution candidate node r.target (enabledAfter c r r.target)
+
+theorem commits_iff (candidate : Configuration.Registry) (node target : String)
+    (enabled : Bool) :
+    (candidateResolution candidate node target enabled).commits = true ↔
+      enabled = false ∨ (∃ s, Configuration.resolveAgent candidate node target = .ok s) ∨
+        Configuration.resolveAgent candidate node target = .error .disabledBackend := by
+  unfold candidateResolution
+  cases enabled with
+  | false => simp [CandidateResolution.commits]
+  | true =>
+    simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, reduceCtorEq, false_or]
+    cases h : Configuration.resolveAgent candidate node target with
+    | ok s => simp [CandidateResolution.commits]
+    | error e => cases e <;> simp [CandidateResolution.commits]
+
+/-- A result whose backend is disabled is deferred, never refused: setup's
+edits of its Engineer commit before inference exists. -/
+theorem disabled_backend_deferred (candidate : Configuration.Registry) (node target : String)
+    (h : Configuration.resolveAgent candidate node target = .error .disabledBackend) :
+    candidateResolution candidate node target true = .deferred := by
+  simp [candidateResolution, h]
+
+/-- Only a disabled backend is deferred: any other failure is refused. -/
+theorem other_failure_refused (candidate : Configuration.Registry) (node target : String)
+    (e : Configuration.ResolveError) (he : e ≠ .disabledBackend)
+    (h : Configuration.resolveAgent candidate node target = .error e) :
+    candidateResolution candidate node target true = .refused := by
+  cases e <;> simp_all [candidateResolution]
+
+/-- A deferred result materializes no session. -/
+theorem deferred_materializes_nothing (profiles : List String) (c : AgentCatalog)
+    (actor : Actor) (r : AgentRequest) (candidate : Configuration.Registry) (node : String)
+    (h : requestResolution c r candidate node = .deferred) :
+    materializedAgent profiles c actor r candidate node = none := by
+  unfold requestResolution candidateResolution at h
+  by_cases he : enabledAfter c r r.target = true
+  · simp only [he, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+    cases hr : Configuration.resolveAgent candidate node r.target with
+    | ok s => simp [hr] at h
+    | error e => simp [materializedAgent, hr, Except.toOption]
+  · simp [materializedAgent, he]
+
+/-- No request is served by a deferred agent: neither one naming it nor a Task
+selecting it resolves to a session. -/
+theorem deferred_agent_serves_no_request (candidate : Configuration.Registry) (node target : String)
+    (h : candidateResolution candidate node target true = .deferred) :
+    (∀ s, Configuration.resolveAgent candidate node target ≠ .ok s) ∧
+      ∀ taskId task s, candidate.tasks node taskId = some ⟨node, task⟩ → task.agentDid = target →
+        Configuration.resolveTask candidate node taskId ≠ .ok s := by
+  have hr : ∀ s, Configuration.resolveAgent candidate node target ≠ .ok s := by
+    intro s hs
+    simp [candidateResolution, hs] at h
+  refine ⟨hr, fun taskId task s ht ha hs => ?_⟩
+  obtain ⟨task', ht', _, hres⟩ := (Configuration.resolveTask_ok_iff candidate node taskId s).mp hs
+  rw [ht] at ht'
+  cases ht'
+  exact hr s (ha ▸ hres)
+
 end SelfConfig

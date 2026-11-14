@@ -7,3 +7,10 @@ fn generated_startup_degraded_reasons_cover_every_public_reason() {
         AgentReadinessUnavailableReason,
     >(|input| is_degraded_startup_unavailable_reason(input.reason));
 }
+
+#[test]
+fn generated_node_degrading_reasons_match_the_protocol_owner() {
+    gents_lean_vocab::families::runtime_startup_degraded_degrades_node::replay::<
+        AgentReadinessUnavailableReason,
+    >(|input| input.reason.degrades_node());
+}

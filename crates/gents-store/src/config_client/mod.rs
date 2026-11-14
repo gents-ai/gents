@@ -14,6 +14,8 @@
 //! - `Option` fields omitted from an `update:` clause preserve the stored
 //!   value; explicit clearing requires `field: null`.
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod access_classification_fixture;
 #[cfg(test)]
 mod agent_signer_conformance;
 mod application_failure;

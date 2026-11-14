@@ -36,7 +36,7 @@ fn expand_p2p_collection_args(
 }
 
 pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
     let raw_replicators: Vec<P2pReplicatorRow> = gents_host::http_client::http_get_json(
@@ -61,7 +61,7 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
     let filters = parse_replicator_filters(&args.filters)
         .context("parsing --filter arguments for p2p admin replicators add")?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
     let wire_filters = to_replication_filters(&filters).map_err(anyhow::Error::msg)?;
@@ -152,7 +152,7 @@ pub(super) fn parse_replicator_filters(filters: &[String]) -> Result<PairingFilt
 
 pub(super) async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Result<()> {
     let collections = expand_p2p_collection_args(&args.collections, &args.profiles)?;
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
     let request = P2pReplicatorDeleteRequest {
