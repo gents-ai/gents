@@ -6,16 +6,35 @@ if [[ -z "${CARGO_BUILD_JOBS:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${RUNNER_TEMP:-}" ]]; then
-  echo "::error::RUNNER_TEMP must be set; Cargo target output is scoped to the job."
-  exit 1
-fi
-
-# The runner empties RUNNER_TEMP around every job, so linked artifacts never
-# outlive the job that built them. The host sccache service is the shared,
-# size-capped compiler cache. Keep this path free of run IDs: sccache hashes
-# CARGO_* environment values, so a per-runner stable path keeps hits warm.
-export CARGO_TARGET_ROOT="${RUNNER_TEMP}/gents-cargo-target"
+case "${1:-}" in
+  --persistent)
+    # sccache cannot cache what links (test harnesses, binaries, proc macros,
+    # build scripts), so a job-scoped tree relinks all of them every job. A
+    # runner process runs one job at a time, so its tree is reused only
+    # serially. ensure-rust-build-space.py empties it above
+    # CARGO_TARGET_MAX_GIB: an uncapped persistent tree once reached 1.7 TiB.
+    if [[ -z "${CARGO_TARGET_MAX_GIB:-}" ]]; then
+      echo "::error::CARGO_TARGET_MAX_GIB must cap a persistent Cargo target tree."
+      exit 1
+    fi
+    export CARGO_TARGET_ROOT="${GENTS_CI_TARGET_ROOT:-${HOME}/.cache/gents-ci-target}"
+    ;;
+  "")
+    if [[ -z "${RUNNER_TEMP:-}" ]]; then
+      echo "::error::RUNNER_TEMP must be set; Cargo target output is scoped to the job."
+      exit 1
+    fi
+    # The runner empties RUNNER_TEMP around every job, so linked artifacts
+    # never outlive the job that built them.
+    export CARGO_TARGET_ROOT="${RUNNER_TEMP}/gents-cargo-target"
+    ;;
+  *)
+    echo "usage: $0 [--persistent]" >&2
+    exit 2
+    ;;
+esac
+# Keep the target path free of run IDs: sccache hashes CARGO_* environment
+# values, so a per-runner stable path keeps hits warm.
 echo "CARGO_TARGET_ROOT=${CARGO_TARGET_ROOT}" >> "${GITHUB_ENV}"
 
 if [[ -z "${RUNNER_NAME:-}" ]]; then

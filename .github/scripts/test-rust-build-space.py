@@ -55,6 +55,42 @@ class BuildSpaceTests(unittest.TestCase):
             unittest.mock.call(["cargo", "clean", "--target-dir", str(self.target)], check=True),
         ])
 
+    def run_with_target_size(self, *gib):
+        with patch.object(build_space.shutil, "disk_usage",
+                          return_value=Usage(100, 0, 1000 * 1024**3)), \
+                patch.object(build_space, "tree_size",
+                             side_effect=[size * 1024**3 for size in gib]):
+            build_space.ensure_build_space(self.target, 64, 150)
+        self.assertEqual(self.marker.read_text(), "keep")
+
+    def test_persistent_cache_under_its_cap_survives(self):
+        self.run_with_target_size(150)
+        self.clean.assert_not_called()
+
+    def test_persistent_cache_over_its_cap_reclaims_workspace_artifacts_first(self):
+        self.run_with_target_size(151, 90)
+        self.clean.assert_called_once_with(
+            ["cargo", "clean", "--workspace", "--target-dir", str(self.target)], check=True)
+
+    def test_persistent_cache_still_over_its_cap_is_emptied(self):
+        self.run_with_target_size(400, 200, 0)
+        self.assertEqual(self.clean.call_args_list, [
+            unittest.mock.call(["cargo", "clean", "--workspace", "--target-dir",
+                                str(self.target)], check=True),
+            unittest.mock.call(["cargo", "clean", "--target-dir", str(self.target)], check=True),
+        ])
+
+    def test_tree_size_counts_hard_links_once_and_does_not_follow_symlinks(self):
+        artifact = self.target / "debug" / "deps" / "artifact"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_bytes(b"x" * 65536)
+        os.link(artifact, self.target / "debug" / "artifact")
+        (self.target / "debug" / "outside").symlink_to(self.other, target_is_directory=True)
+        allocated = os.lstat(artifact).st_blocks * 512
+        self.assertGreaterEqual(allocated, 65536)
+        self.assertLess(build_space.tree_size(self.target), 2 * allocated)
+        self.assertGreaterEqual(build_space.tree_size(self.target), allocated)
+
     def test_insufficient_host_space_fails_before_compilation(self):
         with self.assertRaisesRegex(RuntimeError, "free additional space"):
             self.run_with_free_space(10, 30, 40)
@@ -125,6 +161,12 @@ class BuildSpaceTests(unittest.TestCase):
         for minimum in (0, -1):
             with self.subTest(minimum=minimum), self.assertRaises(ValueError):
                 build_space.ensure_build_space(self.target, minimum)
+        self.clean.assert_not_called()
+
+    def test_rejects_non_positive_cap(self):
+        for maximum in (0, -1):
+            with self.subTest(maximum=maximum), self.assertRaises(ValueError):
+                build_space.ensure_build_space(self.target, 64, maximum)
         self.clean.assert_not_called()
 
 
