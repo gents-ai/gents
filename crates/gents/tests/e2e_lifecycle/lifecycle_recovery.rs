@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::support::agent_requests::{RequestActors, RequestSeed};
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::fixtures::configure_agent_tools;
-use crate::support::live_inference::wait_for_rows;
+use crate::support::live_inference::rows_when;
 use crate::support::{
     accepted_turn::{boot_prepared_accepted_turn, PreparedAcceptedTurn},
     first_row,
@@ -535,11 +535,12 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     .await;
     let agent = recovery_runtime(&db).await;
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
-    wait_for_rows(
-        &actors.fixture.access,
+    // Both waits read as the Agent that owns the rows, so every term below
+    // changes in a transaction that also changes the subscribed collection.
+    rows_when(
+        &actors,
         "AgentToolCall",
         r#"{ AgentToolCall(filter: {session_id: {_eq: "wake-backoff-session"}, tool_name: {_eq: "bash"}, lifecycle_state: {_eq: "running"}}) {_docID} }"#,
-        std::time::Duration::from_secs(10),
         |data| data["AgentToolCall"].as_array().is_some_and(|rows| !rows.is_empty()),
     ).await;
     runtime
@@ -547,21 +548,51 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         .enqueue_response("continue", StreamResponse::bad_request("provider failed"));
     use tokio::io::AsyncWriteExt;
     release.write_all(b"release\n").await.unwrap();
-    wait_for_rows(
-        &actors.fixture.access,
+    rows_when(
+        &actors,
         "AgentRequest",
         r#"{
             AgentRequest(filter: {session_id: {_eq: "wake-backoff-session"}}) {request_id lifecycle_state}
             AgentMessage(filter: {session_id: {_eq: "wake-backoff-session"}}) {message_key}
         }"#,
-        std::time::Duration::from_secs(10),
         |data| {
             let requests = data["AgentRequest"].as_array().unwrap();
-            requests.iter().any(|row| row["request_id"] == "failed-wake-backoff" && row["lifecycle_state"] == "failed")
-                && requests.iter().any(|row| row["request_id"].as_str().is_some_and(|id| id.starts_with("background-completion-")) && row["lifecycle_state"] == "processing")
+            let state = |row: &serde_json::Value| {
+                RequestLifecycleState::parse_opt(row["lifecycle_state"].as_str())
+            };
+            let wake = requests
+                .iter()
+                .find(|row| row["request_id"] == "failed-wake-backoff")
+                .and_then(state);
+            let successor = requests
+                .iter()
+                .find(|row| row["request_id"].as_str().is_some_and(|id| id.starts_with("background-completion-")))
+                .and_then(state);
+            assert!(
+                wake.is_none_or(|wake| wake == RequestLifecycleState::Failed || !wake.is_terminal())
+                    && successor.is_none_or(|successor| !successor.is_terminal()),
+                "the wake must fail and its held successor must stay live: {data}"
+            );
+            wake == Some(RequestLifecycleState::Failed)
+                && successor == Some(RequestLifecycleState::Processing)
                 && data["AgentMessage"].as_array().unwrap().iter().any(|row| row["message_key"].as_str().is_some_and(|key| key.starts_with("background-completion-notification:")))
         },
     ).await;
+    // The test user sees the notification once its session link is
+    // published, which changes AgentMessage and no AgentRequest.
+    rows_when(
+        &actors.fixture.access,
+        "AgentMessage",
+        r#"{ AgentMessage(filter: {session_id: {_eq: "wake-backoff-session"}}) {message_key} }"#,
+        |data| {
+            data["AgentMessage"].as_array().unwrap().iter().any(|row| {
+                row["message_key"]
+                    .as_str()
+                    .is_some_and(|key| key.starts_with("background-completion-notification:"))
+            })
+        },
+    )
+    .await;
     runtime.shutdown().await;
 
     let wake_rows_before = background_wake_retry_rows(access, session_id).await;
