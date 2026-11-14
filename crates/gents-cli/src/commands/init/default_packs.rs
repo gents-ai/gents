@@ -1103,6 +1103,15 @@ mod tests {
             .unwrap()
     }
 
+    /// Lean `Pack.CorePacks.initWiring` replayed against a home's core packs
+    /// right after init, with or without inference.
+    fn replay_init_wiring(at_init: &[(CorePack, Wiring)]) {
+        for case in families::pack_core_packs_init_wiring::cases() {
+            let pack: CorePack = case.input.core_pack;
+            case.check(family_output(wiring_of(at_init, pack)));
+        }
+    }
+
     /// The real `init --engineer` and `gents config pack starter --enable`
     /// replay Lean `Pack.CorePacks`: init installs every core pack the
     /// release carries without asking and leaves each as `initWiring` says;
@@ -1121,10 +1130,7 @@ mod tests {
         let report = &initialized["default_packs"];
         assert_eq!(report["not_installed"], json!([]), "{report}");
         let at_init = observed(home.path(), &report["installed"]).await;
-        for case in families::pack_core_packs_init_wiring::cases() {
-            let pack: CorePack = case.input.core_pack;
-            case.check(family_output(wiring_of(&at_init, pack)));
-        }
+        replay_init_wiring(&at_init);
 
         let listed = status(home.path(), &archives).await.unwrap();
         for pack in &listed {
@@ -1181,10 +1187,7 @@ mod tests {
         let report = &initialized["default_packs"];
         assert_eq!(report["not_installed"], json!([]), "{report}");
         let at_init = observed(home.path(), &report["installed"]).await;
-        for case in families::pack_core_packs_init_wiring::cases() {
-            let pack: CorePack = case.input.core_pack;
-            case.check(family_output(wiring_of(&at_init, pack)));
-        }
+        replay_init_wiring(&at_init);
         let listed = status(home.path(), &archives).await.unwrap();
         for pack in &listed {
             let expected = if pack.pack == CorePack::DynamicWorkflows.coordinate() {
