@@ -1200,20 +1200,6 @@ fn service_isolation_leaks(workspace: &Workspace) -> Vec<String> {
     leaks
 }
 
-fn all_rust_sources(root: &Path, output: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(root)
-        .unwrap_or_else(|error| panic!("read {}: {error}", root.display()))
-        .flatten()
-    {
-        let path = entry.path();
-        if path.is_dir() {
-            all_rust_sources(&path, output);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            output.push(path);
-        }
-    }
-}
-
 #[test]
 fn service_isolation_stays_test_only() {
     let workspace = Workspace::load(&repo_root());
