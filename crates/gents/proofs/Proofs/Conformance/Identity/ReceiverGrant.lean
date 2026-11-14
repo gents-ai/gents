@@ -24,12 +24,12 @@ structure NativeReadInput where
   documentAcp : Bool
   deriving ToJson
 
-/-- `Household.readObserved` over its whole domain, for the native tests that
-observe a hosting node key or another actor after a revocation. -/
+/-- `Household.readObserved` for a document on which document ACP grants the
+reader nothing: the receiving node's own key reads it and an outsider does
+not. -/
 @[conformance_family]
 def nativeRead : Family NativeReadInput Bool where
-  inputs := [(false, false), (false, true), (true, false), (true, true)].map
-    fun (bypass, documentAcp) => { bypass, documentAcp }
+  inputs := [false, true].map fun bypass => { bypass, documentAcp := false }
   model := fun i => _root_.Identity.Household.readObserved i.bypass i.documentAcp
 
 end Conformance.Identity

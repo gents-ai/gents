@@ -1116,7 +1116,7 @@ async fn opening_a_store_completes_a_widened_agent_baseline() -> anyhow::Result<
     use gents_lean_vocab::families::agent_baseline_completion as wire;
 
     let baseline = gents_store::identity::GrantSet::AgentBaseline.permissions();
-    for case in wire::cases() {
+    for case in gents_lean_vocab::families::agent_baseline_completion::cases() {
         let (_directory, runtime, node) = projection_node().await?;
         let binding = gents_store::identity::provision_agent_identity(&runtime)?;
         let agent = identity::Did::new(&binding.agent_did)?;
