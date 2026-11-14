@@ -581,7 +581,7 @@ async fn provision_fresh_home(
     runtime: &dyn NodeIdentity,
     client: &str,
 ) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
-    use gents_store::identity::GrantSet;
+    use gents_store::identity::{GrantSet, Recipient};
     anyhow::ensure!(
         node.node_identity_did() == Some(runtime.did()),
         "bootstrap runtime identity does not match the node"
@@ -589,9 +589,11 @@ async fn provision_fresh_home(
     let client = identity::Did::new(client)?;
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     let binding = gents_store::identity::provision_agent_identity(runtime)?;
-    GrantSet::HouseholdOwner.grant(&access, &client).await?;
-    GrantSet::PolicyDelegate
-        .grant(&access, &identity::Did::new(&binding.agent_did)?)
+    GrantSet::for_recipient(Recipient::InitUser)
+        .grant_direct(&access, &client)
+        .await?;
+    GrantSet::for_recipient(Recipient::DefaultAgent)
+        .grant_direct(&access, &identity::Did::new(&binding.agent_did)?)
         .await?;
     Ok(binding)
 }
@@ -1007,7 +1009,7 @@ async fn bootstrap_identity_only_owner(
     runtime: Arc<dyn NodeIdentity>,
     owner: &str,
 ) -> Result<()> {
-    use gents_store::identity::GrantSet;
+    use gents_store::identity::{GrantSet, Recipient};
     let runtime_did = identity::Did::new(runtime.did())?;
     let preflight = gents_store::local::backend_protection::ProtectedBackendStore::open(
         data_dir, store_key, store_lock,
@@ -1025,8 +1027,8 @@ async fn bootstrap_identity_only_owner(
         home,
     )
     .await?;
-    let granted = GrantSet::HouseholdOwner
-        .grant(
+    let granted = GrantSet::for_recipient(Recipient::InitUser)
+        .grant_direct(
             &ConfigAccess::local_as(node.clone(), runtime_did),
             &identity::Did::new(owner)?,
         )
@@ -2625,10 +2627,6 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_init_grants_native_operations_once_without_regranting_revocation() {
-        let snapshot: Value =
-            tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
-                .await
-                .unwrap();
         for case in gents_lean_vocab::families::node_provisioning_bootstrap_grant::cases() {
             let temp = tempfile::tempdir().unwrap();
             let home = temp.path().join("home");
@@ -2637,9 +2635,7 @@ mod tests {
                 fs::write(home.join(BOOTSTRAP_CONSUMED_FILE_NAME), b"").unwrap();
             }
             let granted = match initialize_disposable_home(&home, false).await {
-                Ok(initial) => {
-                    fresh_init_grants_and_keeps_revocation(&home, &initial, &snapshot).await
-                }
+                Ok(initial) => fresh_init_grants_and_keeps_revocation(&home, &initial).await,
                 Err(error) => {
                     assert!(
                         format!("{error:#}").contains("bootstrap was already attempted"),
@@ -2658,13 +2654,9 @@ mod tests {
         }
     }
 
-    async fn fresh_init_grants_and_keeps_revocation(
-        home: &Path,
-        initial: &Value,
-        snapshot: &Value,
-    ) -> bool {
+    async fn fresh_init_grants_and_keeps_revocation(home: &Path, initial: &Value) -> bool {
         use gents_store::config_client::NodePermission;
-        use gents_store::identity::GrantSet;
+        use gents_store::identity::{GrantSet, Recipient};
         let home = home.to_path_buf();
         let stored = read_init_config(&home).unwrap().unwrap();
         let identity =
@@ -2770,25 +2762,6 @@ mod tests {
             worker.execute("{ AgentRequest { _docID } }").await.unwrap()["data"]["AgentRequest"]
                 .is_array()
         );
-        let recipients = snapshot["identity_grant_recipient_cases"]
-            .as_array()
-            .unwrap();
-        let modeled = |recipient: &str, kind: &str| -> Vec<GrantSet> {
-            recipients
-                .iter()
-                .find(|case| case["recipient"] == recipient)
-                .unwrap()[kind]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|name| {
-                    GrantSet::ALL
-                        .into_iter()
-                        .find(|set| Some(set.name()) == name.as_str())
-                        .unwrap()
-                })
-                .collect()
-        };
         let holds = |did: identity::Did, sets: Vec<GrantSet>| {
             let node = node.clone();
             async move {
@@ -2810,10 +2783,11 @@ mod tests {
                 true
             }
         };
-        let client_sets = modeled("init-user", "direct");
-        let agent_direct = modeled("default-agent", "direct");
+        let client_sets = GrantSet::for_recipient(Recipient::InitUser).direct.to_vec();
+        let default_agent = GrantSet::for_recipient(Recipient::DefaultAgent);
+        let agent_direct = default_agent.direct.to_vec();
         let mut agent_sets = agent_direct.clone();
-        agent_sets.extend(modeled("default-agent", "projected"));
+        agent_sets.extend(default_agent.projected);
         let granted = holds(client_did.clone(), client_sets.clone()).await
             && holds(agent.clone(), agent_sets).await;
         for set in &client_sets {

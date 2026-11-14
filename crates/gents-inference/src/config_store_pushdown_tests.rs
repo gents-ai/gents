@@ -138,19 +138,6 @@ async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed() -
     Ok(())
 }
 
-fn recipient_sets(name: &str) -> Vec<GrantSet> {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .identity_grant_recipient_cases
-        .iter()
-        .find(|case| case.recipient == name)
-        .unwrap_or_else(|| panic!("Lean recipient {name:?}"));
-    case.direct
-        .iter()
-        .chain(&case.projected)
-        .map(|set| set_named(set))
-        .collect()
-}
-
 pub(crate) async fn agent_step(
     access: &ConfigAccess,
     node_did: &str,

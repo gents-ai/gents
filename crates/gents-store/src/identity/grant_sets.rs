@@ -72,6 +72,32 @@ impl GrantSet {
         matches!(self, Self::HouseholdOwner)
     }
 
+    /// The sets `recipient` receives (Lean `Identity.GrantSets.directSets` and
+    /// `projectedSets`). Every admission that grants a recipient its sets asks
+    /// here: init and trial installation for the init User and the default
+    /// Agent, enrollment for an enrolled User, and the tool permission
+    /// projection for every live managed Agent.
+    pub fn for_recipient(recipient: Recipient) -> RecipientGrants {
+        match recipient {
+            Recipient::InitUser => RecipientGrants {
+                direct: &[Self::HouseholdOwner],
+                projected: &[],
+            },
+            Recipient::EnrolledUser => RecipientGrants {
+                direct: &[Self::OperatorUser],
+                projected: &[],
+            },
+            Recipient::DefaultAgent => RecipientGrants {
+                direct: &[Self::PolicyDelegate],
+                projected: &[Self::AgentBaseline],
+            },
+            Recipient::Agent => RecipientGrants {
+                direct: &[],
+                projected: &[Self::AgentBaseline],
+            },
+        }
+    }
+
     fn relations(self) -> impl Iterator<Item = Relation> {
         self.native_admin()
             .then_some(Relation::Admin)
@@ -135,6 +161,62 @@ impl GrantSet {
                     relation: relation.name(),
                     source: Box::new(source),
                 })?;
+        }
+        Ok(())
+    }
+}
+
+/// Who receives grant sets (Lean `Identity.GrantSets.Recipient`). The init
+/// User creates the node (`gents init`'s client, or an evaluation trial's
+/// evaluator); the default Agent is the Agent init publishes or the subject
+/// Agent a trial selects; an enrolled User is admitted by verified enrollment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Recipient {
+    InitUser,
+    EnrolledUser,
+    DefaultAgent,
+    Agent,
+}
+
+impl Recipient {
+    pub const ALL: [Self; 4] = [
+        Self::InitUser,
+        Self::EnrolledUser,
+        Self::DefaultAgent,
+        Self::Agent,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::InitUser => "init-user",
+            Self::EnrolledUser => "enrolled-user",
+            Self::DefaultAgent => "default-agent",
+            Self::Agent => "agent",
+        }
+    }
+}
+
+/// What [`GrantSet::for_recipient`] answers. `direct` sets are granted once by
+/// the admission that creates the recipient and persist until an explicit
+/// revocation; `projected` sets follow the live Agent document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecipientGrants {
+    pub direct: &'static [GrantSet],
+    pub projected: &'static [GrantSet],
+}
+
+impl RecipientGrants {
+    /// Grant every direct set to `subject` as `access`'s actor, in order. Each
+    /// set rolls back its own relations on failure ([`GrantSet::grant`]); sets
+    /// granted before the failing one stay granted.
+    pub async fn grant_direct(
+        self,
+        access: &ConfigAccess,
+        subject: &identity::Did,
+    ) -> Result<(), GrantSetError> {
+        for set in self.direct {
+            set.grant(access, subject).await?;
         }
         Ok(())
     }

@@ -45,8 +45,8 @@ pub(super) async fn install(
     // that node's init User (`Recipient.initUser`): the native admin whose
     // client key installs the pack, including the Tools projections that stage
     // schema authority an enrolled User may not grant.
-    gents_store::identity::GrantSet::HouseholdOwner
-        .grant(&schema_access, &::identity::Did::new(&spec.evaluator_did)?)
+    gents_store::identity::GrantSet::for_recipient(gents_store::identity::Recipient::InitUser)
+        .grant_direct(&schema_access, &::identity::Did::new(&spec.evaluator_did)?)
         .await
         .context("granting the evaluator the trial node's household ownership")?;
     let planning_access = ConfigAccess::local_as(
@@ -200,8 +200,8 @@ pub(super) async fn install(
     // The selected Agent is the trial node's default Agent
     // (`Recipient.defaultAgent`), which holds the relationship-management set
     // that projects a new Agent's baseline when it creates one.
-    gents_store::identity::GrantSet::PolicyDelegate
-        .grant(&schema_access, &::identity::Did::new(&agent_did)?)
+    gents_store::identity::GrantSet::for_recipient(gents_store::identity::Recipient::DefaultAgent)
+        .grant_direct(&schema_access, &::identity::Did::new(&agent_did)?)
         .await
         .context("granting the selected trial Agent policy delegation")?;
     let root_readers = config

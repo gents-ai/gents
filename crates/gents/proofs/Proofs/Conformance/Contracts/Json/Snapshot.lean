@@ -169,6 +169,7 @@ import Proofs.Store.Identity.GrantSetsConformance
 import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
 import Proofs.Conformance.Identity.Delegation
+import Proofs.Conformance.Identity.GrantRecipient
 import Proofs.Conformance.Identity.AgentBlockSigning
 import Proofs.Conformance.Identity.WorkspaceDatastoreWrite
 import Proofs.ToolCalls.Identity.ClientAgentJournal
@@ -402,8 +403,6 @@ def snapshotSessionCasesJson : String :=
 
 def snapshotIdentityCasesJson : String :=
   ""
-    ++ "\"identity_grant_recipient_cases\":"
-      ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
 
 def snapshotClientCasesJson : String :=
   ""
