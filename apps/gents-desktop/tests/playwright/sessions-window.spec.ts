@@ -98,7 +98,13 @@ test("configuration returns to a responsive new session", async ({ page }) => {
   for (let pass = 0; pass < 5; pass++) {
     await page.getByRole("link", { name: "Active node", exact: true }).click();
     await expect(page.getByTestId("agent-screen")).toBeVisible();
-    await page.getByRole("link", { name: "New session", exact: true }).first().click();
+    /* a pointer on the rail opens its hover panel over it 80ms later, so the
+       pointer reaches New session through the panel */
+    await page.getByRole("link", { name: "New session", exact: true }).first().hover();
+    await page
+      .locator('[data-ground="raised"]')
+      .getByRole("link", { name: "New session", exact: true })
+      .click();
     await expect(page.getByTestId("session-screen")).toBeVisible();
     await composer(page).click();
     await composer(page).fill(`Navigation ${pass}`);
