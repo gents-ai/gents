@@ -4,17 +4,10 @@ use super::*;
 async fn managed_pairing_handoff_matches_user_grant_model() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let contract = snapshot["identity_household_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "configuration-explicit-grants")
-        .unwrap();
-    for case in contract["managed_client_handoff_cases"].as_array().unwrap() {
-        let request = case["request"].as_bool().unwrap();
-        let owner = case["owner"].as_bool().unwrap();
-        let node = case["node"].as_bool().unwrap();
+    for case in gents_lean_vocab::families::household_managed_client_handoff::cases() {
+        let request = case.input.request;
+        let owner = case.input.owner;
+        let node = case.input.node;
         let approvals = AtomicUsize::new(0);
         let result = grant_then_approve_managed(
             || async move {
@@ -32,20 +25,17 @@ async fn managed_pairing_handoff_matches_user_grant_model() {
             },
         )
         .await;
-        assert_eq!(
-            approvals.load(Ordering::SeqCst) != 0,
-            case["approve"].as_bool().unwrap(),
-            "{case}"
-        );
         if request && (!owner || !node) {
-            assert!(result.is_err(), "{case}");
+            assert!(result.is_err(), "{:?}", case.input);
         }
         if !request {
             assert!(
                 matches!(result, Ok(PairingApproval::NotVisibleYet)),
-                "{case}"
+                "{:?}",
+                case.input
             );
         }
+        case.check(approvals.load(Ordering::SeqCst) != 0);
     }
 }
 

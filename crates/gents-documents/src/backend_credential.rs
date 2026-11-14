@@ -437,4 +437,101 @@ mod tests {
         node.shutdown().await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn backend_credential_and_its_selection_publish_together() -> anyhow::Result<()> {
+        use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+        use gents_store::identity::NodeIdentity;
+        for case in gents_lean_vocab::families::household_backend_credential_publication::cases() {
+            let (builder, runtime) = gents_store::test_support::keyed_node_builder();
+            let node = std::sync::Arc::new(builder.with_node_acp_enabled().build().await?);
+            gents_store::schema::ensure_runtime_schemas(&node).await?;
+            let owner = ConfigAccess::local_runtime(node.clone(), runtime.clone())?;
+            let node_did = runtime.did().to_owned();
+            crate::test_support::bootstrap_signed_test_node(&owner, &node_did).await;
+            let endpoint = "http://127.0.0.1:1/v1";
+            let publication = |metadata: &str, secret: &str| -> anyhow::Result<_> {
+                let backend: crate::InferenceBackend = serde_json::from_value(serde_json::json!({
+                    "node_did": node_did, "backend_id": "backend", "name": "backend",
+                    "provider_kind": "OpenAiCompatible", "endpoint": endpoint,
+                    "auth": {"kind": "credential", "id": "credential", "version": metadata},
+                }))?;
+                let metadata = crate::InferenceBackendMetadata::from_backend(
+                    backend,
+                    crate::BackendAuthSelection::Credential {
+                        id: "credential".into(),
+                        version: metadata.into(),
+                    },
+                )?;
+                let credential = BackendCredential {
+                    credential_id: "credential".into(),
+                    node_did: node_did.clone(),
+                    provider_kind: "OpenAiCompatible".into(),
+                    endpoint: endpoint.into(),
+                    version: secret.into(),
+                    secret: BackendCredentialSecret::ApiKey {
+                        key: "private".into(),
+                    },
+                };
+                Ok((metadata, credential))
+            };
+            let publish = |access: ConfigAccess, metadata, credential| async move {
+                access
+                    .transact_write("test.credential_publication", |txn| {
+                        let (metadata, credential) = (&metadata, &credential);
+                        Box::pin(async move {
+                            crate::inference_backend::write_backend_metadata_in_txn(
+                                txn,
+                                metadata,
+                                Some(credential),
+                            )
+                            .await
+                        })
+                    })
+                    .await
+            };
+            let (metadata, credential) = publication("old", "old")?;
+            publish(owner.clone(), metadata, credential).await?;
+            let (metadata, credential) = publication(&case.input.metadata, &case.input.secret)?;
+            let actor = if case.input.authorized {
+                owner.clone()
+            } else {
+                let stranger = tokio::task::spawn_blocking(|| {
+                    gents_store::test_support::test_identity("credential-stranger")
+                })
+                .await?;
+                ConfigAccess::local_as(node.clone(), identity::Did::new(stranger.did())?)
+            };
+            if case.input.committed {
+                let _ = publish(actor, metadata, credential).await;
+            } else {
+                let (rolled_back, _) = ConfigApplyTxn::with_successful_mutation_failure_at(
+                    Some(2),
+                    publish(actor, metadata, credential),
+                )
+                .await;
+                anyhow::ensure!(rolled_back.is_err(), "the failed commit must not publish");
+            }
+            let observed = owner
+                .execute("{ InferenceBackendMetadata { credential_version } BackendCredential { version } }")
+                .await?;
+            let version = |collection: &str, field: &str| -> anyhow::Result<String> {
+                let rows =
+                    gents_protocol::graphql::graphql_rows_from_response(&observed, collection);
+                anyhow::ensure!(rows.len() == 1, "one {collection} row: {observed}");
+                rows[0][field]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| anyhow::anyhow!("{collection} has no {field}: {observed}"))
+            };
+            case.check(
+                gents_lean_vocab::families::household_backend_credential_publication::CredentialVersions {
+                    metadata: version("InferenceBackendMetadata", "credential_version")?,
+                    secret: version("BackendCredential", "version")?,
+                },
+            );
+            node.shutdown().await?;
+        }
+        Ok(())
+    }
 }
