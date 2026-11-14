@@ -140,6 +140,60 @@ def agentNewPublication : Family CaseInput AgentNewOutput where
     let c := caseNamed i.name
     { creationReceipt := (finalState c).creationReceipt, targetRead := targetRead c }
 
+structure CreatorRecoveryOutput where
+  committed : Bool
+  toolRunning : Bool
+  sessionPending : Bool
+  requestPending : Bool
+  targetRead : Bool
+  nodeOwnerRead : Bool
+  claim : String
+  deriving ToJson
+
+/-- The served delegated-finality fixture drops the parent's committed
+acknowledgement, then drives the creator's recovery watcher or a node-owner
+completion attempt as the case's actions say.
+Production publication always re-verifies the retained receipt and native
+owner first, so a publication attempt the caller never observed has no
+production call beyond leaving the dropped acknowledgement unrecovered. -/
+def creatorRecoveryNames : List String :=
+  ["commit-unconfirmed", "foreign-recovery-actor"]
+
+@[conformance_family]
+def creatorRecovery : Family CaseInput CreatorRecoveryOutput where
+  inputs := (cases.filter fun c => c.name ∈ creatorRecoveryNames).map caseInput
+  model := fun i =>
+    let c := caseNamed i.name
+    let s := finalState c
+    { committed := s.committed, toolRunning := s.toolRunning
+      sessionPending := s.sessionPending, requestPending := s.requestPending
+      targetRead := targetRead c
+      nodeOwnerRead :=
+        Identity.Household.allowed 5 s.household s.binding.nodeOwner "sessions" s.binding.sessionDoc "read"
+      claim := claimOf c }
+
+structure CommitRefusalOutput where
+  committed : Bool
+  toolRunning : Bool
+  targetRead : Bool
+  claim : String
+  deriving ToJson
+
+/-- The served delegated-finality fixture fails the commit transaction's first
+mutation, replaces the planned starter with an unverifiable source session, or
+names the node owner as the planned author instead of the parent Agent; the
+atomic `agent_new` transaction then publishes nothing. -/
+def commitRefusalNames : List String := ["native-commit-failed", "missing-starter", "wrong-signer"]
+
+@[conformance_family]
+def commitRefusal : Family CaseInput CommitRefusalOutput where
+  inputs := (cases.filter fun c => c.name ∈ commitRefusalNames).map caseInput
+  model := fun i =>
+    let c := caseNamed i.name
+    let s := finalState c
+    { committed := s.committed, toolRunning := s.toolRunning, targetRead := targetRead c
+      claim := claimOf c }
+
 structure Observation where
   committed : Bool
   observed : Bool
@@ -172,17 +226,26 @@ private def observation (c : Case) : Observation :=
     otherUserAdmin := Identity.Household.allowed 5 s.household "other-user" "sessions" b.sessionDoc "delete"
     claim := claimOf c }
 
-/-- model-production-gap: commit, receipt observation, relation publication
-and claim are separate served owners, and no served fixture injects a failed
-native commit, a missing starter or creation receipt, a mis-signed or
-mis-targeted binding, an unconfirmed commit with a later grant attempt, a
-foreign receipt owner, a foreign or mismatched recovery actor, a partial grant
-set, a revocation after publication, a denied or revoked target invoke or a
-native marker conflict at claim. -/
+/-- model-production-gap: no production path reaches these cases.
+`wrong-physical-session` and `wrong-physical-agent`: the `agent_new` commit
+binds the physical session and Agent documents and then signs in the same
+transaction, so no signature names other documents. `missing-creation-receipt`:
+the receipt is issued in that transaction after the opening it needs is staged,
+signed and starter-verified there. `wrong-owner`: the creator is the native
+owner of the documents its transaction creates. `partial-grants` and
+`partial-then-recover`: each relation set is staged atomically with its
+pending marker. Disagreements: `invoke-denied` is refused at commit, not at
+claim; `revoked-after-publication` fails because the parent Agent may not
+delete its session's parent relation (NotAuthorized get-collection). Not built
+yet: `invoke-revoked-at-commit`, `marker-commit-conflict` and
+`same-agent-marker-conflict` need a concurrent change between the claim
+transaction's check and its native commit; `mismatched-recovery-binding` needs
+the child Agent document replaced between the commit and creator recovery. -/
 @[conformance_family]
 def unreached : Family CaseInput Observation where
   inputs := (cases.filter fun c =>
-      !(c.name ∈ readinessNames || c.name ∈ recoveryNames || c.name ∈ agentNewNames)).map caseInput
+      !(c.name ∈ readinessNames || c.name ∈ recoveryNames || c.name ∈ agentNewNames ||
+        c.name ∈ creatorRecoveryNames || c.name ∈ commitRefusalNames)).map caseInput
   model := fun i => observation (caseNamed i.name)
 
 example : targetRead (caseNamed "visible-before-publication-complete") = true := by native_decide
