@@ -1,4 +1,5 @@
 mod authority;
+mod connect;
 mod launch;
 pub(crate) mod native;
 pub(super) mod pairing;
@@ -120,16 +121,15 @@ where
 }
 
 #[tauri::command]
-pub async fn desktop_managed_server_enroll(
+pub async fn desktop_managed_server_enroll<R>(
+    app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
-) -> Result<(), BridgeError> {
+) -> Result<(), BridgeError>
+where
+    R: Runtime,
+{
     ensure_allowed(&state)?;
-    let _lifecycle = state.managed_server_lifecycle.lock().await;
-    let core = current_core(&state)
-        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
-    pairing::enroll_managed_runtime(&state, core)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+    connect::connect_local_node(&app, state).await
 }
 
 #[tauri::command]

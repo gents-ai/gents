@@ -396,6 +396,8 @@ jobs:
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    # The browser journeys take 44 to 58 minutes on one Playwright worker on a
+    # hosted runner (#3786); 60 cut a run whose journeys had passed.
     timeout-minutes: 75
     strategy:
       fail-fast: false

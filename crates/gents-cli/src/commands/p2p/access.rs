@@ -11,7 +11,7 @@ use gents_host::p2p_status::fetch_live_http_p2p_status;
 use gents_host::p2p_status::flatten_p2p_fields;
 
 pub(super) async fn p2p_status(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     let p2p = fetch_live_http_p2p_status(Some(&home_dir), &graphql).await?;
     let mut output = json!({
@@ -28,7 +28,7 @@ pub(super) async fn p2p_status(args: P2pAccessArgs) -> Result<()> {
 }
 
 pub(super) async fn p2p_peers(args: P2pAccessArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let peers = fetch_connected_peer_ids(&graphql).await?;
     let count = peers.len();
     let home_dir = resolve_home_dir(args.home.as_deref());

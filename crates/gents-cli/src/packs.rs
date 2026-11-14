@@ -125,8 +125,9 @@ pub async fn core_packs_from(home: PathBuf, archives: &[(&str, &[u8])]) -> Resul
 /// Turns on each of `packs` (core pack coordinates) for `home`'s Engineer,
 /// installing one the home lacks from this release: the Engineer owns what
 /// the pack ships, its plugins are wired and its skills attached as enabling
-/// says. Returns `{enabled, failed}`. The home's own store is opened, so the
-/// caller stops the runtime first.
+/// says. Returns `{enabled, failed}`. An installed pack is enabled through
+/// the runtime serving the home when one does; a pack the home lacks needs
+/// the home's own store, so it is refused while a runtime serves the home.
 pub async fn enable_core_packs(home: PathBuf, packs: Vec<String>) -> Result<Value> {
     enable_core_packs_from(home, packs, gents_core_packs::archives()).await
 }
@@ -143,6 +144,12 @@ pub async fn enable_core_packs_from(
         .map(|pack| owner::core_pack(&home, pack))
         .collect::<Result<Vec<_>>>()?;
     owner::enable(&home, archives, &packs).await
+}
+
+/// Installs each core pack `home` lacks from `archives`, as `init
+/// --engineer` leaves it. Returns `{installed, not_installed}`.
+pub async fn install_core_packs_from(home: PathBuf, archives: &[(&str, &[u8])]) -> Result<Value> {
+    crate::commands::init::default_packs::install_missing(&home, archives).await
 }
 
 /// Wires the installed `plugin` into `agent`'s Tools and Context (or with

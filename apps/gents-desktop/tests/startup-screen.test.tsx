@@ -134,6 +134,7 @@ describe("desktop startup screen", () => {
       error: null,
     };
     let paired = false;
+    let nodeState: "stopped" | "running" = "stopped";
     const enrollManagedServer = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(new Error("CLI client identity is unavailable"))
@@ -143,7 +144,11 @@ describe("desktop startup screen", () => {
     const fetchDesktopSnapshot = vi.fn(async () => snapshot(true, true));
     const terminalMade = testApp({
       api: {
-        managedServerStatus: vi.fn(async () => ({ ...served, pairingReady: paired })),
+        managedServerStatus: vi.fn(async () => ({
+          ...served,
+          state: nodeState,
+          pairingReady: paired,
+        })),
         enrollManagedServer,
         fetchDesktopSnapshot,
       },
@@ -157,19 +162,29 @@ describe("desktop startup screen", () => {
     expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(
       "Loading saved node settings",
     );
-    const connect = await shown.findByTestId("startup-connect-desktop");
+    expect(await shown.findByTestId("startup-connect-blocked")).toHaveTextContent(
+      "The node on this computer is not running. Start it in a terminal with `gents runtime server`, then choose Try again.",
+    );
     expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(
       "This desktop is not connected to your node",
     );
+
+    nodeState = "running";
+    await userEvent.click(shown.getByTestId("startup-connect-retry"));
+    await waitFor(() =>
+      expect(shown.queryByTestId("startup-connect-blocked")).not.toBeInTheDocument(),
+    );
+    const connect = shown.getByTestId("startup-connect-desktop");
+    const reads = fetchDesktopSnapshot.mock.calls.length;
 
     await userEvent.click(connect);
     expect(await shown.findByTestId("startup-connect-error")).toHaveTextContent(
       "Couldn’t connect this desktop: CLI client identity is unavailable",
     );
-    expect(fetchDesktopSnapshot).not.toHaveBeenCalled();
+    expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(reads);
 
     await userEvent.click(connect);
-    await waitFor(() => expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchDesktopSnapshot).toHaveBeenCalledTimes(reads + 1));
     expect(enrollManagedServer).toHaveBeenCalledTimes(2);
     await waitFor(() =>
       expect(shown.getByTestId("startup-configuration-pending")).toHaveTextContent(

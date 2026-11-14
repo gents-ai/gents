@@ -34,7 +34,7 @@ pub enum SchemaInstallError {
     Contract(#[from] SchemaContractError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
+    #[error("{0}")]
     ConfigClient(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
     Mismatch(#[from] SchemaInstallMismatch),

@@ -2416,7 +2416,9 @@ async fn work_for_signs_as_this_clis_user() {
     let (home, _) = home_serving(graphql, None);
     let user = gents_host::test_support::cli_user().await;
 
-    let work = work::work_for(home.path()).expect("this CLI's User signs");
+    let work = work::work_for(home.path())
+        .await
+        .expect("this CLI's User signs");
 
     assert_eq!(work.access().actor_did().as_deref(), Some(user.did()));
 }
@@ -2426,6 +2428,7 @@ async fn work_for_signs_as_this_clis_user() {
 async fn work_for_turns_off_with_no_runtime_recorded() {
     let bare = tempfile::tempdir().unwrap();
     let off = work::work_for(bare.path())
+        .await
         .err()
         .expect("no runtime recorded");
     assert!(off.contains("gents runtime server"), "{off}");
@@ -5242,7 +5245,7 @@ async fn packs_wait_for_the_runtime() {
     let key = keys.path().join("principal.key");
     let (home, did) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
     gents_host::test_support::cli_user().await;
-    let work = work::work_for(home.path());
+    let work = work::work_for(home.path()).await;
     assert!(
         work.is_ok(),
         "this CLI's User signs: {:?}",

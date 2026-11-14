@@ -26,7 +26,8 @@ pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     let output = enqueue_task_run(&args).await?;
     let mut value = serde_json::to_value(&output)?;
     if args.wait {
-        let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+        let graphql =
+            resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
         let response = wait_for_request(
             &gents_store::config_client::ConfigAccess::Graphql(graphql),
             request_ref(&output.node_did, &output.request_id),

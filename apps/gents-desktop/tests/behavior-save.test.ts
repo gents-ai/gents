@@ -56,17 +56,17 @@ describe("writeAgentDraft", () => {
       agent,
       next: draft,
       asCopy: false,
-      draftMode: { onSaved: vi.fn(), onCancel: vi.fn(), enabled: true },
+      draftMode: { onSaved: vi.fn(), onCancel: vi.fn() },
       newContextId: () => "unused",
     });
 
     expect(changeConfig).toHaveBeenCalledOnce();
+    expect(changeConfig.mock.calls[0]?.[1].document).not.toHaveProperty("enabled");
     expect(changeConfig).toHaveBeenCalledWith("saveAgentConfig", {
       document: expect.objectContaining({
         agent_did: agent.agentDid,
         creation_nonce: "nonce",
         context_id: context.context_id,
-        enabled: true,
       }),
       contextPatch: {
         contextId: context.context_id,

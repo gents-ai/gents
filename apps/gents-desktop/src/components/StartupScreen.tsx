@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@gents/ui/components/button";
 
+import { connectNodeState, connectScreen } from "../lib/connectScreen";
 import { errorText } from "../lib/errorText";
 import { projectStartupLoadingStatus, startupSteps } from "../lib/loadingStatus";
 import { continueLabel } from "../lib/remoteNodes";
@@ -28,19 +29,25 @@ export function StartupScreen({
     () => (waitsOnLocalNode ? watchLocalServer() : undefined),
     [waitsOnLocalNode, watchLocalServer],
   );
-  /* a node set up outside this app serves without this desktop's enrollment,
-     so its settings never arrive until the desktop is connected */
-  const unconnected =
-    waitsOnLocalNode &&
-    (localNode?.state === "running" || localNode?.state === "external") &&
-    !localNode?.pairingReady;
+  const [shown, refusal] = localNode
+    ? connectScreen(connectNodeState(localNode), localNode.pairingReady)
+    : (["loading_settings", null] as const);
+  const unconnected = waitsOnLocalNode && shown === "not_connected";
+  const blocked =
+    refusal === "node_not_running"
+      ? "The node on this computer is not running. Start it in a terminal with `gents runtime server`, then choose Try again."
+      : refusal
+        ? (localNode?.error ?? "The node on this computer cannot be connected to yet.")
+        : null;
+  const reread = () =>
+    Promise.all([actions.refreshSnapshot(), actions.refreshLocalServer()]);
+  const retry = () => void reread();
   const connect = async () => {
     setConnecting(true);
     setConnectError(null);
     try {
       await actions.enrollLocalServer();
-      await actions.awaitLocalServerPairing();
-      await actions.refreshSnapshot();
+      await reread();
     } catch (cause) {
       setConnectError(errorText(cause));
     } finally {
@@ -68,6 +75,15 @@ export function StartupScreen({
               read its settings and sessions yet. Connect this desktop to the node with
               the node owner’s approval.
             </p>
+            {blocked && (
+              <p
+                role="status"
+                className="text-sm wrap-break-word text-muted-foreground"
+                data-testid="startup-connect-blocked"
+              >
+                {blocked}
+              </p>
+            )}
             {connectError && (
               <p
                 role="alert"
@@ -85,12 +101,13 @@ export function StartupScreen({
               data-testid="startup-connect-desktop"
               onClick={() => void connect()}
             >
-              Connect this desktop
+              {connecting ? "Connecting this desktop…" : "Connect this desktop"}
             </Button>
             <Button
               variant="outline"
               disabled={connecting}
-              onClick={() => void actions.refreshSnapshot()}
+              data-testid="startup-connect-retry"
+              onClick={retry}
             >
               Try again
             </Button>

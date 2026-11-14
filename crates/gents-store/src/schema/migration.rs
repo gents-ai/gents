@@ -17,7 +17,7 @@ pub use gents_migration::{
 pub enum RuntimeMigrationError {
     #[error("ensure_migrations")]
     EnsureMigrations(#[source] MigrationError),
-    #[error(transparent)]
+    #[error("{0}")]
     Config(#[from] ConfigClientError),
 }
 

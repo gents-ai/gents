@@ -21,13 +21,16 @@ async fn pending_scope(
         !args.session_id.trim().is_empty(),
         "--session-id must not be empty"
     );
-    let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let node = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let access = ConfigAccess::Graphql(endpoint);
     let actor = access
         .actor_did()
         .context("Pending messages require an authenticated client identity")?;
-    let signer = gents_service::home_state::held_client_identity(&actor)?;
+    let signer = gents_service::home_state::held_client_identity(
+        &gents_service::home_state::resolve_home_dir(args.home.as_deref()),
+        &actor,
+    )?;
     Ok((access, node, signer))
 }
 
