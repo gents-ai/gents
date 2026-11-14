@@ -19,6 +19,31 @@ use gents_session::request::lifecycle::{
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::identity::NodeIdentity;
 
+/// How many generated cases, each on its own node, run at once.
+pub const CASES_AT_ONCE: usize = 8;
+
+/// Drives every generated case to completion as its own task, `CASES_AT_ONCE`
+/// at a time, and re-raises the first case panic in the caller. Most of a
+/// case's work runs on the task that drives it, so the caller's runtime needs
+/// several workers for the cases to overlap.
+pub async fn drive_cases<C, F, Fut>(cases: C, drive: F)
+where
+    C: IntoIterator,
+    F: FnMut(C::Item) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    use futures::StreamExt;
+    let mut finished = futures::stream::iter(cases)
+        .map(drive)
+        .map(tokio::spawn)
+        .buffer_unordered(CASES_AT_ONCE);
+    while let Some(result) = finished.next().await {
+        if let Err(error) = result {
+            std::panic::resume_unwind(error.into_panic());
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct TriggerRuntimeUpdate {
     pub next_run_at: Option<String>,

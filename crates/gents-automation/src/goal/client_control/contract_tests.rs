@@ -34,24 +34,26 @@ pub(super) async fn receipt(
 }
 
 /// Fixtures sharing a node slow down as it accumulates their documents, so
-/// the cases run on a small pool of nodes, a few at a time.
-const CASES_PER_NODE: usize = 32;
-const NODES_AT_ONCE: usize = 4;
+/// each node serves only a few cases.
+const CASES_PER_NODE: usize = 16;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn generated_goal_client_controls_drive_signed_commands() {
-    use futures::StreamExt;
-    let cases =
-        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>();
-    futures::stream::iter(cases.chunks(CASES_PER_NODE))
-        .for_each_concurrent(NODES_AT_ONCE, |chunk| async move {
-            let node = FixtureNode::start().await;
-            for case in chunk {
-                drive_signed_command(&node, case).await;
-            }
-            node.shutdown().await;
-        })
-        .await;
+    let mut cases =
+        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>()
+            .into_iter();
+    let chunks = std::iter::from_fn(|| {
+        let chunk: Vec<_> = cases.by_ref().take(CASES_PER_NODE).collect();
+        (!chunk.is_empty()).then_some(chunk)
+    });
+    crate::test_support::drive_cases(chunks, |chunk| async move {
+        let node = FixtureNode::start().await;
+        for case in &chunk {
+            drive_signed_command(&node, case).await;
+        }
+        node.shutdown().await;
+    })
+    .await;
 }
 
 async fn drive_signed_command(
