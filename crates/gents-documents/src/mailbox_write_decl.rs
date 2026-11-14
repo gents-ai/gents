@@ -193,6 +193,7 @@ pub fn canonical_mailbox_write_decl() -> WriteToolDecl {
         .map(|(name, required)| canonical_field(name, required))
         .collect(),
         output_obligation: None,
+        key_fields: None,
     }
 }
 

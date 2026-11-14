@@ -61,7 +61,7 @@ export interface UxShell {
 
 /** one call's answer from a data surface: a query's rows or a create's receipt */
 export interface UxDataCallResult {
-  kind: "query" | "create";
+  kind: "query" | "create" | "upsert";
   output: unknown;
 }
 
@@ -72,7 +72,7 @@ export type UxDataWatchEvent =
 
 /** one tool of a surface, as the node declares it */
 export interface UxDataToolDecl {
-  kind: "query" | "create";
+  kind: "query" | "create" | "upsert";
   tool_name: string;
   collection: string;
   description?: string;

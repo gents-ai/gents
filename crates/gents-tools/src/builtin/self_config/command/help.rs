@@ -316,7 +316,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "datastore [preview] create|edit  set: surface fields, or options.mailbox",
             ],
             notes: concat!(
-                "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}.\nCreate fields: {name} arguments; omitted or empty means none. Query fields: columns; filter_fields: exact-match {name} arguments. Describe use, inputs and effects.\nfill: correlation uses the request/trigger correlation ID; fill: {source_field: F} copies trigger field F. Omit fill for caller-supplied values. Filled fields cannot be required.\nCaller value: {\"name\":\"correlation\"}. Runtime ID: {\"name\":\"request_correlation\",\"fill\":\"correlation\"}.\nInstall schemas before selection; selection checks names only. Grant requested operations only.\n",
+                "Named surface entries are create, upsert or query. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}.\nCreate fields: {name} arguments; omitted or empty means none. Upsert (kind \"upsert\"): create fields plus key_fields, the fields that find the document; it updates only a document its writer signed. Query fields: columns; filter_fields: exact-match {name} arguments. Describe use, inputs and effects.\nfill: correlation uses the request/trigger correlation ID; fill: {source_field: F} copies trigger field F. Omit fill for caller-supplied values. Filled fields cannot be required.\nCaller value: {\"name\":\"correlation\"}. Runtime ID: {\"name\":\"request_correlation\",\"fill\":\"correlation\"}.\nInstall schemas before selection; selection checks names only. Grant requested operations only.\n",
                 mailbox_identity_choice!(),
                 " A monitor uses condition identity: {\"argv\":[\"datastore\",\"create\"],\"target_id\":\"monitor-mailbox\",\"options\":{\"mailbox\":{\"identity\":{\"mode\":\"condition\",\"key\":\"host-health\"},\"kind\":\"flag\",\"action\":\"ack\"}}}"
             ),
@@ -813,7 +813,7 @@ fn verb_rule(resource: &str) -> &'static str {
         "trigger" => "Create the source and the Task first; the Task decides who handles the event.",
         "event-source" | "schedule" => "A source alone starts no work: add a Task, then a Trigger linking them.",
         "agent" => "set.system_prompt replaces the selected Context's prompt; set.enabled false disables the agent. The default agent stays enabled and an agent cannot disable itself.",
-        "datastore" => "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}. Select the surface in Tools to grant its tools; they exist from the next request.",
+        "datastore" => "Named surface entries are create, upsert or query. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}. Select the surface in Tools to grant its tools; they exist from the next request.",
         _ => "",
     }
 }

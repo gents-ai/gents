@@ -2217,6 +2217,7 @@ fn finding_decl() -> gents_documents::WriteToolDecl {
             },
         ],
         output_obligation: None,
+        key_fields: None,
     }
 }
 #[tokio::test]

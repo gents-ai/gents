@@ -256,6 +256,7 @@ async fn tools_document_round_trips_write_tools() {
             },
         ],
         output_obligation: None,
+        key_fields: None,
     }];
     let tools = Tools {
         tools_id: "steward-write-tools".to_string(),

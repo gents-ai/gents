@@ -48,7 +48,7 @@ export interface UxDataCallRequest {
 }
 
 export interface UxDataCallResult {
-  kind: "query" | "create";
+  kind: "query" | "create" | "upsert";
   output: unknown;
 }
 

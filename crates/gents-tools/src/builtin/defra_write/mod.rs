@@ -166,7 +166,7 @@ impl BoundedWriteTool {
             .collect()
     }
 
-    fn build_mutation(
+    fn build_input(
         &self,
         args: &Map<String, Value>,
         types: &std::collections::BTreeMap<String, String>,
@@ -245,18 +245,97 @@ impl BoundedWriteTool {
             input_parts.push(format!("{}: {}", field.name, literal));
         }
 
-        Ok(format!(
-            "mutation {{ add_{collection}(input: {{ {input} }}) {{ _docID {fields} }} }}",
-            collection = self.decl.collection,
-            input = input_parts.join(", "),
-            fields = self
+        Ok(format!("{{ {} }}", input_parts.join(", ")))
+    }
+
+    fn selection(&self) -> String {
+        self.decl
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The filter an upsert finds its document by: each key field equal to
+    /// the value this call writes to it.
+    fn key_filter(
+        &self,
+        keys: &[String],
+        args: &Map<String, Value>,
+        types: &std::collections::BTreeMap<String, String>,
+    ) -> Result<String> {
+        let mut parts = Vec::with_capacity(keys.len());
+        for key in keys {
+            let field = self
                 .decl
                 .fields
                 .iter()
-                .map(|f| f.name.as_str())
-                .collect::<Vec<_>>()
-                .join(" "),
-        ))
+                .find(|field| &field.name == key)
+                .with_context(|| format!("key field `{key}` is not declared"))?;
+            let value = match &field.fill {
+                None => args.get(key).filter(|value| !value.is_null()).cloned(),
+                Some(fill) => fill.resolve_optional(key)?.map(Value::String),
+            }
+            .ok_or_else(|| {
+                anyhow!(
+                    "tool `{}` finds its document by {}; give `{key}` a value",
+                    self.decl.tool_name,
+                    keys.join(", ")
+                )
+            })?;
+            parts.push(format!(
+                "{key}: {{_eq: {}}}",
+                input::literal(&types[key], &value)?
+            ));
+        }
+        Ok(format!("{{ {} }}", parts.join(", ")))
+    }
+
+    /// The document an upsert updates: none when no document has the key
+    /// values, the one that has them when every commit of it was signed by
+    /// `writer`, and a refusal otherwise.
+    async fn upsert_target(
+        &self,
+        txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+        filter: &str,
+        writer: Option<&str>,
+    ) -> Result<Option<String>> {
+        let collection = &self.decl.collection;
+        let response = txn
+            .execute(&format!(
+                "{{ {collection}(filter: {filter}) {{ _docID }} }}"
+            ))
+            .await?;
+        let ids = response["data"][collection]
+            .as_array()
+            .context("DefraDB returned no collection result")?
+            .iter()
+            .map(|row| row["_docID"].as_str().context("row has no document ID"))
+            .collect::<Result<Vec<_>>>()?;
+        match ids.as_slice() {
+            [] => Ok(None),
+            [id] => {
+                let signers = gents_store::identity::document_signers(txn, &ids).await?;
+                let signer = signers.get(*id).cloned().flatten();
+                if signer.is_none() || signer.as_deref() != writer {
+                    bail!(
+                        "tool `{}` will not update {collection} {id}: {}; an upsert updates only a document its writer signed",
+                        self.decl.tool_name,
+                        match signer {
+                            Some(did) => format!("it was written by {did}"),
+                            None => "no single identity signed it".to_owned(),
+                        }
+                    );
+                }
+                Ok(Some((*id).to_owned()))
+            }
+            many => bail!(
+                "tool `{}` will not update: {} {collection} documents have these key values; an upsert updates exactly one",
+                self.decl.tool_name,
+                many.len()
+            ),
+        }
     }
 }
 
@@ -301,10 +380,18 @@ impl gents_loop::tool::Tool for BoundedWriteTool {
 
         ToolDefinition {
             name: self.decl.tool_name.clone(),
-            description: format!(
-                "Creates a new {} record; this can trigger automation watching that collection. {}",
-                self.decl.collection, self.decl.description
-            ),
+            description: match &self.decl.key_fields {
+                Some(keys) => format!(
+                    "Creates the {collection} record whose {keys} equal the input's, or updates it when you wrote it; this can trigger automation watching that collection. {description}",
+                    collection = self.decl.collection,
+                    keys = keys.join(", "),
+                    description = self.decl.description
+                ),
+                None => format!(
+                    "Creates a new {} record; this can trigger automation watching that collection. {}",
+                    self.decl.collection, self.decl.description
+                ),
+            },
             parameters: json!({
                 "type": "object",
                 "properties": properties,
@@ -317,20 +404,13 @@ impl gents_loop::tool::Tool for BoundedWriteTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         self.ensure_declaration()?;
         let types = self.resolved_field_types().await?;
-        let mutation = self.build_mutation(&args.0, &types)?;
-        let signed_mutation = self.client_schema.as_ref().map(|_| {
-            format!(
-                "mutation($input: {}MutationInputArg!) {{ add_{}(input: $input) {{ _docID {} }} }}",
-                self.decl.collection,
-                self.decl.collection,
-                self.decl
-                    .fields
-                    .iter()
-                    .map(|field| field.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            )
-        });
+        let input = self.build_input(&args.0, &types)?;
+        let key_filter = self
+            .decl
+            .key_fields
+            .as_deref()
+            .map(|keys| self.key_filter(keys, &args.0, &types))
+            .transpose()?;
         if self.client_schema.is_some() {
             if !matches!(self.access, ConfigAccess::Graphql(_)) || self.surface_scope.is_none() {
                 return Err(
@@ -342,57 +422,114 @@ impl gents_loop::tool::Tool for BoundedWriteTool {
             }
         }
         let variables = json!({"input": &args.0});
+        let collection = &self.decl.collection;
+        let selection = self.selection();
+        let create =
+            format!("mutation {{ add_{collection}(input: {input}) {{ _docID {selection} }} }}");
 
-        let resp = if let Some(scope) = &self.surface_scope {
-            let surface = self
-                .surface_id
-                .as_deref()
-                .context("datastore source missing")?;
+        let (resp, updated) = if self.surface_scope.is_some() || key_filter.is_some() {
             self.access
                 .transact_write("tool.defra_write", |txn| {
-                    let mutation = &mutation;
-                    let signed_mutation = &signed_mutation;
+                    let create = &create;
+                    let input = &input;
+                    let selection = &selection;
                     let variables = &variables;
+                    let key_filter = &key_filter;
                     Box::pin(async move {
-                        scope
-                            .revalidate(
-                                txn,
-                                surface,
-                                &gents_documents::SurfaceToolDecl::Create(self.decl.clone()),
-                            )
-                            .await?;
-                        let response = match (&self.client_schema, signed_mutation) {
-                            (Some(schema), Some(document)) => {
-                                txn.execute_client_signed_create(document, variables, schema)
+                        if let Some(scope) = &self.surface_scope {
+                            let surface = self
+                                .surface_id
+                                .as_deref()
+                                .context("datastore source missing")?;
+                            scope
+                                .revalidate(
+                                    txn,
+                                    surface,
+                                    &gents_documents::SurfaceToolDecl::Create(self.decl.clone()),
+                                )
+                                .await?;
+                        }
+                        let writer = if self.client_schema.is_some() {
+                            txn.client_held_signer_did()
+                        } else {
+                            txn.actor_did()
+                        };
+                        let target = match key_filter {
+                            Some(filter) => self.upsert_target(txn, filter, writer).await?,
+                            None => None,
+                        };
+                        let response = match (&self.client_schema, &target) {
+                            (Some(schema), None) => {
+                                let document = format!(
+                                    "mutation($input: {collection}MutationInputArg!) {{ add_{collection}(input: $input) {{ _docID {selection} }} }}"
+                                );
+                                txn.execute_client_signed_create(&document, variables, schema)
                                     .await?
                             }
-                            _ => txn.execute(mutation).await?,
+                            (Some(schema), Some(doc_id)) => {
+                                let document = format!(
+                                    "mutation($input: {collection}MutationInputArg!) {{ update_{collection}(docID: \"{}\", input: $input) {{ _docID {selection} }} }}",
+                                    gents_store::graphql::escape_graphql_string(doc_id)
+                                );
+                                txn.execute_client_signed_update(&document, variables, schema)
+                                    .await?
+                            }
+                            (None, None) => txn.execute(create).await?,
+                            (None, Some(doc_id)) => {
+                                txn.execute(&format!(
+                                    "mutation {{ update_{collection}(docID: \"{}\", input: {input}) {{ _docID {selection} }} }}",
+                                    gents_store::graphql::escape_graphql_string(doc_id)
+                                ))
+                                .await?
+                            }
                         };
-                        gents_store::graphql::created_doc_id(&response, &self.decl.collection)?;
-                        Ok::<_, anyhow::Error>(response)
+                        written_document(&response, collection, target.is_some())?;
+                        Ok::<_, anyhow::Error>((response, target.is_some()))
                     })
                 })
                 .await?
         } else {
-            self.access
-                .write("tool.defra_write", &mutation)
+            let response = self
+                .access
+                .write("tool.defra_write", &create)
                 .await
-                .map_err(anyhow::Error::from)?
+                .map_err(anyhow::Error::from)?;
+            (response, false)
         };
 
-        let doc_id = gents_store::graphql::created_doc_id(&resp, &self.decl.collection)
-            .map_err(anyhow::Error::from)?;
-        let field = format!("add_{}", self.decl.collection);
-        let document = gents_store::graphql::mutation_documents(&resp, &field)
-            .map_err(anyhow::Error::from)?
-            .and_then(|rows| rows.first())
-            .context("write returned no canonical document")?;
+        let (doc_id, document) = written_document(&resp, collection, updated)?;
+        let mut output =
+            json!({"collection": collection, "document_id": doc_id, "document": document});
+        let mut order = vec!["document", "document_id", "collection"];
+        if self.decl.key_fields.is_some() {
+            output["written"] = json!(if updated { "updated" } else { "created" });
+            order.insert(0, "written");
+        }
         Ok(gents_session::session::output_render::render(
-            &json!({"collection":self.decl.collection, "document_id":doc_id,
-                "document":document}),
-            &["document", "document_id", "collection"],
+            &output, &order,
         )?)
     }
+}
+
+/// The one document a create or an update returned, with its ID.
+fn written_document(response: &Value, collection: &str, updated: bool) -> Result<(String, Value)> {
+    let field = if updated {
+        format!("update_{collection}")
+    } else {
+        format!("add_{collection}")
+    };
+    let rows = gents_store::graphql::mutation_documents(response, &field)?.unwrap_or_default();
+    let [document] = rows else {
+        bail!(
+            "write of {collection} returned {} documents, not one",
+            rows.len()
+        );
+    };
+    let doc_id = document["_docID"]
+        .as_str()
+        .filter(|id| !id.trim().is_empty())
+        .with_context(|| format!("write of {collection} returned no document ID"))?;
+    Ok((doc_id.to_owned(), document.clone()))
 }
 
 /// How an agent comes to write application collection(s) through the `write`

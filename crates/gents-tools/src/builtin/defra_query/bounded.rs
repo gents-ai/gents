@@ -866,6 +866,7 @@ mod tests {
                 fill: None,
             }],
             output_obligation: None,
+            key_fields: None,
         };
         assert_eq!(
             declaration.validate().unwrap_err().to_string(),

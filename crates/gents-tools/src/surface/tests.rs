@@ -988,6 +988,7 @@ async fn write_tools_register_under_declared_names() {
                 fill: None,
             }],
             output_obligation: None,
+            key_fields: None,
         })],
     )
     .resolve(&node, &runtime.node_did, &crate::plugin_host::NoPluginHost)
@@ -1038,6 +1039,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
                 minimum_writes: 1,
                 expected_count_field: Some("owner".to_string()),
             }),
+            key_fields: None,
         })],
     )
     .resolve(&node, &runtime.node_did, &crate::plugin_host::NoPluginHost)
@@ -1282,6 +1284,7 @@ fn malformed_write_tool_is_rejected_during_configuration() {
                 description: String::new(),
                 fields: Vec::new(),
                 output_obligation: None,
+                key_fields: None,
             }],
             ..Default::default()
         },
@@ -1311,6 +1314,7 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
                     fill: None,
                 }],
                 output_obligation: None,
+                key_fields: None,
             }],
             ..Default::default()
         },

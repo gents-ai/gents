@@ -182,6 +182,7 @@ pub struct UxDataCallRequest {
 pub enum UxDataCallKind {
     Query,
     Create,
+    Upsert,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, TS)]
