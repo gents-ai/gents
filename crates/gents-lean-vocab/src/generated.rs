@@ -456,9 +456,6 @@ pub struct LeanContractSnapshot {
     pub generated_by: String,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub request_input_cases: Vec<serde_json::Value>,
-    pub goal_client_start_cases: Vec<serde_json::Value>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub causal_hop_default_max_request_hop: Option<u32>,
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
@@ -475,6 +472,8 @@ pub struct LeanContractSnapshot {
     pub feature_matrix: LeanFeatureMatrix,
     pub identity_household_cases: Vec<LeanIdentityHouseholdCase>,
     pub recovery_sweep_ids: Vec<String>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub causal_hop_default_max_request_hop: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

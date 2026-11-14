@@ -1655,11 +1655,16 @@ mod tests {
 
     #[tokio::test]
     async fn goal_reservation_retains_user_owned_session_after_unconfirmed_commit() {
-        let modeled = gents_lean_vocab::lean_contract_snapshot()
-            .goal_client_start_cases
-            .iter()
-            .find(|case| case["name"] == "reserved_session")
-            .expect("modeled client goal reservation");
+        for modeled in
+            gents_lean_vocab::families::goal_client_start_contracts_reservation::cases::<String>()
+        {
+            modeled.check(observe_goal_reservations().await);
+        }
+    }
+
+    async fn observe_goal_reservations(
+    ) -> gents_lean_vocab::families::goal_client_start_contracts_reservation::ReservationOutput
+    {
         let home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
         let (db, runtime) = serve_client_node(
@@ -1703,12 +1708,7 @@ mod tests {
             .is_empty());
         assert!(before["data"]["Goal"].as_array().unwrap().is_empty());
         let retried = reserve_goal_session(&access, &request).await.unwrap();
-        assert_eq!(
-            retried == doc,
-            modeled["reservation"]["retry_reuses_session"]
-                .as_bool()
-                .unwrap()
-        );
+        let retry_reuses_session = retried == doc;
         let owners = access
             .transact_readonly("test.goal.owner", |txn| {
                 let doc = doc.clone();
@@ -1716,24 +1716,18 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(
-            owners[0]
-                .owner
-                .as_ref()
-                .is_some_and(|owner| owner.as_str() == user.did()),
-            modeled["reservation"]["user_owned"].as_bool().unwrap()
-        );
+        let user_owned = owners[0]
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.as_str() == user.did());
         let worker = ConfigAccess::local_as(node.clone(), agent.agent_did.parse().unwrap())
             .execute("{ AgentSession { _docID } }")
             .await
             .unwrap();
-        assert_eq!(
-            !worker["data"]["AgentSession"]
-                .as_array()
-                .unwrap()
-                .is_empty(),
-            modeled["reservation"]["agent_granted"].as_bool().unwrap()
-        );
+        let agent_granted = !worker["data"]["AgentSession"]
+            .as_array()
+            .unwrap()
+            .is_empty();
         let agent_key = gents_store::identity::resolve_agent_identity(&runtime, &agent).unwrap();
         let agent_access = ConfigAccess::local_managed_agent(
             node.clone(),
@@ -1766,13 +1760,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(
-            owners[0]
-                .owner
-                .as_ref()
-                .is_some_and(|owner| owner.as_str() == agent.agent_did),
-            modeled["reservation"]["agent_is_owner"].as_bool().unwrap()
-        );
+        let agent_is_owner = owners[0]
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.as_str() == agent.agent_did);
         let inherited = access
             .execute("{ AgentSession { session_id } }")
             .await
@@ -1783,6 +1774,12 @@ mod tests {
             .iter()
             .any(|row| row["session_id"] == "agent-goal-session"));
         node.shutdown().await.expect("shut down test node");
+        gents_lean_vocab::families::goal_client_start_contracts_reservation::ReservationOutput {
+            user_owned,
+            agent_granted,
+            retry_reuses_session,
+            agent_is_owner,
+        }
     }
 
     #[tokio::test]

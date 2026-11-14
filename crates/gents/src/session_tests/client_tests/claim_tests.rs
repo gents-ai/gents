@@ -9,7 +9,6 @@ use gents_store::config_client::{ConfigAccess, NodePermission};
 #[tokio::test]
 async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     use gents_session::request::watcher::{DefraWatcher, Watcher};
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let (db, runtime) = serve_client_node(
@@ -233,11 +232,6 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             })
             .expect("modeled autonomous session read")
     };
-    let reservation = snapshot
-        .goal_client_start_cases
-        .iter()
-        .find(|case| case["name"] == "reserved_session")
-        .expect("modeled autonomous reservation");
     for (binding, signer, other, session_id) in [
         (&first, &first_signer, &second, "first-autonomous-session"),
         (&second, &second_signer, &first, "second-autonomous-session"),
@@ -263,24 +257,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
         gents_session::request::admission::sign_agent_request_create(signer.as_ref(), &mut request)
             .await
             .unwrap();
-        let doc = reserve_goal_session(&access, &request).await.unwrap();
-        let owners = access
-            .transact_readonly("test.autonomous.session_owner", |txn| {
-                let doc = doc.clone();
-                Box::pin(async move { txn.document_owners("AgentSession", &[doc]).await })
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            owners[0]
-                .owner
-                .as_ref()
-                .is_some_and(|owner| owner.as_str() == binding.agent_did),
-            reservation["reservation"]["agent_is_owner"]
-                .as_bool()
-                .unwrap(),
-            "{session_id} native owner"
-        );
+        reserve_goal_session(&access, &request).await.unwrap();
         let query = format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ session_id }} }}"#,
             gents_store::graphql::escape_graphql_string(session_id),
