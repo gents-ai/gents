@@ -435,14 +435,16 @@ fn acquire_exclusive_lock(lock_path: &Path) -> Result<File> {
 
 /// Cargo supplies the consuming package's manifest paths at runtime; direct
 /// execution must provide the same explicit anchor, and repository metadata
-/// bounds discovery to the selected checkout.
+/// bounds discovery to the selected checkout. nextest sets only
+/// CARGO_MANIFEST_DIR (remapped to the checkout an archived binary runs
+/// against), so the manifest path defaults to that directory's Cargo.toml.
 pub fn proofs_dir() -> Result<PathBuf> {
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
         .context("missing runtime CARGO_MANIFEST_DIR for Lean contract source")?;
     let manifest_path = std::env::var_os("CARGO_MANIFEST_PATH")
         .map(PathBuf::from)
-        .context("missing runtime CARGO_MANIFEST_PATH for Lean contract source")?;
+        .unwrap_or_else(|| manifest_dir.join("Cargo.toml"));
     anyhow::ensure!(
         manifest_dir.is_absolute() && manifest_path.is_absolute(),
         "runtime Cargo manifest paths must be absolute"
