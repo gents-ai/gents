@@ -140,9 +140,8 @@ test("Search all reads the older pages and steps to a match only the oldest hold
   await expect(count).toHaveText("1 of 1", { timeout: 30_000 });
   await expect(bar.getByRole("button", { name: "Search all" })).toHaveCount(0);
 
-  await expect.poll(async () => (await current(page))?.inView).toBe(true);
   /* the first message's row */
-  expect((await current(page))!.key).toContain("large-request-0");
+  expect(await landedKey(page)).toContain("large-request-0");
 });
 
 test("a group find opened folds again when the match leaves it, and the view holds", async ({
