@@ -15,10 +15,6 @@ pub fn lean_identity_household_cases() -> &'static [LeanIdentityHouseholdCase] {
     &lean_contract_snapshot().identity_household_cases
 }
 
-pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
-    &lean_contract_snapshot().recovery_sweep_cases
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum LeanClaimedDid {
@@ -56,7 +52,6 @@ pub struct LeanConfigurationSignedWriteRetryCase {
 pub struct LeanContractSnapshot {
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
-    pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
@@ -404,32 +399,6 @@ pub struct LeanOrdinaryClientMutationCase {
     pub intent: bool,
     pub mutation: bool,
     pub allowed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanRecoverySweepCase {
-    pub name: String,
-    pub sweep_id: String,
-    pub collection: String,
-    pub rust_function: String,
-    pub cadence: String,
-    pub implementation_status: String,
-    pub pre_state: String,
-    pub terminal_state: String,
-    pub measure_before: usize,
-    pub measure_after: usize,
-    pub deadline_expired: Option<bool>,
-    pub parent_live: Option<bool>,
-    pub parent_interrupted: Option<bool>,
-    pub parent_terminal: Option<bool>,
-    pub task_hook_observation: Option<String>,
-    pub execution_registered: Option<bool>,
-    pub process_outcome: Option<String>,
-    pub owner_task_deleted: Option<bool>,
-    pub owner_session_stopped: Option<bool>,
-    pub recovery_cause: Option<String>,
-    pub notification_reason: Option<String>,
-    pub deadline_audit_ref: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
