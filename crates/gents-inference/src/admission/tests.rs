@@ -1937,3 +1937,71 @@ async fn invalid_provider_usage_still_publishes_the_modeled_terminal_observation
         });
     }
 }
+
+/// A stream's finalizer is aborted, not joined, when its stream is dropped,
+/// so the flush a graceful stop awaits must count it from the moment it owns
+/// the permit; otherwise the stop finds the tracker idle and exits before the
+/// permit's `Drop` writes the terminal and the usage it had observed
+/// (`tla/DroppedPermitCleanup.tla`, `UncountedFinalizer`).
+#[tokio::test]
+async fn a_graceful_stop_records_the_usage_of_a_cancelled_finalization() {
+    use super::stream_guard::StreamGuardLifecycle as _;
+    use futures::FutureExt as _;
+    use gents_loop::rig_compat::CachedInputTokensObservation;
+
+    let (db, signer) = test_node().await;
+    let node = db.node.clone();
+    let registry = TestRegistry::new(node.clone(), signer);
+    registry.reconcile(
+        1,
+        &RapidHashMap::from_iter([("stop-backend".to_owned(), config("stop-backend", 1, 1))]),
+    );
+    let request_id = "req-stop-finalization";
+    let context = test_context(&registry, request_id, "stop-backend").await;
+    let usage = gents_protocol::usage::TokenUsage {
+        input_tokens: Some(11),
+        output_tokens: Some(7),
+        provider_total_tokens: Some(18),
+        final_response: true,
+        ..Default::default()
+    };
+    let mut permit = scope_request(context, registry.acquire_current_call_for_test())
+        .await
+        .unwrap();
+    permit.mark_stream_success(
+        Some(super::ProviderCallUsage(usage)),
+        CachedInputTokensObservation::NotAvailable,
+    );
+    let finalizing = permit.finish_stream();
+    assert!(
+        registry.drop_cleanup_idle().now_or_never().is_none(),
+        "the flush counts a finalizer from the moment it owns the permit"
+    );
+    let finalizer = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(finalizing));
+    assert!(
+        registry.drop_cleanup_idle().now_or_never().is_none(),
+        "the flush counts a spawned finalizer that has not run"
+    );
+    drop(finalizer);
+    registry.drop_cleanup_idle().await;
+
+    let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        identity::Did::new(registry.signer.did()).unwrap(),
+        registry.signer.clone(),
+    )
+    .unwrap();
+    let response = access
+        .execute(&format!(
+            r#"{{ InferenceCall(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ call_state prompt_tokens completion_tokens provider_total_tokens }} }}"#,
+            gents_store::graphql::escape_graphql_string(request_id)
+        ))
+        .await
+        .unwrap();
+    let rows = response["data"]["InferenceCall"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["call_state"], "completed");
+    assert_eq!(rows[0]["prompt_tokens"], 11);
+    assert_eq!(rows[0]["completion_tokens"], 7);
+    assert_eq!(rows[0]["provider_total_tokens"], 18);
+}
