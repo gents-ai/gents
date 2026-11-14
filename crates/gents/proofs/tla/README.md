@@ -237,7 +237,11 @@ See `../README.md` for how this fits the broader formal-verification model.
   `AbortOnOpenWriter` are the two stall shapes, each refuted for the code.
   `WaveDeadline` is the test's 60 s per-wave timeout as a property: wall time
   passes while the writers wait for the host, so it fails with every safety
-  property holding.
+  property holding. `Native` is one round of raw single-attempt transactions
+  without the owner, as the native c64 experiment runs them: `RoundProgress`
+  (some writer commits) holds by first-committer-wins, and
+  `NativeAbortOnOpenWriter` (overlapping writers aborted together) ends a
+  round with no commit.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -553,13 +557,15 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCObserverResyncSnapshotBeforeArm.cfg` | 1 node, the snapshot is queued before the streams arm | `NoLostWrite` intentionally VIOLATED: a write between the read and the arm has no event and no later load | 65 distinct states before counterexample; 102 generated | 7 | <1s |
 | `MCSharedOwnerHotCounter.cfg` | `Writers = {w1, w2, w3}`, `Iters = 2`, `Attempts = 4`, `Capacity = 2`, commit timeouts | Passes `TypeOK`, `AckedApplied`, `ConflictNotApplied`, `NoDoubleApply`, `NoLostUpdate`, `TestAccounting`, `AttemptBound`, `PermitsAccounted`, `EveryCallSettles` | 86,973 distinct states; 171,709 generated | — | 30s (Linux, OpenJDK 17, 8 workers) |
 | `MCSharedOwnerHotCounterUnbounded.cfg` | as green, `BoundedRetry = FALSE`, no timeouts | Passes every invariant but `AttemptBound` (unchecked) and `EveryCallSettles` | 8,428 distinct states; 18,517 generated | — | 2s |
-| `MCSharedOwnerHotCounterReadOutsideTxn.cfg` | as green, read before begin | `NoLostUpdate` intentionally VIOLATED | 219 distinct states; 297 generated | — | <1s |
-| `MCSharedOwnerHotCounterStaleRetry.cfg` | as green, the retry keeps the aborted read | `NoLostUpdate` intentionally VIOLATED | 284 distinct states; 449 generated | — | <1s |
-| `MCSharedOwnerHotCounterConflictAsSuccess.cfg` | as green, an abort acknowledged | `AckedApplied` intentionally VIOLATED | 161 distinct states; 231 generated | — | <1s |
-| `MCSharedOwnerHotCounterRetryAmbiguous.cfg` | as green, a timed-out commit repeated | `NoDoubleApply` intentionally VIOLATED | 1,540 distinct states; 2,824 generated | — | <1s |
+| `MCSharedOwnerHotCounterReadOutsideTxn.cfg` | as green, read before begin | `NoLostUpdate` intentionally VIOLATED | 144 distinct states; 186 generated | — | <1s |
+| `MCSharedOwnerHotCounterStaleRetry.cfg` | as green, the retry keeps the aborted read | `NoLostUpdate` intentionally VIOLATED | 297 distinct states; 465 generated | — | <1s |
+| `MCSharedOwnerHotCounterConflictAsSuccess.cfg` | as green, an abort acknowledged | `AckedApplied` intentionally VIOLATED | 126 distinct states; 181 generated | — | <1s |
+| `MCSharedOwnerHotCounterRetryAmbiguous.cfg` | as green, a timed-out commit repeated | `NoDoubleApply` intentionally VIOLATED | 1,354 distinct states; 2,427 generated | — | <1s |
 | `MCSharedOwnerHotCounterLostWakeup.cfg` | as green, a parked acquirer never woken | `EveryCallSettles` intentionally VIOLATED | 15,628 distinct states; 30,262 generated | — | 1s |
-| `MCSharedOwnerHotCounterAbortOnOpenWriter.cfg` | as green, aborts for uncommitted writers, unbounded retries | `EveryCallSettles` intentionally VIOLATED: a livelock lasso | 20,530 distinct states; 50,242 generated | — | 2s |
-| `MCSharedOwnerHotCounterWaveDeadline.cfg` | as green, `CheckDeadline`, `Deadline = 2` | `WaveDeadline` intentionally VIOLATED: three ticks pass before any writer runs; every safety invariant holds | 154 distinct states; 268 generated | 4 | <1s |
+| `MCSharedOwnerHotCounterAbortOnOpenWriter.cfg` | as green, aborts for uncommitted writers, unbounded retries | `EveryCallSettles` intentionally VIOLATED: a livelock lasso | 22,124 distinct states; 56,227 generated | — | 2s |
+| `MCSharedOwnerHotCounterWaveDeadline.cfg` | as green, `CheckDeadline`, `Deadline = 2` | `WaveDeadline` intentionally VIOLATED: three ticks pass before any writer runs; every safety invariant holds | 226 distinct states; 386 generated | 4 | <1s |
+| `MCSharedOwnerHotCounterNative.cfg` | `Iters = 1`, `Attempts = 1`, `Capacity = 3`, no timeouts | Passes every invariant, `RoundProgress` and `EveryCallSettles` | 195 distinct states; 304 generated | — | <1s |
+| `MCSharedOwnerHotCounterNativeAbortOnOpenWriter.cfg` | as `Native`, two writers, overlapping writers aborted together | `RoundProgress` intentionally VIOLATED: both writers read, both abort | 26 distinct states; 32 generated | — | <1s |
 | `MCDesktopUpdateListener.cfg` | `MaxVersion = 2`, `ListenFailures = 1`, `Mismatches = 1`, `Selections = 1`, `RereadBudget = 2`, every guard on | Passes `TypeOK`, `MovedReadQueued`, `ViewConverges`, `NoStuckPending` | 10,819 distinct states; 46,787 generated | 18 | <1s |
 | `MCDesktopUpdateListenerNoRegistration.cfg` | as green, `SpecListenerUnfair` (registration may never resolve) | Passes `TypeOK`, `MovedReadQueued`, `NoStuckPending`: the read without a listener settles the selection with no event at all | 10,819 distinct states; 46,787 generated | 18 | <1s |
 | `MCDesktopUpdateListenerNoInitialRead.cfg` | as NoRegistration, `InitialRead = FALSE` | `NoStuckPending` intentionally VIOLATED: ListenRejects, Relistens, then the listener never resolves; 'Opening session' stays with no read and no action | 5,856 distinct states; 22,536 generated | 18 | <1s |

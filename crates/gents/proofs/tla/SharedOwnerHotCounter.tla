@@ -54,6 +54,9 @@
 \* writer parked on a full gate when a permit comes free; `AbortOnOpenWriter` aborts a commit for a
 \* concurrent writer that has not committed (no first-committer-wins), with
 \* unbounded retries; `WaveDeadline` checks the test's wall-clock bound.
+\* `Native` is one round of raw single-attempt transactions without the owner
+\* (`RoundProgress`); `NativeAbortOnOpenWriter` removes first-committer-wins
+\* from it and a round can end with no commit.
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
@@ -201,6 +204,29 @@ Commit(w) ==
                       /\ UNCHANGED <<snap, rv>>
   /\ UNCHANGED clock
 
+\* RED `AbortOnOpenWriter`: validation that rejects every transaction
+\* overlapping an uncommitted writer of the key aborts two such writers
+\* together, neither having committed.
+MutualAbort(w, v) ==
+  /\ AbortOnOpenWriter
+  /\ w # v
+  /\ pc[w] = "read" /\ pc[v] = "read"
+  /\ LET pair == {w, v}
+         again(x) == ~BoundedRetry \/ tries[x] < Attempts
+     IN /\ permits' = permits + 2
+        /\ held' = [x \in Writers |-> IF x \in pair THEN FALSE ELSE held[x]]
+        /\ pc' = [x \in Writers |->
+                    IF x \notin pair THEN pc[x]
+                    ELSE IF again(x) THEN "backoff"
+                    ELSE IF it[x] < Iters THEN "start" ELSE "done"]
+        /\ outcome' = [c \in Calls |->
+                    IF \E x \in pair : c = <<x, it[x]>> /\ ~again(x) THEN "conflict"
+                    ELSE outcome[c]]
+        /\ it' = [x \in Writers |->
+                    IF x \in pair /\ ~again(x) /\ it[x] < Iters THEN it[x] + 1 ELSE it[x]]
+        /\ tries' = [x \in Writers |-> IF x \in pair /\ ~again(x) THEN 0 ELSE tries[x]]
+  /\ UNCHANGED <<hist, snap, rv, applied, clock>>
+
 \* finalize.rs: the commit phase timed out; the native commit may or may not
 \* have landed. Lean `disposition .conflictRetry .commit .storage` fails the
 \* call; the test's worker then returns that error. RED `RetryAmbiguous`
@@ -252,6 +278,7 @@ Step(w) ==
 
 Next ==
   \/ \E w \in Writers : Step(w) \/ Begin(w)
+  \/ \E w, v \in Writers : MutualAbort(w, v)
   \/ Tick
 
 \* The runtime eventually runs every runnable task; the semaphore is FIFO, so
@@ -294,6 +321,12 @@ TestAccounting ==
        /\ Landed = Acked
 
 EveryCallSettles == <>AllDone
+
+\* A round of single-attempt transactions (`Attempts = 1`, as the native
+\* `begin_transaction_guard`/`commit` experiment runs them, with no owner and
+\* no gate wait) commits at least one writer: the first commit validated finds
+\* no newer version, so it cannot abort. Checked with `EveryCallSettles`.
+RoundProgress == AllDone => \E c \in Calls : outcome[c] = "ok"
 
 \* The test's `tokio::time::timeout(Duration::from_secs(60), ...)` per wave.
 WaveDeadline == clock > Deadline => AllDone
