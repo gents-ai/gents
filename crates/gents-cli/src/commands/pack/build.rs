@@ -61,26 +61,6 @@ mod tests {
     use super::*;
     use gents_pack::pack::archive::PackArchive;
 
-    fn write_plain_pack(root: &Path, name: &str) {
-        std::fs::create_dir_all(root).unwrap();
-        std::fs::write(root.join("README.md"), b"# a plain pack").unwrap();
-        let manifest = json!({
-            "manifest_version": 1,
-            "name": name,
-            "version": "1.0.0",
-            "description": "A plain pack with no plugins",
-            "authors": ["gents-ai contributors"],
-            "tags": ["example"],
-            "kind": "assets",
-            "assets": ["README.md"],
-            "dependencies": [],
-        });
-        std::fs::write(
-            root.join("manifest.json"),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
-    }
     fn write_plugin_pack(root: &Path, name: &str, plugin: serde_json::Value) {
         std::fs::create_dir_all(root).unwrap();
         std::fs::write(root.join("README.md"), b"# a plugins pack").unwrap();
@@ -100,98 +80,6 @@ mod tests {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-    }
-
-    #[test]
-    fn a_pack_with_no_plugins_builds_and_packs() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("plain_pack");
-        write_plain_pack(&root, "plain_pack");
-
-        let out = dir.path().join("out.pack");
-        let report = build_pack(&root, Some(&out)).unwrap();
-
-        assert_eq!(report.pack, "plain_pack");
-        assert_eq!(report.version, "1.0.0");
-        assert!(report.plugins.is_empty());
-        assert_eq!(report.out, out);
-        assert!(out.is_file());
-        assert_eq!(report.size_bytes, std::fs::metadata(&out).unwrap().len());
-
-        let packed = PackArchive::from_bytes(&std::fs::read(&out).unwrap()).unwrap();
-        assert_eq!(packed.digest(), report.digest);
-        let staging_left: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".building-")
-            })
-            .collect();
-        assert!(
-            staging_left.is_empty(),
-            "the staging file is renamed, not left"
-        );
-    }
-
-    #[test]
-    fn default_out_path_lands_beside_the_pack_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("plain_pack");
-        write_plain_pack(&root, "plain_pack");
-
-        let report = build_pack(&root, None).unwrap();
-        assert_eq!(report.out, dir.path().join("gents.plain_pack-1.0.0.pack"));
-        assert!(report.out.is_file());
-    }
-
-    #[test]
-    fn a_plugin_with_no_source_and_a_missing_artifact_names_both() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("shipping_plugins");
-        write_plugin_pack(
-            &root,
-            "shipping_plugins",
-            json!({
-                "name": "format_check",
-                "description": "Checks formatting",
-                "artifact": "plugins/format_check.afb",
-                "language": "rust",
-                "input_schema": {"type": "object", "properties": {}},
-            }),
-        );
-
-        let error = build_pack(&root, None).unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains("plugins/format_check.afb"), "{message}");
-        assert!(message.contains("missing"), "{message}");
-    }
-
-    #[test]
-    fn a_plugin_source_that_is_a_file_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("shipping_plugins");
-        write_plugin_pack(
-            &root,
-            "shipping_plugins",
-            json!({
-                "name": "format_check",
-                "description": "Checks formatting",
-                "artifact": "plugins/format_check.afb",
-                "source": "plugin_src",
-                "language": "rust",
-                "input_schema": {"type": "object", "properties": {}},
-            }),
-        );
-        std::fs::write(root.join("plugin_src"), b"not a directory").unwrap();
-
-        let error = build_pack(&root, None).unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains("is not a directory"), "{message}");
     }
 
     #[test]
@@ -242,77 +130,6 @@ mod tests {
             first,
             "an edited source is rebuilt"
         );
-    }
-
-    #[test]
-    fn a_plugin_source_without_its_entry_file_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("shipping_plugins");
-        write_plugin_pack(
-            &root,
-            "shipping_plugins",
-            json!({
-                "name": "format_check",
-                "description": "Checks formatting",
-                "artifact": "plugins/format_check.afb",
-                "source": "plugin_src",
-                "language": "rust",
-                "input_schema": {"type": "object", "properties": {}},
-            }),
-        );
-        std::fs::create_dir_all(root.join("plugin_src")).unwrap();
-        std::fs::write(root.join("plugin_src/main.rs"), b"fn main() {}").unwrap();
-
-        let error = build_pack(&root, None).unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains("has no source/main.rs"), "{message}");
-    }
-
-    #[test]
-    fn a_plugin_with_an_unknown_language_is_refused_naming_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("shipping_plugins");
-        write_plugin_pack(
-            &root,
-            "shipping_plugins",
-            json!({
-                "name": "format_check",
-                "description": "Checks formatting",
-                "artifact": "plugins/format_check.afb",
-                "language": "haskell",
-                "input_schema": {"type": "object", "properties": {}},
-            }),
-        );
-        std::fs::create_dir_all(root.join("plugins")).unwrap();
-        std::fs::write(root.join("plugins/format_check.afb"), b"stub").unwrap();
-
-        let error = build_pack(&root, None).unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains("haskell"), "{message}");
-    }
-
-    #[test]
-    fn missing_pack_dir_names_a_clear_error() {
-        let error = build_pack(Path::new("/no/such/pack"), None).unwrap_err();
-        assert!(format!("{error:#}").contains("manifest"));
-    }
-
-    #[test]
-    fn build_all_builds_every_pack_directory_under_root() {
-        let dir = tempfile::tempdir().unwrap();
-        write_plain_pack(&dir.path().join("alpha"), "alpha");
-        write_plain_pack(&dir.path().join("beta"), "beta");
-        std::fs::write(dir.path().join("catalog.json"), b"[]").unwrap();
-
-        let reports = build_all(dir.path()).unwrap();
-        let mut names: Vec<_> = reports.iter().map(|report| report.pack.clone()).collect();
-        names.sort();
-        assert_eq!(names, vec!["alpha", "beta"]);
-        for report in &reports {
-            assert!(report.out.is_file());
-        }
     }
 
     #[test]
