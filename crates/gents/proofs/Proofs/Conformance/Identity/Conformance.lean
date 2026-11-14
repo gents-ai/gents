@@ -692,201 +692,6 @@ def eventConfigurationState : State :=
       ⟨"configuration", "trigger", "parent", .object "nodes" "home"⟩,
       ⟨"configuration", "source", "parent", .object "nodes" "home"⟩], enrolled := [] }
 
-def eventConfigurationCaseJson (actor resource operation : String) (revoked : Bool) : Json :=
-  let granted := Automation.publishEventConfiguration eventConfigurationState userDid "trigger" "source" runtimeDid agentDid true
-  let state := if revoked then apply granted
-    (.revoke ⟨"configuration", "source", "reader", .actor agentDid⟩) else granted
-  Json.mkObj [("actor", toJson actor), ("id", toJson resource),
-    ("permission", toJson operation), ("revoked", toJson revoked), ("rebound", toJson false),
-    ("expected", toJson (allowed 5 state actor "configuration" resource operation)),
-    ("claim_allowed", toJson (Automation.eventClaimAllowed state actor agentDid "trigger" "source" true true))]
-
-def eventReboundCaseJson (actor resource : String) : Json :=
-  let granted := Automation.publishEventConfiguration eventConfigurationState userDid "trigger" "source" runtimeDid agentDid true
-  let revoked := apply granted (.revoke ⟨"configuration", "source", "reader", .actor agentDid⟩)
-  let rebound := Automation.rebindEventConfiguration revoked userDid "trigger" "source" agentDid siblingDid
-  Json.mkObj [("actor", toJson actor), ("id", toJson resource), ("permission", toJson "read"),
-    ("revoked", toJson true), ("rebound", toJson true),
-    ("expected", toJson (allowed 5 rebound actor "configuration" resource "read")),
-    ("claim_allowed", toJson (Automation.eventClaimAllowed rebound actor siblingDid "trigger" "source" true true))]
-
-def eventReboundRevokedJson : Json :=
-  let granted := Automation.publishEventConfiguration eventConfigurationState userDid "trigger" "source" runtimeDid agentDid true
-  let rebound := Automation.rebindEventConfiguration granted userDid "trigger" "source" agentDid siblingDid
-  let revoked := apply rebound (.revoke ⟨"configuration", "source", "reader", .actor siblingDid⟩)
-  let unchanged := Automation.publishEventConfiguration revoked userDid "trigger" "source" runtimeDid siblingDid false
-  Json.mkObj [("actor", toJson siblingDid), ("id", toJson "source"), ("permission", toJson "read"),
-    ("revoked", toJson true), ("rebound", toJson true), ("post_revoke", toJson true),
-    ("expected", toJson (allowed 5 unchanged siblingDid "configuration" "source" "read")),
-    ("claim_allowed", toJson (Automation.eventClaimAllowed unchanged siblingDid siblingDid "trigger" "source" true true))]
-
-def eventStaleClaimJson : Json :=
-  let granted := Automation.publishEventConfiguration eventConfigurationState userDid "trigger" "source" runtimeDid agentDid true
-  let rebound := Automation.rebindEventConfiguration granted userDid "trigger" "source" agentDid siblingDid
-  Json.mkObj [("actor", toJson agentDid), ("selected", toJson siblingDid),
-    ("source_read", toJson (allowed 5 rebound agentDid "configuration" "source" "read")),
-    ("claim_allowed", toJson (Automation.eventClaimAllowed rebound agentDid siblingDid "trigger" "source" true true))]
-
-def eventReboundCheckpointJson (actor : String) : Json :=
-  let state : State :=
-    { objects := [⟨"nodes", "home", userDid⟩,
-        ⟨"agents", "old-agent", userDid⟩, ⟨"sessions", "old-session", agentDid⟩,
-        ⟨"delivered_requests", "old-request", agentDid⟩],
-      relations := [⟨"agents", "old-agent", "parent", .object "nodes" "home"⟩,
-        ⟨"agents", "old-agent", "executor", .actor agentDid⟩,
-        ⟨"sessions", "old-session", "parent", .object "agents" "old-agent"⟩,
-        ⟨"sessions", "old-session", "working_agent", .actor agentDid⟩,
-        ⟨"delivered_requests", "old-request", "parent", .object "agents" "old-agent"⟩,
-        ⟨"delivered_requests", "old-request", "session", .object "sessions" "old-session"⟩,
-        ⟨"delivered_requests", "old-request", "working_agent", .actor agentDid⟩], enrolled := [] }
-  Json.mkObj [("actor", toJson actor),
-    ("request_read", toJson (allowed 5 state actor "delivered_requests" "old-request" "read")),
-    ("cursor", toJson (Automation.checkpointTaskArrival state actor "old-request" true true true 0 1))]
-
-def callbackReboundVisibilityJson (actor : String) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩, ⟨"agents", "old-agent", userDid⟩],
-      relations := [⟨"agents", "old-agent", "parent", .object "nodes" "home"⟩,
-        ⟨"agents", "old-agent", "executor", .actor agentDid⟩], enrolled := [] }
-  let state := Household.commitAgentChild initial "old-invocation" agentDid "old-agent" true
-  Json.mkObj [("actor", toJson actor),
-    ("invocation_read", toJson (allowed 5 state actor "agent_children" "old-invocation" "read"))]
-
-def unattendedAgentJson (name : String) (actorMatches enabled : Bool)
-    (invoke : Automation.InvokeObservation) : Json :=
-  Json.mkObj [("name", toJson name), ("actor_matches", toJson actorMatches),
-    ("enabled", toJson enabled), ("allowed", toJson (Automation.unattendedAgentAdmission actorMatches enabled invoke))]
-
-def callbackModuleReaderJson (actor : String) (changed revoked : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"configuration", "module", userDid⟩], relations := [], enrolled := [] }
-  let granted := Automation.publishCallbackModuleReader initial userDid "module" agentDid true
-  let revokedState := if revoked then apply granted (.revoke ⟨"configuration", "module", "reader", .actor agentDid⟩) else granted
-  let state := Automation.publishCallbackModuleReader revokedState userDid "module" siblingDid changed
-  Json.mkObj [("actor", toJson actor), ("changed", toJson changed), ("revoked", toJson revoked),
-    ("expected", toJson (allowed 5 state actor "configuration" "module" "read"))]
-
-def eventGenerationJson (generation : Automation.EventSourceGeneration) : Json := Json.mkObj
-  [("collection", toJson generation.collection), ("event_kind", toJson generation.eventKind),
-   ("filter", toJson generation.filter), ("correlation", toJson generation.correlation),
-   ("grouped", toJson generation.grouped), ("expected_count", toJson generation.expectedCount),
-   ("expected_field", toJson generation.expectedField), ("timeout", toJson generation.timeout),
-   ("minimum", toJson generation.minimum), ("workspace_authority", toJson generation.workspaceAuthority)]
-
-def eventGenerationCases : List Json :=
-  let original : Automation.EventSourceGeneration :=
-    ⟨"Records", "created", some "{eligible: {_eq: true}}", some "batch", true,
-      some 2, none, some 30, 1, none⟩
-  let changed := [("same", original),
-    ("filter", { original with filter := some "{eligible: {_eq: false}}" }),
-    ("correlation", { original with correlation := some "other_batch" }),
-    ("collection", { original with collection := "Other" }),
-    ("group", { original with grouped := false, expectedCount := none, timeout := none }),
-    ("count", { original with expectedCount := some 3 }),
-    ("timeout", { original with timeout := some 60 }),
-    ("minimum", { original with minimum := 2 }),
-    ("workspace", { original with workspaceAuthority := some "readOnly" })]
-  changed.map fun (name, current) => Json.mkObj
-    [("name", toJson name), ("observed", eventGenerationJson original),
-     ("current", eventGenerationJson current),
-     ("allowed", toJson (Automation.eventGenerationAllowed original current)),
-     ("receipt", toJson (Automation.eventGenerationReceipt original current true))]
-
-def eventExecutionJson (value : Automation.EventExecutionGeneration) : Json := Json.mkObj
-  [("task_id", toJson value.taskId), ("agent", toJson value.agent), ("name", toJson value.name),
-   ("prompt", toJson value.prompt), ("objective", toJson value.objective),
-   ("budget", toJson value.budget), ("output", toJson value.output), ("hooks", toJson value.hooks),
-   ("emit", toJson value.emit), ("source_id", toJson value.sourceId),
-   ("trigger_doc", toJson value.triggerDoc), ("source_doc", toJson value.sourceDoc),
-   ("task_doc", toJson value.taskDoc),
-   ("session_template", toJson value.sessionTemplate), ("concurrency", toJson value.concurrency)]
-
-def eventExecutionCases : List Json :=
-  let original : Automation.EventExecutionGeneration :=
-    ⟨"task", "agent", none, "work", none, none, none, "[]", false, "source",
-      "trigger-doc", "source-doc", "task-doc", none, "parallel"⟩
-  let changed := [("same", original), ("prompt", { original with prompt := "changed" }),
-    ("source", { original with sourceId := "other" }),
-    ("trigger_recreated", { original with triggerDoc := "new-trigger" }),
-    ("source_recreated", { original with sourceDoc := "new-source" }),
-    ("task_recreated", { original with taskDoc := "new-task" }),
-    ("agent", { original with agent := "other" }),
-    ("session", { original with sessionTemplate := some "session" }),
-    ("concurrency", { original with concurrency := "serial" }),
-    ("objective", { original with objective := some "objective" }),
-    ("budget", { original with objective := some "objective", budget := some 25 }),
-    ("output", { original with output := some "schema" }),
-    ("hooks", { original with hooks := "[{\"hook_id\":\"hook\",\"phase\":\"before\",\"command\":[\"true\"]}]" }),
-    ("emit", { original with emit := true })]
-  changed.map fun (name, current) => Json.mkObj
-    [("name", toJson name), ("observed", eventExecutionJson original),
-     ("current", eventExecutionJson current),
-     ("allowed", toJson (Automation.eventExecutionAllowed original current))]
-
-def eventCursorRebindCaseJson (actor : String) (revoked : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩], relations := [], enrolled := [] }
-  let created := Automation.publishEventCursor initial userDid "cursor" "home" agentDid true true
-  let rebound := Automation.rebindEventCursor created userDid "cursor" agentDid siblingDid
-  let state := if revoked then apply rebound
-    (.revoke ⟨"configuration", "cursor", "writer", .actor siblingDid⟩) else rebound
-  Json.mkObj [("actor", toJson actor), ("revoked", toJson revoked),
-    ("expected", toJson (allowed 5 state actor "configuration" "cursor" "update"))]
-
-def eventCursorMoveCaseJson (cursor : String) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩], relations := [], enrolled := [] }
-  let created := Automation.publishEventCursor initial userDid "old" "home" agentDid true true
-  let moved := Automation.moveEventCursor created userDid "old" "new" "home" agentDid
-  Json.mkObj [("cursor", toJson cursor),
-    ("expected", toJson (allowed 5 moved agentDid "configuration" cursor "update"))]
-
-def eventGroupCaseJson (actor : String) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩, ⟨"agents", "agent-doc", userDid⟩],
-      relations := [⟨"nodes", "home", "runtime_reader", .actor runtimeDid⟩,
-        ⟨"agents", "agent-doc", "parent", .object "nodes" "home"⟩,
-        ⟨"agents", "agent-doc", "executor", .actor agentDid⟩], enrolled := [] }
-  let state := commitAgentChild initial "group" agentDid "agent-doc" true
-  Json.mkObj [("actor", toJson actor),
-    ("expected", toJson (allowed 5 state actor "agent_children" "group" "read"))]
-
-def taskReceiptCaseJson (creator actor operation : String) (producerReader : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩, ⟨"agents", "agent-doc", userDid⟩,
-        ⟨"sessions", "session", userDid⟩],
-      relations := [⟨"agents", "agent-doc", "parent", .object "nodes" "home"⟩,
-        ⟨"sessions", "session", "parent", .object "agents" "agent-doc"⟩,
-        ⟨"sessions", "session", "working_agent", .actor agentDid⟩], enrolled := [] }
-  let shared := if producerReader then apply initial
-    (.grantAs userDid ⟨"agents", "agent-doc", "reader", .actor siblingDid⟩) else initial
-  let state := Automation.publishTaskReceipt shared creator "receipt" "session" agentDid true true
-  Json.mkObj [("creator", toJson creator), ("actor", toJson actor),
-    ("permission", toJson operation), ("producer_reader", toJson producerReader),
-    ("expected", toJson (allowed 5 state actor "children" "receipt" operation))]
-
-def scheduleCaseJson (name actor : String) (revokeParent missing : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩],
-      relations := [⟨"nodes", "home", "runtime_reader", .actor runtimeDid⟩], enrolled := [] }
-  let published := Automation.publishSchedule initial userDid "schedule" "home" true
-  let state := if revokeParent then apply published
-    (.revoke ⟨"configuration", "schedule", "parent", .object "nodes" "home"⟩) else published
-  let selected := if missing then "replaced" else "schedule"
-  Json.mkObj [("name", toJson name), ("actor", toJson actor),
-    ("revoke_parent", toJson revokeParent), ("missing", toJson missing),
-    ("expected", toJson (Automation.scheduleVisible state runtimeDid actor selected))]
-
-def scheduleWriteCaseJson (name : String) (grant revoke : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩], relations := [], enrolled := [] }
-  let published := Automation.publishSchedule initial userDid "schedule" "home" true
-  let writer : Relation := ⟨"configuration", "schedule", "writer", .actor agentDid⟩
-  let granted := if grant then apply published (.grantAs userDid writer) else published
-  let state := if revoke then apply granted (.revokeAs userDid writer) else granted
-  Json.mkObj [("name", toJson name), ("grant", toJson grant), ("revoke", toJson revoke),
-    ("expected", toJson (Household.allowed 5 state agentDid "configuration" "schedule" "update"))]
-
 def inferenceProviderCaseJson (name actor revoked : String) : Json :=
   let state := if revoked.isEmpty then Configuration.inferenceProviderFixture else
     apply Configuration.inferenceProviderFixture
@@ -920,14 +725,6 @@ def retryUsersetCaseJson (name actor : String) (revokeExecution : Bool) : Json :
     ("document", toJson "retry"), ("direct", toJson false),
     ("expected", toJson (Household.allowed 8 state actor "configuration" "retry" "read"))]
 
-def skillUsersetCaseJson (name actor : String) (revoked : Bool) : Json :=
-  let state := if revoked then apply Configuration.skillSelectionFixture (.revoke
-      ⟨"configuration", "skill", "selected_by", .entitySet "configuration" "context" "selected_by"⟩)
-    else Configuration.skillSelectionFixture
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
-    ("expected", toJson (Household.allowed 8 state actor "configuration" "skill" "read")),
-    ("tool_expected", toJson (Configuration.skillToolMayReturn state actor "skill"))]
-
 def compactionUsersetCaseJson (phase actor document : String) : Json :=
   let initial := Configuration.compactionSelectionFixture
   let edgeA : Relation := ⟨"configuration", "compaction-a", "selected_by", .entitySet "configuration" "context" "selected_by"⟩
@@ -949,13 +746,6 @@ def compactionUsersetCaseJson (phase actor document : String) : Json :=
     ("expected", toJson visible), ("guard_expected", toJson guard),
     ("update_expected", toJson (Household.allowed 8 state actor "configuration" document "update")),
     ("owner_update_expected", toJson (Household.allowed 8 state "user" "configuration" document "update"))]
-
-def toolsUsersetCaseJson (name actor : String) (revoked : Bool) : Json :=
-  let state := if revoked then apply Configuration.toolsSelectionFixture (.revoke
-      ⟨"configuration", "context", "selected_by", .entitySet "agents" "agent" "executor"⟩)
-    else Configuration.toolsSelectionFixture
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
-    ("expected", toJson (Household.allowed 8 state actor "configuration" "tools" "read"))]
 
 def taskTargetCaseJson (name actor document transition : String) : Json :=
   let state := if transition == "rebound" then TaskTarget.rebindTask TaskTarget.fixture "user" "a" "b" true
@@ -1042,10 +832,6 @@ def datastoreWriteCaseJson (name : String) (sourceValid responseConfirmed commit
   Json.mkObj [("name", toJson name), ("source_valid", toJson sourceValid),
     ("response_confirmed", toJson responseConfirmed), ("commit", toJson commit),
     ("expected", toJson (Configuration.cachedDatastoreWriteCommitted sourceValid responseConfirmed commit))]
-
-def uxCreateCaseJson (name : String) (remote signed : Bool) : Json :=
-  Json.mkObj [("name", toJson name), ("remote", toJson remote), ("signed_graph", toJson signed),
-    ("expected", toJson (Configuration.uxCreateTransportSupported remote signed))]
 
 def pluginDeleteCase (name : String) (installed selected managed pinnedSame : Bool) : Json :=
   let root : Configuration.PluginDeleteRoot := ⟨"team/worker", "digest-a"⟩
@@ -1440,42 +1226,6 @@ def callbackCaseJson (actor id : String) (revoked : Bool) : Json :=
     ("expected", toJson (allowed 5 state actor "configuration" id "read")),
     ("claim_allowed", toJson (Automation.callbackClaimAllowed state actor agentDid "binding" "callback" true true))]
 
-def callbackGenerationCaseJson (name : String) (sourceVisible : Bool)
-    (observed current : Option String) : Json :=
-  Json.mkObj [("name", toJson name), ("source_visible", toJson sourceVisible),
-    ("observed", toJson observed), ("current", toJson current),
-    ("allowed", toJson (Automation.callbackGenerationAllowed sourceVisible observed current))]
-
-def callbackModuleClaimJson (name : String) (visible same prepared committed : Bool) : Json :=
-  Json.mkObj [("name", toJson name), ("visible", toJson visible), ("same", toJson same),
-    ("prepared", toJson prepared), ("committed", toJson committed),
-    ("allowed", toJson (Automation.callbackModuleClaim visible same prepared committed))]
-
-def callbackRecoveryConfigurationJson (claimed : Bool) : Json :=
-  Json.mkObj [("claimed", toJson claimed), ("snapshot", toJson "admitted"),
-    ("current", toJson "changed"),
-    ("expected", toJson (Automation.callbackRecoveryConfiguration claimed "admitted" "changed"))]
-
-def callbackPlacementJson (actor : String) (revoked : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"configuration", "placement", userDid⟩],
-      relations := [⟨"configuration", "placement", "reader", .actor agentDid⟩], enrolled := [] }
-  let state := if revoked then apply initial (.revoke ⟨"configuration", "placement", "reader", .actor agentDid⟩) else initial
-  Json.mkObj [("actor", toJson actor), ("revoked", toJson revoked),
-    ("expected", toJson (Automation.callbackPlacementReadable state actor "placement"))]
-
-def callbackChildJson (name : String) (fresh committed revoke : Bool) : Json :=
-  let initial : State :=
-    { objects := [⟨"nodes", "home", userDid⟩, ⟨"agents", "agent-doc", userDid⟩],
-      relations := [⟨"agents", "agent-doc", "parent", .object "nodes" "home"⟩,
-        ⟨"agents", "agent-doc", "executor", .actor agentDid⟩], enrolled := [] }
-  let published := Automation.publishCallbackChild initial agentDid agentDid "child" "agent-doc" true true
-  let before := if revoke then apply published
-    (.revoke ⟨"agent_children", "child", "parent", .object "agents" "agent-doc"⟩) else initial
-  let result := Automation.publishCallbackChild before agentDid agentDid "child" "agent-doc" fresh committed
-  Json.mkObj [("name", toJson name), ("user_read", toJson (allowed 5 result userDid "agent_children" "child" "read")),
-    ("agent_read", toJson (allowed 5 result agentDid "agent_children" "child" "read"))]
-
 def backendCredentialCaseJson (name : String) (access : Configuration.BackendCredentialAccess)
     (currentSecret historicalSecret : Bool) : Json :=
   Json.mkObj [("name", toJson name),
@@ -1734,19 +1484,11 @@ def json : Json := Json.mkObj
        inferenceSelfConfigCase "revoked" "agent" "context",
        inferenceSelfConfigCase "revoked" "agent" "tools",
        inferenceSelfConfigCase "direct-after-revoke" "agent" "execution"]),
-   ("configuration_skill_cases", toJson
-      [skillUsersetCaseJson "selected" "selected" false,
-       skillUsersetCaseJson "sibling" "sibling" false,
-       skillUsersetCaseJson "revoked" "selected" true]),
    ("configuration_compaction_cases", toJson
       ((["initial", "revoked", "unchanged", "rebound", "direct-rebound", "context-revoked", "executor-revoked"] : List String).flatMap fun phase =>
         (["selected", "sibling"] : List String).flatMap fun actor =>
           (["compaction-a", "compaction-b"] : List String).map fun document =>
             compactionUsersetCaseJson phase actor document)),
-   ("configuration_tools_selection_cases", toJson
-      [toolsUsersetCaseJson "selected" "selected" false,
-       toolsUsersetCaseJson "sibling" "sibling" false,
-       toolsUsersetCaseJson "revoked-context" "selected" true]),
    ("configuration_task_target_cases", toJson
       [taskTargetCaseJson "task-owner" "user" "task" "initial",
        taskTargetCaseJson "task-runtime" "runtime" "task" "initial",
@@ -1773,28 +1515,6 @@ def json : Json := Json.mkObj
        pluginProfileCaseJson "absent" none false,
        pluginProfileCaseJson "revoked" (some "agent") true]),
    ("agent_node_manager_invoke_case", agentInvokeManagerCaseJson),
-   ("mcp_service_use_cases", toJson
-      ([(true, true, true, true, true, true),
-        (false, true, true, true, true, true),
-        (true, false, true, true, true, true),
-        (true, true, false, true, true, true),
-        (true, true, true, false, true, true),
-        (true, true, true, true, false, true),
-        (true, true, true, true, true, false)].map fun
-        (actor, chain, selection, selected, visible, enabled) => Json.mkObj
-          [("same_actor", toJson actor), ("same_chain", toJson chain),
-           ("same_selection", toJson selection), ("selected", toJson selected),
-           ("service_visible", toJson visible), ("enabled", toJson enabled),
-           ("allowed", toJson (McpService.mayUse actor chain selection selected visible enabled))])),
-   ("configuration_schedule_cases", toJson
-      [scheduleCaseJson "runtime" runtimeDid false false,
-       scheduleCaseJson "agent" agentDid false false,
-       scheduleCaseJson "revoked-parent" runtimeDid true false,
-       scheduleCaseJson "replaced" runtimeDid false true]),
-   ("configuration_schedule_write_cases", toJson
-      [scheduleWriteCaseJson "denied" false false,
-       scheduleWriteCaseJson "granted" true false,
-       scheduleWriteCaseJson "revoked" true true]),
    ("configuration_pack_installation_cases", toJson
       [packInstallationCaseJson "user-created" userDid true false false false,
        packInstallationCaseJson "agent-created" agentDid true false false false,
@@ -1824,10 +1544,6 @@ def json : Json := Json.mkObj
        datastoreWriteCaseJson "mutation-failed" true false false,
        datastoreWriteCaseJson "unconfirmed" true false true,
        datastoreWriteCaseJson "source-revoked" false true true]),
-   ("configuration_ux_create_cases", toJson
-      [uxCreateCaseJson "embedded-held" false false,
-       uxCreateCaseJson "remote-unsigned" true false,
-       uxCreateCaseJson "remote-approved-graph" true true]),
    ("projection_binding_cases", toJson
       ([false, true].flatMap fun revoked =>
         let state := if revoked then apply Configuration.projectionBindingFixture
@@ -1848,81 +1564,7 @@ def json : Json := Json.mkObj
        callbackCaseJson runtimeDid "module" false, callbackCaseJson agentDid "binding" false,
        callbackCaseJson agentDid "callback" false, callbackCaseJson agentDid "module" false,
        callbackCaseJson siblingDid "binding" false, callbackCaseJson agentDid "binding" true]),
-   ("callback_generation_cases", toJson
-      [callbackGenerationCaseJson "same" true (some "original") (some "original"),
-       callbackGenerationCaseJson "source_revoked" false (some "original") (some "original"),
-       callbackGenerationCaseJson "source_filter" true (some "original") (some "source_filter"),
-       callbackGenerationCaseJson "binding_input" true (some "original") (some "binding_input"),
-       callbackGenerationCaseJson "callback_handler" true (some "original") (some "callback_handler"),
-       callbackGenerationCaseJson "binding_recreated" true (some "original") (some "binding_recreated"),
-       callbackGenerationCaseJson "source_recreated" true (some "original") (some "source_recreated"),
-       callbackGenerationCaseJson "callback_recreated" true (some "original") (some "callback_recreated"),
-       callbackGenerationCaseJson "missing" true none (some "original")]),
-   ("callback_module_claim_cases", toJson
-      [callbackModuleClaimJson "allowed" true true true true,
-       callbackModuleClaimJson "revoked" false true true true,
-       callbackModuleClaimJson "changed" true false true true,
-       callbackModuleClaimJson "recreated" true false true true,
-       callbackModuleClaimJson "unprepared" true true false true,
-       callbackModuleClaimJson "aborted" true true true false]),
-   ("callback_recovery_configuration_cases", toJson
-      [callbackRecoveryConfigurationJson true, callbackRecoveryConfigurationJson false]),
-   ("callback_placement_cases", toJson [callbackPlacementJson userDid false,
-     callbackPlacementJson agentDid false, callbackPlacementJson siblingDid false,
-     callbackPlacementJson agentDid true]),
-   ("callback_child_cases", toJson [callbackChildJson "commit" true true false,
-     callbackChildJson "abort" true false false, callbackChildJson "duplicate" false true true]),
-   ("event_configuration_cases", toJson
-      [eventConfigurationCaseJson userDid "trigger" "update" false,
-       eventConfigurationCaseJson runtimeDid "trigger" "update" false,
-       eventConfigurationCaseJson runtimeDid "source" "read" false,
-       eventConfigurationCaseJson agentDid "trigger" "read" false,
-       eventConfigurationCaseJson agentDid "source" "read" false,
-       eventConfigurationCaseJson agentDid "trigger" "update" false,
-       eventConfigurationCaseJson siblingDid "source" "read" false,
-       eventConfigurationCaseJson agentDid "source" "read" true,
-       eventReboundCaseJson siblingDid "trigger", eventReboundCaseJson siblingDid "source",
-       eventReboundCaseJson agentDid "source", eventReboundCaseJson agentDid "trigger", eventReboundRevokedJson]),
-   ("event_cursor_rebind_cases", toJson
-      [eventCursorRebindCaseJson agentDid false, eventCursorRebindCaseJson siblingDid false,
-       eventCursorRebindCaseJson siblingDid true]),
-   ("event_cursor_move_cases", toJson [eventCursorMoveCaseJson "old", eventCursorMoveCaseJson "new"]),
-   ("event_stale_claim_cases", toJson [eventStaleClaimJson]),
-   ("event_rebound_checkpoint_cases", toJson
-      [eventReboundCheckpointJson userDid, eventReboundCheckpointJson agentDid, eventReboundCheckpointJson siblingDid]),
-   ("callback_rebound_visibility_cases", toJson
-      [callbackReboundVisibilityJson userDid, callbackReboundVisibilityJson agentDid, callbackReboundVisibilityJson siblingDid]),
-   ("unattended_agent_cases", toJson
-      [unattendedAgentJson "allowed" true true .allowed,
-       unattendedAgentJson "disabled" true false .allowed,
-       unattendedAgentJson "reader_only" true true .denied,
-       unattendedAgentJson "unavailable" true true .unavailable,
-       unattendedAgentJson "wrong_actor" false true .allowed]),
    ("unattended_receipt_cases", toJson Identity.UnattendedReceipt.cases),
-   ("callback_checkpoint_claim_cases", toJson
-      (([(false, false), (true, false), (false, true), (true, true)] : List (Bool × Bool)).map fun (time, config) =>
-        Json.mkObj [("claim_time", toJson time), ("retained_configuration", toJson config),
-          ("expected", toJson (Identity.UnattendedReceipt.visibleCallbackClaim time config))])),
-   ("ordinary_receipt_visibility_cases", toJson
-      [Json.mkObj [("name", toJson "hidden"), ("expected", toJson (Identity.UnattendedReceipt.ordinaryVisible true false))],
-       Json.mkObj [("name", toJson "absent"), ("expected", toJson (Identity.UnattendedReceipt.ordinaryVisible false false))]]),
-   ("callback_module_reader_cases", toJson
-      [callbackModuleReaderJson agentDid false false, callbackModuleReaderJson siblingDid false false,
-       callbackModuleReaderJson agentDid true false, callbackModuleReaderJson siblingDid true false,
-       callbackModuleReaderJson agentDid false true]),
-   ("event_generation_cases", toJson eventGenerationCases),
-   ("event_execution_cases", toJson eventExecutionCases),
-   ("event_group_state_cases", toJson
-      [eventGroupCaseJson userDid, eventGroupCaseJson agentDid,
-       eventGroupCaseJson runtimeDid, eventGroupCaseJson siblingDid]),
-   ("task_receipt_cases", toJson
-      [taskReceiptCaseJson userDid userDid "read" false,
-       taskReceiptCaseJson userDid agentDid "read" false,
-       taskReceiptCaseJson agentDid userDid "read" false,
-       taskReceiptCaseJson agentDid agentDid "read" false,
-       taskReceiptCaseJson agentDid agentDid "update" false,
-       taskReceiptCaseJson agentDid siblingDid "read" false,
-       taskReceiptCaseJson agentDid siblingDid "read" true]),
    ("outcome_reader_cases", Automation.outcomeReaderCasesJson),
    ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
       checks withReader ++ [actionJson withReader (.grant writer)] ++ checks withWriter ++

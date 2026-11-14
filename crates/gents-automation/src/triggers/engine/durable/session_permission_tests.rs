@@ -9,18 +9,6 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
-    let modeled_user = &contract
-        .objects
-        .iter()
-        .find(|row| row.id == "home")
-        .unwrap()
-        .owner;
-    let modeled_agent = &contract
-        .objects
-        .iter()
-        .find(|row| row.id == "agent-created")
-        .unwrap()
-        .owner;
     let directory = tempfile::tempdir()?;
     let root = gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("node.key"),
@@ -194,8 +182,8 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
         assert_eq!(allowed, case["after"].as_bool().unwrap(), "{case}");
     }
     let mut shared = false;
-    for observation in &contract.task_receipt_cases {
-        if observation["producer_reader"] == true && !shared {
+    for observation in gents_lean_vocab::families::household_task_receipt_session::cases() {
+        if observation.input.producer_reader && !shared {
             user.add_actor_relationship(
                 "Agent",
                 &agent_doc,
@@ -205,21 +193,17 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
             .await?;
             shared = true;
         }
-        let creator = observation["creator"].as_str().unwrap();
-        let doc = &receipts[if creator == modeled_user {
+        let doc = &receipts[if observation.input.creator_role == "user" {
             "manual"
         } else {
             "triggered"
         }];
-        let actor = observation["actor"].as_str().unwrap();
-        let access = if actor == modeled_user {
-            &user
-        } else if actor == modeled_agent {
-            &worker
-        } else {
-            &other
+        let access = match observation.input.role.as_str() {
+            "user" => &user,
+            "agent" => &worker,
+            _ => &other,
         };
-        let allowed = match observation["permission"].as_str().unwrap() {
+        let allowed = match observation.input.permission.as_str() {
             "read" => !access.execute(&format!("{{TriggerFire(filter:{{_docID:{{_eq:\"{}\"}}}}){{_docID}}}}", escape_graphql_string(doc))).await?["data"]["TriggerFire"].as_array().unwrap().is_empty(),
             "update" => match access.write("test.receipt.update", &format!("mutation {{update_TriggerFire(docID:\"{}\",input:{{goal_assignment_applied:true}}){{_docID}}}}", escape_graphql_string(doc))).await {
                 Ok(response) => !response["data"]["update_TriggerFire"].as_array().unwrap().is_empty(),
@@ -228,11 +212,7 @@ async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Res
             },
             _ => unreachable!(),
         };
-        assert_eq!(
-            allowed,
-            observation["expected"].as_bool().unwrap(),
-            "{observation}"
-        );
+        observation.check(allowed);
     }
     assert_eq!(
         other

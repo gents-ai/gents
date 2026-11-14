@@ -5,10 +5,6 @@ use std::sync::Arc;
 
 #[test]
 fn modeled_event_execution_generations_match_runtime_projection() {
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
     let project = |value: &serde_json::Value| {
         let task: gents_documents::Task = serde_json::from_value(json!({
             "node_did":"node", "task_id":value["task_id"], "agent_did":value["agent"],
@@ -61,27 +57,20 @@ fn modeled_event_execution_generations_match_runtime_projection() {
             gents_documents::automation::resolved_event_execution_generation(&resolved),
         )
     };
-    for case in &contract.event_execution_cases {
-        let (observed, resolved) = project(&case["observed"]);
-        let (current, _) = project(&case["current"]);
-        assert_eq!(observed, case["observed"], "{}", case["name"]);
-        assert_eq!(resolved, observed, "{}", case["name"]);
-        assert_eq!(current, case["current"], "{}", case["name"]);
-        assert_eq!(
-            observed == current,
-            case["allowed"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
+    gents_lean_vocab::families::household_event_execution_projection::replay(|case| {
+        let observed_input = serde_json::to_value(&case.observed).unwrap();
+        let current_input = serde_json::to_value(&case.current).unwrap();
+        let (observed, resolved) = project(&observed_input);
+        let (current, _) = project(&current_input);
+        assert_eq!(observed, observed_input, "{}", case.name);
+        assert_eq!(resolved, observed, "{}", case.name);
+        assert_eq!(current, current_input, "{}", case.name);
+        observed == current
+    });
 }
 
 #[test]
 fn modeled_event_source_generations_match_resolved_projection() {
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
     let source = |generation: &serde_json::Value| -> EventSource {
         let expected = if generation["expected_count"].is_number() {
             generation["expected_count"].clone()
@@ -145,62 +134,29 @@ fn modeled_event_source_generations_match_resolved_projection() {
                 .as_str()
                 .map(str::to_owned),
         };
-    for case in &contract.event_generation_cases {
+    gents_lean_vocab::families::household_event_source_generation_projection::replay(|case| {
+        let observed_input = serde_json::to_value(&case.observed).unwrap();
+        let current_input = serde_json::to_value(&case.current).unwrap();
         let observed =
-            gents_documents::automation::event_source_generation(&source(&case["observed"]))
-                .unwrap();
+            gents_documents::automation::event_source_generation(&source(&observed_input)).unwrap();
         let current =
-            gents_documents::automation::event_source_generation(&source(&case["current"]))
-                .unwrap();
-        assert_eq!(observed, case["observed"], "{}", case["name"]);
-        assert_eq!(current, case["current"], "{}", case["name"]);
+            gents_documents::automation::event_source_generation(&source(&current_input)).unwrap();
+        assert_eq!(observed, observed_input, "{}", case.name);
+        assert_eq!(current, current_input, "{}", case.name);
         assert_eq!(
             gents_documents::automation::resolved_event_source_generation(&resolved(
-                &case["observed"]
+                &observed_input
             )),
             observed,
             "{}",
-            case["name"]
+            case.name
         );
-        assert_eq!(
-            observed == current,
-            case["allowed"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
+        observed == current
+    });
 }
 
 #[tokio::test]
 async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> anyhow::Result<()> {
-    let contract = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let modeled_user = &contract
-        .objects
-        .iter()
-        .find(|row| row.id == "home")
-        .unwrap()
-        .owner;
-    let modeled_agent = &contract
-        .objects
-        .iter()
-        .find(|row| row.id == "agent-created")
-        .unwrap()
-        .owner;
-    let modeled_runtime = contract
-        .relations
-        .iter()
-        .find_map(|relation| match &relation.subject {
-            gents_lean_vocab::LeanIdentitySubject::Actor { actor }
-                if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .unwrap();
     let directory = tempfile::tempdir()?;
     let root = gents_store::identity::KeyIdentity::load_or_create(
         directory.path().join("node.key"),
@@ -231,7 +187,7 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
         identity::Did::new(root.did())?,
     );
     let ctx = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
-    node.add_dac_policy_with_counter_as(&ctx, &contract.policy_yaml, 0)
+    node.add_dac_policy_with_counter_as(&ctx, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY, 0)
         .await?;
     for schema in [
         gents_protocol::schemas::NODE,
@@ -282,37 +238,26 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
         source: &source,
     };
     let group = load_or_create_group(&worker, delivery, "batch").await?;
-    let runtime_did = modeled_runtime.as_str();
-    for observation in contract.event_group_state_cases.as_ref().unwrap() {
-        let actor = observation.actor.as_str();
-        let access = if actor == modeled_user {
-            &owner
-        } else if actor == modeled_agent {
-            &worker
-        } else if actor == runtime_did {
-            &runtime
-        } else {
-            let sibling = gents_store::config_client::ConfigAccess::local_as(
-                node.clone(),
-                identity::Did::new(actor)?,
-            );
-            let response = sibling.execute("{EventGroupState {_docID}}").await?;
-            assert_eq!(
-                !response["data"]["EventGroupState"]
-                    .as_array()
-                    .unwrap()
-                    .is_empty(),
-                observation.expected
-            );
-            continue;
+    for case in gents_lean_vocab::families::household_event_group_state::cases() {
+        let sibling;
+        let access = match case.input.role.as_str() {
+            "user" => &owner,
+            "agent" => &worker,
+            "runtime" => &runtime,
+            _ => {
+                sibling = gents_store::config_client::ConfigAccess::local_as(
+                    node.clone(),
+                    identity::Did::new(&case.input.actor)?,
+                );
+                &sibling
+            }
         };
         let response = access.execute("{EventGroupState {_docID}}").await?;
-        assert_eq!(
+        case.check(
             !response["data"]["EventGroupState"]
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            observation.expected
         );
     }
     quiesce_group(&worker, &group, "done").await?;

@@ -2910,6 +2910,88 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_callback_claim_recorded")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_binding_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_callback_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_event_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_generation_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_placement")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_child")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_module_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_recovery_configuration")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_claim_checkpoint")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_grants_configuration")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_binding_rebound")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_rebound_checkpoint")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_rebound_cursor")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_event_rebound_cursor_unreached"
+      "model-production-gap: checkpoint_prefix checkpoints only as the consumer's currently selected Agent and refuses any other actor (event consumer selected Agent changed before checkpoint), while checkpointTaskArrival gates only on reading the request; the owner and the former Agent read the old request, so the model advances their cursor where production refuses the checkpoint.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ordinary_receipt_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_stale_claim")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_cursor_rebind")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_cursor_move")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_generation_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_source_generation_projection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_execution_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_execution_projection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_module_reader")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_callback_rebound_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_event_group_state")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_schedule_visibility")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_schedule_write")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_receipt_session")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_task_receipt_delivery")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_callback_module_claim_unreached"
+      "model-production-gap: claim_invocation commits the module plan and the claim in its own transaction; no production path aborts that transaction after a valid module plan has been prepared, so an aborted module claim cannot be driven.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_mcp_service_lookup")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_mcp_service_native_policy")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ux_create_embedded")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_ux_create_remote")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_tools_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_skill_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_documents_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_documents_unavailable")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_session_admission")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_unattended_session_unavailable")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "household_fresh_backend_admission_unreached"
       "model-production-gap: a fresh-store admission cannot observe a missing or broken private binding; FreshBackendStore::initialize installs the private legacy schema itself, and a store whose binding is absent or altered is refused only on reopen (household_fresh_backend_reopen).")
       "identity-permission" [Surface.runtimeInternal]
