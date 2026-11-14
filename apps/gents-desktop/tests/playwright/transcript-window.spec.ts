@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, framesDrawn, gotoHarness, test } from "./desktopTest";
+import { expect, framesDrawn, gotoHarness, scrollAtRest, test } from "./desktopTest";
 
 /* The transcript draws only the rows near the view. Wherever the list
    shows in the view, a drawn row must cover it: a gap is a row the list
@@ -77,6 +77,18 @@ const loadedRows = (page: Page) =>
     .locator("[data-transcript-list]")
     .evaluate((list) => Number(list.getAttribute("data-rows")));
 
+/* older pages read until the transcript holds more than `rows`: each wheel
+   lands before the next, so the rows read depend on the wheels sent, not on
+   how fast the page draws them */
+async function loadRows(page: Page, rows: number) {
+  const scroller = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  await page.getByTestId("transcript-panel").hover();
+  for (let wheel = 0; wheel < 80 && (await loadedRows(page)) <= rows; wheel += 1) {
+    await page.mouse.wheel(0, -1500);
+    await scrollAtRest(scroller);
+  }
+}
+
 test("a long transcript shows no blank row while the reader scrolls up", async ({
   page,
 }, testInfo) => {
@@ -111,7 +123,7 @@ test("a jump to a far part of a long transcript shows no blank row", async ({
   await gotoHarness(page, "mobile-performance");
   await page.locator('[data-testid="session-session-large"]').click();
   await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
-  await loadHistory(page);
+  await loadRows(page, 200);
   await watchBlank(page);
   expect(await loadedRows(page)).toBeGreaterThan(200);
 
