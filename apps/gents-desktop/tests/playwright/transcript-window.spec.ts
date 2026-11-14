@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, framesDrawn, gotoHarness, test } from "./desktopTest";
 
 /* The transcript draws only the rows near the view. Wherever the list
    shows in the view, a drawn row must cover it: a gap is a row the list
@@ -55,18 +55,21 @@ async function watchBlank(page: Page) {
   });
 }
 
+/* a reader's pace, and never faster than the page draws: each wheel is
+   given frames to draw before the next, so the frames sampled do not shrink
+   with a slower or busier browser */
 async function loadHistory(page: Page) {
   const panel = page.getByTestId("transcript-panel");
   await panel.hover();
   for (let i = 0; i < 40; i += 1) {
     await page.mouse.wheel(0, -1500);
-    await page.waitForTimeout(150);
+    await Promise.all([page.waitForTimeout(150), framesDrawn(page, 2)]);
   }
   for (let i = 0; i < 40; i += 1) {
     await page.mouse.wheel(0, 1500);
-    await page.waitForTimeout(100);
+    await Promise.all([page.waitForTimeout(100), framesDrawn(page, 1)]);
   }
-  await page.waitForTimeout(500);
+  await Promise.all([page.waitForTimeout(500), framesDrawn(page, 10)]);
 }
 
 const loadedRows = (page: Page) =>
