@@ -19,6 +19,9 @@ const JOB_CRASH_WORKER_READY: &str = "GENTS_PLUGIN_JOB_CRASH_WORKER_READY";
 const SESSION: &str = "plugin-job-restart-session";
 const TOOL_CALL: &str = "job-r";
 const SLOTS: [&str; 3] = ["a", "b", "c"];
+/// Recovery takes over the killed worker's claims only once their execution
+/// lease lapses; the default lease would idle the restarted runtime for two minutes.
+const EXECUTION_LEASE: Duration = Duration::from_secs(10);
 
 fn child_prompt(slot: &str) -> String {
     format!("restart child {slot}")
@@ -127,6 +130,7 @@ async fn run_job_crash_worker(ready_path: &Path) {
         SESSION,
         vec![job_call(TOOL_CALL, &plan)],
         child_plans,
+        Some(EXECUTION_LEASE),
     )
     .await;
     wait_job(

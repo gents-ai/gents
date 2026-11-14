@@ -230,6 +230,9 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         "another client received a private journal subscription event"
     );
     drop(updates);
+    // Node shutdown drains an open subscription stream to its 30 s deadline
+    // in each of its three stages instead of closing it.
+    drop(owner_updates);
 
     let (outsider_test, _) = runtime_http_test_node(other.clone()).await;
     let receiver = &outsider_test.node;

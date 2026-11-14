@@ -91,7 +91,6 @@ async fn replicated_events(node: &std::sync::Arc<EmbeddedNode>) -> Vec<Value> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unpaired_application_event_source_stays_local() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     let db_writer = test_p2p_db("event-trigger-p2p-writer").await;
     register_replicated_event_schema(&db_writer.node).await;
     let db_agent = test_p2p_db("event-trigger-p2p-agent").await;

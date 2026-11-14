@@ -313,12 +313,62 @@ async fn boot_runtime(
     boot_prepared_accepted_turn(db, prepared, agent).await
 }
 
+/// Selects one `InferenceExecution` with this execution lease for both job
+/// Agents, so a claim held by a killed runtime expires after `lease` rather
+/// than the default lease.
+async fn select_execution_lease(db: &TestDb, actors: &JobActors, lease: Duration) {
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_store::collection::Collection;
+    const EXECUTION: &str = "plugin-job-execution";
+    let node_did = db.node_identity.did();
+    let mut documents = vec![(
+        Collection::InferenceExecution,
+        json!({"node_did": node_did, "execution_id": EXECUTION, "stream_liveness_timeout_secs": lease.as_secs()}),
+    )];
+    for agent_did in [&actors.fixture.binding.agent_did, &actors.child_did] {
+        documents.push((
+            Collection::InferenceProfile,
+            json!({"node_did": node_did, "profile_id": format!("{agent_did}:inference"), "backend_id": BACKEND_ID, "model_name": MODEL, "execution_id": EXECUTION}),
+        ));
+    }
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .expect("render the job execution lease");
+    actors
+        .fixture
+        .access
+        .transact_write("test.plugin_job.execution_lease", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .expect("select the job execution lease");
+}
+
+/// `execution_lease`, when set, bounds how long a claim of a killed runtime
+/// stays live before recovery may take it over.
 pub(crate) async fn boot_job_harness(
     db: TestDb,
     plugin_home: PathBuf,
     session_id: &str,
     accepted_chunks: Vec<StreamChunk>,
     child_plans: Vec<StreamPlan>,
+    execution_lease: Option<Duration>,
 ) -> JobHarness {
     let actors = install_job_fixture(&db, &plugin_home, job_settings()).await;
     // A child inherits the pin's cwd, and an empty one cannot be resolved.
@@ -348,6 +398,9 @@ pub(crate) async fn boot_job_harness(
         },
     )
     .await;
+    if let Some(lease) = execution_lease {
+        select_execution_lease(&db, &actors, lease).await;
+    }
     let runtime = boot_runtime(&db, &plugin_home, prepared).await;
     JobHarness {
         db,

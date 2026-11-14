@@ -52,6 +52,7 @@ async fn completed_harness(name: &str, value: Value) -> (JobHarness, String) {
             CHILD_PROMPT,
             vec![StreamResponse::completes(CHILD_PROMPT, ["child a done"])],
         )],
+        None,
     )
     .await;
     wait_job(
