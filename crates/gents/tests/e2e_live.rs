@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "e2e_live/backend_auth_live.rs"]
 mod backend_auth_live;
 #[path = "e2e_live/edit_file_live.rs"]

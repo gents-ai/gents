@@ -15,7 +15,7 @@ use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 use tokio::sync::Notify;
 
-use crate::queue_management::{enqueue_owned, row_as};
+use super::queue_management::{enqueue_owned, row_as};
 use crate::support::agent_requests::{canonical_now, RequestActors};
 use crate::support::agent_transcript;
 use crate::support::builder_runtime::{

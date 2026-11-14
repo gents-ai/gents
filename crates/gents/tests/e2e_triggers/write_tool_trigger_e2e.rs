@@ -353,7 +353,7 @@ fn request_action_decl() -> WriteToolDecl {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_field_template_renders_all_referenced_doc_fields() {
-    let _guard = crate::P2P_E2E_LOCK.lock().await;
+    let _guard = super::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-multifield").await;
     let target = crate::support::live_inference::live_target().await;
     let actors = crate::support::live_inference::bind_target(&db, &target).await;
@@ -391,7 +391,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn declared_write_tool_call_fires_event_trigger() {
-    let _guard = crate::P2P_E2E_LOCK.lock().await;
+    let _guard = super::P2P_E2E_LOCK.lock().await;
     let db = test_db("write-tool-trigger-tooldriven").await;
     let target = crate::support::live_inference::live_target().await;
     let actors = crate::support::live_inference::bind_target(&db, &target).await;

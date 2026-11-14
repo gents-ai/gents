@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "e2e_background/plugin_job_admission.rs"]
 mod plugin_job_admission;
 #[path = "e2e_background/plugin_job_restart.rs"]

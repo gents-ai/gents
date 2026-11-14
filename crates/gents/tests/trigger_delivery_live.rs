@@ -1,6 +1,4 @@
-#![cfg(feature = "live-e2e")]
-
-mod support;
+use crate::support;
 
 use anyhow::{ensure, Context, Result};
 use gents_documents::apply_desired_state_plan;

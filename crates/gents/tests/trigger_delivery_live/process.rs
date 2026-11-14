@@ -21,7 +21,7 @@ async fn spawn_child(artifacts: &Path, phase: &str) -> Result<ChildGuard> {
     let child = Command::new(std::env::current_exe()?)
         .args([
             "--exact",
-            "process::delivery_crash_child",
+            "trigger_delivery_live::process::delivery_crash_child",
             "--ignored",
             "--nocapture",
         ])

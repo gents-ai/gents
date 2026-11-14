@@ -257,7 +257,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     .unwrap();
     let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
-        .arg("r6_background_recovery::recover_all_interrupts_backgrounded_running_tool_with_live_parent")
+        .arg("e2e_live::r6_background_recovery::recover_all_interrupts_backgrounded_running_tool_with_live_parent")
         .arg("--nocapture")
         .env(CRASH_WORKER_READY, &ready_path)
         .kill_on_drop(true)

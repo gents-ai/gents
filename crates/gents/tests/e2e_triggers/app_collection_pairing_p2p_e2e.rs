@@ -44,7 +44,7 @@ async fn signed_invitation_delivers_request_without_http() {
     use gents_p2p::p2p_reconcile::enrollment_offer::EnrollmentOfferIssuer;
     use gents_protocol::enrollment::EnrollmentDecisionKind;
 
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     let host = test_p2p_db("invite-host").await;
     let guest = test_p2p_db("invite-guest").await;
     wait_for_peer_identity(&host.node).await;
@@ -866,7 +866,7 @@ async fn start_runtime(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn application_documents_replicate_only_after_each_node_opts_in() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-pairing-a").await;
@@ -1212,7 +1212,7 @@ async fn application_documents_replicate_only_after_each_node_opts_in() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authorless_overlay_is_skipped_and_control_route_stands() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-soft-skip-a").await;
@@ -1414,7 +1414,7 @@ async fn fixture_moves(db: &crate::support::TestDb, id: &str) -> Vec<Value> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn document_pack_collections_pair_only_by_explicit_opt_in() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/packs/shared_fixture");
@@ -1517,7 +1517,7 @@ async fn document_pack_collections_pair_only_by_explicit_opt_in() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn application_pairing_replicates_only_while_its_author_holds_the_grant() {
-    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let _p2p_guard = super::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-pairing-authority-a").await;
