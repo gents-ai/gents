@@ -1,0 +1,4 @@
+---- MODULE MCGoalSourceObservationFiringOwner ----
+EXTENDS GoalSourceObservation
+
+====

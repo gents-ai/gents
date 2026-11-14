@@ -1,0 +1,4 @@
+---- MODULE MCInterruptPartialOutput ----
+EXTENDS InterruptPartialOutput
+
+====
