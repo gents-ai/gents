@@ -24,6 +24,7 @@ struct Fixture {
     access: ConfigAccess,
     config: ConfigAccess,
     parent_binding: gents_protocol::agent_identity::AgentIdentityBinding,
+    child_binding: gents_protocol::agent_identity::AgentIdentityBinding,
     runtime: Arc<dyn NodeIdentity>,
     parent: Arc<dyn NodeIdentity>,
     child: Arc<dyn NodeIdentity>,
@@ -207,7 +208,7 @@ async fn fixture(name: &str) -> Fixture {
     };
     let target = SessionMessageTarget {
         node_did: runtime.did().into(),
-        agent_did: child.agent_did,
+        agent_did: child.agent_did.clone(),
         session_id: uuid::Uuid::new_v4().to_string(),
     };
     let signer = parent_identity.managed_agent_signer().unwrap();
@@ -238,6 +239,7 @@ async fn fixture(name: &str) -> Fixture {
         access,
         config: user_access,
         parent_binding: parent,
+        child_binding: child,
         runtime,
         parent: parent_identity,
         child: child_identity,
@@ -496,11 +498,74 @@ async fn child_claim(fixture: &Fixture, doc: &str) -> String {
         .bind_managed_agent(fixture.child.as_ref())
         .unwrap();
     lifecycle.set_client_claim_admission(admission);
-    match lifecycle.claim_with_identity().await.unwrap() {
-        ClaimOutcome::Claimed => "claimed".into(),
-        ClaimOutcome::Queued => "unavailable".into(),
+    let outcome = lifecycle.claim_with_identity().await;
+    match outcome {
+        Ok(ClaimOutcome::Claimed) => "claimed".into(),
+        Ok(ClaimOutcome::Queued) => "unavailable".into(),
         other => panic!("unmodeled child claim outcome {other:?}"),
     }
+}
+
+async fn child_agent_document(fixture: &Fixture) -> String {
+    let agents = fixture
+        .config
+        .execute("{ Agent { _docID agent_did } }")
+        .await
+        .unwrap();
+    agents["data"]["Agent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agent_did"] == fixture.child.did())
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn replace_child_agent_document(fixture: &Fixture) {
+    let doc = child_agent_document(fixture).await;
+    fixture
+        .config
+        .transact_write("test.finality.child_agent_removed", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.delete_document_with_schema("Agent", doc, gents_protocol::schemas::AGENT)
+                    .await
+            })
+        })
+        .await
+        .unwrap();
+    let docs = gents_documents::test_support::test_agent_documents(
+        fixture.runtime.did(),
+        "child",
+        &fixture.child_binding,
+    )
+    .into_iter()
+    .filter(|(collection, _)| matches!(collection, gents_store::collection::Collection::Agent))
+    .map(|(collection, value)| DesiredStateApplyDocument {
+        collection,
+        add: value.clone(),
+        update: value,
+    })
+    .collect();
+    let plan = DesiredStateApplyPlan::new(docs).unwrap();
+    fixture
+        .config
+        .transact_write("test.finality.child_agent_replaced", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    assert_ne!(child_agent_document(fixture).await, doc);
 }
 
 #[tokio::test]
@@ -516,6 +581,9 @@ async fn delegated_publication_creator_recovery_follows_the_lean_model() {
                 }
                 "publish" if action.actor.as_deref() == Some(case.input.parent_agent.as_str()) => {
                     if receipt_observed {
+                        if action.exact != Some(true) {
+                            replace_child_agent_document(&fixture).await;
+                        }
                         recover_as_creator(&fixture).await;
                     }
                 }

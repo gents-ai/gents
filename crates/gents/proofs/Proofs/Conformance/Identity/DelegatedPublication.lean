@@ -91,8 +91,7 @@ structure ReadinessOutput where
 /-- The served readiness fixture builds a visible request whose relation set
 is still pending and then completes it through the creator's publication
 owner, for a client-signed request and for an Agent that signs its own
-request; it cannot inject a failed commit, a forged binding or a foreign
-recovery actor. -/
+request. -/
 def readinessNames : List String :=
   [ "visible-before-publication-complete", "published"
   , "same-agent-partial-visible", "same-agent-published" ]
@@ -152,12 +151,13 @@ structure CreatorRecoveryOutput where
 
 /-- The served delegated-finality fixture drops the parent's committed
 acknowledgement, then drives the creator's recovery watcher or a node-owner
-completion attempt as the case's actions say.
+completion attempt as the case's actions say. A recovery for a mismatched
+binding runs after the configuring User replaces the child Agent document.
 Production publication always re-verifies the retained receipt and native
 owner first, so a publication attempt the caller never observed has no
 production call beyond leaving the dropped acknowledgement unrecovered. -/
 def creatorRecoveryNames : List String :=
-  ["commit-unconfirmed", "foreign-recovery-actor"]
+  ["commit-unconfirmed", "foreign-recovery-actor", "mismatched-recovery-binding"]
 
 @[conformance_family]
 def creatorRecovery : Family CaseInput CreatorRecoveryOutput where
@@ -226,7 +226,7 @@ private def observation (c : Case) : Observation :=
     otherUserAdmin := Identity.Household.allowed 5 s.household "other-user" "sessions" b.sessionDoc "delete"
     claim := claimOf c }
 
-/-- model-production-gap: no production path reaches these cases.
+/-- model-production-gap: no production path reaches six cases.
 `wrong-physical-session` and `wrong-physical-agent`: the `agent_new` commit
 binds the physical session and Agent documents and then signs in the same
 transaction, so no signature names other documents. `missing-creation-receipt`:
@@ -234,13 +234,32 @@ the receipt is issued in that transaction after the opening it needs is staged,
 signed and starter-verified there. `wrong-owner`: the creator is the native
 owner of the documents its transaction creates. `partial-grants` and
 `partial-then-recover`: each relation set is staged atomically with its
-pending marker. Disagreements: `invoke-denied` is refused at commit, not at
-claim; `revoked-after-publication` fails because the parent Agent may not
-delete its session's parent relation (NotAuthorized get-collection). Not built
-yet: `invoke-revoked-at-commit`, `marker-commit-conflict` and
-`same-agent-marker-conflict` need a concurrent change between the claim
-transaction's check and its native commit; `mismatched-recovery-binding` needs
-the child Agent document replaced between the commit and creator recovery. -/
+pending marker.
+
+Model and production disagree on two cases. `invoke-denied`: the model commits
+without the parent's invoke grant (`commit`,
+Proofs/Session/Identity/DelegatedPublication.lean:58) and denies only at claim
+(`claim`, line 131); production's `agent_new` transaction refuses the commit
+(crates/gents-session/src/session/message/commit.rs:460, staging the target
+session at line 534). `revoked-after-publication`: the model lets the parent
+Agent revoke its session's parent relation
+(Proofs/Session/Identity/DelegatedPublicationCases.lean:38); production refuses
+the parent Agent's `delete_resource_relationship`
+(crates/gents-store/src/config_client/relationships.rs:147) with NotAuthorized
+get-collection.
+
+Model and production also disagree on the claim's native commit conflict
+(`invoke-revoked-at-commit`, `marker-commit-conflict`,
+`same-agent-marker-conflict`). The model's claim ends in `conflict` when its
+native commit conflicts (`claim`, Proofs/Session/Identity/DelegatedPublication.lean:126,
+through `decideClaim`). Production claims in `transact_write`
+(crates/gents-session/src/request/lifecycle/claim.rs:273), whose ConflictRetry
+mode (crates/gents-store/src/config_client/txn/transact_entry.rs:106) reruns a
+conflicted attempt, so the observable result is the rerun's decision. Holding
+the claim at its commit boundary while the User revoked the parent's
+`session_writer` gave a denied claim; holding it while the author rewrote both
+markers complete gave a committed claim (whether that rewrite raised a native
+conflict was not established). -/
 @[conformance_family]
 def unreached : Family CaseInput Observation where
   inputs := (cases.filter fun c =>
