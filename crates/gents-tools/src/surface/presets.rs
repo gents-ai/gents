@@ -120,6 +120,7 @@ mod tests {
             description: "Record a finding".into(),
             fields: vec![],
             output_obligation: None,
+            key_fields: None,
         });
         assert_eq!(classify_tools(&tools, &merged).unwrap(), None);
     }
