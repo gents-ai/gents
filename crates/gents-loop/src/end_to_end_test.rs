@@ -387,6 +387,104 @@ async fn cancelling_a_pending_provider_stream_drops_it() {
     assert!(dropped.load(Ordering::SeqCst));
 }
 
+/// TLA+ `InterruptPartialOutput`: a chunk the provider has handed to the
+/// loop reaches the consumer in the same poll, so an interrupt that wins the
+/// consumer's next select cannot drop it with the stream. A spent cooperative
+/// budget makes every tokio resource poll return `Pending`; the handoff must
+/// not be one of them.
+#[tokio::test]
+async fn a_received_provider_chunk_is_yielded_when_the_task_budget_is_spent() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use futures::StreamExt;
+
+    use crate::loop_stream::LoopStreamItem;
+    use crate::session_hook::NoopSessionHook;
+
+    struct GatedChunk {
+        open: Arc<AtomicBool>,
+        emitted: Arc<AtomicBool>,
+    }
+    impl futures::Stream for GatedChunk {
+        type Item = Result<RawStreamingChoice<()>, CompletionError>;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            if !self.open.load(Ordering::SeqCst) || self.emitted.swap(true, Ordering::SeqCst) {
+                return std::task::Poll::Pending;
+            }
+            std::task::Poll::Ready(Some(Ok(RawStreamingChoice::Message(
+                "received partial".into(),
+            ))))
+        }
+    }
+    #[derive(Clone)]
+    struct Model {
+        open: Arc<AtomicBool>,
+        emitted: Arc<AtomicBool>,
+    }
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for Model {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            unreachable!()
+        }
+
+        async fn completion(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            unreachable!()
+        }
+
+        async fn stream(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            let _ = crate::rendered_request::scope::claim_pending();
+            Ok(StreamingCompletionResponse::stream(Box::pin(GatedChunk {
+                open: self.open.clone(),
+                emitted: self.emitted.clone(),
+            })))
+        }
+    }
+
+    let model = Model {
+        open: Arc::new(AtomicBool::new(false)),
+        emitted: Arc::new(AtomicBool::new(false)),
+    };
+    let stream = crate::loop_stream::run_loop_stream::<_, NoopSessionHook>(
+        model.clone(),
+        None,
+        TaggedMessage::unassociated(Message::user("hello")),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        test_loop_config(),
+    );
+    futures::pin_mut!(stream);
+    assert!(futures::poll!(stream.next()).is_pending());
+    assert!(!model.emitted.load(Ordering::SeqCst));
+
+    model.open.store(true, Ordering::SeqCst);
+    while tokio::task::coop::has_budget_remaining() {
+        tokio::task::consume_budget().await;
+    }
+    let polled = futures::poll!(stream.next());
+    assert!(
+        model.emitted.load(Ordering::SeqCst),
+        "the provider was polled"
+    );
+    let std::task::Poll::Ready(Some(Ok(LoopStreamItem::Text(text)))) = polled else {
+        panic!("a received provider chunk stayed inside the loop stream");
+    };
+    assert_eq!(text, "received partial");
+}
+
 #[tokio::test]
 async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
     use std::sync::atomic::{AtomicBool, Ordering};
