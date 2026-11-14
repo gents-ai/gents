@@ -2228,6 +2228,35 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "delegated_publication_claim_readiness")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_recovery_receipt")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_agent_new_publication")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "agent_creation_receipt_opening")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_creator_recovery")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_commit_refusal")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "delegated_publication_unreached"
+      "model-production-gap: wrong-physical-session, wrong-physical-agent, missing-creation-receipt, partial-grants and partial-then-recover have no production path (the agent_new commit binds then signs its targets and issues the receipt in one transaction; relation sets are atomic with their markers). Model and production disagree on invoke-denied (model DelegatedPublication.lean:58 commits and :131 denies at claim; production commit.rs:460 refuses the commit), revoked-after-publication (model DelegatedPublicationCases.lean:38 lets the parent revoke; production relationships.rs:147 refuses the parent Agent with NotAuthorized get-collection), and invoke-revoked-at-commit and same-agent-marker-conflict (model DelegatedPublication.lean:126 ends in conflict; production claim.rs:273 reruns a conflicted claim under ConflictRetry, transact_entry.rs:106; observed denied after a concurrent revocation). marker-commit-conflict is inconclusive: a concurrent rewrite of both markers to complete gave a committed claim and no native conflict was shown; a marker reset to pending between the claim check and its commit is untested and is a question for the maintainer.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "client_agent_journal_local_signer")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage

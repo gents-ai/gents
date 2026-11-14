@@ -50,7 +50,6 @@ pub struct LeanConfigurationSignedWriteRetryCase {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanContractSnapshot {
-    pub delegated_publication_cases: Vec<serde_json::Value>,
     pub generated_by: String,
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,

@@ -157,7 +157,8 @@ import Proofs.Conformance.ClientTelemetry
 import Proofs.Conformance.InferenceObservation
 import Proofs.Conformance.Identity.Publication
 import Proofs.Conformance.Identity.GoalLinks
-import Proofs.Session.Identity.DelegatedPublicationCases
+import Proofs.Conformance.Identity.DelegatedPublication
+import Proofs.Conformance.Identity.AgentCreationReceipt
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Conformance.Identity.CallbackParent
 import Proofs.Conformance.Identity.AgentIdentity
@@ -391,8 +392,6 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"delegated_publication_cases\":"
-      ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
 
 def snapshotGoalMutationCasesJson : String :=
   ""

@@ -128,46 +128,4 @@ theorem cancelled_after_child_commit_recovers_relationships_in_the_actor_watcher
     allowed 5 watcherRecoveredState.household "child-agent" "delivered_requests" "child-request" "read" = true ∧
     claim watcherRecoveredState grantedCommit = .claimed := by native_decide
 
-def actionJson : Action → Json
-  | .commit starter receipt native => Json.mkObj [("kind", toJson ("commit" : String)),
-      ("starter", toJson starter), ("creation_receipt", toJson receipt), ("native_commit", toJson native)]
-  | .observe exact owner => Json.mkObj [("kind", toJson ("observe" : String)),
-      ("exact", toJson exact), ("owner", toJson owner)]
-  | .publish actor exact g => Json.mkObj [("kind", toJson ("publish" : String)),
-      ("actor", toJson actor), ("exact", toJson exact), ("session_parent", toJson g.sessionParent),
-      ("session_worker", toJson g.sessionWorker), ("request_parent", toJson g.requestParent),
-      ("request_session", toJson g.requestSession), ("request_worker", toJson g.requestWorker),
-      ("mark_session", toJson g.markSession), ("mark_request", toJson g.markRequest)]
-  | .revokeSessionParent => Json.mkObj [("kind", toJson ("revoke_session_parent" : String))]
-
-def decisionName : Decision → String
-  | .blocked => "blocked" | .unavailable => "unavailable" | .denied => "denied"
-  | .conflict => "conflict" | .claimed => "claimed"
-
-def caseJson (c : Case) : Json :=
-  let s := c.actions.foldl step (initial c.invokeGrant c.binding)
-  let b := s.binding
-  Json.mkObj [("name", toJson c.name), ("invoke_grant", toJson c.invokeGrant),
-    ("node_owner", toJson b.nodeOwner), ("parent_agent", toJson b.parentAgent),
-    ("target_agent", toJson b.targetAgent), ("session_doc", toJson b.sessionDoc),
-    ("agent_doc", toJson b.agentDoc), ("request_doc", toJson b.requestDoc),
-    ("signed_session", toJson b.signedSession), ("signed_agent", toJson b.signedAgent),
-    ("signer", toJson b.signer), ("actions", toJson (c.actions.map actionJson)),
-    ("claim_session_permission", toJson c.claimCommit.sessionPermission),
-    ("claim_agent_invoke", toJson c.claimCommit.agentInvoke),
-    ("claim_native_commit", toJson c.claimCommit.committed),
-    ("expected_committed", toJson s.committed), ("expected_observed", toJson s.observed),
-    ("expected_tool_running", toJson s.toolRunning), ("expected_receipt", toJson s.receipt),
-    ("expected_starter", toJson s.starterVerified), ("expected_creation_receipt", toJson s.creationReceipt),
-    ("expected_session_pending", toJson s.sessionPending), ("expected_request_pending", toJson s.requestPending),
-    ("expected_target_read", toJson (allowed 5 s.household b.targetAgent "delivered_requests" b.requestDoc "read")),
-    ("expected_node_owner_read", toJson (allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "read")),
-    ("expected_node_owner_update", toJson (allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "update")),
-    ("expected_node_owner_admin", toJson (allowed 5 s.household b.nodeOwner "sessions" b.sessionDoc "delete")),
-    ("expected_other_user_read", toJson (allowed 5 s.household "other-user" "sessions" b.sessionDoc "read")),
-    ("expected_other_user_admin", toJson (allowed 5 s.household "other-user" "sessions" b.sessionDoc "delete")),
-    ("expected_claim", toJson (decisionName (claim s c.claimCommit)))]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
-
 end Identity.DelegatedPublication.Cases
