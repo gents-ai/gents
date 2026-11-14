@@ -1264,7 +1264,8 @@ Model → conformance → Rust bindings:
 - **Recovery sweeps** — `Proofs/ToolCalls/Recovery/Sweeps/*`, `Proofs/Session/Recovery/Sweeps/Requests.lean`, `Proofs/Inference/Recovery/Sweeps/Inference.lean` (tool calls, session-message
   rows, terminal-parent foreground tools #837, and orphaned native-background
   ownership repair, including retryable completion-notification/wake
-  obligations) → `recovery_sweep_cases`.
+  obligations) → the `recovery_sweeps_*` families, one or more per
+  registered sweep; the plugin-job sweep is `plugin_job_recoveries`.
 - **Partial output (#937, revised by #1571)** —
   `Proofs/Runtime/Background/ToolOutput.lean` reads canonical segments for the exact
   physical tool, independently of volatile executor registries. Generic paging

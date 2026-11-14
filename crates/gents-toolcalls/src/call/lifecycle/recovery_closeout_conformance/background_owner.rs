@@ -13,28 +13,9 @@ use crate::call::lifecycle::admission_fixture::{completion_obligations, update_r
 async fn generated_registered_background_owner_stop_cases_use_live_worker() {
     let mut owned_blocked = None;
     let mut owned_background = None;
+    let mut left_to_worker = Vec::new();
+    let mut settled = Vec::new();
     for session_stopped in [false, true] {
-        let cases = gents_lean_vocab::lean_recovery_sweep_cases();
-        let left = cases
-            .iter()
-            .find(|case| case.name == "registered_background_tool_left_to_worker_deferred")
-            .unwrap();
-        let deleted = cases
-            .iter()
-            .find(|case| {
-                case.name
-                    == if session_stopped {
-                        "registered_background_tool_session_stopped_to_cancelled"
-                    } else {
-                        "registered_background_tool_task_deleted_to_cancelled"
-                    }
-            })
-            .unwrap();
-        assert_eq!(left.execution_registered, Some(true));
-        assert_eq!(left.owner_task_deleted, Some(false));
-        assert_eq!(deleted.owner_task_deleted, Some(!session_stopped));
-        assert_eq!(deleted.owner_session_stopped, Some(session_stopped));
-
         let name = if session_stopped {
             "session-stopped"
         } else {
@@ -146,13 +127,33 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         )
         .await
         .unwrap();
-        assert_eq!(report.tool_calls_terminalized, 0, "{}", left.name);
         assert_eq!(
             process.observe(),
             gents_session::exec::ownership::ProcessObservation::Running,
-            "{}",
-            left.name
+            "{name}: the registered worker keeps its process"
         );
+        let left_state = super::lifecycle_state(&tool.access().unwrap(), &tool_doc_id).await;
+        let left_again = ToolCallLifecycle::reconcile_orphaned_background_tools(
+            &node,
+            &node_did,
+            &identities,
+            &registry,
+        )
+        .await
+        .unwrap();
+        let (left_notifications, _) = completion_obligations(
+            &tool.access().unwrap(),
+            &session_id,
+            &node_did,
+            tool.requester_did(),
+        )
+        .await;
+        left_to_worker.push((
+            left_state,
+            super::swept(report.tool_calls_terminalized),
+            super::swept(left_again.tool_calls_terminalized),
+            super::notice_reason(&left_notifications),
+        ));
 
         if session_stopped {
             update_request(
@@ -213,14 +214,20 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         )
         .await
         .unwrap();
-        assert_eq!(report.tool_calls_terminalized, 1, "{}", deleted.name);
         worker.await.unwrap();
         assert_ne!(
             process.observe(),
             gents_session::exec::ownership::ProcessObservation::Running,
-            "{}",
-            deleted.name
+            "{name}: the settled row's process stopped"
         );
+        let again = ToolCallLifecycle::reconcile_orphaned_background_tools(
+            &node,
+            &node_did,
+            &identities,
+            &registry,
+        )
+        .await
+        .unwrap();
         if session_stopped {
             gents_session::session::resume_session_with_access(
                 &node,
@@ -266,7 +273,6 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             .await
             .unwrap();
         let row = &response["data"]["AgentToolCall"][0];
-        assert_eq!(row["lifecycle_state"], deleted.terminal_state.as_str());
         assert_eq!(
             row["cancel_cause"],
             if session_stopped {
@@ -282,10 +288,43 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             tool.requester_did(),
         )
         .await;
-        let reason = deleted.notification_reason.as_deref().unwrap();
-        assert_eq!(notifications.len(), 1);
-        assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
+        settled.push((
+            session_stopped,
+            row["lifecycle_state"]
+                .as_str()
+                .expect("the tool row has a lifecycle state")
+                .to_owned(),
+            super::swept(report.tool_calls_terminalized),
+            super::swept(again.tool_calls_terminalized),
+            super::notice_reason(&notifications),
+        ));
         node.shutdown().await.expect("shut down test node");
+    }
+    assert_eq!(
+        left_to_worker[0], left_to_worker[1],
+        "both fixtures leave the registered worker's row alike"
+    );
+    for case in gents_lean_vocab::families::recovery_sweeps_orphan_live_worker::cases() {
+        let input = &case.input;
+        let (terminal_state, measure_before, measure_after, notification_reason) =
+            if input.owner_task_deleted || input.owner_session_stopped {
+                let (_, state, before, after, reason) = settled
+                    .iter()
+                    .find(|observed| observed.0 == input.owner_session_stopped)
+                    .cloned()
+                    .expect("a fixture settles each owner stop");
+                (state, before, after, reason)
+            } else {
+                left_to_worker[0].clone()
+            };
+        case.check(
+            gents_lean_vocab::families::recovery_sweeps_orphan_live_worker::OrphanSettled {
+                terminal_state,
+                measure_before,
+                measure_after,
+                notification_reason,
+            },
+        );
     }
     let observed = owned_background.expect("the stopped-session case resumed after settlement");
     for case in

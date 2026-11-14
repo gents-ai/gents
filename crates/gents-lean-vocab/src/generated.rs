@@ -41,10 +41,6 @@ pub fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {
     &lean_contract_snapshot().r6_backgrounding_cases
 }
 
-pub fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
-    &lean_contract_snapshot().recovery_sweep_cases
-}
-
 pub fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
     &lean_contract_snapshot().session_input_edit_cases
 }
@@ -462,7 +458,6 @@ pub struct LeanContractSnapshot {
     pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
@@ -1054,32 +1049,6 @@ pub struct LeanR6BackgroundingCase {
     pub redrive_allowed: Option<bool>,
     #[serde(default)]
     pub operation: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanRecoverySweepCase {
-    pub name: String,
-    pub sweep_id: String,
-    pub collection: String,
-    pub rust_function: String,
-    pub cadence: String,
-    pub implementation_status: String,
-    pub pre_state: String,
-    pub terminal_state: String,
-    pub measure_before: usize,
-    pub measure_after: usize,
-    pub deadline_expired: Option<bool>,
-    pub parent_live: Option<bool>,
-    pub parent_interrupted: Option<bool>,
-    pub parent_terminal: Option<bool>,
-    pub task_hook_observation: Option<String>,
-    pub execution_registered: Option<bool>,
-    pub process_outcome: Option<String>,
-    pub owner_task_deleted: Option<bool>,
-    pub owner_session_stopped: Option<bool>,
-    pub recovery_cause: Option<String>,
-    pub notification_reason: Option<String>,
-    pub deadline_audit_ref: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

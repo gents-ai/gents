@@ -388,31 +388,6 @@ structure QueueDeadlineConformanceCase where
   explicitDeadlinePreserved : Bool
   deriving Repr
 
-structure RecoverySweepCase where
-  name : String
-  sweepId : String
-  collection : String
-  rustFunction : String
-  cadence : String
-  implementationStatus : String
-  preState : String
-  terminalState : String
-  measureBefore : Nat
-  measureAfter : Nat
-  deadlineAuditRef : String
-  deadlineExpired : Option Bool := none
-  parentLive : Option Bool := none
-  parentInterrupted : Option Bool := none
-  parentTerminal : Option Bool := none
-  taskHookObservation : Option String := none
-  executionRegistered : Option Bool := none
-  processOutcome : Option String := none
-  ownerTaskDeleted : Option Bool := none
-  ownerSessionStopped : Option Bool := none
-  recoveryCause : Option String := none
-  notificationReason : Option String := none
-  deriving DecidableEq, Repr
-
 structure RestartDispositionCase where
   name : String
   rustFunction : String
