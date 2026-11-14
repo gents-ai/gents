@@ -2,6 +2,7 @@ import Proofs.Shared.CompletionRetry.Executable
 import Proofs.Shared.CompletionRetry.Directive
 import Proofs.Conformance.Family
 import Proofs.Conformance.ContractTypes
+import Proofs.Runtime.CompletionLoop
 
 namespace CompletionRetry.Contracts
 
@@ -15,6 +16,9 @@ structure Trace where
   now : Nat
   deadline : Option Nat
   steps : List Step
+  /-- A bound, not an expectation: the longest delay native jitter can give a
+  resample paced from the ladder's last step, in milliseconds. -/
+  resampleDelayBoundMs : Option Nat
   deriving ToJson
 
 private def scheduled : Policy :=
@@ -42,23 +46,31 @@ private def compactionIssued : Step :=
 
 private def trace (name : String) (policy : Policy) (steps : List Step)
     (deadline : Option Nat := none) : Trace :=
-  { name, policy, now := 1000, deadline, steps }
+  { name, policy, now := 1000, deadline, steps, resampleDelayBoundMs := none }
+
+/-- Native jitter moves a delay by at most a quarter of it, so a resample paced
+from the last ladder step waits at most 1.25 times that step. -/
+def resampleDelayBoundMs (p : Policy) : Nat := (p.backoff.getLast?.getD 0) * 1250
+
+private def boundedResample (t : Trace) : Trace :=
+  { t with resampleDelayBoundMs := some (resampleDelayBoundMs t.policy) }
 
 /-- Native retry delays are jittered: `jitter` in
 `crates/gents-loop/src/completion_retry.rs` moves each base delay by at most a
 quarter of it and floors the result at 100 ms, while the model wakes exactly
-at the base delay. A trace whose backoff steps are whole positive seconds and
-whose deadline is absent, behind the clock, closer than three quarters of the
-smallest base delay, or further than twice every base delay its steps can
-sum, has the same outcome under every jitter. -/
+at the base delay. A trace without a deadline has the same outcome under every
+jitter. A trace with a deadline needs a non-empty ladder of whole positive
+seconds (an empty ladder waits the 100 ms floor where the model waits zero)
+and a deadline behind the clock, closer than three quarters of the smallest
+base delay, or further than twice every base delay its steps can sum. -/
 def jitterSafe (t : Trace) : Bool :=
-  t.policy.backoff.all (· > 0) &&
-    match t.deadline with
-    | none => true
-    | some d =>
-        d < t.now ||
+  match t.deadline with
+  | none => true
+  | some d =>
+      !t.policy.backoff.isEmpty && t.policy.backoff.all (· > 0) &&
+        (d < t.now ||
           4 * (d - t.now) < 3 * t.policy.backoff.foldl min (t.policy.backoff.headD 0) ||
-          d - t.now ≥ 2 * t.steps.length * t.policy.backoff.foldl max 0
+          d - t.now ≥ 2 * t.steps.length * t.policy.backoff.foldl max 0)
 
 def preStreamTraces : List Trace :=
   [ trace "transport_failure_requires_retraction" scheduled [pre .transport "io"]
@@ -74,12 +86,15 @@ def preStreamTraces : List Trace :=
   , trace "deterministic_parse_moves_to_repair"
       { scheduled with backoff := [5, 30], maxResample := 2 }
       [pre .parseBadRequest "json", pre .parseBadRequest "json"]
-  , trace "resample_budget_outlives_ladder"
+  , boundedResample (trace "resample_budget_outlives_ladder"
       { scheduled with backoff := [5], maxResample := 3 }
-      [pre .parseBadRequest "a", pre .parseBadRequest "b", pre .parseBadRequest "c"]
-  , trace "resample_exhausts_on_its_own_budget"
+      [pre .parseBadRequest "a", pre .parseBadRequest "b", pre .parseBadRequest "c"])
+  , boundedResample (trace "resample_exhausts_on_its_own_budget"
       { scheduled with backoff := [5], maxResample := 2 }
-      [pre .parseBadRequest "a", pre .parseBadRequest "b", pre .parseBadRequest "c"]
+      [pre .parseBadRequest "a", pre .parseBadRequest "b", pre .parseBadRequest "c"])
+  , trace "empty_ladder_parse_resamples_at_once"
+      { scheduled with backoff := [], maxResample := 1, maxEmptyResample := 0 }
+      [pre .parseBadRequest "a", pre .parseBadRequest "b"]
   , trace "parse_budget_without_repair_is_exhausted" { scheduled with allowRepair := false }
       [pre .parseBadRequest "a", pre .parseBadRequest "b"]
   , trace "repair_issue_consumes_its_only_capability"
@@ -216,21 +231,46 @@ def witnessOutput (name : String) : WitnessOutput :=
     repairUsed := post.map (·.repairUsed)
     usageCharged := post.map (·.usageCharged) }
 
-/-- model-production-gap: the native retry owner `CompletionRetryState` has
-no retraction, publication, usage or repair-issue step. The owned loop writes
-the Retracted closure, accepts publication and records usage only inside a
-provider stream, and exposes no observation of these retry-machine steps (a
-refused schedule before retraction, an uncommitted retraction, acceptance as
-absorbing, usage across retraction, a second repair issue) for a test to
-compare. -/
+/-- model-production-gap: production has no API to attempt these retry-machine
+actions: a schedule before a durable retraction, an uncommitted retraction, a
+failure or a schedule after acceptance, and an accepted-tool-failure
+observation on the retry machine. -/
 @[conformance_family]
 def retractionUnreached : Family WitnessInput WitnessOutput where
   inputs :=
     [ "cannot_schedule_before_retraction", "uncommitted_retraction_is_rejected"
-    , "durable_retraction_is_observed", "accepted_publication_closes_retry"
     , "accepted_failure_cannot_retract", "accepted_tool_failure_is_terminal_observation"
-    , "accepted_publication_cannot_schedule", "usage_is_charged_before_retraction"
-    , "late_usage_is_still_charged", "second_repair_issue_is_rejected" ].map fun name => { name }
+    , "accepted_publication_cannot_schedule" ].map fun name => { name }
   model := fun i => witnessOutput i.name
+
+structure LoopWitness where
+  name : String
+  scenario : CompletionLoop.Input
+  deriving ToJson
+
+private def loopDone : CompletionLoop.Call := { text := ["Hello ", "world"] }
+private def loopCharged : CompletionLoop.Call :=
+  { text := ["done"], usage := some ⟨100, 100, 1000⟩ }
+private def loopFailure (kind : String) : CompletionLoop.Call := { failure := some kind }
+
+/-- The retry-machine witnesses whose behaviour the owned loop reaches: a
+durable retraction before the retry, acceptance closing the attempt, usage
+charged across a retraction and after acceptance, and the single repair. -/
+@[conformance_family]
+def loopWitness : Family LoopWitness CompletionLoop.Observation where
+  inputs :=
+    [ { name := "durable_retraction_is_observed"
+        scenario := { calls := [{ loopFailure "transport" with text := ["Hel"] }, loopDone] } }
+    , { name := "accepted_publication_closes_retry"
+        scenario := { calls := [loopDone, loopFailure "transport"] } }
+    , { name := "usage_is_charged_before_retraction"
+        scenario := { calls := [{ loopFailure "transport" with text := ["partial"] }, loopCharged]
+                      limit := some 5000 } }
+    , { name := "late_usage_is_still_charged"
+        scenario := { calls := [{ tool := true, usage := some ⟨1000, 1000, 2000⟩ }, loopCharged]
+                      limit := some 5000 } }
+    , { name := "second_repair_issue_is_rejected"
+        scenario := { calls := [loopFailure "reasoning", loopFailure "reasoning"] } } ]
+  model := fun i => CompletionLoop.run i.scenario
 
 end CompletionRetry.Contracts

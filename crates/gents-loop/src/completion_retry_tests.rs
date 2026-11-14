@@ -398,6 +398,7 @@ struct RetryTrace {
     now: i64,
     deadline: Option<i64>,
     steps: Vec<RetryTraceStep>,
+    resample_delay_bound_ms: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -514,6 +515,22 @@ fn replay_retry_trace(trace: &RetryTrace) -> Vec<RetryTraceOutcome> {
     let mut outcomes = Vec::new();
     for step in &trace.steps {
         let (kind, delay) = match step.entry.as_str() {
+            "pre_stream" if step.failure == "parse_bad_request" => {
+                let observed = pre_stream_kind(state.on_pre_stream_failure(
+                    &trace_failure(&step.failure, &step.error),
+                    now,
+                    deadline,
+                ));
+                if let (Some(bound), "retry_resample") = (trace.resample_delay_bound_ms, observed.0)
+                {
+                    assert!(
+                        observed.1 <= Duration::from_millis(bound),
+                        "a resample paces from the ladder's last step: {:?} exceeds {bound} ms",
+                        observed.1
+                    );
+                }
+                observed
+            }
             "pre_stream" => pre_stream_kind(state.on_pre_stream_failure(
                 &trace_failure(&step.failure, &step.error),
                 now,

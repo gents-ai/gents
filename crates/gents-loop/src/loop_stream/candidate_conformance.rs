@@ -595,3 +595,13 @@ async fn generated_completion_text_discards_retracted_previews() {
         });
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn retry_machine_witnesses_replay_through_the_owned_loop() {
+    for case in
+        gents_lean_vocab::families::completion_retry_contracts_loop_witness::cases::<String>()
+    {
+        let input: family::Input = gents_lean_vocab::family::recode(&case.input.scenario);
+        case.check(gents_lean_vocab::family::recode(&observe(&input).await));
+    }
+}

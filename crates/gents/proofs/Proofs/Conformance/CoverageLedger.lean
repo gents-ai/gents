@@ -1341,7 +1341,11 @@ def caseCoverage : List CoverageEntry :=
       "completion_retry_contracts_origin_class")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "completion_retry_contracts_retraction_unreached"
-      "model-production-gap: the native retry owner CompletionRetryState has no retraction, publication, usage or repair-issue step; the owned loop performs them inside a provider stream and exposes no observation of the retry machine's refused schedule before retraction, uncommitted retraction, absorbing acceptance, usage across retraction or second repair issue.")
+      "model-production-gap: production has no API to attempt these retry-machine actions: a schedule before a durable retraction, an uncommitted retraction, a failure or a schedule after acceptance, and an accepted-tool-failure observation on the retry machine.")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_loop_witness")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "Proofs.Conformance.FleetSlotAccounting"
