@@ -303,8 +303,8 @@ fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
         assert!(path.is_absolute(), "{name} must be absolute");
         path
     };
+    path(gents_desktop_core::client::DESKTOP_HOME_ENV);
     BridgeConfig {
-        home: HomePolicy::FixedRoot(path("GENTS_E2E_DESKTOP_HOME")),
         bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
             node_home: NodeHomePolicy::Fixed(path("GENTS_E2E_NODE_HOME")),
         },
