@@ -400,7 +400,6 @@ def snapshotRequestCasesJson : String :=
 
 def snapshotSessionCasesJson : String :=
   ""
-    ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
 
 def snapshotIdentityCasesJson : String :=
   ""
