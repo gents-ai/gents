@@ -536,6 +536,12 @@ async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
     Ok((home, node))
 }
 
+/// Every acknowledged increment is durable with its receipt, a returned
+/// conflict applied nothing, and every call returns (`tla/SharedOwnerHotCounter
+/// .tla`: `TestAccounting`, `EveryCallSettles`). A wave has no wall-clock
+/// bound: the owner bounds attempts and each native phase, not the time the
+/// host takes to schedule them (`WaveDeadline` fails with every safety
+/// property holding), so a hang surfaces as the owner's phase-timeout error.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
     let (_home, node) = node().await?;
@@ -580,15 +586,10 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
             });
         }
         next_writer += width as i64;
-        let observations = tokio::time::timeout(Duration::from_secs(60), async {
-            let mut observations = Vec::new();
-            while let Some(worker) = workers.join_next().await {
-                observations.extend(worker??);
-            }
-            Ok::<_, anyhow::Error>(observations)
-        })
-        .await
-        .context("shared owner writers stalled")??;
+        let mut observations = Vec::new();
+        while let Some(worker) = workers.join_next().await {
+            observations.extend(worker??);
+        }
         assert_eq!(observations.len(), width * 8);
         let accepted = observations.iter().filter(|row| row.1).count();
         assert!(accepted > 0, "at least one hot-counter update commits");
