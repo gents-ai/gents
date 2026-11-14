@@ -26,6 +26,7 @@ import Proofs.Conformance.MailboxContent
 import Proofs.Conformance.ManualRequest
 import Proofs.Conformance.PendingRejection
 import Proofs.Conformance.ManagedExecSpawn
+import Proofs.Conformance.ManagedExecToolRoute
 import Proofs.Conformance.PluginBind
 import Proofs.Conformance.OperatorProtection
 import Proofs.Conformance.EnrollmentMemberRenewal
@@ -414,9 +415,6 @@ def snapshotClientCasesJson : String :=
 
 def snapshotRuntimeCasesJson : String :=
   ""
-    ++ "\"managed_exec_tool_boundary_cases\":"
-      ++ jsonArray
-        (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
     ++ "\"process_stop_cases\":"
       ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
 

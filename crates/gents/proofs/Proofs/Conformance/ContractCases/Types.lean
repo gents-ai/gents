@@ -313,18 +313,6 @@ structure NativeFilesystemBoundaryCase where
   blockerMs : Nat
   deriving Repr
 
-structure ManagedExecToolBoundaryCase where
-  name : String
-  toolName : String
-  workClass : String
-  boundary : String
-  killScope : String
-  timeoutRequiresKill : Bool
-  cancelRequiresKill : Bool
-  descendantsInTerminationScope : Bool
-  captureDrainBounded : Bool
-  deriving Repr
-
 structure ProcessStopCase where
   name : String
   liveEvidence : String := ""

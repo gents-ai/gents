@@ -25,10 +25,6 @@ pub fn lean_identity_household_cases() -> &'static [LeanIdentityHouseholdCase] {
     &lean_contract_snapshot().identity_household_cases
 }
 
-pub fn lean_managed_exec_tool_boundary_cases() -> &'static [LeanManagedExecToolBoundaryCase] {
-    &lean_contract_snapshot().managed_exec_tool_boundary_cases
-}
-
 pub fn lean_process_stop_cases() -> &'static [LeanProcessStopCase] {
     &lean_contract_snapshot().process_stop_cases
 }
@@ -433,7 +429,6 @@ pub struct LeanContractSnapshot {
     pub goal_client_start_cases: Vec<serde_json::Value>,
     #[serde(deserialize_with = "required_nullable")]
     pub causal_hop_default_max_request_hop: Option<u32>,
-    pub managed_exec_tool_boundary_cases: Vec<LeanManagedExecToolBoundaryCase>,
     pub process_stop_cases: Vec<LeanProcessStopCase>,
     pub recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
@@ -850,19 +845,6 @@ pub enum LeanIdentitySubject {
     Actor { actor: String },
     EntitySet { resource: String, id: String, target_relation: String },
     Object { resource: String, id: String },
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanManagedExecToolBoundaryCase {
-    pub name: String,
-    pub tool_name: String,
-    pub work_class: String,
-    pub boundary: String,
-    pub kill_scope: String,
-    pub timeout_requires_kill: bool,
-    pub cancel_requires_kill: bool,
-    pub descendants_in_termination_scope: bool,
-    pub capture_drain_bounded: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

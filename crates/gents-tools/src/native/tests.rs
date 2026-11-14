@@ -486,6 +486,7 @@ fn tool_outcome_state(outcome: &gents_loop::tool_call_lifecycle::ToolOutcome) ->
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
     ensure_native_fs_runner_for_test();
+    let _env = FS_RUNNER_BLOCK_ENV.lock().await;
     for case in gents_lean_vocab::families::contracts_native_filesystem_boundary::cases() {
         let root = temp_root(&format!("gents-native-boundary-{}", case.input.tool_name));
         std::fs::write(root.join("first.txt"), "first request\n").unwrap();
@@ -2672,5 +2673,102 @@ async fn bash_tool_liveness_follows_the_lean_composed_model() {
                 tool_state: tool_outcome_state(&outcome).to_owned(),
             },
         );
+    }
+}
+
+/// The filesystem runner's blocker reads process-wide environment at spawn, so
+/// tests that set it hold this lock for the whole blocked call.
+static FS_RUNNER_BLOCK_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test]
+async fn native_tool_blocking_calls_register_their_managed_executor() {
+    ensure_native_fs_runner_for_test();
+    let runner = native_fs_runner_binary_for_current_test()
+        .expect("native filesystem runner test binary")
+        .to_string_lossy()
+        .into_owned();
+    let _env = FS_RUNNER_BLOCK_ENV.lock().await;
+    for case in gents_lean_vocab::families::managed_exec_tool_route::cases::<String>() {
+        let tool_name = case.input.tool_name.clone();
+        let root = temp_root(&format!("gents-tool-route-{tool_name}"));
+        std::fs::write(root.join("first.txt"), "first request\n").unwrap();
+        let context = ToolContext::new(root.clone(), false).unwrap();
+        let gate = root.join("gate");
+        let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
+        let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", root.join("entered"));
+        let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &gate);
+        let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", root.join("released"));
+        let (tool, args): (Box<dyn gents_loop::tool::ToolDyn>, String) = match tool_name.as_str() {
+            "list_files" => (
+                Box::new(ListFilesTool::new(
+                    context.clone(),
+                    DEFAULT_MAX_LIST_ENTRIES,
+                )),
+                r#"{"recursive":true}"#.to_string(),
+            ),
+            "glob" => (
+                Box::new(GlobTool::new(context.clone(), DEFAULT_MAX_MATCHES)),
+                r#"{"pattern":"*.txt"}"#.to_string(),
+            ),
+            "grep" => (
+                Box::new(GrepTool::new(context.clone(), DEFAULT_MAX_MATCHES)),
+                r#"{"pattern":"request"}"#.to_string(),
+            ),
+            "bash" => (
+                Box::new(ReadOnlyBashTool::new(
+                    context.clone(),
+                    Duration::from_secs(60),
+                    vec!["sleep".into()],
+                )),
+                serde_json::json!({ "command": "sleep", "args": ["30"] }).to_string(),
+            ),
+            "bash_unrestricted" => (
+                Box::new(UnrestrictedBashTool::with_policy(
+                    context.clone(),
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                    DEFAULT_MAX_COMMAND_CHARS,
+                    CommandExecutionPolicy::write_capable(),
+                )),
+                serde_json::json!({ "command": "sleep 30" }).to_string(),
+            ),
+            other => panic!("no native tool scenario for {other}"),
+        };
+        let token = tokio_util::sync::CancellationToken::new();
+        let call = crate::runtime_context::scope_request_tool_execution(
+            None,
+            token.clone(),
+            crate::runtime_context::call_tool_managed(tool.as_ref(), args),
+        );
+        let observe = async {
+            let observed = tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
+                loop {
+                    let registered = gents_session::exec::status::active_native_executors()
+                        .into_iter()
+                        .find(|executor| executor.tool_name.as_deref() == Some(tool_name.as_str()));
+                    if let Some(executor) = registered {
+                        break if executor.argv0 == runner {
+                            "filesystem_traversal"
+                        } else {
+                            "shell_command"
+                        }
+                        .to_string();
+                    }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .ok();
+            std::fs::write(&gate, b"open").expect("opening the blocker gate");
+            token.cancel();
+            observed
+        };
+        let (_, work_class) = tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {
+            tokio::join!(call, observe)
+        })
+        .await
+        .expect("a blocked native tool call ends once released");
+        let _ = std::fs::remove_dir_all(&root);
+        case.check(gents_lean_vocab::families::managed_exec_tool_route::RouteOutput { work_class });
     }
 }
