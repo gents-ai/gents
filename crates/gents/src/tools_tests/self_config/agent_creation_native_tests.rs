@@ -775,10 +775,6 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         creator_access.execute("{ Node { _docID } }").await?["data"]["Node"],
         json!([])
     );
-    let modeled = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .context("configuration policy model is missing")?;
     let mut installations = Vec::new();
     let mut removals = Vec::new();
     let agent_did = identity::Did::new(signer.did())?;
@@ -976,16 +972,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .add_actor_relationship("DatastoreToolSurface", surface_doc, "reader", &sibling_did)
         .await?;
-    let surface_case = |name: &str| {
-        modeled
-            .configuration_datastore_tool_use_cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .with_context(|| format!("missing modeled surface case {name}"))
-    };
-    assert_eq!(
+    let mut revalidated = std::collections::BTreeMap::new();
+    revalidated.insert(
+        "allowed",
         cached_surface_usable(&sibling_writer, runtime.did(), &declaration).await,
-        surface_case("allowed")?["expected"].as_bool().unwrap()
     );
     use gents_loop::tool::Tool as _;
     let cached_write = gents_tools::builtin::defra_write::BoundedWriteTool::new(
@@ -1165,10 +1155,36 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             })
         })
         .await?;
-    assert_eq!(
+    revalidated.insert(
+        "changed",
         cached_surface_usable(&sibling_writer, runtime.did(), &declaration).await,
-        surface_case("changed")?["expected"].as_bool().unwrap()
     );
+    for enabled in [false, true] {
+        let mutation = format!(
+            r#"mutation($input: DatastoreToolSurfaceMutationInputArg!) {{ update_DatastoreToolSurface(docID: "{}", input: $input) {{ _docID }} }}"#,
+            gents_store::graphql::escape_graphql_string(surface_doc)
+        );
+        let variables = json!({"input": {"enabled": enabled}});
+        user_access
+            .transact_write("test.surface.toggle", |txn| {
+                let (mutation, variables) = (&mutation, &variables);
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        variables,
+                        gents_protocol::schemas::DATASTORE_TOOL_SURFACE,
+                    )
+                    .await
+                })
+            })
+            .await?;
+        if !enabled {
+            revalidated.insert(
+                "disabled",
+                cached_surface_usable(&sibling_writer, runtime.did(), &declaration).await,
+            );
+        }
+    }
     user_access
         .transact_write("test.surface.restore", |txn| {
             let plan = &initial_surface_plan;
@@ -1202,9 +1218,9 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         })
         .await?;
     assert_eq!(sibling_writer.execute("{ DatastoreToolSurface(filter: {surface_id: {_eq: \"fixture/surface\"}}) { _docID } }").await?["data"]["DatastoreToolSurface"].as_array().unwrap().len(), 1);
-    assert_eq!(
+    revalidated.insert(
+        "deselected",
         cached_surface_usable(&sibling_writer, runtime.did(), &declaration).await,
-        surface_case("deselected")?["expected"].as_bool().unwrap()
     );
     user_access
         .delete_actor_relationship("DatastoreToolSurface", surface_doc, "reader", &sibling_did)
@@ -1328,11 +1344,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         }
     };
     revocation.context("surface revocation was blocked by cached tool transaction")??;
-    assert_eq!(
-        raced.is_ok(),
-        surface_case("revoked")?["expected"].as_bool().unwrap(),
-        "revocation did not fence a source observation and write: {raced:?}"
-    );
+    let raced_write = raced.is_ok();
     let raced_rows = sibling_writer
         .execute("{ FixtureEntry(filter: {name: {_eq: \"raced-revocation\"}}) { _docID } }")
         .await?;
@@ -1340,10 +1352,21 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .as_array()
         .context("raced entries missing")?
         .is_empty());
-    assert_eq!(
+    revalidated.insert(
+        "revoked",
         cached_surface_usable(&sibling_writer, runtime.did(), &declaration).await,
-        surface_case("revoked")?["expected"].as_bool().unwrap()
     );
+    assert_eq!(
+        raced_write, revalidated["revoked"],
+        "revocation did not fence a source observation and write"
+    );
+    for case in gents_lean_vocab::families::household_datastore_tool_revalidation::cases() {
+        let observed = revalidated
+            .get(case.input.name.as_str())
+            .copied()
+            .with_context(|| format!("the surface scenario has no step {}", case.input.name))?;
+        case.check(observed);
+    }
     let error = gents_loop::tool::Tool::call(
         &cached_tool,
         gents_tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()),

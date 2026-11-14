@@ -1685,14 +1685,14 @@ async fn session_tool_reads_follow_the_node_grant_and_session_acp() -> anyhow::R
                 did.clone(),
                 signer.as_ref(),
             )?;
-            readers.push((did, access, agent_value));
+            readers.push((did, access));
         }
         let create = |name: &str| {
             format!(
                 r#"mutation {{ create_ToolSessionProbe(input: {{name:"{name}"}}) {{_docID}} }}"#
             )
         };
-        let (agent, agent_access, agent_value) = &readers[0];
+        let (agent, agent_access) = &readers[0];
         let owned = gents_store::graphql::created_doc_id(
             &agent_access
                 .write("test.session_tool.owned", &create("owned"))
@@ -1720,7 +1720,8 @@ async fn session_tool_reads_follow_the_node_grant_and_session_acp() -> anyhow::R
         }
         if !case.input.granted {
             owner.write("test.session_tool.withdraw", &format!(
-                r#"mutation {{ update_Agent(filter: {{node_did:{{_eq:"{node_value}"}},agent_did:{{_eq:"{agent_value}"}}}},input:{{enabled:false}}) {{_docID}} }}"#
+                r#"mutation {{ update_Agent(filter: {{node_did:{{_eq:"{node_value}"}},agent_did:{{_eq:"{}"}}}},input:{{enabled:false}}) {{_docID}} }}"#,
+                escape_graphql_string(agent.as_str())
             )).await?;
         }
         let doc = match case.input.session.as_str() {
@@ -1857,17 +1858,78 @@ async fn rolled_back_write(
     Ok(())
 }
 
-async fn schema_tool_enabled(
+async fn tool_source_grants(
+    node: &defra_node::Node,
+    actor: &identity::Did,
+) -> anyhow::Result<Vec<(String, NodePermission)>> {
+    let txn = node.database().new_txn(false).await?;
+    let store = Arc::new(acp::zanzibar::store::TransactionZanzibarStore::new(
+        txn.datastore()?.sibling(Namespace::Acpstore),
+    ));
+    let mut granted = Vec::new();
+    for name in [
+        "get-collection",
+        "patch-collection",
+        "truncate-collection",
+        "set-migration",
+        "add-view",
+    ] {
+        let permission = schema_permission(name)?;
+        for root in store
+            .get_relation_subjects(
+                acp::NODE_POLICY_ID,
+                acp::NODE_RESOURCE_NAME,
+                acp::NODE_OBJECT_ID,
+                permission.as_str(),
+            )
+            .await?
+        {
+            let Subject::EntitySet { object_id, .. } = root else {
+                continue;
+            };
+            let Some(source) = decode_source_for_tests(&object_id)
+                .filter(|source| source.starts_with("gents-tool-v1:"))
+            else {
+                continue;
+            };
+            let members = store
+                .get_relation_subjects(
+                    acp::NODE_POLICY_ID,
+                    acp::NODE_RESOURCE_NAME,
+                    &object_id,
+                    permission.as_str(),
+                )
+                .await?;
+            if members.contains(&Subject::Entity(actor.clone())) {
+                granted.push((source, permission));
+            }
+        }
+    }
+    drop(store);
+    txn.commit().await?;
+    Ok(granted)
+}
+
+async fn enabled_operation_sources(
     owner: &gents_store::config_client::ConfigAccess,
-    tools_doc: &str,
-) -> anyhow::Result<bool> {
+    node_did: &str,
+    tools_id: &str,
+) -> anyhow::Result<Vec<gents_store::local::ProjectedOperationSource>> {
+    use gents_store::local::ToolSourcePolicy;
     let response = owner
         .execute(&format!(
-            r#"{{ Tools(filter: {{_docID: {{_eq: "{}"}}}}) {{ built_ins }} }}"#,
-            escape_graphql_string(tools_doc)
+            r#"{{ Tools(filter: {{node_did: {{_eq: "{}"}}, tools_id: {{_eq: "{}"}}}}) {{ node_did tools_id built_ins }} }}"#,
+            escape_graphql_string(node_did),
+            escape_graphql_string(tools_id)
         ))
         .await?;
-    Ok(response["data"]["Tools"][0]["built_ins"]["enable_schema_tool"] == true)
+    let Some(tools) = response["data"]["Tools"]
+        .as_array()
+        .and_then(|rows| rows.first())
+    else {
+        return Ok(Vec::new());
+    };
+    crate::surface::ToolCeiling::meta_only().node_operation_sources(tools, &[])
 }
 
 #[tokio::test]
@@ -1886,6 +1948,27 @@ async fn schema_tool_source_changes_follow_the_modeled_projection() -> anyhow::R
         let nonce = escape_graphql_string(&binding.creation_nonce);
         let physical = !input.source.tools_doc.is_empty();
         let tools_id = if physical { "tools" } else { "missing-tools" };
+        let same_source =
+            |other: &gents_lean_vocab::families::household_tool_grant_projection::SourceWire| {
+                other.tools_doc == input.source.tools_doc
+                    && other.agent == input.source.agent
+                    && other.purpose == input.source.purpose
+                    && other.permission == input.source.permission
+            };
+        if !input.initial.owners.is_empty()
+            || input.initial.enabled.len() > 1
+            || input.initial.enabled.len() != input.initial.grants.len()
+            || !input.initial.enabled.iter().all(same_source)
+            || !input.initial.grants.iter().all(same_source)
+            || input
+                .initial
+                .admins
+                .iter()
+                .any(|admin| admin != &input.source.agent)
+            || input.source.purpose != "schema"
+        {
+            anyhow::bail!("the projection scenario cannot build {:?}", input);
+        }
         let selected = !input.initial.enabled.is_empty();
         let tools_doc = if physical {
             Some(gents_store::graphql::created_doc_id(
@@ -1941,32 +2024,41 @@ async fn schema_tool_source_changes_follow_the_modeled_projection() -> anyhow::R
             rolled_back_write(&owner, &update).await?;
         }
         let permission = schema_permission(&input.source.permission)?;
-        let (enabled, grants) = match &tools_doc {
-            Some(doc) => (
-                schema_tool_enabled(&owner, doc).await?,
-                source_grants(
-                    &node,
-                    &gents_store::local::tool_permission_projection::tool_source(
+        let production = enabled_operation_sources(&owner, runtime.did(), tools_id).await?;
+        let wire = |tools_doc: &str, purpose: &str, permission: NodePermission| {
+            gents_lean_vocab::families::household_tool_grant_projection::SourceWire {
+                tools_doc: tools_doc.to_owned(),
+                agent: input.source.agent.clone(),
+                purpose: purpose.to_owned(),
+                permission: permission.as_str().to_owned(),
+            }
+        };
+        let enabled = production
+            .iter()
+            .filter(|source| source.permission == permission)
+            .map(|source| wire(&input.source.tools_doc, source.purpose, source.permission))
+            .collect::<Vec<_>>();
+        let mut grants = Vec::new();
+        for (source, granted) in tool_source_grants(&node, &agent).await? {
+            if granted != permission {
+                continue;
+            }
+            let attributed = tools_doc.as_ref().and_then(|doc| {
+                production.iter().find(|candidate| {
+                    gents_store::local::tool_permission_projection::tool_source(
                         runtime.did(),
                         doc,
                         &context_doc,
                         agent.as_str(),
-                        &input.source.purpose,
-                    ),
-                    permission,
-                    &agent,
-                )
-                .await?,
-            ),
-            None => (false, false),
-        };
-        let observed = |present: bool| {
-            if present {
-                vec![input.source.clone()]
-            } else {
-                Vec::new()
-            }
-        };
+                        candidate.purpose,
+                    ) == source
+                })
+            });
+            grants.push(match attributed {
+                Some(candidate) => wire(&input.source.tools_doc, candidate.purpose, granted),
+                None => wire("unattributed", "unattributed", granted),
+            });
+        }
         let effective = node
             .nac_manager()
             .check_permission(&agent, permission)
@@ -1974,8 +2066,8 @@ async fn schema_tool_source_changes_follow_the_modeled_projection() -> anyhow::R
         node.shutdown().await?;
         case.check(
             gents_lean_vocab::families::household_tool_grant_projection::ProjectionOutput {
-                enabled: observed(enabled),
-                grants: observed(grants),
+                enabled,
+                grants,
                 effective,
             },
         );
@@ -1997,6 +2089,24 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
         let node_value = escape_graphql_string(runtime.did());
         let agent_value = escape_graphql_string(&binding.agent_did);
         let nonce = escape_graphql_string(&binding.creation_nonce);
+        let first = input
+            .sources
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("an empty tool group"))?;
+        if !input.initial.owners.is_empty()
+            || !input.initial.admins.is_empty()
+            || !input.initial.direct.is_empty()
+            || input.initial.enabled.len() != input.initial.grants.len()
+            || !(input.initial.enabled.is_empty()
+                || input.initial.enabled.len() == input.sources.len())
+            || input.sources.iter().any(|source| {
+                source.tools_doc != first.tools_doc
+                    || source.agent != first.agent
+                    || source.purpose != "schema"
+            })
+        {
+            anyhow::bail!("the group scenario cannot build {:?}", input);
+        }
         let selected = !input.initial.enabled.is_empty();
         let tools_doc = gents_store::graphql::created_doc_id(
             &owner.write("test.tool_group.tools", &format!(
@@ -2032,28 +2142,45 @@ async fn schema_tool_group_changes_commit_every_permission_together() -> anyhow:
         } else {
             rolled_back_write(&owner, &update).await?;
         }
-        let tool_enabled = schema_tool_enabled(&owner, &tools_doc).await?;
-        let mut enabled = Vec::new();
-        let mut grants = Vec::new();
-        for source in &input.sources {
-            if tool_enabled {
-                enabled.push(source.clone());
+        let production = enabled_operation_sources(&owner, runtime.did(), "tools").await?;
+        let wire = |purpose: &str, permission: NodePermission| {
+            gents_lean_vocab::families::household_tool_grant_group::SourceWire {
+                tools_doc: first.tools_doc.clone(),
+                agent: first.agent.clone(),
+                purpose: purpose.to_owned(),
+                permission: permission.as_str().to_owned(),
             }
-            let projected = source_grants(
-                &node,
-                &gents_store::local::tool_permission_projection::tool_source(
-                    runtime.did(),
-                    &tools_doc,
-                    &context_doc,
-                    agent.as_str(),
-                    &source.purpose,
-                ),
-                schema_permission(&source.permission)?,
-                &agent,
-            )
-            .await?;
-            if projected {
-                grants.push(source.clone());
+        };
+        let mut enabled = Vec::new();
+        for source in &input.sources {
+            let permission = schema_permission(&source.permission)?;
+            for candidate in &production {
+                if candidate.purpose == source.purpose && candidate.permission == permission {
+                    enabled.push(wire(candidate.purpose, candidate.permission));
+                }
+            }
+        }
+        let mut grants = Vec::new();
+        let granted = tool_source_grants(&node, &agent).await?;
+        for source in &input.sources {
+            let permission = schema_permission(&source.permission)?;
+            for (projected, held) in &granted {
+                if *held != permission {
+                    continue;
+                }
+                let attributed = production.iter().find(|candidate| {
+                    gents_store::local::tool_permission_projection::tool_source(
+                        runtime.did(),
+                        &tools_doc,
+                        &context_doc,
+                        agent.as_str(),
+                        candidate.purpose,
+                    ) == *projected
+                });
+                grants.push(match attributed {
+                    Some(candidate) => wire(candidate.purpose, *held),
+                    None => wire("unattributed", *held),
+                });
             }
         }
         let mut permissions = Vec::new();

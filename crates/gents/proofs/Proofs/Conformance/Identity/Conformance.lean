@@ -198,7 +198,6 @@ def managedToolIdentityCases : List (Option ClaimedDid × String × Option Strin
   , (some (.key "malformed"), "runtime", some "not-a-nonce")
   , (none, "runtime", some creationA) ]
 
-
 namespace HouseholdFixture
 open Household
 
@@ -544,14 +543,6 @@ theorem target_household_controls_delivered_request :
      allowed 5 initial agentDid "agents" "general" "invoke"] =
     [true, true, false, true] := by native_decide
 
-def json : Json := Json.mkObj
-  [("name", toJson "user-node-agents-mixed-session-ownership-policy-followup"), ("policy_yaml", toJson policyYaml),
-   ("objects", toJson (initial.objects.map objectJson)),
-   ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
-   ("policy_registrations", toJson ([] : List Json)),
-   ("self_config_actions", toJson ([] : List Json)),
-   ("self_config_lookup_cases", toJson ([] : List Json)),
-   ("actions", toJson (traceJson initial (nodeAdministratorChanges ++ runtimeReaderChanges ++ invokeChanges ++ invokeOnlySessionActions ++ requestSessionChanges ++ receiptAuthorChanges ++ matrix ++ managementChanges ++ selfConfigChanges ++ changes)))]
 end HouseholdFixture
 
 namespace OperationsFixture
@@ -579,14 +570,6 @@ theorem detached_parent_grant_trace :
     HouseholdFixture.observed initial actions = [false, false, true, true, false, true, false, false, false, false, true, false] := by
   native_decide
 
-def json : Json := Json.mkObj
-  [("name", toJson "operations-parent-publication"), ("policy_yaml", toJson policyYaml),
-   ("objects", toJson (initial.objects.map objectJson)),
-   ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
-   ("policy_registrations", toJson ([] : List Json)),
-   ("self_config_actions", toJson ([] : List Json)),
-   ("self_config_lookup_cases", toJson ([] : List Json)),
-   ("actions", toJson (traceJson initial actions))]
 end OperationsFixture
 
 namespace ConfigurationFixture
@@ -600,22 +583,8 @@ def initial : State :=
       ⟨"configuration", "agent-created", "parent", .object "nodes" "home"⟩],
     enrolled := [] }
 
-def checks (state : State) : List Json :=
-  [userDid, agentDid, siblingDid, runtimeDid].flatMap fun actor =>
-    ["selected", "agent-created"].flatMap fun id =>
-      ["read", "update", "delete"].map fun operation => Json.mkObj
-        [("action", toJson "check"), ("actor", toJson actor),
-         ("resource", toJson "configuration"), ("id", toJson id),
-         ("permission", toJson operation),
-         ("expected", toJson (Household.allowed 5 state actor "configuration" id operation))]
-
 def reader : Relation := ⟨"configuration", "selected", "reader", .actor agentDid⟩
 def writer : Relation := ⟨"configuration", "selected", "writer", .actor agentDid⟩
-def withReader : State := apply initial (.grant reader)
-def withWriter : State := apply withReader (.grant writer)
-def withoutWriter : State := apply withWriter (.revoke writer)
-def withoutReader : State := apply withoutWriter (.revoke reader)
-
 def atomicInitial : State :=
   { objects := [⟨"nodes", "home", userDid⟩], relations := [], enrolled := [] }
 
@@ -635,27 +604,10 @@ def eventConfigurationState : State :=
       ⟨"configuration", "trigger", "parent", .object "nodes" "home"⟩,
       ⟨"configuration", "source", "parent", .object "nodes" "home"⟩], enrolled := [] }
 
-
-
-
-
-def datastoreToolUseCaseJson (name : String)
-    (visible enabled selected declarationMatches : Bool) : Json :=
-  Json.mkObj [("name", toJson name), ("visible", toJson visible),
-    ("enabled", toJson enabled), ("selected", toJson selected),
-    ("declaration_matches", toJson declarationMatches),
-    ("expected", toJson (Configuration.cachedDatastoreToolUsable
-      visible enabled selected declarationMatches))]
-
-
 def toolSource : Configuration.ToolGrantSource := ⟨"tools-doc", agentDid, "schema", "patch-collection"⟩
 def otherToolSource : Configuration.ToolGrantSource := ⟨"other-tools-doc", agentDid, "schema", "patch-collection"⟩
 def otherAgentSource : Configuration.ToolGrantSource := ⟨"tools-doc", siblingDid, "schema", "patch-collection"⟩
 def otherPurposeSource : Configuration.ToolGrantSource := ⟨"tools-doc", agentDid, "other", "patch-collection"⟩
-
-def toolSourceJson (source : Configuration.ToolGrantSource) : Json := Json.mkObj
-  [("tools_doc", toJson source.toolsDoc), ("agent", toJson source.agent),
-   ("purpose", toJson source.purpose), ("permission", toJson source.permission)]
 
 def schemaToolSources : List Configuration.ToolGrantSource :=
   Configuration.schemaToolPermissions.map fun permission =>
@@ -712,7 +664,6 @@ def toolGrantorHousehold : State :=
   { objects := [⟨"configuration", "tools-doc", userDid⟩],
     relations := [⟨"configuration", "tools-doc", "writer", .actor agentDid⟩], enrolled := [] }
 
-
 theorem tools_writer_cannot_grant_itself_schema_authority :
     let initial : Configuration.ToolGrantProjection := { admins := [userDid] }
     (Household.allowed 5 toolGrantorHousehold agentDid "configuration" "tools-doc" "update" ∧
@@ -764,62 +715,6 @@ def callbackState : State :=
       ⟨"configuration", "callback", "parent", .object "nodes" "home"⟩,
       ⟨"configuration", "module", "parent", .object "nodes" "home"⟩], enrolled := [] }
 
-def backendCredentialCaseJson (name : String) (access : Configuration.BackendCredentialAccess)
-    (currentSecret historicalSecret : Bool) : Json :=
-  Json.mkObj [("name", toJson name),
-    ("profile_required", toJson access.profileRequired),
-    ("profile_visible", toJson access.profileVisible),
-    ("backend_visible", toJson access.backendVisible),
-    ("metadata_shareable", toJson (Configuration.backendMetadataShareable currentSecret historicalSecret)),
-    ("runtime_actor", toJson access.runtimeActor),
-    ("secret_readable", toJson access.secretReadable),
-    ("same_node", toJson access.sameNode),
-    ("selected_backend", toJson access.selectedBackend),
-    ("same_credential", toJson access.sameCredential),
-    ("destination_approved", toJson access.destinationApproved),
-    ("credential_version_matches", toJson access.credentialVersionMatches),
-    ("current_secret", toJson currentSecret), ("historical_secret", toJson historicalSecret),
-    ("may_share", toJson (Configuration.backendMetadataShareable currentSecret historicalSecret)),
-    ("may_use", toJson (Configuration.runtimeMayUseBackendCredential access currentSecret historicalSecret))]
-
-def backendCredentialCases : List Json := Id.run do
-  let allowed : Configuration.BackendCredentialAccess := ⟨true, true, true, true, true, true, true, true, true, true⟩
-  return [backendCredentialCaseJson "authorized" allowed false false,
-    backendCredentialCaseJson "background-discovery" { allowed with profileRequired := false, profileVisible := false } false false,
-    backendCredentialCaseJson "profile-hidden" { allowed with profileVisible := false } false false,
-    backendCredentialCaseJson "backend-hidden" { allowed with backendVisible := false } false false,
-    backendCredentialCaseJson "agent-is-not-runtime" { allowed with runtimeActor := false } false false,
-    backendCredentialCaseJson "runtime-secret-revoked" { allowed with secretReadable := false } false false,
-    backendCredentialCaseJson "foreign-node" { allowed with sameNode := false } false false,
-    backendCredentialCaseJson "wrong-backend" { allowed with selectedBackend := false } false false,
-    backendCredentialCaseJson "wrong-credential" { allowed with sameCredential := false } false false,
-    backendCredentialCaseJson "unapproved-destination" { allowed with destinationApproved := false } false false,
-    backendCredentialCaseJson "rotated-credential" { allowed with credentialVersionMatches := false } false false,
-    backendCredentialCaseJson "inline-secret" allowed true true,
-    backendCredentialCaseJson "redacted-history" allowed false true]
-
-
-
-
-def json : Json := Json.mkObj
-  [("name", toJson "configuration-explicit-grants"),
-   ("backend_credential_cases", toJson backendCredentialCases),
-   ("policy_yaml", toJson policyYaml),
-   ("objects", toJson (initial.objects.map objectJson)),
-   ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson ([] : List String)),
-   ("policy_registrations", toJson ([] : List Json)),
-   ("self_config_actions", toJson ([] : List Json)),
-   ("self_config_lookup_cases", toJson ([] : List Json)),
-   ("configuration_datastore_tool_use_cases", toJson
-      [datastoreToolUseCaseJson "allowed" true true true true,
-       datastoreToolUseCaseJson "revoked" false true true true,
-       datastoreToolUseCaseJson "disabled" true false true true,
-       datastoreToolUseCaseJson "deselected" true true false true,
-       datastoreToolUseCaseJson "changed" true true true false]),
-   ("actions", toJson (checks initial ++ [actionJson initial (.grant reader)] ++
-      checks withReader ++ [actionJson withReader (.grant writer)] ++ checks withWriter ++
-      [actionJson withWriter (.revoke writer)] ++ checks withoutWriter ++
-      [actionJson withoutWriter (.revoke reader)] ++ checks withoutReader))]
 end ConfigurationFixture
 
 namespace SecretConfigurationFixture
@@ -842,17 +737,6 @@ def actions : List Action :=
 theorem access_trace : HouseholdFixture.observed initial actions =
     [true, true, true, false, false, false, false] := by native_decide
 
-def json : Json := Json.mkObj
-  [("name", toJson "secret-configuration-publication"), ("policy_yaml", toJson policyYaml),
-   ("objects", toJson (initial.objects.map objectJson)),
-   ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
-   ("policy_registrations", toJson ([] : List Json)),
-   ("self_config_actions", toJson ([] : List Json)),
-   ("self_config_lookup_cases", toJson ([] : List Json)),
-   ("actions", toJson (traceJson initial actions))]
 end SecretConfigurationFixture
-
-def householdCasesJson : String := (toJson [HouseholdFixture.json, OperationsFixture.json,
-  ConfigurationFixture.json, SecretConfigurationFixture.json]).compress
 
 end Identity.Conformance

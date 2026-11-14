@@ -398,8 +398,6 @@ def snapshotCoverageTailJson : String :=
       ++ featureSurfaceRequirementsJson
     ++ ",\"feature_matrix\":"
       ++ featureMatrixJson
-    ++ ",\"identity_household_cases\":"
-      ++ Identity.Conformance.householdCasesJson
     ++ "}"
 
 def snapshotJsonTail : String :=

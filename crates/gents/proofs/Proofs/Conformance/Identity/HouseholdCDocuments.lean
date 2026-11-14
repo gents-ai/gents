@@ -1,4 +1,5 @@
 import Proofs.Conformance.Identity.Conformance
+import Proofs.Conformance.Identity.HouseholdDocuments
 import Proofs.Conformance.Family
 
 namespace Conformance.HouseholdC
@@ -119,5 +120,14 @@ tool path makes one. -/
 def sessionToolAccessUnreached : Family SessionToolInput Bool where
   inputs := sessionToolInputs.filter fun i => i.nativeBypass
   model := sessionToolAllowed
+
+/-- The native-tool scenario revalidates one cached surface tool as a selected
+Agent through `revalidate_datastore_tool_in_txn` while the User revokes, disables,
+deselects and changes the surface. -/
+@[conformance_family]
+def datastoreToolRevalidation : Family DatastoreToolUseInput Bool where
+  inputs := datastoreToolUseInputs
+  model := fun i =>
+    Configuration.cachedDatastoreToolUsable i.visible i.enabled i.selected i.declarationMatches
 
 end Conformance.Household
