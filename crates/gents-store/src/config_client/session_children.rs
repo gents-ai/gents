@@ -11,6 +11,7 @@ pub use ownership::without_child_relationship_repair;
 pub mod ownership;
 pub use ownership::{
     publish_agent_session_child_relationships_with_access,
+    publish_output_segment_relationships_with_access,
     recover_agent_session_child_relationships_with_access,
 };
 

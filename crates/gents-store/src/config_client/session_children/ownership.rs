@@ -46,6 +46,12 @@ struct PendingChild {
     session_doc_id: String,
 }
 
+struct Target<'a> {
+    collection: &'static str,
+    doc_id: &'a str,
+    session_doc_id: Option<&'a str>,
+}
+
 /// The child is created before its relationships; each pending grant and its
 /// marker commit together, so completed publication cannot restore a revocation.
 pub async fn recover_agent_session_child_relationships_with_access(
@@ -63,6 +69,34 @@ pub async fn publish_agent_session_child_relationships_with_access(
     session_id: &str,
 ) -> Result<usize> {
     recover_agent_children(access, node_did, agent, Some(session_id)).await
+}
+
+/// Publishes the relationships of one output segment its creator has just
+/// committed. The append knows the document it wrote, so it observes that
+/// document alone; other pending children of the session are published by the
+/// session-wide owners above and by startup recovery.
+pub async fn publish_output_segment_relationships_with_access(
+    access: &ConfigAccess,
+    node_did: &str,
+    agent: &identity::Did,
+    session_id: &str,
+    segment_doc_id: &str,
+) -> Result<usize> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    if SKIP_CHILD_REPAIR.try_with(|()| ()).is_ok() {
+        return Ok(0);
+    }
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(agent.as_str()),
+        "child repair actor differs from access actor"
+    );
+    let target = Target {
+        collection: "AgentOutputSegment",
+        doc_id: segment_doc_id,
+        session_doc_id: None,
+    };
+    let published = publish_child(access, node_did, agent, Some(session_id), &target).await?;
+    Ok(usize::from(published))
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -107,48 +141,73 @@ async fn recover_agent_children(
         .await?;
     let mut repaired = 0;
     for child in pending {
-        let published = access
-            .transact_write("session.publish_child_relationships", |txn| {
-                let child = &child;
-                let expected_agent = &expected_agent;
-                let node_did = &node_did;
-                let session_id = &session_id;
-                Box::pin(async move {
-                    let current = load_pending(
-                        txn, node_did, expected_agent, session_id.as_deref(), Some(child),
-                    ).await?;
-                    if current.is_empty() {
-                        return Ok::<bool, anyhow::Error>(false);
-                    }
-                    anyhow::ensure!(current.len() == 1, "ambiguous child relationship recovery");
-                    txn.add_resource_relationship(
-                        child.collection, &child.doc_id, "parent", "sessions", &child.session_doc_id,
-                    ).await?;
-                    if matches!(child.collection, "Goal" | "GoalCreationClaim") {
-                        txn.add_actor_relationship(child.collection, &child.doc_id, "working_agent", agent).await?;
-                    }
-                    let doc = escape_graphql_string(&child.doc_id);
-                    let creator = escape_graphql_string(agent.as_str());
-                    let session = escape_graphql_string(&child.session_doc_id);
-                    let collection = child.collection;
-                    let response = txn.execute(&format!(
-                        r#"mutation {{ update_{collection}(docID: "{doc}", filter: {{ creator_did: {{ _eq: "{creator}" }}, session_doc_id: {{ _eq: "{session}" }}, parent_linked: {{ _eq: false }} }}, input: {{ parent_linked: true }}) {{ _docID }} }}"#
-                    )).await?;
-                    let updated = crate::graphql::mutation_documents(
-                        &response, &format!("update_{collection}"),
-                    )?.context("child relationship marker omitted mutation result")?;
-                    anyhow::ensure!(
-                        updated.len() == 1 && updated[0]["_docID"].as_str() == Some(child.doc_id.as_str()),
-                        "child relationship marker lost its owner-bound compare-and-set"
-                    );
-                    Ok(true)
-                })
-            })
-            .await?;
+        let target = Target {
+            collection: child.collection,
+            doc_id: &child.doc_id,
+            session_doc_id: Some(&child.session_doc_id),
+        };
+        let published =
+            publish_child(access, &node_did, agent, session_id.as_deref(), &target).await?;
         repaired += usize::from(published);
     }
 
     Ok(repaired)
+}
+
+async fn publish_child(
+    access: &ConfigAccess,
+    node_did: &str,
+    agent: &identity::Did,
+    session_id: Option<&str>,
+    target: &Target<'_>,
+) -> Result<bool> {
+    access
+        .transact_write("session.publish_child_relationships", |txn| {
+            Box::pin(async move {
+                let current =
+                    load_pending(txn, node_did, agent.as_str(), session_id, Some(target)).await?;
+                let [child] = current.as_slice() else {
+                    anyhow::ensure!(current.is_empty(), "ambiguous child relationship recovery");
+                    return Ok::<bool, anyhow::Error>(false);
+                };
+                txn.add_resource_relationship(
+                    child.collection,
+                    &child.doc_id,
+                    "parent",
+                    "sessions",
+                    &child.session_doc_id,
+                )
+                .await?;
+                if matches!(child.collection, "Goal" | "GoalCreationClaim") {
+                    txn.add_actor_relationship(
+                        child.collection,
+                        &child.doc_id,
+                        "working_agent",
+                        agent,
+                    )
+                    .await?;
+                }
+                let doc = escape_graphql_string(&child.doc_id);
+                let creator = escape_graphql_string(agent.as_str());
+                let session = escape_graphql_string(&child.session_doc_id);
+                let collection = child.collection;
+                let response = txn.execute(&format!(
+                    r#"mutation {{ update_{collection}(docID: "{doc}", filter: {{ creator_did: {{ _eq: "{creator}" }}, session_doc_id: {{ _eq: "{session}" }}, parent_linked: {{ _eq: false }} }}, input: {{ parent_linked: true }}) {{ _docID }} }}"#
+                )).await?;
+                let updated = crate::graphql::mutation_documents(
+                    &response,
+                    &format!("update_{collection}"),
+                )?
+                .context("child relationship marker omitted mutation result")?;
+                anyhow::ensure!(
+                    updated.len() == 1
+                        && updated[0]["_docID"].as_str() == Some(child.doc_id.as_str()),
+                    "child relationship marker lost its owner-bound compare-and-set"
+                );
+                Ok(true)
+            })
+        })
+        .await
 }
 
 async fn load_pending(
@@ -156,7 +215,7 @@ async fn load_pending(
     node_did: &str,
     agent: &str,
     session_id: Option<&str>,
-    only_child: Option<&PendingChild>,
+    only_child: Option<&Target<'_>>,
 ) -> Result<Vec<PendingChild>> {
     let mut filter = format!(
         r#"node_did: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, creator_did: {{ _eq: "{}" }}, parent_linked: {{ _eq: false }}"#,
@@ -173,7 +232,7 @@ async fn load_pending(
     if let Some(child) = only_child {
         filter.push_str(&format!(
             r#", _docID: {{ _eq: "{}" }}"#,
-            escape_graphql_string(&child.doc_id)
+            escape_graphql_string(child.doc_id)
         ));
     }
     let mut pending = Vec::new();
@@ -236,7 +295,8 @@ async fn load_pending(
                 }
                 let session: Session = serde_json::from_value(parents[0].clone())?;
                 if only_child
-                    .is_some_and(|expected| expected.session_doc_id != child.session_doc_id)
+                    .and_then(|expected| expected.session_doc_id)
+                    .is_some_and(|expected| expected != child.session_doc_id)
                     || session.doc_id != child.session_doc_id
                     || session.node_did != child.node_did
                     || session.session_id != child.session_id

@@ -31,11 +31,12 @@ pub async fn append_provider_segment_with_signer(
             |txn| Box::pin(async move { append_in_txn(txn, generation, prepared).await }),
         )
         .await?;
-    gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+    gents_store::config_client::session_children::publish_output_segment_relationships_with_access(
         &access,
         &prepared.node_did,
         &actor,
         &prepared.session_id,
+        &result,
     )
     .await?;
     Ok(result)
@@ -56,11 +57,12 @@ pub async fn append_provider_segment_at_with_access(
             |txn| Box::pin(async move { append_in_txn_at(txn, generation, prepared, now).await }),
         )
         .await?;
-    gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+    gents_store::config_client::session_children::publish_output_segment_relationships_with_access(
         access,
         &prepared.node_did,
         &actor,
         &prepared.session_id,
+        &result,
     )
     .await?;
     Ok(result)
