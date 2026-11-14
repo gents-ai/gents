@@ -338,17 +338,12 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
 /// request on the served node as the session model says.
 #[tokio::test]
 async fn generated_resume_continuation_is_read_through_the_session() {
-    let modeled =
-        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>()
-            .into_iter()
-            .find(|case| case.input.name == "paused_authorized_idle_current_resume")
-            .expect("modeled idle client resume");
+    use gents_lean_vocab::families::goal_client_control_contracts_resume_readers as family;
+    let cases = family::cases::<String>();
+    let before = &cases.first().expect("modeled resume readers").input.before;
     let node = FixtureNode::start().await;
     let fixture = node
-        .fixture_with_parent_state(
-            &serde_json::to_value(&modeled.input.before.execution).unwrap(),
-            true,
-        )
+        .fixture_with_parent_state(&serde_json::to_value(&before.execution).unwrap(), true)
         .await;
     let access = fixture.user_access();
     let session = access
@@ -438,7 +433,7 @@ async fn generated_resume_continuation_is_read_through_the_session() {
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
         escape_graphql_string(&continuation)
     );
-    for case in gents_lean_vocab::families::goal_client_control_contracts_resume_readers::cases() {
+    for case in &cases {
         let reader = match case.input.reader.as_str() {
             "requester" => access.clone(),
             "agent" => fixture.agent_access(),
@@ -449,11 +444,7 @@ async fn generated_resume_continuation_is_read_through_the_session() {
         let readable = rows["data"]["AgentRequest"]
             .as_array()
             .is_some_and(|rows| rows.len() == 1);
-        case.check(
-            gents_lean_vocab::families::goal_client_control_contracts_resume_readers::ResumeReaderOutput {
-                readable,
-            },
-        );
+        case.check(family::ResumeReaderOutput { readable });
     }
     node.shutdown().await;
 }
