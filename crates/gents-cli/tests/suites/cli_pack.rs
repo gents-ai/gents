@@ -5,9 +5,12 @@ use anyhow::{Context, Result};
 /// A documents pack that ships a plugin: install stores the plugin and
 /// records it. No Tools selects the plugin, so removing the pack retires it:
 /// the plugin is no longer installed or callable. Every pack here is
-/// scaffolded on the fly, so this needs no fixture at all.
+/// scaffolded on the fly, so this needs no fixture at all. Its plugin is
+/// compiled from source: the other tests here take theirs through
+/// `build_pack`'s cache.
 #[test]
-fn a_document_pack_with_a_plugin_installs_and_its_removal_retires_the_plugin() -> Result<()> {
+fn a_document_pack_with_a_plugin_compiled_from_source_installs_and_its_removal_retires_it(
+) -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("node");
     let home_arg = home.to_str().context("path")?;
@@ -125,6 +128,126 @@ const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:9";
 
 fn dir_arg(path: &std::path::Path) -> &str {
     path.to_str().expect("fixture path is not UTF-8")
+}
+
+/// Runs `gents config pack build` on `dir` after seeding each source plugin's
+/// artifact and build stamp from an earlier build of the same manifest and
+/// source in this target directory, and records what the build leaves.
+/// `pack build` still decides: it recompiles unless the seeded stamp matches
+/// the builder, the mirrored source and the artifact, so a stale or foreign
+/// cache entry costs a compile, never a wrong artifact.
+fn build_pack(scratch: &std::path::Path, dir: &std::path::Path) -> Result<()> {
+    let manifest = read_json_file(&dir.join("manifest.json"))?;
+    let cached = manifest["plugins"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|plugin| plugin["source"].is_string())
+        .map(|plugin| CachedPlugin::new(dir, &manifest, plugin))
+        .collect::<Result<Vec<_>>>()?;
+    for plugin in &cached {
+        plugin.seed()?;
+    }
+    run_cli_text(scratch, &["config", "pack", "build", dir_arg(dir)])?;
+    for plugin in &cached {
+        plugin.record()?;
+    }
+    Ok(())
+}
+
+/// One source plugin of a pack being built, and its entry in the build cache.
+struct CachedPlugin {
+    artifact: std::path::PathBuf,
+    stamp: std::path::PathBuf,
+    entry: std::path::PathBuf,
+}
+
+impl CachedPlugin {
+    fn new(
+        dir: &std::path::Path,
+        manifest: &serde_json::Value,
+        plugin: &serde_json::Value,
+    ) -> Result<Self> {
+        use sha2::Digest;
+        let name = plugin["name"].as_str().context("plugin has no name")?;
+        let artifact = plugin["artifact"]
+            .as_str()
+            .context("plugin has no artifact")?;
+        let source = plugin["source"].as_str().context("plugin has no source")?;
+        let mut files = Vec::new();
+        source_files(&dir.join(source), &mut files)?;
+        files.sort();
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(serde_json::to_vec(manifest)?);
+        hasher.update([0]);
+        hasher.update(name.as_bytes());
+        for file in files {
+            let bytes = std::fs::read(&file)?;
+            hasher.update([0]);
+            hasher.update(file.strip_prefix(dir)?.to_string_lossy().as_bytes());
+            hasher.update([0]);
+            hasher.update((bytes.len() as u64).to_be_bytes());
+            hasher.update(&bytes);
+        }
+        Ok(Self {
+            artifact: dir.join(artifact),
+            stamp: dir
+                .join("target/plugins")
+                .join(name)
+                .join("target/gents-build.stamp"),
+            entry: std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+                .join("cli_pack_plugin_builds")
+                .join(format!("{:x}", hasher.finalize())),
+        })
+    }
+
+    fn seed(&self) -> Result<()> {
+        let (Ok(artifact), Ok(stamp)) = (
+            std::fs::read(self.entry.join("artifact.afb")),
+            std::fs::read(self.entry.join("gents-build.stamp")),
+        ) else {
+            return Ok(());
+        };
+        for (path, bytes) in [(&self.artifact, artifact), (&self.stamp, stamp)] {
+            std::fs::create_dir_all(path.parent().context("seeded file has no parent")?)?;
+            std::fs::write(path, bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Each file is renamed into place, so a concurrent reader sees a whole
+    /// file or none.
+    fn record(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.entry)?;
+        for (from, name) in [
+            (&self.artifact, "artifact.afb"),
+            (&self.stamp, "gents-build.stamp"),
+        ] {
+            let staged = tempfile::NamedTempFile::new_in(&self.entry)?;
+            std::fs::copy(from, staged.path())
+                .with_context(|| format!("caching {}", from.display()))?;
+            staged.persist(self.entry.join(name))?;
+        }
+        Ok(())
+    }
+}
+
+/// The files `pack build` mirrors from a plugin source: everything but
+/// `target` directories and dot files.
+fn source_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == "target" || name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            source_files(&entry.path(), files)?;
+        } else {
+            files.push(entry.path());
+        }
+    }
+    Ok(())
 }
 
 /// An initialized offline home whose documents dependency is already in the
@@ -416,10 +539,7 @@ fn a_documents_dependency_plugin_is_retired_with_its_dependent() -> Result<()> {
             dir_arg(&dependee),
         ],
     )?;
-    run_cli_text(
-        scratch.path(),
-        &["config", "pack", "build", dir_arg(&dependee)],
-    )?;
+    build_pack(scratch.path(), &dependee)?;
 
     let setup = DependentHome::with_dependee("dep-plugin", &dependee)?;
     run_cli_json(setup.tempdir.path(), &setup.install_args())?;
@@ -521,7 +641,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
         config["agent_targets"] = serde_json::json!([wire_target("wf-content")]);
     })?;
 
-    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&job_pack)])?;
+    build_pack(scratch, &job_pack)?;
     for (pack, slots) in [
         (&job_pack, Vec::new()),
         (
@@ -838,7 +958,7 @@ fn uninstalled_job_pack() -> Result<WireFixture> {
         .to_owned();
     let job_pack = scratch.join("job_plugin_fixture");
     copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &job_pack)?;
-    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&job_pack)])?;
+    build_pack(scratch, &job_pack)?;
     Ok(WireFixture {
         tempdir,
         home,
@@ -1484,7 +1604,7 @@ fn release_starter_fixture(
             "system_prompt": "Work.", "tools_id": "${GENTS_PACK_NODE_DID}-wf-worker"}]);
     }
     edit_pack_config(&dir, |existing| *existing = config)?;
-    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&dir)])?;
+    build_pack(scratch, &dir)?;
     let mut archive = Vec::new();
     gents_pack::pack::archive::write_pack(&dir, &mut archive)
         .with_context(|| format!("packing {name}"))?;
