@@ -116,23 +116,27 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
         data.join(PROVENANCE_MARKER),
         data.join(".gents-private-backend-v1"),
     )?;
-    let listing = |data: &std::path::Path| -> anyhow::Result<Vec<(String, u64)>> {
-        let mut files = Vec::new();
-        for entry in std::fs::read_dir(data)? {
-            let entry = entry?;
-            files.push((
-                entry.file_name().to_string_lossy().into_owned(),
-                entry.metadata()?.len(),
-            ));
+    drop(lock);
+    // Every file under the home, the store lock's own file included.
+    fn snapshot(
+        directory: &std::path::Path,
+        files: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) -> anyhow::Result<()> {
+        for entry in std::fs::read_dir(directory)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                snapshot(&path, files)?;
+            } else {
+                files.insert(path.clone(), std::fs::read(&path)?);
+            }
         }
-        files.sort();
-        Ok(files)
-    };
-    let before = listing(&data)?;
+        Ok(())
+    }
+    let mut before = std::collections::BTreeMap::new();
+    snapshot(&home, &mut before)?;
+    assert!(before.contains_key(&home.join("data.lock")));
 
-    let refused = ProtectedBackendStore::open(&data, &key, &lock)
-        .await
-        .map(|_| ())
+    let refused = super::backend_protection::refuse_earlier_lineage(&data)
         .expect_err("the previous lineage is not this version's");
     assert!(
         matches!(refused, BackendProtectionError::MissingProvenance),
@@ -145,6 +149,18 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
         gents_protocol::operations::install_repair::IncompatibleStoreKind::UnknownLineage
     );
     assert!(store.kind.made_by_older_version());
-    assert_eq!(listing(&data)?, before, "the refused store is untouched");
+    let mut after = std::collections::BTreeMap::new();
+    snapshot(&home, &mut after)?;
+    assert_eq!(after, before, "the refused home is byte-identical");
+
+    // A store with this version's marker, and one with no marker, pass to
+    // the lock.
+    std::fs::rename(
+        data.join(".gents-private-backend-v1"),
+        data.join(PROVENANCE_MARKER),
+    )?;
+    super::backend_protection::refuse_earlier_lineage(&data)?;
+    std::fs::remove_file(data.join(PROVENANCE_MARKER))?;
+    super::backend_protection::refuse_earlier_lineage(&data)?;
     Ok(())
 }

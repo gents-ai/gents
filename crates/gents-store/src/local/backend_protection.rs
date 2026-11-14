@@ -75,6 +75,29 @@ impl BackendProtectionError {
 
 type Result<T> = std::result::Result<T, BackendProtectionError>;
 
+/// Refuses a store that carries an earlier lineage's marker and not this
+/// version's, by reading the directory's names only. It runs before the
+/// store lock is taken, because taking the lock rewrites the lock file and a
+/// refused older home is left byte-identical. Only a positively earlier
+/// marker is refused here: a store with no marker at all may be one another
+/// process is still initializing, which the lock decides.
+pub fn refuse_earlier_lineage(data: &Path) -> Result<()> {
+    let prefix = MARKER.rsplit_once('v').map_or(MARKER, |(prefix, _)| prefix);
+    let mut earlier = false;
+    for entry in std::fs::read_dir(data)? {
+        let name = entry?.file_name();
+        let name = name.to_string_lossy();
+        if name == MARKER {
+            return Ok(());
+        }
+        earlier |= name.starts_with(prefix);
+    }
+    if earlier {
+        return Err(BackendProtectionError::MissingProvenance);
+    }
+    Ok(())
+}
+
 async fn check_lock(data: &Path, lock: &StoreLock) -> Result<PathBuf> {
     let path = tokio::fs::canonicalize(data).await?;
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
