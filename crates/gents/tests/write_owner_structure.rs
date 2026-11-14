@@ -18,11 +18,6 @@ const READ_OWNER_FILES: &[&str] = &[
     "crates/gents-store/src/graphql.rs",
 ];
 
-#[rustfmt::skip]
-const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-migration/src/materialize.rs", 1),
-];
-
 const NODE_ONLY_METHODS: &[&str] = &["execute_as", "execute_request", "runner"];
 
 const FORBIDDEN_FUNCTIONS: &[&str] = &[
@@ -673,7 +668,7 @@ fn write_violations(syntax: &syn::File) -> Vec<String> {
 }
 
 #[test]
-fn production_defradb_node_execution_only_shrinks() {
+fn production_defradb_node_execution_stays_in_the_store_owners() {
     let root = repo_root();
     let mut sources = Vec::new();
     for directory in defradb_member_directories(&root) {
@@ -690,45 +685,21 @@ fn production_defradb_node_execution_only_shrinks() {
         workspace.visit_file(syntax);
     }
 
-    let mut actual = BTreeMap::new();
-    for (relative, syntax) in &parsed {
-        if READ_OWNER_FILES.contains(&relative.as_str()) {
-            continue;
-        }
-        let sites = node_execution_sites(&workspace, syntax);
-        if sites > 0 {
-            actual.insert(relative.clone(), sites);
-        }
-    }
-
-    let allowed = NODE_EXECUTE_ALLOWLIST
+    let violations = parsed
         .iter()
-        .map(|(path, count)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        match allowed.get(path).copied() {
-            None => violations.push(format!(
-                "{path}: {found} new direct EmbeddedNode execution site(s); use the config_client/graphql owners"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{path}: {found} direct EmbeddedNode execution sites exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{path}: {found} direct EmbeddedNode execution sites; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    let current = actual
-        .iter()
-        .map(|(path, count)| format!("    (\"{path}\", {count}),"))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .filter(|(relative, _)| !READ_OWNER_FILES.contains(&relative.as_str()))
+        .filter_map(|(relative, syntax)| {
+            let sites = node_execution_sites(&workspace, syntax);
+            (sites > 0).then(|| {
+                format!(
+                    "{relative}: {sites} direct EmbeddedNode execution site(s); use the config_client/graphql owners"
+                )
+            })
+        })
+        .collect::<Vec<_>>();
     assert!(
         violations.is_empty(),
-        "direct DefraDB node execution ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        "direct DefraDB node execution outside the store owners:\n{}",
         violations.join("\n")
     );
 }
@@ -1320,13 +1291,6 @@ const OAUTH_ROW_READERS: &[&str] = &[
     "lookup_oauth_credential_by_doc_id",
 ];
 
-#[rustfmt::skip]
-const OAUTH_ROW_READ_ALLOWLIST: &[(&str, usize)] = &[
-    ("crates/gents-desktop-bridge/src/accounts/provider.rs", 2),
-    ("crates/gents/src/runtime/agent/document_view/load.rs", 1),
-    ("crates/gents/src/runtime/agent/document_view/mod.rs", 1),
-];
-
 #[derive(Default)]
 struct OAuthPickVisitor {
     violations: Vec<String>,
@@ -1433,7 +1397,6 @@ fn oauth_pick_findings(syntax: &syn::File) -> (Vec<String>, usize) {
 fn oauth_credential_picks_go_through_the_resolver() {
     let root = repo_root();
     let mut violations = Vec::new();
-    let mut actual = BTreeMap::new();
     for (relative, syntax) in parse_production(&root, production_sources(&root)) {
         if owned_by(&relative, OAUTH_CREDENTIAL_OWNER) {
             continue;
@@ -1445,19 +1408,8 @@ fn oauth_credential_picks_go_through_the_resolver() {
                 .map(|found| format!("{relative}: {found}")),
         );
         if reads > 0 {
-            actual.insert(relative, reads);
-        }
-    }
-    let allowed = OAUTH_ROW_READ_ALLOWLIST
-        .iter()
-        .map(|(path, count)| (path.to_string(), *count))
-        .collect::<BTreeMap<_, _>>();
-    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let found = actual.get(path).copied().unwrap_or_default();
-        let limit = allowed.get(path).copied().unwrap_or_default();
-        if found != limit {
             violations.push(format!(
-                "{path}: {found} OAuthCredential row read(s), allowlisted {limit}; pick through inference::auth::credential::resolve_oauth_credential"
+                "{relative}: {reads} OAuthCredential row read(s); pick through inference::auth::credential::resolve_oauth_credential"
             ));
         }
     }

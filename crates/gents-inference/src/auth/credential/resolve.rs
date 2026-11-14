@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rapidhash::{HashSetExt, RapidHashSet};
 use serde_json::Value;
 
 use super::*;
@@ -55,6 +56,51 @@ pub fn pick_oauth_pool<'c>(
         .collect();
     pool.sort_by(|a, b| resolver_order(a, b));
     pool
+}
+
+/// One node's credential rows as a runtime view holds them between loads, so
+/// readiness asks the resolver's picks of the rows it was resolved against
+/// rather than of a later read.
+#[derive(Debug, Clone, Default)]
+pub struct NodeOAuthAccounts {
+    rows: Vec<OAuthCredential>,
+}
+
+impl NodeOAuthAccounts {
+    pub async fn load(
+        access: &gents_store::config_client::ConfigAccess,
+        node_did: &str,
+    ) -> Result<Self> {
+        let rows = super::list_oauth_credentials_on(access, node_did).await?;
+        let mut seen = RapidHashSet::with_capacity(rows.len());
+        for row in &rows {
+            anyhow::ensure!(row.doc_id.is_some(), "OAuthCredential missing physical ID");
+            anyhow::ensure!(row.node_did == node_did, "OAuthCredential owner mismatch");
+            anyhow::ensure!(
+                seen.insert(row.credential_id.as_str()),
+                "duplicate OAuthCredential {}",
+                row.credential_id
+            );
+        }
+        Ok(Self { rows })
+    }
+
+    pub fn resolves(&self, node_did: &str, provider: &str, pick: AccountPick<'_>) -> bool {
+        pick_oauth_credential(&self.rows, node_did, provider, pick).is_some()
+    }
+
+    /// The credential ids of [`pick_oauth_pool`], in rotation order.
+    pub fn pool_ids(&self, node_did: &str, provider: &str) -> Vec<String> {
+        pick_oauth_pool(&self.rows, node_did, provider)
+            .into_iter()
+            .map(|row| row.credential_id.clone())
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn rows_mut(&mut self) -> &mut Vec<OAuthCredential> {
+        &mut self.rows
+    }
 }
 
 pub async fn resolve_oauth_credential(
