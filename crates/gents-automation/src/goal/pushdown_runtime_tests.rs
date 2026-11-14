@@ -3214,10 +3214,8 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
 
     let (mut source, _snapshot_tx) = source_for_agent(&db, &agent_identity).await;
-    tokio::time::timeout(Duration::from_secs(2), source.next_fire())
-        .await
-        .expect("goal source timed out")
-        .expect("wrapup intent");
+    // The source's first rescan tick is immediate, so this needs no deadline.
+    source.next_fire().await.expect("wrapup intent");
     let children = goal_children_from_access(&access).await;
     assert_eq!(children.len(), 1);
     let user_children = goal_children_from_access(&db.client_access(&user)).await;
@@ -3237,10 +3235,20 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         "final durable wrapup",
     )
     .await;
+    // Reconcile the completed wrapup through the source's own per-goal step,
+    // awaited here, instead of hoping its subscription runs it inside a
+    // window: the source writes `wrapup_completed` only while it is polled.
+    let actor: identity::Did = agent_identity.did().parse().unwrap();
+    let observed = load_goal_as(&access, db.node_identity.did())
+        .await
+        .expect("goal exists");
     assert!(
-        tokio::time::timeout(Duration::from_millis(200), source.next_fire())
+        source
+            .build_intent(&actor, observed)
             .await
-            .is_err()
+            .expect("reconcile the completed wrapup")
+            .is_none(),
+        "a completed wrapup must not fire a second continuation"
     );
     let goal = load_goal_as(&access, db.node_identity.did())
         .await
