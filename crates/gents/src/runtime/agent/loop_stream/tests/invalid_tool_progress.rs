@@ -1,11 +1,11 @@
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn invalid_tool_progress_composition_drives_owned_loop() {
     let cases = gents_lean_vocab::families::invalid_tool_progress_contracts_composed::cases::<
         String,
         String,
         String,
     >();
-    for case in cases {
+    crate::test_support::cases::drive_cases(cases, |case| async move {
         let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
         let node = db.node.clone();
         let name = case.input.name.clone();
@@ -105,5 +105,6 @@ async fn invalid_tool_progress_composition_drives_owned_loop() {
                 composed_invalid_used: charged as u64,
             },
         );
-    }
+    })
+    .await;
 }

@@ -3076,7 +3076,7 @@ impl NativeCanonicalExecution {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn every_generated_native_execution_script_runs_to_completion() {
     let cases = gents_lean_vocab::lean_contract_snapshot()
         .canonical_execution_gate_cases
@@ -3092,14 +3092,14 @@ async fn every_generated_native_execution_script_runs_to_completion() {
         !cases.is_empty(),
         "Lean exported no native execution scripts"
     );
-    let mut failures = Vec::new();
-    for case in cases {
+    let failures = crate::test_support::cases::drive_cases(cases, |case| async move {
         let mut adapter = NativeCanonicalExecutionAdapter;
-        if let Err(error) = gents_lean_vocab::assert_native_execution_case(case, &mut adapter).await
-        {
-            failures.push(error);
-        }
-    }
+        gents_lean_vocab::assert_native_execution_case(case, &mut adapter).await
+    })
+    .await
+    .into_iter()
+    .filter_map(Result::err)
+    .collect::<Vec<_>>();
     assert!(
         failures.is_empty(),
         "native execution contract gaps:\n{}",

@@ -436,12 +436,12 @@ async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestL
     lifecycle
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
-    let mut conflicting_history_cases = 0;
-    for case in
-        gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::cases::<String, String>()
-    {
+    let cases =
+        gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::cases::<String, String>();
+    let conflicting = crate::test_support::cases::drive_cases(cases, |case| async move {
+        let mut conflicting_history = false;
         let name = case.input.name.as_str();
         let fixture = ScopeFixture::new(&format!("goal-wake-scope-{name}")).await;
         let node = fixture.db.node.clone();
@@ -559,7 +559,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             )
             .await
             .unwrap();
-            conflicting_history_cases += 1;
+            conflicting_history = true;
         }
         if case.input.prior.is_empty()
             && case.input.retry_parent.is_none()
@@ -724,8 +724,10 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         drop(lifecycle);
         node.shutdown().await.expect("node shutdown");
         case.check(ReceiptOutput { captured, current });
-    }
-    assert!(conflicting_history_cases > 0);
+        conflicting_history
+    })
+    .await;
+    assert!(conflicting.contains(&true));
 }
 
 #[tokio::test]

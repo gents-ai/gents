@@ -339,11 +339,11 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes() {
-    for case in
-        gents_lean_vocab::families::logical_output_obligation_contracts_gate::cases::<String>()
-    {
+    let cases =
+        gents_lean_vocab::families::logical_output_obligation_contracts_gate::cases::<String>();
+    crate::test_support::cases::drive_cases(cases, |case| async move {
         let input = &case.input;
         let (db, identity) = rooted_node().await;
         let (db, agent) = live_agent(db, &identity).await;
@@ -537,7 +537,8 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             };
         node.shutdown().await.expect("node shutdown");
         case.check(observed.to_string());
-    }
+    })
+    .await;
 }
 
 #[tokio::test]

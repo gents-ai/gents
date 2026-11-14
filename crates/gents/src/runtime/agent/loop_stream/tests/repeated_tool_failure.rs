@@ -1,10 +1,11 @@
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn repeated_tool_failures_follow_the_lean_model() {
-    for case in gents_lean_vocab::families::repeated_tool_failure_contracts_owned_loop::cases::<
+    let cases = gents_lean_vocab::families::repeated_tool_failure_contracts_owned_loop::cases::<
         String,
         String,
         String,
-    >() {
+    >();
+    crate::test_support::cases::drive_cases(cases, |case| async move {
         let label = format!("{:?}", case.input);
         let events = case
             .input
@@ -127,5 +128,6 @@ async fn repeated_tool_failures_follow_the_lean_model() {
                 invalid_used: charged,
             },
         );
-    }
+    })
+    .await;
 }

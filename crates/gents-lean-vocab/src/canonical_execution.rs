@@ -2,7 +2,7 @@ use crate::generated::*;
 use std::future::Future;
 use std::pin::Pin;
 
-pub type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+pub type ExecutionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 impl LeanCanonicalExecutionOperation {
     pub fn actor_and_now(&self) -> (u64, u64) {

@@ -409,11 +409,11 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
     assert_eq!(child_count(&db, &goal, parent).await, 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn generated_claimed_readiness_cases_drive_goal_source() {
-    for case in
-        gents_lean_vocab::families::goal_claimed_readiness_claimed::cases::<String, String>()
-    {
+    let cases =
+        gents_lean_vocab::families::goal_claimed_readiness_claimed::cases::<String, String>();
+    crate::test_support::cases::drive_cases(cases, |case| async move {
         let name = case.input.name.as_str();
         let db = test_db(name).await;
         let before = install_claim(&db, &serde_json::to_value(&case.input.before).unwrap()).await;
@@ -584,7 +584,8 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
                 expected: Some(serde_json::from_value(settled_state).unwrap()),
             },
         );
-    }
+    })
+    .await;
 }
 
 #[tokio::test]
