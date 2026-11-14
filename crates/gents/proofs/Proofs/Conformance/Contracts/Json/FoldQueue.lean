@@ -97,59 +97,6 @@ def retrySelection : Family RetrySelectionInput RetrySelectionOutput where
     let value : RetrySelectionCase := ⟨i.name, i.parentPublished, i.selected⟩
     { resume := value.resume, answered := value.answered }
 
-def managementStateJson (state : SessionQueueState) : String :=
-  "{\"active\":" ++ jsonOptionalNat state.active ++
-  ",\"pending\":" ++ jsonArray (state.pending.map entryJson) ++
-  ",\"folding\":" ++ jsonArray (state.folding.map entryJson) ++
-  ",\"terminal\":" ++ jsonArray ((state.terminal.sort (· ≤ ·)).map toString) ++ "}"
-
-def editReceiptJson (r : SessionQueue.InputEdit.Receipt) : String :=
-  "{\"command_id\":" ++ toString r.commandId ++
-  ",\"digest\":" ++ toString r.digest ++ ",\"outcome\":" ++
-  jsonString (match r.outcome with | .applied => "applied" | .rejected => "rejected") ++
-  ",\"request_ids\":" ++ jsonArray (r.requestIds.map toString) ++ "}"
-
-def editStateJson (s : SessionQueue.InputEdit.State) : String :=
-  "{\"queue\":" ++ managementStateJson s.queue ++
-  ",\"receipts\":" ++ jsonArray (s.receipts.map editReceiptJson) ++ "}"
-
-def editCommandJson (command : SessionQueue.InputEdit.Command) : String :=
-  "{\"id\":" ++ toString command.id ++
-  ",\"digest\":" ++ toString command.digest ++ ",\"caller\":" ++ jsonOptionalNat command.caller ++
-  ",\"issued_at\":" ++ toString command.issuedAt ++ ",\"expires_at\":" ++ toString command.expiresAt ++
-  ",\"expected\":" ++ jsonArray (command.expected.map toString) ++
-  ",\"offset\":" ++ toString command.offset ++ ",\"count\":" ++ toString command.count ++
-  ",\"replacements\":" ++ jsonArray (command.replacements.map entryJson) ++ "}"
-
-def editAuthorityJson (a : SessionQueue.InputEdit.Authority) : String :=
-  "{\"signature_valid\":" ++ jsonOptionalBool (some a.signatureValid) ++
-  ",\"replacements_valid\":" ++ jsonOptionalBool (some a.replacementsValid) ++
-  ",\"session_owned\":" ++ jsonOptionalBool (some a.sessionOwned) ++
-  ",\"editor\":" ++ jsonString (match a.editor with
-    | .requester => "requester" | .workingAgent => "working_agent"
-    | .admin => "admin" | .other => "other") ++
-  ",\"command_identity_unique\":" ++ jsonOptionalBool (some a.commandIdentityUnique) ++ "}"
-
-def editStepJson : SessionQueue.InputEditCases.Step → String
-  | .apply now a command =>
-      "{\"kind\":\"apply\",\"now\":" ++ toString now ++
-      ",\"authority\":" ++ editAuthorityJson a ++ ",\"command\":" ++ editCommandJson command ++ "}"
-  | .loseReceipts => "{\"kind\":\"lose_receipts\"}"
-  | .otherSession session =>
-      "{\"kind\":\"other_session\",\"session\":" ++ toString session ++ "}"
-
-def inputEditCasesJson : String :=
-  jsonArray (SessionQueue.InputEditCases.cases.map fun c =>
-    let result := SessionQueue.InputEditCases.run c
-    "{\"name\":" ++ jsonString c.name ++
-    ",\"initial\":" ++ editStateJson SessionQueue.InputEditCases.state ++
-    ",\"history\":" ++ jsonArray (c.history.map editStepJson) ++
-    ",\"before\":" ++ editStateJson c.before ++
-    ",\"now\":" ++ toString c.now ++ ",\"command\":" ++ editCommandJson c.command ++
-    ",\"authority\":" ++ editAuthorityJson c.authority ++
-    ",\"after\":" ++ editStateJson result.1 ++ ",\"receipt\":" ++
-    (match result.2 with | none => "null" | some r => editReceiptJson r) ++ "}")
-
 section Families
 
 open Lean
@@ -629,6 +576,264 @@ def inputEditClientObservation :
     { commandOutcome := observation.commandOutcome, projectionFresh := observation.projectionFresh }
 
 end InputEditClientObservation
+
+section InputEdit
+
+open SessionQueue.InputEdit
+
+deriving instance ToJson for SessionQueue.InputEdit.Editor, SessionQueue.InputEdit.Authority,
+  SessionQueue.InputEdit.Receipt
+
+structure EditStateWire where
+  queue : StateWire
+  receipts : List SessionQueue.InputEdit.Receipt
+  deriving ToJson
+
+def EditStateWire.ofModel (s : SessionQueue.InputEdit.State) : EditStateWire :=
+  { queue := StateWire.ofModel s.queue, receipts := s.receipts }
+
+def EditStateWire.toModel (s : EditStateWire) : SessionQueue.InputEdit.State :=
+  ⟨s.queue.toModel, s.receipts⟩
+
+structure CommandWire where
+  id : Nat
+  digest : Nat
+  caller : Option Nat
+  issuedAt : Nat
+  expiresAt : Nat
+  expected : List Nat
+  offset : Nat
+  count : Nat
+  replacements : List EntryWire
+  deriving ToJson
+
+def CommandWire.ofModel (c : SessionQueue.InputEdit.Command) : CommandWire :=
+  { id := c.id, digest := c.digest, caller := c.caller, issuedAt := c.issuedAt
+    expiresAt := c.expiresAt, expected := c.expected, offset := c.offset, count := c.count
+    replacements := c.replacements.map EntryWire.ofModel }
+
+def CommandWire.toModel (c : CommandWire) : SessionQueue.InputEdit.Command :=
+  ⟨c.id, c.digest, c.caller, c.issuedAt, c.expiresAt, c.expected, c.offset, c.count,
+    c.replacements.map EntryWire.toModel⟩
+
+inductive InputEditStepKind where
+  | apply | loseReceipts | otherSession
+  deriving ToJson
+
+structure InputEditStepWire where
+  kind : InputEditStepKind
+  now : Option Nat
+  authority : Option Authority
+  command : Option CommandWire
+  session : Option Nat
+  deriving ToJson
+
+def InputEditStepWire.ofModel : SessionQueue.InputEditCases.Step → InputEditStepWire
+  | .apply now a c =>
+      { kind := .apply, now := some now, authority := some a
+        command := some (CommandWire.ofModel c), session := none }
+  | .loseReceipts =>
+      { kind := .loseReceipts, now := none, authority := none, command := none, session := none }
+  | .otherSession session =>
+      { kind := .otherSession, now := none, authority := none, command := none
+        session := some session }
+
+def InputEditStepWire.toModel (step : InputEditStepWire) :
+    Option SessionQueue.InputEditCases.Step :=
+  match step.kind with
+  | .apply => do pure (.apply (← step.now) (← step.authority) (← step.command).toModel)
+  | .loseReceipts => some .loseReceipts
+  | .otherSession => step.session.map .otherSession
+
+structure InputEditCaseWire where
+  name : String
+  initial : EditStateWire
+  history : List InputEditStepWire
+  now : Nat
+  command : CommandWire
+  authority : Authority
+  deriving ToJson
+
+def InputEditCaseWire.ofCase (c : SessionQueue.InputEditCases.Case) : InputEditCaseWire :=
+  { name := c.name, initial := EditStateWire.ofModel SessionQueue.InputEditCases.state
+    history := c.history.map InputEditStepWire.ofModel, now := c.now
+    command := CommandWire.ofModel c.command, authority := c.authority }
+
+def InputEditCaseWire.run (i : InputEditCaseWire) :
+    Option (SessionQueue.InputEdit.State × SessionQueue.InputEdit.State ×
+      Option SessionQueue.InputEdit.Receipt) := do
+  let history ← i.history.mapM InputEditStepWire.toModel
+  let before := history.foldl SessionQueue.InputEditCases.Step.run i.initial.toModel
+  let result := apply before.queue.scope i.now i.authority i.command.toModel before
+  pure (before, result.1, result.2)
+
+structure EditImageWire where
+  queue : QueueImageWire
+  receipts : List SessionQueue.InputEdit.Receipt
+  deriving ToJson
+
+def EditImageWire.ofModel (s : SessionQueue.InputEdit.State) : EditImageWire :=
+  { queue := { active := s.queue.active, pending := s.queue.pending.map (·.requestId)
+               folding := s.queue.folding.map (·.requestId)
+               terminal := s.queue.terminal.sort (· ≤ ·) }
+    receipts := s.receipts }
+
+structure InputEditObservation where
+  before : EditImageWire
+  after : EditImageWire
+  receipt : Option SessionQueue.InputEdit.Receipt
+  deriving ToJson
+
+def inputEditObservation (i : InputEditCaseWire) : Option InputEditObservation := do
+  let (before, after, receipt) ← i.run
+  pure { before := EditImageWire.ofModel before, after := EditImageWire.ofModel after, receipt }
+
+/-- The session command table indexes `command_id` as unique, so the queue owner
+stores at most one physical command per ID, and its fixture holds one session's
+queue. -/
+def atomicOwnerCase (c : SessionQueue.InputEditCases.Case) : Bool :=
+  c.authority.commandIdentityUnique && c.history.all fun step => match step with
+    | .apply _ a _ => a.commandIdentityUnique
+    | .loseReceipts => true
+    | .otherSession _ => false
+
+def inputEditCasesNamed (names : List String) : List InputEditCaseWire :=
+  (SessionQueue.InputEditCases.cases.filter (names.contains ·.name)).map InputEditCaseWire.ofCase
+
+@[conformance_family]
+def inputEditAtomic : Family InputEditCaseWire (Option InputEditObservation) where
+  inputs := (SessionQueue.InputEditCases.cases.filter atomicOwnerCase).map InputEditCaseWire.ofCase
+  model := inputEditObservation
+
+/-- The enrolled User authors each endpoint edit through the signed client
+endpoint under a fresh command ID, as the session's requester, with no prior
+history, and the scenario waits for each receipt; another editor, a recorded
+history and a deferred decision are replayed by the atomic queue owner family. -/
+def endpointNames : List String :=
+  ["local_self_applied", "expired_rejected", "signature_rejected",
+   "replacement_signature_rejected", "stale_queue_rejected"]
+
+/-- The endpoint's command shape owner refuses a command naming a session its
+author does not own before publication, so the runtime never answers it; the
+atomic queue owner family replays the runtime rejection. -/
+def endpointRefusedNames : List String := ["foreign_session_rejected"]
+
+structure EndpointImageWire where
+  pending : List Nat
+  terminal : List Nat
+  receipts : List SessionQueue.InputEdit.Receipt
+  deriving ToJson
+
+def EndpointImageWire.ofModel (s : SessionQueue.InputEdit.State) : EndpointImageWire :=
+  { pending := s.queue.pending.map (·.requestId), terminal := s.queue.terminal.sort (· ≤ ·)
+    receipts := s.receipts }
+
+structure EndpointObservation where
+  before : EndpointImageWire
+  after : EndpointImageWire
+  receipt : Option SessionQueue.InputEdit.Receipt
+  deriving ToJson
+
+def endpointObservation (i : InputEditCaseWire) : Option EndpointObservation := do
+  let (before, after, receipt) ← i.run
+  pure { before := EndpointImageWire.ofModel before, after := EndpointImageWire.ofModel after
+         receipt }
+
+structure EndpointQueueWire where
+  pending : List Nat
+  terminal : List Nat
+  deriving ToJson
+
+structure EndpointRefusedObservation where
+  after : EndpointQueueWire
+  deriving ToJson
+
+@[conformance_family]
+def inputEditEndpoint : Family InputEditCaseWire (Option EndpointObservation) where
+  inputs := inputEditCasesNamed endpointNames
+  model := endpointObservation
+
+@[conformance_family]
+def inputEditEndpointRefused : Family InputEditCaseWire (Option EndpointRefusedObservation) where
+  inputs := inputEditCasesNamed endpointRefusedNames
+  model := fun i => do
+    let (_, after, _) ← i.run
+    pure { after := { pending := after.queue.pending.map (·.requestId)
+                      terminal := after.queue.terminal.sort (· ≤ ·) } }
+
+/-- The same signed intent published twice at once is one physical command; its
+history step is that publication and the replay is a restarted reconciler
+reading the recorded receipt, which is final whatever the clock. -/
+@[conformance_family]
+def inputEditConcurrentReplay : Family InputEditCaseWire (Option EndpointObservation) where
+  inputs := inputEditCasesNamed ["exact_replay_after_expiry"]
+  model := endpointObservation
+
+/-- Two different intents race for one command ID at the endpoint; its unique
+command identity admits one, which the model decides as a lone fresh command,
+and the refused intent leaves its own session untouched. -/
+@[conformance_family]
+def inputEditRacingIntents : Family InputEditCaseWire (Option EndpointObservation) where
+  inputs := inputEditCasesNamed ["local_self_applied"]
+  model := endpointObservation
+
+/-- A later intent reuses an applied command ID from another session. With a
+unique command identity the model looks receipts up by command ID alone, so
+the twin is the model's command-identity collision: no receipt answers it and
+the prior receipt and queue stand. -/
+@[conformance_family]
+def inputEditLateTwin : Family InputEditCaseWire (Option EndpointObservation) where
+  inputs := inputEditCasesNamed ["command_identity_collision"]
+  model := endpointObservation
+
+/-- The identical signed intent republished after its receipt is refused as a
+second physical document; the recorded receipt answers it unchanged. -/
+@[conformance_family]
+def inputEditIdenticalRepublish : Family InputEditCaseWire (Option EndpointObservation) where
+  inputs := inputEditCasesNamed ["exact_replay_after_expiry"]
+  model := endpointObservation
+
+/-- model-production-gap: `process_command` leaves a command unanswered when
+another physical command shares its ID, but no production path stores two.
+Locally the unique `command_id` index (agent_session_input_edit.graphql:5)
+refuses the second create. A twin could only arrive by replication, where
+DefraDB resolves a live unique-index conflict by keeping the smallest docID
+rather than rejecting it (defradb.rs crates/defra-core/src/merge.rs:101-104),
+but Gents never replicates AgentSessionInputEdit: it is a managed collection
+(gents-protocol peer_schema.rs:12) that application pairing refuses
+(gents-p2p templates.rs:243) and not a replicated protocol collection
+(gents-schemas lib.rs:388). The twin branch therefore guards a replication
+path Gents does not open. -/
+@[conformance_family]
+def inputEditUnreached : Family InputEditCaseWire (Option InputEditObservation) where
+  inputs := (SessionQueue.InputEditCases.cases.filter (!atomicOwnerCase ·)).map
+    InputEditCaseWire.ofCase
+  model := inputEditObservation
+
+example : (EditStateWire.ofModel SessionQueue.InputEditCases.state).toModel =
+    SessionQueue.InputEditCases.state := by native_decide
+
+example : SessionQueue.InputEditCases.cases.all fun c =>
+    (InputEditCaseWire.ofCase c).run == some (c.before, SessionQueue.InputEditCases.run c) := by
+  native_decide
+
+example : (SessionQueue.InputEditCases.cases.filter atomicOwnerCase).length = 11 := by
+  native_decide
+
+example : (SessionQueue.InputEditCases.cases.filter (!atomicOwnerCase ·)).map (·.name) =
+    ["simultaneous_command_identity_collision", "observed_collision_preserves_prior_receipt",
+     "cross_session_collision_preserves_prior_receipt"] := by native_decide
+
+example : (SessionQueue.InputEditCases.cases.filter (!atomicOwnerCase ·)).all fun c =>
+    SessionQueue.InputEditCases.run c = (c.before, none) := by native_decide
+
+example : (SessionQueue.InputEditCases.cases.find? (·.name == "exact_replay_after_expiry")).all
+    fun replay => (SessionQueue.InputEditCases.run replay).1 == replay.before &&
+      (SessionQueue.InputEditCases.cases.find? (·.name == "local_self_applied")).all fun c =>
+        (SessionQueue.InputEditCases.run replay).2 == (SessionQueue.InputEditCases.run c).2 := by
+  native_decide
+
+end InputEdit
 
 end Families
 

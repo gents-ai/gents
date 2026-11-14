@@ -24,24 +24,17 @@ mod support;
 use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
-use gents_lean_vocab::{
-    lean_contract_snapshot, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
-    lean_recovery_sweep_cases,
-};
+use gents_lean_vocab::lean_contract_snapshot;
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
     fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
 use support::{build_request, first_optional_row, first_row, test_db, BACKEND_ID, DEADLINE_SECS};
 
-#[path = "conformance/background.rs"]
-mod background;
 #[path = "conformance/compaction_gate.rs"]
 mod compaction_gate;
 #[path = "conformance/coverage.rs"]
 mod coverage;
-#[path = "conformance/enrollment.rs"]
-mod enrollment;
 #[path = "conformance/eval.rs"]
 mod eval;
 #[path = "conformance/interrupts_manual.rs"]
@@ -64,8 +57,13 @@ mod startup_readiness;
 mod streaming_compaction;
 
 #[tokio::test]
-async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
-    recovery_sweeps::generated_recovery_sweep_cases_drive_startup_recovery_contract().await;
+async fn generated_request_recovery_cases_drive_request_owner() {
+    recovery_sweeps::generated_request_recovery_cases_drive_request_owner().await;
+}
+
+#[tokio::test]
+async fn generated_inference_recovery_cases_drive_inference_owner() {
+    recovery_sweeps::generated_inference_recovery_cases_drive_inference_owner().await;
 }
 
 #[tokio::test]
@@ -97,11 +95,6 @@ async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 #[tokio::test]
 async fn drain_wakeups_never_interrupts_foreign_replica() {
     request_owner_scope::drain_wakeups_never_interrupts_foreign_replica().await;
-}
-
-#[tokio::test]
-async fn generated_r6_backgrounding_case_metadata_matches_export() {
-    background::generated_r6_backgrounding_case_metadata_matches_export().await;
 }
 
 #[test]

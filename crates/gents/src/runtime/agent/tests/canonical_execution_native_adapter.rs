@@ -14,14 +14,10 @@ use gents_protocol::row::AgentRequestRow;
 
 use gents_store::identity::NodeIdentity;
 
-use gents_lean_vocab::{
-    CanonicalExecutionAdapter, ExecutionFuture, LeanAuxiliaryKind,
-    LeanCanonicalExecutionObservation, LeanCanonicalExecutionOperation, LeanCanonicalExecutionSeed,
-    LeanCanonicalMessage, LeanCanonicalSegment, LeanCanonicalSource, LeanCanonicalToolAdmission,
-    LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome,
-    LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningPart,
-    LeanRequestPurpose, LeanResultPart, LeanTerminalSelection,
-};
+use gents_lean_vocab::canonical_wire as wire;
+use gents_protocol::request_admission::RequestPurpose;
+
+type ExecutionFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + 'a>>;
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
 
@@ -331,8 +327,8 @@ pub(crate) struct NativeCanonicalExecution {
     session_id: String,
     node_did: String,
     title_parent: Option<(u64, String)>,
-    segments: Vec<LeanCanonicalSegment>,
-    messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
+    segments: Vec<wire::Segment>,
+    messages: Vec<wire::Message<wire::PayloadSpec>>,
     tool_state: Option<String>,
     physical_tool_request: Option<u64>,
     segment_ids: RapidHashMap<String, u64>,
@@ -415,8 +411,8 @@ impl NativeCanonicalExecution {
         expected_generation: u64,
         fresh_generation: u64,
         outcome: &str,
-        selection: &LeanTerminalSelection,
-    ) -> Result<LeanCanonicalExecutionObservation> {
+        selection: &wire::TerminalSelection,
+    ) -> Result<wire::ExecutionObservation> {
         anyhow::ensure!(
             outcome == "dead",
             "modeled corrupt revocation outcome changed"
@@ -464,8 +460,8 @@ impl NativeCanonicalExecution {
             gents_store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
                 .context("native revoked request disappeared")?;
         let expected_selection = match selection {
-            LeanTerminalSelection::NoMessage => gents_protocol::output::TerminalOutput::NoMessage,
-            LeanTerminalSelection::Message { id } => {
+            wire::TerminalSelection::NoMessage => gents_protocol::output::TerminalOutput::NoMessage,
+            wire::TerminalSelection::Message { id } => {
                 let physical = self
                     .message_ids
                     .iter()
@@ -489,16 +485,16 @@ impl NativeCanonicalExecution {
         now: u64,
         document: u64,
         authority_outcome: &str,
-        record: &LeanCanonicalSegment,
-        message: &LeanCanonicalMessage<LeanPayloadSpec>,
-    ) -> Result<LeanCanonicalExecutionObservation> {
+        record: &wire::Segment,
+        message: &wire::Message<wire::PayloadSpec>,
+    ) -> Result<wire::ExecutionObservation> {
         anyhow::ensure!(
             authority_outcome == "complete",
             "native completion requires complete authority"
         );
         anyhow::ensure!(
-            matches!(record.coordinate.source, LeanCanonicalSource::Tool { call } if call == document)
-                && matches!(record.writer, LeanCanonicalWriter::Tool { call } if call == document),
+            matches!(record.coordinate.source, wire::Source::Tool { call } if call == document)
+                && matches!(record.writer, wire::Writer::Tool { call } if call == document),
             "modeled tool closure is not bound to selected physical tool"
         );
         let raw = String::from_utf8(
@@ -509,11 +505,11 @@ impl NativeCanonicalExecution {
                 .payload
                 .clone(),
         )?;
-        let [LeanMessageBlock::ToolResult { doc_id, parts, .. }] = message.blocks.as_slice() else {
+        let [wire::Block::ToolResult { doc_id, parts, .. }] = message.blocks.as_slice() else {
             anyhow::bail!("modeled native completion has no sole ToolResult block")
         };
         anyhow::ensure!(*doc_id == document, "modeled result refers to another tool");
-        let [LeanResultPart::Text { payload }] = parts.as_slice() else {
+        let [wire::ResultPart::Text { payload }] = parts.as_slice() else {
             anyhow::bail!("modeled native completion has no sole text result")
         };
         anyhow::ensure!(
@@ -521,19 +517,19 @@ impl NativeCanonicalExecution {
             "modeled result does not reference the closing tool stream"
         );
         let presentation = match &payload.presentation {
-            LeanPresentation::Full => PayloadPresentation::Full,
-            LeanPresentation::Composed { parts } => PayloadPresentation::Composed {
+            wire::Presentation::Full => PayloadPresentation::Full,
+            wire::Presentation::Composed { parts } => PayloadPresentation::Composed {
                 parts: parts
                     .iter()
                     .map(|part| -> Result<_> {
                         Ok(match part {
-                            LeanPresentationPart::Range { start, end } => {
+                            wire::PresentationPart::Range { start, end } => {
                                 gents_protocol::output::PresentationPart::OutputRange {
                                     start_byte: *start,
                                     end_byte: *end,
                                 }
                             }
-                            LeanPresentationPart::Literal { bytes } => {
+                            wire::PresentationPart::Literal { bytes } => {
                                 gents_protocol::output::PresentationPart::Literal {
                                     text: String::from_utf8(bytes.clone())?,
                                 }
@@ -633,9 +629,9 @@ impl NativeCanonicalExecution {
         expected_generation: u64,
         fresh_generation: u64,
         outcome: &str,
-        selection: &LeanTerminalSelection,
-        items: &[gents_lean_vocab::LeanCanonicalRecoveryItem],
-    ) -> Result<LeanCanonicalExecutionObservation> {
+        selection: &wire::TerminalSelection,
+        items: &[wire::RecoveryItem],
+    ) -> Result<wire::ExecutionObservation> {
         if outcome == "interrupted" {
             gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
                 &self.access,
@@ -663,10 +659,10 @@ impl NativeCanonicalExecution {
             .as_deref()
             .context("native recovery request omitted deadline")?;
         let choice = match selection {
-            LeanTerminalSelection::NoMessage => {
+            wire::TerminalSelection::NoMessage => {
                 gents_session::request::lifecycle::RecoverySelectionChoice::NoMessage
             }
-            LeanTerminalSelection::Message { id } => {
+            wire::TerminalSelection::Message { id } => {
                 let accepted_key = self.message_ids.iter().find_map(|(physical, symbolic)| {
                     (*symbolic == *id)
                         .then(|| self.canonical_message_keys.get(physical))
@@ -894,7 +890,7 @@ impl NativeCanonicalExecution {
         &self,
         id: u64,
         segment: &gents_protocol::output::OutputSegment,
-    ) -> Result<LeanCanonicalSegment> {
+    ) -> Result<wire::Segment> {
         let source = match &segment.source {
             gents_protocol::output::OutputSource::ProviderTurn {
                 scope,
@@ -902,7 +898,7 @@ impl NativeCanonicalExecution {
                 attempt,
             } => match scope.kind {
                 gents_protocol::rendered_request::CaptureScopeKind::Inference => {
-                    LeanCanonicalSource::Provider {
+                    wire::Source::Provider {
                         scope: modeled_capture_seq(scope.seq)?,
                         turn: u64::from(*turn_index),
                         attempt: u64::from(*attempt),
@@ -912,19 +908,19 @@ impl NativeCanonicalExecution {
                 | gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
                 | gents_protocol::rendered_request::CaptureScopeKind::Title
                 | gents_protocol::rendered_request::CaptureScopeKind::AccessReview => {
-                    LeanCanonicalSource::Auxiliary {
+                    wire::Source::Auxiliary {
                         auxiliary_kind: match scope.kind {
                             gents_protocol::rendered_request::CaptureScopeKind::Compaction => {
-                                LeanAuxiliaryKind::Compaction
+                                wire::AuxiliaryKind::Compaction
                             }
                             gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback => {
-                                LeanAuxiliaryKind::CompactionFallback
+                                wire::AuxiliaryKind::CompactionFallback
                             }
                             gents_protocol::rendered_request::CaptureScopeKind::Title => {
-                                LeanAuxiliaryKind::Title
+                                wire::AuxiliaryKind::Title
                             }
                             gents_protocol::rendered_request::CaptureScopeKind::AccessReview => {
-                                LeanAuxiliaryKind::AccessReview
+                                wire::AuxiliaryKind::AccessReview
                             }
                             _ => anyhow::bail!("native provider scope is not modeled"),
                         },
@@ -936,7 +932,7 @@ impl NativeCanonicalExecution {
                 _ => anyhow::bail!("native provider scope is not modeled"),
             },
             gents_protocol::output::OutputSource::ToolCall { tool_call_doc_id } => {
-                LeanCanonicalSource::Tool {
+                wire::Source::Tool {
                     call: self
                         .tool_ids
                         .get(tool_call_doc_id)
@@ -949,12 +945,12 @@ impl NativeCanonicalExecution {
         let writer = match &segment.writer {
             gents_protocol::output::OutputWriter::RequestExecution {
                 execution_generation,
-            } => LeanCanonicalWriter::Request {
+            } => wire::Writer::Request {
                 generation: parse_generation(Some(execution_generation))
                     .context("native segment generation is not symbolic")?,
             },
             gents_protocol::output::OutputWriter::ToolExecution { tool_call_doc_id } => {
-                LeanCanonicalWriter::Tool {
+                wire::Writer::Tool {
                     call: self
                         .tool_ids
                         .get(tool_call_doc_id)
@@ -966,13 +962,13 @@ impl NativeCanonicalExecution {
         let flush = segment
             .ordinal
             .map(|ordinal| -> Result<_> {
-                Ok(gents_lean_vocab::LeanCanonicalFlush {
+                Ok(wire::Flush {
                     ordinal: u64::from(ordinal),
                     runs: segment
                         .runs
                         .iter()
                         .map(|run| {
-                            Ok(gents_lean_vocab::LeanCanonicalRun {
+                            Ok(wire::Run {
                                 stream: u64::from(run.stream),
                                 bytes: u64::from(run.bytes),
                                 declaration: run
@@ -981,46 +977,46 @@ impl NativeCanonicalExecution {
                                     .map(|declaration| {
                                         let (kind, tool) = match &declaration.payload {
                                         gents_protocol::output::StreamPayload::Text => {
-                                            (LeanPayloadKind::Text, None)
+                                            (wire::PayloadKind::Text, None)
                                         }
                                         gents_protocol::output::StreamPayload::Reasoning => {
-                                            (LeanPayloadKind::Reasoning, None)
+                                            (wire::PayloadKind::Reasoning, None)
                                         }
                                         gents_protocol::output::StreamPayload::ReasoningSignature => {
-                                            (LeanPayloadKind::Signature, None)
+                                            (wire::PayloadKind::Signature, None)
                                         }
                                         gents_protocol::output::StreamPayload::ReasoningStop => {
-                                            (LeanPayloadKind::ReasoningStop, None)
+                                            (wire::PayloadKind::ReasoningStop, None)
                                         }
                                         gents_protocol::output::StreamPayload::ReasoningSummary => {
-                                            (LeanPayloadKind::Summary, None)
+                                            (wire::PayloadKind::Summary, None)
                                         }
                                         gents_protocol::output::StreamPayload::ReasoningEncrypted => {
-                                            (LeanPayloadKind::Encrypted, None)
+                                            (wire::PayloadKind::Encrypted, None)
                                         }
                                         gents_protocol::output::StreamPayload::ReasoningRedacted => {
-                                            (LeanPayloadKind::Redacted, None)
+                                            (wire::PayloadKind::Redacted, None)
                                         }
                                         gents_protocol::output::StreamPayload::ToolArguments {
                                             id,
                                             call_id,
                                             name,
                                         } => (
-                                            LeanPayloadKind::Arguments,
-                                            Some(gents_lean_vocab::LeanToolIdentity {
+                                            wire::PayloadKind::Arguments,
+                                            Some(wire::ToolIdentity {
                                                 id: id.clone(),
                                                 call_id: call_id.clone(),
                                                 name: name.clone(),
                                             }),
                                         ),
                                         gents_protocol::output::StreamPayload::ToolOutput => {
-                                            (LeanPayloadKind::ToolOutput, None)
+                                            (wire::PayloadKind::ToolOutput, None)
                                         }
                                         _ => anyhow::bail!(
                                             "native adapter observed unsupported stream payload"
                                         ),
                                     };
-                                        Ok(gents_lean_vocab::LeanCanonicalDeclaration {
+                                        Ok(wire::Declaration {
                                             block: u64::from(declaration.block_index),
                                             part: u64::from(declaration.part_index),
                                             kind,
@@ -1041,19 +1037,19 @@ impl NativeCanonicalExecution {
                 outcome,
                 segments,
                 stream_bytes,
-            } => gents_lean_vocab::LeanCanonicalClosure::Closed {
+            } => wire::Closure::Closed {
                 outcome: match outcome {
-                    OutputOutcome::Complete => LeanOutcome::Complete,
-                    OutputOutcome::Partial => LeanOutcome::Partial,
+                    OutputOutcome::Complete => wire::Outcome::Complete,
+                    OutputOutcome::Partial => wire::Outcome::Partial,
                 },
                 segments: u64::from(*segments),
                 stream_bytes: stream_bytes.clone(),
             },
-            SourceClose::Retracted => gents_lean_vocab::LeanCanonicalClosure::Retracted,
+            SourceClose::Retracted => wire::Closure::Retracted,
         });
-        Ok(LeanCanonicalSegment {
+        Ok(wire::Segment {
             id,
-            coordinate: gents_lean_vocab::LeanCanonicalCoordinate {
+            coordinate: wire::Coordinate {
                 request: self.symbolic_request()?,
                 source,
             },
@@ -1072,10 +1068,10 @@ impl NativeCanonicalExecution {
         &self,
         id: u64,
         message: &TranscriptMessage,
-    ) -> Result<LeanCanonicalMessage<LeanPayloadSpec>> {
-        let payload_ref = |reference: &PayloadRef| -> Result<LeanPayloadSpec> {
-            Ok(LeanPayloadSpec {
-                reference: gents_lean_vocab::LeanPayloadRef {
+    ) -> Result<wire::Message<wire::PayloadSpec>> {
+        let payload_ref = |reference: &PayloadRef| -> Result<wire::PayloadSpec> {
+            Ok(wire::PayloadSpec {
+                reference: wire::PayloadRef {
                     close_id: self
                         .segment_ids
                         .get(&reference.close_doc_id)
@@ -1083,26 +1079,26 @@ impl NativeCanonicalExecution {
                         .context("native payload reference has no symbolic closure identity")?,
                     stream: u64::from(reference.stream),
                 },
-                presentation: LeanPresentation::Full,
+                presentation: wire::Presentation::Full,
             })
         };
-        let presented_payload = |value: &PresentedPayload| -> Result<LeanPayloadSpec> {
+        let presented_payload = |value: &PresentedPayload| -> Result<wire::PayloadSpec> {
             let mut payload = payload_ref(&value.output)?;
             payload.presentation = match &value.presentation {
-                PayloadPresentation::Full => LeanPresentation::Full,
-                PayloadPresentation::Composed { parts } => LeanPresentation::Composed {
+                PayloadPresentation::Full => wire::Presentation::Full,
+                PayloadPresentation::Composed { parts } => wire::Presentation::Composed {
                     parts: parts
                         .iter()
                         .map(|part| match part {
                             gents_protocol::output::PresentationPart::OutputRange {
                                 start_byte,
                                 end_byte,
-                            } => LeanPresentationPart::Range {
+                            } => wire::PresentationPart::Range {
                                 start: *start_byte,
                                 end: *end_byte,
                             },
                             gents_protocol::output::PresentationPart::Literal { text } => {
-                                LeanPresentationPart::Literal {
+                                wire::PresentationPart::Literal {
                                     bytes: text.as_bytes().to_vec(),
                                 }
                             }
@@ -1115,42 +1111,44 @@ impl NativeCanonicalExecution {
         let blocks = message
             .blocks
             .iter()
-            .map(|block| -> Result<LeanMessageBlock<LeanPayloadSpec>> {
+            .map(|block| -> Result<wire::Block<wire::PayloadSpec>> {
                 Ok(match block {
                     MessageBlock::Text { text } => {
                         anyhow::ensure!(
                             matches!(text.presentation, PayloadPresentation::Full),
                             "native text presentation is not modeled"
                         );
-                        LeanMessageBlock::Text {
+                        wire::Block::Text {
                             payload: payload_ref(&text.output)?,
                         }
                     }
-                    MessageBlock::Reasoning { id, parts } => LeanMessageBlock::Reasoning {
+                    MessageBlock::Reasoning { id, parts } => wire::Block::Reasoning {
                         id: id.clone(),
                         parts: parts
                             .iter()
-                            .map(|part| -> Result<LeanReasoningPart<LeanPayloadSpec>> {
+                            .map(|part| -> Result<wire::ReasoningPart<wire::PayloadSpec>> {
                                 Ok(match part {
                                     ReasoningPart::Text { text, signature } => {
-                                        LeanReasoningPart::Text {
+                                        wire::ReasoningPart::Text {
                                             payload: payload_ref(text)?,
                                             signature: signature.clone(),
                                         }
                                     }
                                     ReasoningPart::Encrypted { data } => {
-                                        LeanReasoningPart::Encrypted {
+                                        wire::ReasoningPart::Encrypted {
                                             payload: payload_ref(data)?,
                                         }
                                     }
                                     ReasoningPart::Redacted { data } => {
-                                        LeanReasoningPart::Redacted {
+                                        wire::ReasoningPart::Redacted {
                                             payload: payload_ref(data)?,
                                         }
                                     }
-                                    ReasoningPart::Summary { text } => LeanReasoningPart::Summary {
-                                        payload: payload_ref(text)?,
-                                    },
+                                    ReasoningPart::Summary { text } => {
+                                        wire::ReasoningPart::Summary {
+                                            payload: payload_ref(text)?,
+                                        }
+                                    }
                                 })
                             })
                             .collect::<Result<Vec<_>>>()?,
@@ -1163,7 +1161,7 @@ impl NativeCanonicalExecution {
                         arguments,
                         signature,
                         additional_params,
-                    } => LeanMessageBlock::ToolCall {
+                    } => wire::Block::ToolCall {
                         doc_id: self
                             .tool_ids
                             .get(tool_call_doc_id)
@@ -1184,7 +1182,7 @@ impl NativeCanonicalExecution {
                         id,
                         call_id,
                         parts,
-                    } => LeanMessageBlock::ToolResult {
+                    } => wire::Block::ToolResult {
                         doc_id: self
                             .tool_ids
                             .get(tool_call_doc_id)
@@ -1196,7 +1194,7 @@ impl NativeCanonicalExecution {
                             .iter()
                             .map(|part| match part {
                                 gents_protocol::output::ToolResultPart::Text { text } => {
-                                    Ok(LeanResultPart::Text {
+                                    Ok(wire::ResultPart::Text {
                                         payload: presented_payload(text)?,
                                     })
                                 }
@@ -1210,8 +1208,8 @@ impl NativeCanonicalExecution {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(LeanCanonicalMessage {
-            header: gents_lean_vocab::LeanCanonicalHeader {
+        Ok(wire::Message {
+            header: wire::Header {
                 id,
                 session: self.transcript_session_id,
                 request: message.request_doc_id.as_ref().map(|_| self.request_id),
@@ -1220,7 +1218,7 @@ impl NativeCanonicalExecution {
                     .payload_references()
                     .into_iter()
                     .map(|reference| {
-                        Ok(gents_lean_vocab::LeanPayloadRef {
+                        Ok(wire::PayloadRef {
                             close_id: self
                                 .segment_ids
                                 .get(&reference.close_doc_id)
@@ -1233,29 +1231,29 @@ impl NativeCanonicalExecution {
                     })
                     .collect::<Result<Vec<_>>>()?,
                 outcome: match message.outcome {
-                    OutputOutcome::Complete => LeanOutcome::Complete,
-                    OutputOutcome::Partial => LeanOutcome::Partial,
+                    OutputOutcome::Complete => wire::Outcome::Complete,
+                    OutputOutcome::Partial => wire::Outcome::Partial,
                 },
                 role: match message.role {
-                    MessageRole::System => LeanMessageRole::System,
-                    MessageRole::User => LeanMessageRole::User,
-                    MessageRole::Assistant => LeanMessageRole::Assistant,
+                    MessageRole::System => wire::Role::System,
+                    MessageRole::User => wire::Role::User,
+                    MessageRole::Assistant => wire::Role::Assistant,
                 },
                 publication: match &message.publication {
                     MessagePublication::RequestExecution {
                         execution_generation,
-                    } => LeanMessagePublication::RequestExecution {
+                    } => wire::Publication::RequestExecution {
                         generation: parse_generation(Some(execution_generation))
                             .context("native header generation is not symbolic")?,
                     },
                     MessagePublication::RequestRecovery {
                         execution_generation,
-                    } => LeanMessagePublication::RequestRecovery {
+                    } => wire::Publication::RequestRecovery {
                         generation: parse_generation(Some(execution_generation))
                             .context("native recovery header generation is not symbolic")?,
                     },
                     MessagePublication::ToolDelivery { tool_call_doc_id } => {
-                        LeanMessagePublication::ToolDelivery {
+                        wire::Publication::ToolDelivery {
                             call: self
                                 .tool_ids
                                 .get(tool_call_doc_id)
@@ -1275,7 +1273,7 @@ impl NativeCanonicalExecution {
         })
     }
 
-    async fn observe(&mut self, accepted: bool) -> Result<LeanCanonicalExecutionObservation> {
+    async fn observe(&mut self, accepted: bool) -> Result<wire::ExecutionObservation> {
         self.refresh_output().await?;
         let response = self
             .query(&format!(
@@ -1321,10 +1319,10 @@ impl NativeCanonicalExecution {
         let terminal_selection = match row.terminal_output.as_ref() {
             None => None,
             Some(gents_protocol::output::TerminalOutput::NoMessage) => {
-                Some(LeanTerminalSelection::NoMessage)
+                Some(wire::TerminalSelection::NoMessage)
             }
             Some(gents_protocol::output::TerminalOutput::Message { message_doc_id }) => {
-                Some(LeanTerminalSelection::Message {
+                Some(wire::TerminalSelection::Message {
                     id: *self
                         .message_ids
                         .get(message_doc_id)
@@ -1432,7 +1430,7 @@ impl NativeCanonicalExecution {
             .compacted_through_sequence
             .map(|sequence| modeled_sequence(u64::from(sequence)))
             .transpose()?;
-        Ok(LeanCanonicalExecutionObservation {
+        Ok(wire::ExecutionObservation {
             accepted,
             generation: active_lease.then_some(persisted_generation).flatten(),
             terminal_generation: state
@@ -1455,14 +1453,11 @@ impl NativeCanonicalExecution {
     }
 }
 
-impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
-    type Error = anyhow::Error;
-    type Native = NativeCanonicalExecution;
-
+impl NativeCanonicalExecutionAdapter {
     fn initialize<'a>(
         &'a mut self,
-        seed: &'a LeanCanonicalExecutionSeed,
-    ) -> ExecutionFuture<'a, Result<Self::Native>> {
+        seed: &'a wire::Seed,
+    ) -> ExecutionFuture<'a, Result<NativeCanonicalExecution>> {
         Box::pin(async move {
             anyhow::ensure!(
                 seed.segments.is_empty() && seed.messages.is_empty(),
@@ -1480,8 +1475,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 matches!(
                     seed.lease.request,
                     RequestLifecycleState::Claimed | RequestLifecycleState::Processing
-                ) && seed.lease.lease.status
-                    == gents_lean_vocab::LeanRequestExecutionLeaseStatus::Active,
+                ) && seed.lease.lease.status == wire::LeaseStatus::Active,
                 "native fixture only supports an active claimed or processing request"
             );
             let generation = seed
@@ -1508,14 +1502,14 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             let seed_creation_time = fixture_time(seed.lease.now)?;
             let title_binding = match seed.purpose {
-                LeanRequestPurpose::Normal => {
+                RequestPurpose::Normal => {
                     anyhow::ensure!(
                         seed.title_binding.is_none(),
                         "normal seed has title binding"
                     );
                     None
                 }
-                LeanRequestPurpose::TitleAudit | LeanRequestPurpose::AccessReview => {
+                RequestPurpose::TitleAudit | RequestPurpose::AccessReview => {
                     let binding = seed
                         .title_binding
                         .as_ref()
@@ -1576,7 +1570,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     &access,
                     &user,
                     gents_session::request::lifecycle::RequestSpec::new(
-                        gents_protocol::request_admission::RequestPurpose::Normal,
+                        RequestPurpose::Normal,
                         request_identity(format!("lean-request-{}", binding.parent_logical)),
                         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
                             user.did(),
@@ -1626,7 +1620,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         &access,
                         &user,
                         gents_session::request::lifecycle::RequestSpec::new(
-                            gents_protocol::request_admission::RequestPurpose::Normal,
+                            RequestPurpose::Normal,
                             request_identity(request_id.clone()),
                             gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
                                 user.did(),
@@ -1645,7 +1639,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             ..Default::default()
                         }),
                         ..gents_session::request::lifecycle::RequestSpec::new(
-                            seed.purpose.into(), auxiliary_identity,
+                            seed.purpose, auxiliary_identity,
                             gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
                                 agent.did(), &parent.request_id,
                             ),
@@ -1710,7 +1704,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             if let Some(parent) = &parent {
                 anyhow::ensure!(
-                    claimed.purpose == Some(seed.purpose.into())
+                    claimed.purpose == Some(seed.purpose)
                         && claimed.caused_by_parent_request_id.as_deref()
                             == Some(parent.request_id.as_str())
                         && claimed.caused_by_parent_request_doc_id.as_deref()
@@ -1804,20 +1798,20 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
 
     fn apply<'a>(
         &'a mut self,
-        native: &'a mut Self::Native,
+        native: &'a mut NativeCanonicalExecution,
         query_document: u64,
-        operation: &'a LeanCanonicalExecutionOperation,
-    ) -> ExecutionFuture<'a, Result<LeanCanonicalExecutionObservation>> {
+        operation: &'a wire::Operation,
+    ) -> ExecutionFuture<'a, Result<wire::ExecutionObservation>> {
         Box::pin(async move {
             native.query_document = query_document;
             match operation {
-                LeanCanonicalExecutionOperation::RetractBeforeRetry {
+                wire::Operation::RetractBeforeRetry {
                     now,
                     generation,
                     record,
                     ..
                 } => native.close_auxiliary(*now, *generation, record).await,
-                LeanCanonicalExecutionOperation::RenewLease {
+                wire::Operation::RenewLease {
                     now,
                     generation,
                     expected_deadline,
@@ -1839,7 +1833,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         ))
                         .await
                 }
-                LeanCanonicalExecutionOperation::AppendOutput {
+                wire::Operation::AppendOutput {
                     now,
                     generation,
                     record,
@@ -1872,7 +1866,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     native.segment_ids.insert(doc_id, record.id);
                     native.observe(true).await
                 }
-                LeanCanonicalExecutionOperation::AppendToolOutput {
+                wire::Operation::AppendToolOutput {
                     now,
                     document,
                     record,
@@ -1911,7 +1905,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     native.segment_ids.insert(receipt.segment_doc_id, record.id);
                     native.observe(true).await
                 }
-                LeanCanonicalExecutionOperation::AppendOutputWhileSiblingWaits {
+                wire::Operation::AppendOutputWhileSiblingWaits {
                     now,
                     generation,
                     record,
@@ -1949,19 +1943,19 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Ok(()) => anyhow::bail!("same-task guarded append bypassed mutation gate"),
                     }
                 }
-                LeanCanonicalExecutionOperation::ClosePartial {
+                wire::Operation::ClosePartial {
                     now,
                     generation,
                     item,
                     ..
                 } => native.close_partial(*now, *generation, item).await,
-                LeanCanonicalExecutionOperation::CloseAuxiliary {
+                wire::Operation::CloseAuxiliary {
                     now,
                     generation,
                     closing,
                     ..
                 } => native.close_auxiliary(*now, *generation, closing).await,
-                LeanCanonicalExecutionOperation::RecoverExpiredTerminal {
+                wire::Operation::RecoverExpiredTerminal {
                     now,
                     expected_generation,
                     fresh_generation,
@@ -1985,7 +1979,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         )
                         .await
                 }
-                LeanCanonicalExecutionOperation::Dispatch {
+                wire::Operation::Dispatch {
                     now,
                     generation,
                     call,
@@ -2017,7 +2011,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Err(error) => Err(error.context("native tool dispatch owner failed")),
                     }
                 }
-                LeanCanonicalExecutionOperation::TerminalizeCompleted {
+                wire::Operation::TerminalizeCompleted {
                     now,
                     generation,
                     outcome,
@@ -2041,10 +2035,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         other => anyhow::bail!("unknown modeled terminal outcome: {other}"),
                     };
                     let selection = match selection {
-                        LeanTerminalSelection::NoMessage => {
+                        wire::TerminalSelection::NoMessage => {
                             gents_protocol::output::TerminalOutput::NoMessage
                         }
-                        LeanTerminalSelection::Message { id } => {
+                        wire::TerminalSelection::Message { id } => {
                             let physical = native
                                 .message_ids
                                 .iter()
@@ -2092,7 +2086,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         ))
                         .await
                 }
-                LeanCanonicalExecutionOperation::CompleteForegroundTool {
+                wire::Operation::CompleteForegroundTool {
                     now,
                     document,
                     authority_outcome,
@@ -2104,7 +2098,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .complete_foreground(*now, *document, authority_outcome, record, message)
                         .await
                 }
-                LeanCanonicalExecutionOperation::RevokeCorrupt {
+                wire::Operation::RevokeCorrupt {
                     now,
                     expected_generation,
                     fresh_generation,
@@ -2122,7 +2116,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         )
                         .await
                 }
-                LeanCanonicalExecutionOperation::AdmitSpawnedBackground {
+                wire::Operation::AdmitSpawnedBackground {
                     now,
                     generation,
                     admission,
@@ -2165,9 +2159,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     }
                     native.observe(true).await
                 }
-                LeanCanonicalExecutionOperation::DeliverReplicatedSegment { record, .. } => {
+                wire::Operation::DeliverReplicatedSegment { record, .. } => {
                     let generation = match &record.writer {
-                        LeanCanonicalWriter::Request { generation } => *generation,
+                        wire::Writer::Request { generation } => *generation,
                         _ => anyhow::bail!(
                             "replicated native fixture supports provider segments only"
                         ),
@@ -2177,7 +2171,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     native.segment_ids.insert(doc_id, record.id);
                     native.observe(true).await
                 }
-                LeanCanonicalExecutionOperation::AcceptForeground {
+                wire::Operation::AcceptForeground {
                     now,
                     generation,
                     closing,
@@ -2185,7 +2179,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     admissions,
                     ..
                 }
-                | LeanCanonicalExecutionOperation::AcceptBackground {
+                | wire::Operation::AcceptBackground {
                     now,
                     generation,
                     closing,
@@ -2193,7 +2187,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     admissions,
                     ..
                 }
-                | LeanCanonicalExecutionOperation::AcceptTurn {
+                | wire::Operation::AcceptTurn {
                     now,
                     generation,
                     closing,
@@ -2218,9 +2212,9 @@ impl NativeCanonicalExecution {
         &mut self,
         now: u64,
         generation: u64,
-        closing: &LeanCanonicalSegment,
-    ) -> Result<LeanCanonicalExecutionObservation> {
-        let LeanCanonicalWriter::Request {
+        closing: &wire::Segment,
+    ) -> Result<wire::ExecutionObservation> {
+        let wire::Writer::Request {
             generation: writer_generation,
         } = &closing.writer
         else {
@@ -2303,9 +2297,9 @@ impl NativeCanonicalExecution {
         &mut self,
         now: u64,
         generation: u64,
-        item: &gents_lean_vocab::LeanCanonicalRecoveryItem,
-    ) -> Result<LeanCanonicalExecutionObservation> {
-        let LeanCanonicalWriter::Request {
+        item: &wire::RecoveryItem,
+    ) -> Result<wire::ExecutionObservation> {
+        let wire::Writer::Request {
             generation: writer_generation,
         } = &item.closing.writer
         else {
@@ -2431,15 +2425,15 @@ impl NativeCanonicalExecution {
         &mut self,
         now: u64,
         generation: u64,
-        closing: &LeanCanonicalSegment,
-        message: &LeanCanonicalMessage<LeanPayloadSpec>,
-        admissions: &[LeanCanonicalToolAdmission],
-    ) -> Result<LeanCanonicalExecutionObservation> {
+        closing: &wire::Segment,
+        message: &wire::Message<wire::PayloadSpec>,
+        admissions: &[wire::ToolAdmission],
+    ) -> Result<wire::ExecutionObservation> {
         anyhow::ensure!(
             matches!(
                 closing.close,
-                Some(gents_lean_vocab::LeanCanonicalClosure::Closed {
-                    outcome: LeanOutcome::Complete,
+                Some(wire::Closure::Closed {
+                    outcome: wire::Outcome::Complete,
                     ..
                 })
             ),
@@ -2520,7 +2514,7 @@ impl NativeCanonicalExecution {
                     .blocks
                     .iter()
                     .find_map(|block| match block {
-                        LeanMessageBlock::ToolCall { doc_id, id, .. }
+                        wire::Block::ToolCall { doc_id, id, .. }
                             if *doc_id == admission.document =>
                         {
                             Some(id.clone())
@@ -2679,7 +2673,7 @@ impl NativeCanonicalExecution {
 
     fn protocol_message(
         &self,
-        message: &LeanCanonicalMessage<LeanPayloadSpec>,
+        message: &wire::Message<wire::PayloadSpec>,
         generation: u64,
     ) -> Result<TranscriptMessage> {
         anyhow::ensure!(message.header.session > 0, "message session is blank");
@@ -2693,20 +2687,20 @@ impl NativeCanonicalExecution {
         );
         anyhow::ensure!(
             matches!(message.header.publication,
-                LeanMessagePublication::RequestExecution { generation: owner }
-                | LeanMessagePublication::RequestRecovery { generation: owner }
+                wire::Publication::RequestExecution { generation: owner }
+                | wire::Publication::RequestRecovery { generation: owner }
                 if owner == generation),
             "provider header generation conflicts with operation"
         );
-        let payload = |value: &LeanPayloadSpec| -> Result<PresentedPayload> {
+        let payload = |value: &wire::PayloadSpec| -> Result<PresentedPayload> {
             Ok(PresentedPayload {
                 output: PayloadRef {
                     close_doc_id: format!("lean-segment-{}", value.reference.close_id),
                     stream: u32::try_from(value.reference.stream)?,
                 },
                 presentation: match &value.presentation {
-                    LeanPresentation::Full => PayloadPresentation::Full,
-                    LeanPresentation::Composed { .. } => anyhow::bail!(
+                    wire::Presentation::Full => PayloadPresentation::Full,
+                    wire::Presentation::Composed { .. } => anyhow::bail!(
                         "composed presentation is not implemented by the bounded adapter"
                     ),
                 },
@@ -2717,33 +2711,33 @@ impl NativeCanonicalExecution {
             .iter()
             .map(|block| -> Result<MessageBlock> {
                 Ok(match block {
-                    LeanMessageBlock::Text { payload: value } => MessageBlock::Text {
+                    wire::Block::Text { payload: value } => MessageBlock::Text {
                         text: payload(value)?,
                     },
-                    LeanMessageBlock::Reasoning { id, parts } => MessageBlock::Reasoning {
+                    wire::Block::Reasoning { id, parts } => MessageBlock::Reasoning {
                         id: id.clone(),
                         parts: parts
                             .iter()
                             .map(|part| -> Result<ReasoningPart> {
                                 Ok(match part {
-                                    LeanReasoningPart::Text {
+                                    wire::ReasoningPart::Text {
                                         payload: value,
                                         signature,
                                     } => ReasoningPart::Text {
                                         text: payload(value)?.output,
                                         signature: signature.clone(),
                                     },
-                                    LeanReasoningPart::Encrypted { payload: value } => {
+                                    wire::ReasoningPart::Encrypted { payload: value } => {
                                         ReasoningPart::Encrypted {
                                             data: payload(value)?.output,
                                         }
                                     }
-                                    LeanReasoningPart::Redacted { payload: value } => {
+                                    wire::ReasoningPart::Redacted { payload: value } => {
                                         ReasoningPart::Redacted {
                                             data: payload(value)?.output,
                                         }
                                     }
-                                    LeanReasoningPart::Summary { payload: value } => {
+                                    wire::ReasoningPart::Summary { payload: value } => {
                                         ReasoningPart::Summary {
                                             text: payload(value)?.output,
                                         }
@@ -2752,7 +2746,7 @@ impl NativeCanonicalExecution {
                             })
                             .collect::<Result<Vec<_>>>()?,
                     },
-                    LeanMessageBlock::ToolCall {
+                    wire::Block::ToolCall {
                         doc_id,
                         id,
                         call_id,
@@ -2785,27 +2779,25 @@ impl NativeCanonicalExecution {
             requester_did: Some(self.request_requester_did.clone()),
             request_doc_id: Some(self.request_doc_id.clone()),
             publication: match message.header.publication {
-                LeanMessagePublication::RequestExecution { .. } => {
+                wire::Publication::RequestExecution { .. } => {
                     MessagePublication::RequestExecution {
                         execution_generation: symbolic_generation(generation),
                     }
                 }
-                LeanMessagePublication::RequestRecovery { .. } => {
-                    MessagePublication::RequestRecovery {
-                        execution_generation: symbolic_generation(generation),
-                    }
-                }
+                wire::Publication::RequestRecovery { .. } => MessagePublication::RequestRecovery {
+                    execution_generation: symbolic_generation(generation),
+                },
                 _ => anyhow::bail!("provider header has unsupported publication authority"),
             },
             outcome: match message.header.outcome {
-                LeanOutcome::Complete => OutputOutcome::Complete,
-                LeanOutcome::Partial => OutputOutcome::Partial,
+                wire::Outcome::Complete => OutputOutcome::Complete,
+                wire::Outcome::Partial => OutputOutcome::Partial,
             },
             sequence: native_sequence(message.sequence)?,
             role: match message.header.role {
-                LeanMessageRole::System => MessageRole::System,
-                LeanMessageRole::User => MessageRole::User,
-                LeanMessageRole::Assistant => MessageRole::Assistant,
+                wire::Role::System => MessageRole::System,
+                wire::Role::User => MessageRole::User,
+                wire::Role::Assistant => MessageRole::Assistant,
             },
             native_id: message.native_id.clone(),
             native_request_id: message.native_request_id.clone(),
@@ -2816,11 +2808,11 @@ impl NativeCanonicalExecution {
 
     fn provider_segment(
         &self,
-        record: &LeanCanonicalSegment,
+        record: &wire::Segment,
         generation: u64,
     ) -> Result<gents_protocol::output::OutputSegment> {
         let (capture_kind, scope, turn, attempt) = match &record.coordinate.source {
-            LeanCanonicalSource::Provider {
+            wire::Source::Provider {
                 scope,
                 turn,
                 attempt,
@@ -2830,23 +2822,23 @@ impl NativeCanonicalExecution {
                 *turn,
                 *attempt,
             ),
-            LeanCanonicalSource::Auxiliary {
+            wire::Source::Auxiliary {
                 auxiliary_kind,
                 scope,
                 turn,
                 attempt,
             } => (
                 match auxiliary_kind {
-                    LeanAuxiliaryKind::Compaction => {
+                    wire::AuxiliaryKind::Compaction => {
                         gents_protocol::rendered_request::CaptureScopeKind::Compaction
                     }
-                    LeanAuxiliaryKind::CompactionFallback => {
+                    wire::AuxiliaryKind::CompactionFallback => {
                         gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
                     }
-                    LeanAuxiliaryKind::Title => {
+                    wire::AuxiliaryKind::Title => {
                         gents_protocol::rendered_request::CaptureScopeKind::Title
                     }
-                    LeanAuxiliaryKind::AccessReview => {
+                    wire::AuxiliaryKind::AccessReview => {
                         gents_protocol::rendered_request::CaptureScopeKind::AccessReview
                     }
                 },
@@ -2866,7 +2858,7 @@ impl NativeCanonicalExecution {
                 .context("provider coordinate names an unmapped physical request")?
         };
         anyhow::ensure!(
-            matches!(&record.writer, LeanCanonicalWriter::Request { generation: writer } if *writer == generation),
+            matches!(&record.writer, wire::Writer::Request { generation: writer } if *writer == generation),
             "append output writer generation conflicts with operation"
         );
         let runs = record
@@ -2880,26 +2872,26 @@ impl NativeCanonicalExecution {
                     .as_ref()
                     .map(|declaration| {
                         let payload = match declaration.kind {
-                            LeanPayloadKind::Text => gents_protocol::output::StreamPayload::Text,
-                            LeanPayloadKind::Reasoning => {
+                            wire::PayloadKind::Text => gents_protocol::output::StreamPayload::Text,
+                            wire::PayloadKind::Reasoning => {
                                 gents_protocol::output::StreamPayload::Reasoning
                             }
-                            LeanPayloadKind::Signature => {
+                            wire::PayloadKind::Signature => {
                                 gents_protocol::output::StreamPayload::ReasoningSignature
                             }
-                            LeanPayloadKind::ReasoningStop => {
+                            wire::PayloadKind::ReasoningStop => {
                                 gents_protocol::output::StreamPayload::ReasoningStop
                             }
-                            LeanPayloadKind::Summary => {
+                            wire::PayloadKind::Summary => {
                                 gents_protocol::output::StreamPayload::ReasoningSummary
                             }
-                            LeanPayloadKind::Encrypted => {
+                            wire::PayloadKind::Encrypted => {
                                 gents_protocol::output::StreamPayload::ReasoningEncrypted
                             }
-                            LeanPayloadKind::Redacted => {
+                            wire::PayloadKind::Redacted => {
                                 gents_protocol::output::StreamPayload::ReasoningRedacted
                             }
-                            LeanPayloadKind::Arguments => {
+                            wire::PayloadKind::Arguments => {
                                 let tool = declaration
                                     .tool
                                     .as_ref()
@@ -2910,10 +2902,10 @@ impl NativeCanonicalExecution {
                                     name: tool.name.clone(),
                                 }
                             }
-                            LeanPayloadKind::ToolOutput => {
+                            wire::PayloadKind::ToolOutput => {
                                 gents_protocol::output::StreamPayload::ToolOutput
                             }
-                            LeanPayloadKind::Media => anyhow::bail!(
+                            wire::PayloadKind::Media => anyhow::bail!(
                                 "media append conversion is not implemented in the bounded adapter"
                             ),
                         };
@@ -2964,19 +2956,19 @@ impl NativeCanonicalExecution {
                 .transpose()?
                 .unwrap_or_default(),
             close: record.close.as_ref().map(|close| match close {
-                gents_lean_vocab::LeanCanonicalClosure::Closed {
+                wire::Closure::Closed {
                     outcome,
                     segments,
                     stream_bytes,
                 } => SourceClose::Closed {
                     outcome: match outcome {
-                        LeanOutcome::Complete => OutputOutcome::Complete,
-                        LeanOutcome::Partial => OutputOutcome::Partial,
+                        wire::Outcome::Complete => OutputOutcome::Complete,
+                        wire::Outcome::Partial => OutputOutcome::Partial,
                     },
                     segments: u32::try_from(*segments).expect("modeled segment count exceeds u32"),
                     stream_bytes: stream_bytes.clone(),
                 },
-                gents_lean_vocab::LeanCanonicalClosure::Retracted => SourceClose::Retracted,
+                wire::Closure::Retracted => SourceClose::Retracted,
             }),
             created_at: self.fixture_time(record.created_at)?.to_rfc3339(),
         })
@@ -2984,7 +2976,7 @@ impl NativeCanonicalExecution {
 
     fn tool_output_segment(
         &self,
-        record: &LeanCanonicalSegment,
+        record: &wire::Segment,
         symbolic_tool: u64,
         physical_tool: &str,
     ) -> Result<gents_protocol::output::OutputSegment> {
@@ -2993,11 +2985,11 @@ impl NativeCanonicalExecution {
             "tool output segment belongs to another request"
         );
         anyhow::ensure!(
-            matches!(&record.coordinate.source, LeanCanonicalSource::Tool { call } if *call == symbolic_tool),
+            matches!(&record.coordinate.source, wire::Source::Tool { call } if *call == symbolic_tool),
             "tool output segment belongs to another source"
         );
         anyhow::ensure!(
-            matches!(&record.writer, LeanCanonicalWriter::Tool { call } if *call == symbolic_tool),
+            matches!(&record.writer, wire::Writer::Tool { call } if *call == symbolic_tool),
             "tool output segment has another writer"
         );
         let runs = record
@@ -3013,7 +3005,7 @@ impl NativeCanonicalExecution {
                             .as_ref()
                             .map(|declaration| {
                                 anyhow::ensure!(
-                                    declaration.kind == LeanPayloadKind::ToolOutput,
+                                    declaration.kind == wire::PayloadKind::ToolOutput,
                                     "modeled tool source declared a non-tool payload"
                                 );
                                 Ok(gents_protocol::output::StreamDeclaration {
@@ -3057,54 +3049,79 @@ impl NativeCanonicalExecution {
                 .transpose()?
                 .unwrap_or_default(),
             close: record.close.as_ref().map(|close| match close {
-                gents_lean_vocab::LeanCanonicalClosure::Closed {
+                wire::Closure::Closed {
                     outcome,
                     segments,
                     stream_bytes,
                 } => SourceClose::Closed {
                     outcome: match outcome {
-                        LeanOutcome::Complete => OutputOutcome::Complete,
-                        LeanOutcome::Partial => OutputOutcome::Partial,
+                        wire::Outcome::Complete => OutputOutcome::Complete,
+                        wire::Outcome::Partial => OutputOutcome::Partial,
                     },
                     segments: u32::try_from(*segments).expect("modeled segment count exceeds u32"),
                     stream_bytes: stream_bytes.clone(),
                 },
-                gents_lean_vocab::LeanCanonicalClosure::Retracted => SourceClose::Retracted,
+                wire::Closure::Retracted => SourceClose::Retracted,
             }),
             created_at: self.fixture_time(record.created_at)?.to_rfc3339(),
         })
     }
 }
 
+fn decoded_script(
+    seed: &gents_lean_vocab::family::Json,
+    operations: &[gents_lean_vocab::family::Json],
+) -> (wire::Seed, Vec<wire::Operation>) {
+    (
+        wire::decode(&seed.0),
+        operations
+            .iter()
+            .map(|operation| wire::decode(&operation.0))
+            .collect(),
+    )
+}
+
+async fn run_script(
+    name: &str,
+    seed: &wire::Seed,
+    query_document: u64,
+    operations: &[wire::Operation],
+) -> Vec<gents_lean_vocab::family::Json> {
+    let mut adapter = NativeCanonicalExecutionAdapter;
+    let mut native = adapter
+        .initialize(seed)
+        .await
+        .unwrap_or_else(|error| panic!("{name}: native fixture initialization failed: {error:#}"));
+    let mut observations = Vec::new();
+    for (index, operation) in operations.iter().enumerate() {
+        let observation = adapter
+            .apply(&mut native, query_document, operation)
+            .await
+            .unwrap_or_else(|error| {
+                panic!("{name} step {index}: native adapter failed: {error:#}")
+            });
+        observations.push(gents_lean_vocab::family::Json(observation.wire()));
+    }
+    observations
+}
+
 #[tokio::test]
 async fn every_generated_native_execution_script_runs_to_completion() {
-    let cases = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_execution_gate_cases
-        .iter()
-        .filter(|case| {
-            matches!(
-                case,
-                gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution { .. }
-            )
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        !cases.is_empty(),
-        "Lean exported no native execution scripts"
-    );
-    let mut failures = Vec::new();
-    for case in cases {
-        let mut adapter = NativeCanonicalExecutionAdapter;
-        if let Err(error) = gents_lean_vocab::assert_native_execution_case(case, &mut adapter).await
-        {
-            failures.push(error);
-        }
+    for case in gents_lean_vocab::families::native_execution_contracts_script::cases() {
+        let (seed, operations) = decoded_script(&case.input.seed, &case.input.operations);
+        let observations = run_script(
+            &case.input.name,
+            &seed,
+            case.input.query_document,
+            &operations,
+        )
+        .await;
+        case.check(Some(
+            gents_lean_vocab::families::native_execution_contracts_script::ScriptOutput {
+                observations,
+            },
+        ));
     }
-    assert!(
-        failures.is_empty(),
-        "native execution contract gaps:\n{}",
-        failures.join("\n")
-    );
 }
 
 /// Negative controls outside Lean's valid Time domain: a missing durable
@@ -3112,29 +3129,28 @@ async fn every_generated_native_execution_script_runs_to_completion() {
 /// DefraDB's DateTime scalar.
 #[tokio::test]
 async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_execution_gate_cases
-        .iter()
-        .find(|case| {
-            matches!(case,
-                gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution { name, .. }
-                    if name == "tool_output_before_deadline")
-        })
-        .expect("Lean exports the native pre-deadline tool-output script");
-    let gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution {
-        seed,
-        query_document,
-        operations,
-        expected_observations,
-        ..
-    } = case
-    else {
-        unreachable!()
-    };
-    let [accept, dispatch, append] = operations.as_slice() else {
+    for case in gents_lean_vocab::families::native_execution_contracts_tool_append_deadline::cases()
+    {
+        let (seed, operations) = decoded_script(&case.input.seed, &case.input.operations);
+        let query_document = &case.input.query_document;
+        let observed = tool_append_with_invalid_deadline(&seed, query_document, &operations).await;
+        case.check(Some(
+            gents_lean_vocab::families::native_execution_contracts_tool_append_deadline::PrefixOutput {
+                before_append: gents_lean_vocab::family::Json(observed.wire()),
+            },
+        ));
+    }
+}
+
+async fn tool_append_with_invalid_deadline(
+    seed: &wire::Seed,
+    query_document: &u64,
+    operations: &[wire::Operation],
+) -> wire::ExecutionObservation {
+    let [accept, dispatch, append] = operations else {
         panic!("generated tool-output script must accept, dispatch, then append");
     };
-    let LeanCanonicalExecutionOperation::AppendToolOutput {
+    let wire::Operation::AppendToolOutput {
         now,
         document,
         record,
@@ -3156,8 +3172,6 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
         );
     }
     let before = native.observe(true).await.unwrap();
-    assert_eq!(before, expected_observations[1]);
-    assert!(expected_observations[2].accepted);
     let physical = native.physical_tool(*document).unwrap().to_owned();
     let prepared = native
         .tool_output_segment(record, *document, &physical)
@@ -3225,41 +3239,39 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
         );
     }
     native.node.shutdown().await.expect("shutdown node");
+    before
 }
 
 #[tokio::test]
 async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
+    for case in
+        gents_lean_vocab::families::native_execution_contracts_renewal_under_held_gate::cases()
+    {
+        let (seed, operations) = decoded_script(&case.input.seed, &case.input.operations);
+        let observations =
+            renewal_then_recovery(&seed, &case.input.query_document, &operations).await;
+        case.check(Some(
+            gents_lean_vocab::families::native_execution_contracts_renewal_under_held_gate::ScriptOutput {
+                observations,
+            },
+        ));
+    }
+}
+
+async fn renewal_then_recovery(
+    seed: &wire::Seed,
+    query_document: &u64,
+    operations: &[wire::Operation],
+) -> Vec<gents_lean_vocab::family::Json> {
     use gents_session::request::lifecycle::{
         RecoveryResult, RecoverySelectionChoice, RenewalAttemptOutcome,
     };
     use gents_store::config_client::ConfigApplyTxn;
 
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_execution_gate_cases
-        .iter()
-        .find(|case| {
-            matches!(case,
-                gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution { name, .. }
-                    if name == "renewal_wins_before_terminal_recovery")
-        })
-        .expect("Lean exports the native renewal/recovery ordering case");
-    let gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution {
-        seed,
-        query_document,
-        operations,
-        expected_observations,
-        ..
-    } = case
-    else {
-        unreachable!()
-    };
-    let [renewal, recovery] = operations.as_slice() else {
+    let [renewal, recovery] = operations else {
         panic!("generated gate case must contain renewal then recovery");
     };
-    let [expected_after_renewal, expected_after_recovery] = expected_observations.as_slice() else {
-        panic!("generated gate case must observe both operations");
-    };
-    let LeanCanonicalExecutionOperation::RenewLease {
+    let wire::Operation::RenewLease {
         now: renewal_now,
         generation,
         expected_deadline,
@@ -3268,7 +3280,7 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     else {
         panic!("first generated gate operation must renew");
     };
-    let LeanCanonicalExecutionOperation::RecoverExpiredTerminal {
+    let wire::Operation::RecoverExpiredTerminal {
         now: recovery_now,
         expected_generation,
         fresh_generation,
@@ -3286,8 +3298,8 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
         "this gate trace has no recovered output items"
     );
     let choice = match selection {
-        LeanTerminalSelection::NoMessage => RecoverySelectionChoice::NoMessage,
-        LeanTerminalSelection::Message { .. } => {
+        wire::TerminalSelection::NoMessage => RecoverySelectionChoice::NoMessage,
+        wire::TerminalSelection::Message { .. } => {
             panic!("this gate trace requires a no-message recovery selection")
         }
     };
@@ -3350,7 +3362,7 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
     .expect("renewal must commit while another ordinary transaction holds the gate")
     .unwrap();
     assert_eq!(renewed, RenewalAttemptOutcome::Committed);
-    assert_eq!(native.observe(true).await.unwrap(), *expected_after_renewal);
+    let after_renewal = native.observe(true).await.unwrap();
     holder.commit().await.unwrap();
     let recovered =
         gents_session::request::lifecycle::recover_expired_generation_with_access_for_test(
@@ -3366,89 +3378,41 @@ async fn generated_renewal_commits_while_ordinary_write_gate_is_held() {
         .await
         .unwrap();
     assert_eq!(recovered, RecoveryResult::Lost);
-    assert_eq!(
-        native.observe(false).await.unwrap(),
-        *expected_after_recovery
-    );
+    let after_recovery = native.observe(false).await.unwrap();
     native.node.shutdown().await.expect("shutdown node");
-}
-
-#[tokio::test]
-async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejection() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_execution_gate_cases
+    [after_renewal, after_recovery]
         .iter()
-        .find(|case| {
-            matches!(case,
-                gents_lean_vocab::LeanCanonicalExecutionCase::ModelExecution { name, .. }
-                    if name == "spawned_admission_conflicting_child_document_rejected")
-        })
-        .expect("Lean exports the conflicting spawned-child document as model-only");
-    let gents_lean_vocab::LeanCanonicalExecutionCase::ModelExecution {
-        seed,
-        query_document,
-        operations,
-        expected_observations,
-        ..
-    } = case
-    else {
-        unreachable!()
-    };
-    assert_eq!(operations.len(), expected_observations.len());
-    assert!(operations.len() > 1);
-    assert!(
-        !expected_observations.last().unwrap().accepted,
-        "Lean must reject the conflicting child document"
-    );
-
-    let mut adapter = NativeCanonicalExecutionAdapter;
-    let mut native = adapter.initialize(seed).await.unwrap();
-    for (operation, expected) in operations[..operations.len() - 1]
-        .iter()
-        .zip(&expected_observations[..expected_observations.len() - 1])
-    {
-        let observed = adapter
-            .apply(&mut native, *query_document, operation)
-            .await
-            .unwrap();
-        assert_eq!(&observed, expected);
-    }
-    let error = adapter
-        .apply(&mut native, *query_document, operations.last().unwrap())
-        .await
-        .expect_err("the native API cannot take a conflicting candidate child document");
-    assert!(
-        error
-            .to_string()
-            .contains("native spawned child maps to symbolic document"),
-        "unexpected adapter error: {error}"
-    );
-    native.node.shutdown().await.expect("shutdown node");
+        .map(|observation| gents_lean_vocab::family::Json(observation.wire()))
+        .collect()
 }
 
 #[tokio::test]
 async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_execution_gate_cases
-        .iter()
-        .find(|case| {
-            matches!(case,
-            gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution { name, .. }
-                if name == "running_foreground_terminal_recovery_records_handoff")
-        })
-        .expect("Lean exports the running foreground terminal-recovery case");
-    let gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution {
-        seed, operations, ..
-    } = case
-    else {
-        unreachable!()
-    };
-    let mut adapter = NativeCanonicalExecutionAdapter;
-    let mut native = adapter.initialize(seed).await.unwrap();
-    for operation in operations.iter().take(2) {
-        let observed = adapter.apply(&mut native, 600, operation).await.unwrap();
-        assert!(observed.accepted);
+    for case in
+        gents_lean_vocab::families::native_execution_contracts_foreground_dispatch_prefix::cases()
+    {
+        let (seed, operations) = decoded_script(&case.input.seed, &case.input.operations);
+        let mut adapter = NativeCanonicalExecutionAdapter;
+        let mut native = adapter.initialize(&seed).await.unwrap();
+        let mut observations = Vec::new();
+        for operation in &operations {
+            let observed = adapter
+                .apply(&mut native, case.input.query_document, operation)
+                .await
+                .unwrap();
+            observations.push(gents_lean_vocab::family::Json(observed.wire()));
+        }
+        case.check(Some(
+            gents_lean_vocab::families::native_execution_contracts_foreground_dispatch_prefix::ScriptOutput {
+                observations,
+            },
+        ));
+        forced_terminal_keeps_in_flight(&mut native).await;
+        native.node.shutdown().await.expect("shutdown node");
     }
+}
+
+async fn forced_terminal_keeps_in_flight(native: &mut NativeCanonicalExecution) {
     let before = native.observe(true).await.unwrap();
     assert!(before.in_flight);
     assert_eq!(before.tool_stuck_since, None);
@@ -3469,30 +3433,16 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     assert_eq!(after.tool_state.as_deref(), Some("running"));
     assert_eq!(after.tool_stuck_since, None);
     assert!(after.in_flight);
-    native.node.shutdown().await.expect("shutdown node");
 }
 
 #[tokio::test]
 async fn canonical_tool_output_uses_modeled_physical_source_facts() {
-    let acceptance = gents_lean_vocab::lean_contract_snapshot()
-        .canonical_execution_gate_cases
-        .iter()
-        .find(|case| matches!(case, gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution { name, .. } if name == "running_foreground_terminal_recovery_records_handoff"))
-        .expect("foreground acceptance case");
-    let gents_lean_vocab::LeanCanonicalExecutionCase::NativeExecution {
-        seed, operations, ..
-    } = acceptance
-    else {
-        unreachable!()
-    };
-
     for case in gents_lean_vocab::families::contracts_tool_output_canonical_source::cases() {
+        let seed: wire::Seed = wire::decode(&case.input.seed.0);
+        let accept: wire::Operation = wire::decode(&case.input.accept.0);
         let mut adapter = NativeCanonicalExecutionAdapter;
-        let mut native = adapter.initialize(seed).await.unwrap();
-        adapter
-            .apply(&mut native, 600, &operations[0])
-            .await
-            .unwrap();
+        let mut native = adapter.initialize(&seed).await.unwrap();
+        adapter.apply(&mut native, 600, &accept).await.unwrap();
         let physical_tool = native.tool_ids.iter().find_map(|(physical, symbolic)| {
             (*symbolic == case.input.document).then_some(physical.clone())
         });
@@ -3517,11 +3467,11 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
                             other => other,
                         }
                     }
-                    let record: LeanCanonicalSegment = serde_json::from_value(without_nulls(
+                    let record: wire::Segment = serde_json::from_value(without_nulls(
                         serde_json::to_value(segment).expect("segment encodes"),
                     ))
                     .unwrap_or_else(|error| panic!("{}: segment decodes: {error}", case.input.name));
-                    if !matches!(&record.coordinate.source, LeanCanonicalSource::Tool { call } if *call == case.input.document)
+                    if !matches!(&record.coordinate.source, wire::Source::Tool { call } if *call == case.input.document)
                     {
                         continue;
                     }

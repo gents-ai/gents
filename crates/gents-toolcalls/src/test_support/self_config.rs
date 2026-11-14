@@ -26,38 +26,23 @@ pub fn config(categories: &[&str]) -> SelfConfigToolConfig {
     }
 }
 
-/// Grants `subject` the direct sets Lean `Identity.GrantSets.directSets` gives
+/// Grants `subject` the direct sets `GrantSet::for_recipient` gives
 /// `recipient`, as the runtime owner does at init. The fixture Agent is its
 /// Node's default Agent, so it holds the modeled default-Agent sets.
 pub async fn grant_modeled_direct_sets(
     db: &gents_inference::test_support::TestDb,
-    recipient: &str,
+    recipient: gents_store::identity::Recipient,
     subject: &str,
 ) {
-    use gents_store::identity::GrantSet;
-    let wanted = recipient.to_owned();
-    let case = tokio::task::spawn_blocking(move || {
-        gents_lean_vocab::lean_contract_snapshot()
-            .identity_grant_recipient_cases
-            .iter()
-            .find(|case| case.recipient == wanted)
-            .cloned()
-    })
-    .await
-    .unwrap()
-    .unwrap_or_else(|| panic!("Lean recipient {recipient:?}"));
     let admin = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).unwrap(),
     );
     let subject = identity::Did::new(subject).unwrap();
-    for name in &case.direct {
-        let set = GrantSet::ALL
-            .into_iter()
-            .find(|set| set.name() == name)
-            .unwrap_or_else(|| panic!("Lean grant set {name:?} has no Rust owner"));
-        set.grant(&admin, &subject).await.unwrap();
-    }
+    gents_store::identity::GrantSet::for_recipient(recipient)
+        .grant_direct(&admin, &subject)
+        .await
+        .unwrap();
 }
 
 /// Grants `subject` the node permissions the init Engineer holds through the
@@ -132,7 +117,12 @@ impl SelfConfigFixture {
             enabled: true,
             default_agent_did: Some(binding.agent_did.clone()),
         };
-        grant_modeled_direct_sets(&db, "default-agent", &binding.agent_did).await;
+        grant_modeled_direct_sets(
+            &db,
+            gents_store::identity::Recipient::DefaultAgent,
+            &binding.agent_did,
+        )
+        .await;
         Self {
             db,
             user_access,

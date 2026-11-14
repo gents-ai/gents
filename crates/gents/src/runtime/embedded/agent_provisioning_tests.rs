@@ -4,12 +4,11 @@ use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
 async fn authorized_provisioning_grants_no_direct_node_permission() {
-    let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .identity_grant_recipient_cases
-        .iter()
-        .find(|case| case.recipient == "agent")
-        .expect("modeled Agent recipient");
-    assert!(modeled.direct.is_empty());
+    assert!(gents_store::identity::GrantSet::for_recipient(
+        gents_store::identity::Recipient::Agent
+    )
+    .direct
+    .is_empty());
     let (db, owner, _) =
         crate::test_support::root::signed_test_node_without_agent("provision-no-direct").await;
     let node = db.node.clone();

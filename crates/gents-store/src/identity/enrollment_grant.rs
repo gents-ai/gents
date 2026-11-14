@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigClientError, NodePermission};
-use crate::identity::GrantSet;
+use crate::identity::{GrantSet, Recipient};
 
 const RECEIPT_COLLECTION: &str = gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT_NAME;
 const NODE_ADMINISTRATOR_RELATION: &str = "administrator";
@@ -33,9 +33,10 @@ impl EnrollmentGrantTuple {
     pub fn derived() -> Vec<Self> {
         std::iter::once(Self::NodeAdministrator)
             .chain(
-                GrantSet::OperatorUser
-                    .permissions()
+                GrantSet::for_recipient(Recipient::EnrolledUser)
+                    .direct
                     .iter()
+                    .flat_map(|set| set.permissions())
                     .copied()
                     .map(Self::Permission),
             )

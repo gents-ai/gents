@@ -1,0 +1,28 @@
+{
+ "ok": true,
+ "problems": [],
+ "per_key": {
+  "process_stop_cases": []
+ },
+ "notes": [
+  "process_stop_cases: subset_fields (carried only for the named scenario families' cases): {'durable_state': ['process_stop_unrecorded_cancel', 'process_stop_client_unverified', 'process_stop_client_released_native', 'process_stop_model_cancel_unverified', 'process_stop_approval_wait_stop', 'process_stop_unverified_worker', 'process_stop_unverified_foreground', 'process_stop_terminal_write_failure'], 'preserve_timeout': ['process_stop_later_stop', 'process_stop_timeout_before_cleanup', 'process_stop_interrupt_sweep'], 'preserve_failure': ['process_stop_later_stop'], 'pending_failure_beats_cancel': ['process_stop_pending_failure'], 'pending_failure_resolves': ['process_stop_pending_failure'], 'retained_completion_notified': ['process_stop_terminal_write_failure'], 'retired_completion_notified': ['process_stop_terminal_write_failure']}",
+  "process_stop_approval_wait_stop: consumer crates/gents/src/toolcalls_tests/hook/background_admission.rs",
+  "process_stop_client_released_native: consumer crates/gents-toolcalls/src/call/lifecycle/client_control_race_tests.rs",
+  "process_stop_client_unverified: consumer crates/gents-toolcalls/src/call/lifecycle/client_control_race_tests.rs",
+  "process_stop_early_confirmation: consumer crates/gents-toolcalls/src/call/hook/tests/foreground_handoff.rs",
+  "process_stop_failed_handoff_receipt: consumer crates/gents-toolcalls/src/call/hook/tests/foreground_handoff.rs",
+  "process_stop_gone_leader: consumer crates/gents-toolcalls/src/call/hook/tests/process_control_scope.rs",
+  "process_stop_host: consumer crates/gents-session/src/exec/ownership.rs",
+  "process_stop_interrupt_sweep: consumer crates/gents-toolcalls/src/call/hook/tests/foreground_handoff.rs",
+  "process_stop_later_stop: consumer crates/gents-toolcalls/src/call/hook/persistence/background_tools_tests.rs",
+  "process_stop_live_settlement: consumer crates/gents-session/src/exec/ownership.rs",
+  "process_stop_model_cancel_unverified: consumer crates/gents-toolcalls/src/call/hook/tests/process_control_scope.rs",
+  "process_stop_owned_process: consumer crates/gents-session/src/exec/tests.rs",
+  "process_stop_pending_failure: consumer crates/gents-toolcalls/src/call/hook/persistence/background_tools_tests.rs",
+  "process_stop_terminal_write_failure: consumer crates/gents-toolcalls/src/call/hook/persistence/background_tools_tests.rs",
+  "process_stop_timeout_before_cleanup: consumer crates/gents-toolcalls/src/call/hook/persistence/background_tools_tests.rs",
+  "process_stop_unrecorded_cancel: consumer crates/gents-toolcalls/src/call/control.rs",
+  "process_stop_unverified_foreground: consumer crates/gents-toolcalls/src/call/hook/tests/foreground_handoff.rs",
+  "process_stop_unverified_worker: consumer crates/gents-toolcalls/src/call/hook/persistence/background_tools_tests.rs"
+ ]
+}

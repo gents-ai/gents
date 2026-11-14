@@ -179,35 +179,38 @@ def check(root, entries, exported_groups):
     return errors
 
 
+SCRIPT_FAMILIES = {"native_execution_contracts_script": False,
+                   "native_execution_contracts_script_unreached": True}
+
+
 def check_execution_export(payload):
-    if not isinstance(payload, dict):
-        raise ValueError("contract export must be an object")
-    cases = payload.get("canonical_execution_gate_cases")
-    if not isinstance(cases, list) or not cases:
-        raise ValueError("canonical execution export must contain cases")
-    names, native_count = set(), 0
-    for case in cases:
-        if not isinstance(case, dict):
-            raise ValueError("execution cases must be objects")
-        name = case.get("name")
-        if not isinstance(name, str) or not name.strip() or name in names:
-            raise ValueError("execution case names must be nonempty and unique")
-        names.add(name)
-        if case.get("kind") == "trace_summary":
-            if case.get("completed") is not True:
-                raise ValueError(f"{name}: execution summary witness did not succeed")
-        elif case.get("kind") in {"native_execution", "model_execution"}:
-            if case["kind"] == "native_execution":
-                native_count += 1
-                if case.get("native_gap") is not None:
-                    raise ValueError(f"{name}: native script cannot declare a model-only gap")
-            elif not isinstance(case.get("native_gap"), str) or not case["native_gap"].strip():
+    if not isinstance(payload, dict) or not isinstance(payload.get("families"), dict):
+        raise ValueError("contract export must be an object with families")
+    names = set()
+    for key, gap in SCRIPT_FAMILIES.items():
+        family = payload["families"].get(key)
+        cases = family.get("cases") if isinstance(family, dict) else None
+        if not isinstance(cases, list) or not cases:
+            raise ValueError(f"{key}: execution family must contain cases")
+        for case in cases:
+            if not isinstance(case, dict) or not isinstance(case.get("input"), dict):
+                raise ValueError(f"{key}: execution cases must be objects with an input")
+            script = case["input"]
+            name = script.get("name")
+            if not isinstance(name, str) or not name.strip() or name in names:
+                raise ValueError("execution case names must be nonempty and unique")
+            names.add(name)
+            if gap and (not isinstance(script.get("native_gap"), str) or not script["native_gap"].strip()):
                 raise ValueError(f"{name}: model-only script needs a precise native gap")
-            operations, observations = case.get("operations"), case.get("expected_observations")
+            if not gap and "native_gap" in script:
+                raise ValueError(f"{name}: native script cannot declare a model-only gap")
+            expected = case.get("expected")
+            operations = script.get("operations")
+            observations = expected.get("observations") if isinstance(expected, dict) else None
             if (not isinstance(operations, list) or not operations or
                     not isinstance(observations, list) or len(operations) != len(observations)):
                 raise ValueError(f"{name}: native script needs one observation per operation")
-            if not isinstance(case.get("seed"), dict):
+            if not isinstance(script.get("seed"), dict):
                 raise ValueError(f"{name}: native script needs an input seed")
             for operation, observation in zip(operations, observations):
                 if (not isinstance(operation, dict) or
@@ -216,10 +219,6 @@ def check_execution_export(payload):
                     raise ValueError(f"{name}: native script has a missing operation")
                 if not isinstance(observation, dict) or type(observation.get("accepted")) is not bool:
                     raise ValueError(f"{name}: native script has a missing decision observation")
-        else:
-            raise ValueError(f"{name}: unknown execution fixture kind")
-    if not native_count:
-        raise ValueError("execution export contains summaries but no native input scripts")
 
 
 def main():

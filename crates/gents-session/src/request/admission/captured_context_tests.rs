@@ -138,18 +138,13 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
     )
     .await
     .unwrap();
-    let mut observed = 0;
-    for (index, case) in gents_lean_vocab::lean_contract_snapshot()
-        .request_input_cases
-        .iter()
-        .enumerate()
+    for (index, case) in
+        gents_lean_vocab::families::request_input_contracts_admitted_capture::cases()
+            .into_iter()
+            .enumerate()
     {
-        let input: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
-        if input.captured_context.is_empty() || input.cwd.is_some() {
-            continue;
-        }
-        observed += 1;
-        let name = case["name"].as_str().unwrap();
+        let input: RequestInput = gents_lean_vocab::production_request_input(&case.input.input);
+        let name = &case.input.name;
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             format!("capture-{index}"),
@@ -204,11 +199,7 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
         let result =
             super::verify_fresh_local_self_request(&node, &identity, &request, &binding.agent_did)
                 .await;
-        assert_eq!(
-            result.is_ok(),
-            case["expected_accepted"].as_bool().unwrap(),
-            "{name}: actual signed admission: {result:?}",
-        );
+        let accepted = result.is_ok();
         let stored = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{ {} }} }}"#,
@@ -227,10 +218,11 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
             gents_store::identity::request_receipt::verify_request_receipt_signature(&row).is_err(),
             "{name}"
         );
+        case.check(
+            gents_lean_vocab::families::request_input_contracts_admitted_capture::Admission {
+                accepted,
+            },
+        );
     }
-    assert!(
-        observed > 0,
-        "generated captures must exercise fresh admission"
-    );
     node.shutdown().await.expect("shut down test node");
 }
