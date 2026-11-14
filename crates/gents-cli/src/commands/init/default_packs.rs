@@ -1054,6 +1054,11 @@ mod tests {
             .unwrap();
         let report = &initialized["default_packs"];
         assert_eq!(report["not_installed"], json!([]), "{report}");
+        let at_init = observed(home.path(), &report["installed"]).await;
+        for case in families::pack_core_packs_init_wiring::cases() {
+            let pack: CorePack = case.input.core_pack;
+            case.check(family_output(wiring_of(&at_init, pack)));
+        }
         let listed = status(home.path(), &archives).await.unwrap();
         for pack in &listed {
             let expected = if pack.pack == CorePack::DynamicWorkflows.coordinate() {
