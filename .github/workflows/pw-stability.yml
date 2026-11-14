@@ -1,0 +1,99 @@
+name: Playwright stability (scratch)
+
+# Temporary: runs the desktop browser journeys on hosted four-core runners
+# with zero retries, several times at once, to measure stability per worker
+# count (#3818). Lives only on a scratch branch.
+on:
+  push:
+    branches:
+      - ci-scratch/playwright-stability
+
+permissions:
+  contents: read
+
+jobs:
+  journeys:
+    name: journeys (w${{ matrix.workers }} video-${{ matrix.video }} r${{ matrix.rep }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        workers: [2]
+        video: [retain-on-failure, "off"]
+        rep: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace frontend dependencies
+        run: npm ci
+
+      - name: Build desktop packages
+        run: npm run build:packages
+
+      - name: Use the Ubuntu archive for browser system dependencies
+        run: |
+          sudo python3 - <<'PYTHON'
+          from pathlib import Path
+
+          for path in Path('/etc/apt').rglob('*'):
+              if not path.is_file():
+                  continue
+              if path.suffix not in {'.sources', '.list'} and path.name != 'apt-mirrors.txt':
+                  continue
+              original = path.read_text(encoding='utf-8')
+              updated = original
+              for scheme in ('http', 'https'):
+                  updated = updated.replace(
+                      f'{scheme}://azure.archive.ubuntu.com/ubuntu',
+                      'https://archive.ubuntu.com/ubuntu',
+                  )
+              if updated != original:
+                  path.write_text(updated, encoding='utf-8')
+          PYTHON
+
+      - name: Install Playwright browsers
+        working-directory: apps/gents-desktop
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Build desktop frontend
+        working-directory: apps/gents-desktop
+        run: npm run build
+
+      - name: Typecheck desktop tests
+        working-directory: apps/gents-desktop
+        run: npm run typecheck
+
+      - name: Run desktop browser journeys
+        working-directory: apps/gents-desktop
+        shell: bash
+        env:
+          CI: "1"
+          PW_VIDEO: ${{ matrix.video }}
+        run: |
+          nproc
+          npx playwright test --workers=${{ matrix.workers }} --retries=0 2>&1 | tee list.log
+
+      - name: Summarise
+        if: always()
+        working-directory: apps/gents-desktop
+        run: |
+          grep -E '^\s+[0-9]+\) \[|passed|failed|flaky|skipped' list.log | tail -40 || true
+          (journalctl -k --no-pager 2>/dev/null || sudo dmesg 2>/dev/null) | grep -i segfault | tail -20 || true
+
+      - name: Upload failures
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failures-w${{ matrix.workers }}-${{ matrix.video }}-r${{ matrix.rep }}
+          if-no-files-found: ignore
+          path: |
+            apps/gents-desktop/test-results

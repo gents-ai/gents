@@ -31,7 +31,7 @@ export default defineConfig({
     navigationTimeout: 30_000,
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
-    video: "retain-on-failure",
+    video: (process.env.PW_VIDEO ?? "retain-on-failure") as "off" | "retain-on-failure",
   },
   webServer: {
     /* the plugin frames inline a prebuilt runtime; build it before serving */
