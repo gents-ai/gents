@@ -878,15 +878,14 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
     )
     .await
     .unwrap();
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
     let core = fixture.core();
     let access = core.access().unwrap();
     let mut disabled = false;
-    for (index, case) in model.runtime_default_choice_cases.iter().enumerate() {
-        if case["visible_default"].is_null() && !disabled {
+    for (index, case) in gents_lean_vocab::families::household_runtime_default_choice::cases()
+        .into_iter()
+        .enumerate()
+    {
+        if case.input.visible_default.is_none() && !disabled {
             gents_inference::auth::credential::set_account_enabled(
                 fixture.user_access(),
                 owner,
@@ -900,8 +899,12 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
         let current_id = format!("guard-current-{index}");
         let next_id = format!("guard-next-{index}");
         for (id, kind, account) in [
-            (&current_id, &case["current_kind"], &case["current_ref"]),
-            (&next_id, &case["next_kind"], &case["next_ref"]),
+            (
+                &current_id,
+                &case.input.current_kind,
+                &case.input.current_ref,
+            ),
+            (&next_id, &case.input.next_kind, &case.input.next_ref),
         ] {
             let backend: gents_documents::InferenceBackend = serde_json::from_value(json!({
                 "node_did": owner, "backend_id": id, "name": id,
@@ -931,15 +934,10 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
                 })
             })
             .await;
-        assert_eq!(
-            result.is_ok(),
-            case["accepted"].as_bool().unwrap(),
-            "{}: {result:?}",
-            case["name"]
-        );
-        if let Err(error) = result {
+        if let Err(error) = &result {
             assert!(!format!("{error:#}").contains("g2"));
         }
+        case.check(result.is_ok());
     }
 }
 
@@ -1235,13 +1233,6 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model");
-    let own_edit = household
-        .own_tool_edit_cases
-        .iter()
-        .find(|case| case["name"] == "own-only-goal")
-        .expect("own-only goal edit model")["accepted"]
-        .as_bool()
-        .unwrap();
     let no_source_change = household
         .tool_source_change_cases
         .iter()
@@ -1255,8 +1246,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
             vec![("built_ins".into(), Some(json!({"enable_goal_tools":true})))],
         ))
         .await;
-    assert_eq!(goal.is_ok(), own_edit, "{goal:?}");
-    if let Err(error) = goal {
+    if let Err(error) = &goal {
         assert!(
             format!("{error:#}").contains("source projection requires an authorized actor"),
             "{error:#}"
@@ -1273,6 +1263,10 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         ))
         .await;
     assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
+    for case in gents_lean_vocab::families::household_own_tool_edit::cases() {
+        assert_eq!(case.input.name, "own-only-goal", "{:?}", case.input);
+        case.check(goal.is_ok());
+    }
 }
 
 use gents_automation::test_support::self_config::*;

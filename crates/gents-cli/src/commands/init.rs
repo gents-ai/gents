@@ -2562,64 +2562,70 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_backend_baseline_commits_before_http_is_started() -> Result<()> {
-        let snapshot: Value =
-            tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
-                .await?;
-        let case = snapshot["identity_household_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == "configuration-explicit-grants")
-            .unwrap()["fresh_backend_origin_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| {
-                case["locked"] == true
-                    && case["empty"] == true
-                    && case["unexposed"] == true
-                    && case["committed"] == true
+        for case in gents_lean_vocab::families::household_fresh_backend_origin::cases() {
+            let directory = tempfile::tempdir()?;
+            let data = directory.path().join("data");
+            let lock_home = directory.path().to_owned();
+            let lock_data = data.clone();
+            let lock =
+                tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
+                    .await??;
+            let foreign_home = directory.path().join("foreign");
+            let foreign_lock = if case.input.locked {
+                None
+            } else {
+                let foreign_data = foreign_home.join("data");
+                Some(
+                    tokio::task::spawn_blocking(move || {
+                        lock_init_store(&foreign_home, &foreign_data, false)
+                    })
+                    .await??,
+                )
+            };
+            assert!(tokio::fs::read_dir(&data)
+                .await?
+                .next_entry()
+                .await?
+                .is_none());
+            if !case.input.empty {
+                tokio::fs::write(data.join("stray"), b"not fresh").await?;
+            }
+            let key = gents_store::local::store_key::StoreKey::from_host(&[7; 32])?;
+            let path = directory.path().join("node.key");
+            let did = tokio::task::spawn_blocking(move || -> Result<String> {
+                Ok(KeyIdentity::load_or_create(path, None)?.did().to_owned())
             })
-            .unwrap();
-        let directory = tempfile::tempdir()?;
-        let data = directory.path().join("data");
-        let lock_home = directory.path().to_owned();
-        let lock_data = data.clone();
-        let _lock =
-            tokio::task::spawn_blocking(move || lock_init_store(&lock_home, &lock_data, false))
-                .await??;
-        assert!(tokio::fs::read_dir(&data)
-            .await?
-            .next_entry()
-            .await?
-            .is_none());
-        let key = gents_store::local::store_key::StoreKey::from_host(&[7; 32])?;
-        let path = directory.path().join("node.key");
-        let did = tokio::task::spawn_blocking(move || -> Result<String> {
-            Ok(KeyIdentity::load_or_create(path, None)?.did().to_owned())
-        })
-        .await??;
-        let fresh =
-            gents_store::local::backend_protection::FreshBackendStore::observe(&data, &_lock)
+            .await??;
+            let initialized =
+                match gents_store::local::backend_protection::FreshBackendStore::observe(
+                    &data,
+                    foreign_lock.as_ref().unwrap_or(&lock),
+                )
+                .await
+                {
+                    Ok(fresh) => fresh.initialize(&key, Some(&did)).await.is_ok(),
+                    Err(_) => false,
+                };
+            case.check(initialized);
+            if !initialized {
+                continue;
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await?
+                .into_std()?;
+            let node = gents_store::local::store_key::persistent_builder(&data, &key)?
+                .with_node_identity_did(did)
+                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
+                .build()
                 .await?;
-        let result = fresh.initialize(&key, Some(&did)).await;
-        assert_eq!(result.is_ok(), case["origin"].as_bool().unwrap());
-        result?;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await?
-            .into_std()?;
-        let node = gents_store::local::store_key::persistent_builder(&data, &key)?
-            .with_node_identity_did(did)
-            .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
-            .build()
-            .await?;
-        let collection = node
-            .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
-            .context("legacy backend baseline missing")?;
-        assert!(collection.policy.is_some_and(|policy| policy.id
-            == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
-            && policy.resource_name == "secret_configuration"));
-        node.shutdown().await?;
+            let collection = node
+                .get_collection(gents_protocol::schemas::INFERENCE_BACKEND_NAME)?
+                .context("legacy backend baseline missing")?;
+            assert!(collection.policy.is_some_and(|policy| policy.id
+                == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+                && policy.resource_name == "secret_configuration"));
+            node.shutdown().await?;
+        }
         Ok(())
     }
 

@@ -346,6 +346,9 @@ import Proofs.Conformance.ScopeCollectionRules
 import Proofs.Conformance.Identity.SecretPublication
 import Proofs.Conformance.Identity.HouseholdBPack
 import Proofs.Conformance.Identity.HouseholdBInference
+import Proofs.Conformance.Identity.HouseholdBGents
+import Proofs.Conformance.Identity.HouseholdBTrace
+import Proofs.Conformance.Identity.HouseholdBBackend
 import Proofs.Conformance.Identity.HouseholdStore
 import Proofs.Conformance.Identity.HouseholdP2p
 import Proofs.Conformance.Identity.HouseholdDocuments

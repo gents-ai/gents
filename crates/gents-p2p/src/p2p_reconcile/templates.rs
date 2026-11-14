@@ -468,31 +468,36 @@ mod tests {
     }
 
     fn household_subject(
-        subject: &gents_lean_vocab::LeanIdentitySubject,
+        subject: &gents_lean_vocab::families::household_policy_trace::TraceSubject,
     ) -> anyhow::Result<acp::Subject> {
-        use gents_lean_vocab::LeanIdentitySubject;
-        Ok(match subject {
-            LeanIdentitySubject::Actor { actor } => acp::Subject::Entity(Did::new(actor)?),
-            LeanIdentitySubject::Object { resource, id } => {
-                acp::Subject::entity_set(resource, id, "")
-            }
-            LeanIdentitySubject::EntitySet {
-                resource,
-                id,
-                target_relation,
-            } => acp::Subject::entity_set(resource, id, target_relation),
-        })
+        Ok(
+            match (
+                &subject.actor,
+                &subject.resource,
+                &subject.id,
+                &subject.target_relation,
+            ) {
+                (Some(actor), _, _, _) => acp::Subject::Entity(Did::new(actor)?),
+                (None, Some(resource), Some(id), Some(target_relation)) => {
+                    acp::Subject::entity_set(resource, id, target_relation)
+                }
+                (None, Some(resource), Some(id), None) => {
+                    acp::Subject::entity_set(resource, id, "")
+                }
+                _ => anyhow::bail!("unmodeled relationship subject {subject:?}"),
+            },
+        )
     }
 
     async fn household_relationship(
         acp: &acp::ZanzibarDocumentACP<acp::MemoryZanzibarStore>,
         policy_id: &str,
-        case: &gents_lean_vocab::LeanIdentityHouseholdCase,
-        relation: &gents_lean_vocab::LeanIdentityRelation,
+        trace: &gents_lean_vocab::families::household_policy_trace::PolicyTraceInput,
+        relation: &gents_lean_vocab::families::household_policy_trace::TraceRelation,
         grant: bool,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
-        let object = case
+        let object = trace
             .objects
             .iter()
             .find(|object| object.resource == relation.resource && object.id == relation.id)
@@ -525,7 +530,7 @@ mod tests {
         anyhow::ensure!(
             changed,
             "{}: modeled relationship action was not applied",
-            case.name
+            trace.name
         );
         Ok(())
     }
@@ -534,10 +539,9 @@ mod tests {
         acp: &acp::ZanzibarDocumentACP<acp::MemoryZanzibarStore>,
         policy_id: &str,
         actor: &str,
-        relation: &gents_lean_vocab::LeanIdentityRelation,
+        relation: &gents_lean_vocab::families::household_policy_trace::TraceRelation,
         grant: bool,
-        expected: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let actor = Did::new(actor)?;
         let subject = household_subject(&relation.subject)?;
         let result = if grant {
@@ -564,14 +568,55 @@ mod tests {
             .await
         };
         match result {
-            Ok(changed) => {
-                anyhow::ensure!(
-                    expected && changed,
-                    "unexpected relationship mutation by {actor}"
-                );
-            }
-            Err(acp::Error::NotOwner { .. } | acp::Error::NotManager { .. }) if !expected => (),
-            Err(error) => return Err(error.into()),
+            Ok(changed) => Ok(changed),
+            Err(acp::Error::NotOwner { .. } | acp::Error::NotManager { .. }) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[test]
+    fn household_policy_is_the_production_policy() {
+        gents_lean_vocab::families::household_policy_definition::replay(|_| {
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY.to_owned()
+        });
+    }
+
+    #[tokio::test]
+    async fn household_policy_registrations_follow_native_policy_ids() -> anyhow::Result<()> {
+        use acp::policy_yaml::{build_policy, parse_policy_yaml};
+        use acp::ZanzibarStore;
+        let policy = build_policy(
+            &parse_policy_yaml(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY)
+                .map_err(anyhow::Error::msg)?,
+            0,
+        )?;
+        for registration in gents_lean_vocab::families::household_policy_registration::cases() {
+            let candidate = build_policy(
+                &parse_policy_yaml(&registration.input.candidate_yaml)
+                    .map_err(anyhow::Error::msg)?,
+                0,
+            )?;
+            let registry = acp::PersistentZanzibarStore::from_store(Arc::new(
+                storage::RegolithStore::in_memory()?,
+            ));
+            registry.store_policy(&policy).await?;
+            let result = registry.store_policy(&candidate).await;
+            let retained = registry
+                .get_policy(&policy.id)
+                .await?
+                .expect("registered policy");
+            assert_eq!(
+                serde_json::to_value(retained)?,
+                serde_json::to_value(&policy)?,
+                "{}: registration must retain the original definition",
+                registration.input.name
+            );
+            registration.check(
+                gents_lean_vocab::families::household_policy_registration::PolicyRegistration {
+                    same_id: policy.id == candidate.id,
+                    accepted: result.is_ok(),
+                },
+            );
         }
         Ok(())
     }
@@ -582,56 +627,17 @@ mod tests {
             policy_yaml::{build_policy, parse_policy_yaml},
             MemoryZanzibarStore, ZanzibarDocumentACP, ZanzibarStore,
         };
-        use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
-        let cases = lean_identity_household_cases();
-        assert!(!cases.is_empty());
-        for case in cases {
-            assert_eq!(
-                case.policy_yaml,
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-                "the policy wired to AgentSession must match the executable household model"
-            );
-            let parsed = parse_policy_yaml(&case.policy_yaml).map_err(anyhow::Error::msg)?;
-            let policy = build_policy(&parsed, 0)?;
-            for registration in &case.policy_registrations {
-                let candidate = build_policy(
-                    &parse_policy_yaml(&registration.candidate_yaml).map_err(anyhow::Error::msg)?,
-                    0,
-                )?;
-                assert_eq!(
-                    policy.id == candidate.id,
-                    registration.same_id,
-                    "{}: policy ID",
-                    registration.name
-                );
-                let registry = acp::PersistentZanzibarStore::from_store(Arc::new(
-                    storage::RegolithStore::in_memory()?,
-                ));
-                registry.store_policy(&policy).await?;
-                let result = registry.store_policy(&candidate).await;
-                assert_eq!(
-                    result.is_ok(),
-                    registration.accepted,
-                    "{}: {result:?}",
-                    registration.name
-                );
-                let retained = registry
-                    .get_policy(&policy.id)
-                    .await?
-                    .expect("registered policy");
-                assert_eq!(
-                    serde_json::to_value(retained)?,
-                    serde_json::to_value(&policy)?,
-                    "{}: registration must retain the original definition",
-                    registration.name
-                );
-            }
+        let parsed = parse_policy_yaml(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY)
+            .map_err(anyhow::Error::msg)?;
+        let policy = build_policy(&parsed, 0)?;
+        for case in gents_lean_vocab::families::household_policy_trace::cases() {
+            let trace = &case.input;
             let store = Arc::new(MemoryZanzibarStore::new());
             store.store_policy(&policy).await?;
             let acp = ZanzibarDocumentACP::new(Arc::clone(&store));
             let mut engine = acp::PermissionEngine::new(store);
             engine.add_policy(&policy);
-            for object in &case.objects {
+            for object in &trace.objects {
                 acp.register_doc_object(
                     &Did::new(&object.owner)?,
                     &policy.id,
@@ -640,49 +646,37 @@ mod tests {
                 )
                 .await?;
             }
-            for relation in &case.relations {
-                household_relationship(&acp, &policy.id, case, relation, true).await?;
+            for relation in &trace.relations {
+                household_relationship(&acp, &policy.id, trace, relation, true).await?;
             }
-            for enrolled in &case.enrolled {
+            for enrolled in &trace.enrolled {
                 Did::new(enrolled)?;
             }
-            for (step, action) in case.actions.iter().enumerate() {
-                match action {
-                    LeanIdentityAction::Grant { relation } => {
-                        household_relationship(&acp, &policy.id, case, relation, true).await?;
+            let mut outcomes = Vec::new();
+            for step in &trace.steps {
+                let outcome = match (step.action.as_str(), &step.relation, &step.actor) {
+                    ("grant", Some(relation), _) => {
+                        household_relationship(&acp, &policy.id, trace, relation, true).await?;
+                        None
                     }
-                    LeanIdentityAction::Revoke { relation } => {
-                        household_relationship(&acp, &policy.id, case, relation, false).await?;
+                    ("revoke", Some(relation), _) => {
+                        household_relationship(&acp, &policy.id, trace, relation, false).await?;
+                        None
                     }
-                    LeanIdentityAction::GrantAs {
-                        actor,
-                        relation,
-                        expected,
-                    } => {
-                        household_relationship_as(
-                            &acp, &policy.id, actor, relation, true, *expected,
-                        )
-                        .await?;
-                    }
-                    LeanIdentityAction::RevokeAs {
-                        actor,
-                        relation,
-                        expected,
-                    } => {
-                        household_relationship_as(
-                            &acp, &policy.id, actor, relation, false, *expected,
-                        )
-                        .await?;
-                    }
-                    LeanIdentityAction::Check {
-                        actor,
-                        resource,
-                        id,
-                        permission,
-                        expected,
-                    } => {
+                    ("grant_as", Some(relation), Some(actor)) => Some(
+                        household_relationship_as(&acp, &policy.id, actor, relation, true).await?,
+                    ),
+                    ("revoke_as", Some(relation), Some(actor)) => Some(
+                        household_relationship_as(&acp, &policy.id, actor, relation, false).await?,
+                    ),
+                    ("check", _, Some(actor)) => {
+                        let (Some(resource), Some(id), Some(permission)) =
+                            (&step.resource, &step.id, &step.permission)
+                        else {
+                            anyhow::bail!("incomplete modeled check {step:?}");
+                        };
                         let actor = Did::new(actor)?;
-                        let allowed = match permission.as_str() {
+                        Some(match permission.as_str() {
                             "read" | "update" | "delete" => {
                                 let native = match permission.as_str() {
                                     "read" => DocumentPermission::Read,
@@ -704,15 +698,13 @@ mod tests {
                                     .await?
                             }
                             other => anyhow::bail!("unknown modeled native permission {other}"),
-                        };
-                        assert_eq!(
-                            allowed, *expected,
-                            "{} step {step}: document ACP",
-                            case.name
-                        );
+                        })
                     }
-                }
+                    _ => anyhow::bail!("unmodeled household step {step:?}"),
+                };
+                outcomes.push(outcome);
             }
+            case.check(outcomes);
         }
         Ok(())
     }

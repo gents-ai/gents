@@ -2886,6 +2886,67 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_plugin_backend_use")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_provider_assembly")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_inference_provider_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_plugin_backend_selection")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_runtime_default_choice")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_own_tool_edit")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_dangling_selection_repair")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_operations_deferred_enrollment")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_operations_runtime_status")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_fresh_backend_origin")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_policy_trace")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_grant_trace")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_self_config_trace")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_policy_definition")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_policy_registration")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_automated_session_read")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_invoke_session_check")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_live_session_update")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_live_administrator_read")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_agent_manager_invoke_live")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_self_config_lookup")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_configuration_atomic")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_destination")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_discovery")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_probe")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_removal")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_genesis")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_fresh_backend_origin_unreached"
+      "model-production-gap: FreshBackendStore::initialize builds its temporary native Node without HTTP or P2P transport and has no seam that fails its schema commit, so an exposed or uncommitted fresh-store baseline cannot be driven.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_own_tool_edit_unreached"
+      "model-production-gap: the self-configuration tool runs only for an Agent that also holds its own-only self-configuration grant, so an Agent holding exactly the Agent baseline and policy delegate sets cannot be built through it; with that grant added, production accepts the goal-tools edit the model refuses for the two sets alone.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "household_self_config_lookup_unreached"
+      "model-production-gap: native document ACP cannot fence a document replacement between the self-config lookup and its relationship grant, so a lookup whose Agent document changed generation in between cannot be driven.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "household_runtime_default_account_read_unreached"
       "model-production-gap: the runtime default-account read always shares the Agent write's transaction snapshot, and its metadata query and delegated read check are answered by the same native ACP state, so a different snapshot or a failed native read of a runtime-visible row is not produced by any served-node fixture.")
       "identity-permission" [Surface.runtimeInternal]

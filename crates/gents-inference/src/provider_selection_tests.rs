@@ -1,45 +1,20 @@
-use super::*;
-use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
+use std::sync::Arc;
+
+use crate::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::{created_doc_id, escape_graphql_string};
-use gents_store::identity::NodeIdentity;
-use serde_json::Value;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
+
+fn agent_identities(directory: &std::path::Path) -> anyhow::Result<(KeyIdentity, KeyIdentity)> {
+    Ok((
+        KeyIdentity::load_or_create(directory.join("agent"), None)?,
+        KeyIdentity::load_or_create(directory.join("sibling"), None)?,
+    ))
+}
 
 #[tokio::test]
 async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_documents(
 ) -> anyhow::Result<()> {
-    let case = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
-    let modeled_user = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "home")
-        .unwrap()
-        .owner;
-    let agent = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
-    let sibling = case
-        .actions
-        .iter()
-        .find_map(|action| match action {
-            LeanIdentityAction::Check { actor, .. }
-                if actor != modeled_user
-                    && actor != agent
-                    && case.configuration_provider_cases.iter().any(|c| {
-                        c["name"] == "sibling" && c["actor"].as_str() == Some(actor.as_str())
-                    }) =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .expect("modeled sibling");
     let directory = tempfile::tempdir()?;
     let owner =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
@@ -52,17 +27,22 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
             .await?,
     );
     let user_access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
-    let actor = identity::Did::new(agent)?;
+    let (agent, sibling) = agent_identities(directory.path())?;
+    let actor = identity::Did::new(agent.did())?;
     // The sibling is also a managed Agent holding the baseline, so its refusal is
     // the document policy's, not a missing node grant.
-    for agent_did in [&actor, &identity::Did::new(sibling)?] {
+    for agent_did in [&actor, &identity::Did::new(sibling.did())?] {
         gents_store::identity::GrantSet::AgentBaseline
             .grant(&user_access, agent_did)
             .await?;
     }
     let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
         .await?;
     user_access.add_collection(&format!(
         "type Agent @policy(id: \"{}\", resource: \"agents\") {{ agent_did: String }}\ntype AgentContext @policy(id: \"{}\", resource: \"configuration\") {{ context_id: String }}\ntype Tools @policy(id: \"{}\", resource: \"configuration\") {{ tools_id: String }}",
@@ -112,9 +92,8 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
     user_access
         .add_actor_relationship("Tools", &docs[2], "reader", &actor)
         .await?;
-    for item in &case.configuration_provider_cases {
-        let revoked = item["revoke_tools"].as_bool().unwrap();
-        if revoked {
+    for item in gents_lean_vocab::families::household_provider_assembly::cases() {
+        if item.input.revoke_tools {
             user_access
                 .delete_actor_relationship("Tools", &docs[2], "reader", &actor)
                 .await?;
@@ -123,10 +102,10 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
                 .add_actor_relationship("Tools", &docs[2], "reader", &actor)
                 .await?;
         }
-        let who = if item["actor"] == Value::String(sibling.clone()) {
-            sibling
-        } else {
-            agent
+        let who = match item.input.role.as_str() {
+            "agent" => agent.did(),
+            "sibling" => sibling.did(),
+            other => anyhow::bail!("unmodeled provider actor {other}"),
         };
         let selected = vec![
             SelectedConfigurationDocument {
@@ -136,7 +115,7 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
             },
             SelectedConfigurationDocument {
                 collection: gents_store::collection::Collection::AgentContext,
-                doc_id: if item["missing_context"] == true {
+                doc_id: if item.input.missing_context {
                     docs[3].clone()
                 } else {
                     docs[1].clone()
@@ -150,13 +129,7 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
             },
         ];
         let binding = SelectedConfiguration::new(node.clone(), identity::Did::new(who)?, selected);
-        let result = binding.check().await;
-        assert_eq!(
-            result.is_ok(),
-            item["expected"].as_bool().unwrap(),
-            "modeled {}: {result:?}",
-            item["name"]
-        );
+        item.check(binding.check().await.is_ok());
     }
     node.shutdown().await?;
     Ok(())
@@ -164,32 +137,6 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
 
 #[tokio::test]
 async fn modeled_inference_inputs_require_each_selected_native_document() -> anyhow::Result<()> {
-    let case = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .expect("configuration model");
-    let modeled_user = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "home")
-        .unwrap()
-        .owner;
-    let agent = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
-    let sibling = case
-        .actions
-        .iter()
-        .find_map(|action| match action {
-            LeanIdentityAction::Check { actor, .. } if actor != modeled_user && actor != agent => {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .expect("modeled sibling");
     let directory = tempfile::tempdir()?;
     let owner =
         gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
@@ -202,14 +149,19 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
             .await?,
     );
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
-    for agent_did in [agent, sibling] {
+    let (agent, sibling) = agent_identities(directory.path())?;
+    for agent_did in [agent.did(), sibling.did()] {
         gents_store::identity::GrantSet::AgentBaseline
             .grant(&access, &identity::Did::new(agent_did)?)
             .await?;
     }
     let context = defra_core::RequestContext::default().with_identity(Some(user.to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
         .await?;
     let names = [
         "Agent",
@@ -246,7 +198,12 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
         .await?;
     let agent_doc = created_doc_id(&response, "Agent")?;
     access
-        .add_actor_relationship("Agent", &agent_doc, "executor", &identity::Did::new(agent)?)
+        .add_actor_relationship(
+            "Agent",
+            &agent_doc,
+            "executor",
+            &identity::Did::new(agent.did())?,
+        )
         .await?;
     let documents = [
         (
@@ -274,16 +231,7 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
             gents_store::collection::Collection::InferenceProfile,
         ),
     ];
-    let modeled_documents = case.configuration_inference_provider_cases[0]["documents"]
-        .as_array()
-        .expect("modeled inference documents")
-        .iter()
-        .map(|value| value.as_str().expect("modeled document ID"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        documents.map(|(label, _)| label).as_slice(),
-        modeled_documents.as_slice()
-    );
+    let cases = gents_lean_vocab::families::household_inference_provider_selection::cases();
     let mut ids = Vec::new();
     for (label, collection) in documents {
         let name = collection.graphql_type();
@@ -309,8 +257,12 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
             .await?;
         ids.push((label, collection, doc_id));
     }
-    for item in &case.configuration_inference_provider_cases {
-        let revoked = item["revoked"].as_str().unwrap();
+    for item in cases {
+        assert_eq!(
+            documents.map(|(label, _)| label).as_slice(),
+            item.input.documents.as_slice()
+        );
+        let revoked = item.input.revoked.as_str();
         if let Some((_, collection, doc_id)) = ids.iter().find(|(label, _, _)| *label == revoked) {
             access
                 .transact_write("test.inference.revoke", |txn| {
@@ -342,20 +294,15 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
                     logical_id: None,
                 }),
         );
-        let who = if item["actor"] == "sibling" {
-            sibling
-        } else {
-            agent
+        let who = match item.input.actor.as_str() {
+            "agent" => agent.did(),
+            "sibling" => sibling.did(),
+            other => anyhow::bail!("unmodeled inference actor {other}"),
         };
-        let result = SelectedConfiguration::new(node.clone(), identity::Did::new(who)?, selected)
+        let allowed = SelectedConfiguration::new(node.clone(), identity::Did::new(who)?, selected)
             .check()
-            .await;
-        assert_eq!(
-            result.is_ok(),
-            item["expected"].as_bool().unwrap(),
-            "modeled {}: {result:?}",
-            item["name"]
-        );
+            .await
+            .is_ok();
         if let Some((_, collection, doc_id)) = ids.iter().find(|(label, _, _)| *label == revoked) {
             access
                 .transact_write("test.inference.restore", |txn| {
@@ -374,6 +321,7 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
                 })
                 .await?;
         }
+        item.check(allowed);
     }
     node.shutdown().await?;
     Ok(())
@@ -383,22 +331,13 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
 async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::Result<()> {
     use gents_store::config_client::{GraphqlEndpoint, NodePermission};
 
-    let case = lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "configuration-explicit-grants")
-        .unwrap();
-    let agent = &case
-        .objects
-        .iter()
-        .find(|object| object.id == "agent-created")
-        .unwrap()
-        .owner;
     let directory = tempfile::tempdir()?;
     let key_path = directory.path().to_owned();
-    let (runtime, user) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+    let (runtime, user, agent) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         Ok((
-            gents_store::identity::KeyIdentity::load_or_create(key_path.join("runtime"), None)?,
-            gents_store::identity::KeyIdentity::load_or_create(key_path.join("user"), None)?,
+            KeyIdentity::load_or_create(key_path.join("runtime"), None)?,
+            KeyIdentity::load_or_create(key_path.join("user"), None)?,
+            KeyIdentity::load_or_create(key_path.join("agent"), None)?,
         ))
     })
     .await??;
@@ -416,7 +355,7 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
             .await?,
     );
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
-    let actor = identity::Did::new(agent)?;
+    let actor = identity::Did::new(agent.did())?;
     for (subject, permissions) in [
         (
             identity::Did::new(user.did())?,
@@ -445,7 +384,11 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
     let context =
         defra_core::RequestContext::default().with_identity(Some(runtime.did().to_owned()));
     let policy = node
-        .add_dac_policy_with_counter_as(&context, &case.policy_yaml, 0)
+        .add_dac_policy_with_counter_as(
+            &context,
+            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+            0,
+        )
         .await?;
     let mut docs = Vec::new();
     for (collection, field) in [
@@ -494,12 +437,9 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
     access
         .add_actor_relationship("InferenceBackendMetadata", &docs[2], "reader", &actor)
         .await?;
-    for item in &case.configuration_plugin_backend_cases {
-        if item["actor"] != "agent" {
-            continue;
-        }
-        let revoked = item["revoked"].as_str().unwrap();
-        let target = match revoked {
+    for item in gents_lean_vocab::families::household_plugin_backend_selection::cases() {
+        assert_eq!(item.input.actor.as_deref(), Some("agent"));
+        let target = match item.input.revoked.as_str() {
             "profile" => Some(("InferenceProfile", &docs[1])),
             "backend" => Some(("InferenceBackendMetadata", &docs[2])),
             "" => None,
@@ -531,15 +471,13 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
                 },
             ],
         );
-        assert_eq!(
-            selection.check().await.is_ok(),
-            item["expected"].as_bool().unwrap()
-        );
+        let allowed = selection.check().await.is_ok();
         if let Some((collection, doc)) = target {
             access
                 .add_actor_relationship(collection, doc, "reader", &actor)
                 .await?;
         }
+        item.check(allowed);
     }
     node.shutdown().await?;
     Ok(())

@@ -177,15 +177,20 @@ structure PluginBackendInput where
   revoked : String
   deriving ToJson
 
-@[conformance_family]
-def pluginBackendUse : Family PluginBackendInput Bool where
-  inputs := [("selected", some "agent", ""), ("sibling", some "sibling", ""), ("absent", none, ""),
+def pluginBackendCases : List PluginBackendInput :=
+  [("selected", some "agent", ""), ("sibling", some "sibling", ""), ("absent", none, ""),
     ("profile_revoked", some "agent", "profile"), ("backend_revoked", some "agent", "backend")].map
     fun (name, actor, revoked) => { name, actor, revoked }
-  model := fun i =>
-    let state := if i.revoked == "" then Configuration.pluginBackendFixture else
-      Household.apply Configuration.pluginBackendFixture
-        (.revoke ⟨"configuration", i.revoked, "reader", .actor "agent"⟩)
-    Configuration.pluginBackendMayUse state i.actor
+
+def pluginBackendModel (i : PluginBackendInput) : Bool :=
+  let state := if i.revoked == "" then Configuration.pluginBackendFixture else
+    Household.apply Configuration.pluginBackendFixture
+      (.revoke ⟨"configuration", i.revoked, "reader", .actor "agent"⟩)
+  Configuration.pluginBackendMayUse state i.actor
+
+@[conformance_family]
+def pluginBackendUse : Family PluginBackendInput Bool where
+  inputs := pluginBackendCases
+  model := pluginBackendModel
 
 end Conformance.Household

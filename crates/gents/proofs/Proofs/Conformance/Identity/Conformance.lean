@@ -321,11 +321,6 @@ def selfConfigLookupCases : List (String × SelfConfigAttempt) :=
    ("manager_allowed", ⟨true, true, true, true⟩),
    ("stale_generation", ⟨true, true, false, true⟩)]
 
-def selfConfigLookupCaseJson (name : String) (attempt : SelfConfigAttempt) : Json := Json.mkObj
-  [("name", toJson name), ("present", toJson attempt.present), ("visible", toJson attempt.visible),
-   ("same_generation", toJson attempt.sameGeneration), ("native_allows", toJson attempt.nativeAllows),
-   ("expected", toJson (selfConfigOutcome attempt))]
-
 def matrix : List Action :=
   [userDid, runtimeDid, agentDid, siblingDid, otherAgentDid, readerDid, strangerDid].flatMap
     (fun actor => initial.objects.flatMap (fun object => ["read", "update", "delete"].map
@@ -555,25 +550,15 @@ theorem target_household_controls_delivered_request :
      allowed 5 initial agentDid "agents" "general" "invoke"] =
     [true, true, false, true] := by native_decide
 
-def policyRegistrations : List Json :=
-  [("identical-policy", policy), ("management-metadata-collision", policyWithDifferentManagement),
-    ("relation-type-collision", policyWithDifferentTypes)].map fun (name, candidate) =>
-      let candidateYaml := policyYamlOf candidate
-      Json.mkObj [("name", toJson name), ("candidate_yaml", toJson candidateYaml),
-        ("same_id", toJson (policyIdInput policy == policyIdInput candidate)),
-        ("accepted", toJson ((registerPolicy (some policyYaml) candidateYaml).isSome))]
-
 def json : Json := Json.mkObj
   [("name", toJson "user-node-agents-mixed-session-ownership-policy-followup"), ("policy_yaml", toJson policyYaml),
    ("managed_client_handoff_cases", toJson ([] : List Json)),
    ("desktop_reset_cases", toJson ([] : List Json)),
    ("objects", toJson (initial.objects.map objectJson)),
    ("relations", toJson (initial.relations.map relationJson)), ("enrolled", toJson initial.enrolled),
-   ("policy_registrations", toJson policyRegistrations),
-   ("self_config_actions", toJson (traceJson initial selfConfigChanges)),
-   ("invoke_session_actions", toJson (traceJson initial invokeOnlySessionActions)),
-   ("self_config_lookup_cases", toJson (selfConfigLookupCases.map fun (name, attempt) =>
-     selfConfigLookupCaseJson name attempt)),
+   ("policy_registrations", toJson ([] : List Json)),
+   ("self_config_actions", toJson ([] : List Json)),
+   ("self_config_lookup_cases", toJson ([] : List Json)),
    ("actions", toJson (traceJson initial (nodeAdministratorChanges ++ runtimeReaderChanges ++ invokeChanges ++ invokeOnlySessionActions ++ requestSessionChanges ++ receiptAuthorChanges ++ matrix ++ managementChanges ++ selfConfigChanges ++ changes)))]
 end HouseholdFixture
 
@@ -644,13 +629,6 @@ def withoutReader : State := apply withoutWriter (.revoke reader)
 def atomicInitial : State :=
   { objects := [⟨"nodes", "home", userDid⟩], relations := [], enrolled := [] }
 
-def atomicCaseJson (commit : Bool) : Json :=
-  let state := Configuration.publishSelectedAtomic atomicInitial userDid "atomic" "home" agentDid commit
-  Json.mkObj [("commit", toJson commit),
-    ("owner_read", toJson (Household.allowed 5 state userDid "configuration" "atomic" "read")),
-    ("agent_read", toJson (Household.allowed 5 state agentDid "configuration" "atomic" "read")),
-    ("sibling_read", toJson (Household.allowed 5 state siblingDid "configuration" "atomic" "read"))]
-
 def providerInitial : State :=
   { objects := [⟨"agents", "agent-doc", userDid⟩,
       ⟨"configuration", "context-doc", userDid⟩,
@@ -659,16 +637,6 @@ def providerInitial : State :=
       ⟨"configuration", "context-doc", "reader", .actor agentDid⟩,
       ⟨"configuration", "tools-doc", "reader", .actor agentDid⟩], enrolled := [] }
 
-def providerCaseJson (name actor purpose : String) (revokeTools missingContext : Bool) : Json :=
-  let state := if revokeTools then apply providerInitial
-    (.revoke ⟨"configuration", "tools-doc", "reader", .actor agentDid⟩) else providerInitial
-  let documents := [("agents", "agent-doc"),
-    ("configuration", if missingContext then "replaced-context" else "context-doc"),
-    ("configuration", "tools-doc")]
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("purpose", toJson purpose),
-    ("revoke_tools", toJson revokeTools), ("missing_context", toJson missingContext),
-    ("expected", toJson (Configuration.providerAssemblyAllowed state actor userDid documents))]
-
 def eventConfigurationState : State :=
   { objects := [⟨"nodes", "home", userDid⟩,
       ⟨"configuration", "trigger", userDid⟩,
@@ -676,15 +644,6 @@ def eventConfigurationState : State :=
     relations := [⟨"nodes", "home", "runtime_reader", .actor runtimeDid⟩,
       ⟨"configuration", "trigger", "parent", .object "nodes" "home"⟩,
       ⟨"configuration", "source", "parent", .object "nodes" "home"⟩], enrolled := [] }
-
-def inferenceProviderCaseJson (name actor revoked : String) : Json :=
-  let state := if revoked.isEmpty then Configuration.inferenceProviderFixture else
-    apply Configuration.inferenceProviderFixture
-      (.revoke ⟨"configuration", revoked, "selected_by", .entitySet "agents" "agent-doc" "executor"⟩)
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
-    ("documents", toJson (Configuration.inferenceProviderDocuments.map Prod.snd)),
-    ("expected", toJson (Configuration.providerConfigurationVisible state actor
-      Configuration.inferenceProviderDocuments))]
 
 def inferenceUsersetCaseJson (name actor revoked : String) (direct : Bool) : Json :=
   let withDirect := if direct then apply Configuration.inferenceUsersetFixture
@@ -723,13 +682,6 @@ def pluginProfileCaseJson (name : String) (actor : Option String) (revoked : Boo
     else Configuration.inferenceUsersetFixture
   Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
     ("expected", toJson (Configuration.pluginModelMayUse state actor "profile"))]
-
-def agentInvokeManagerCaseJson : Json :=
-  let grant : Relation := ⟨"agents", "agent", "session_writer", .actor "reader"⟩
-  let granted := apply nodeManagerFixture (.grantAs "user" grant)
-  let revoked := apply granted (.revokeAs "user" grant)
-  Json.mkObj [("before", toJson (allowed 8 granted "reader" "agents" "agent" "invoke")),
-    ("after", toJson (allowed 8 revoked "reader" "agents" "agent" "invoke"))]
 
 def datastoreToolUseCaseJson (name : String)
     (visible enabled selected declarationMatches : Bool) : Json :=
@@ -1072,28 +1024,6 @@ def editToolSources (surface : ToolPolicy.Surface) (pack : Bool) : List Configur
 def selfConfigPackSurface : ToolPolicy.Surface :=
   { ToolPolicy.ContractCases.secureMinimal with selfConfig := true, selfConfigCategories := .all }
 
-/-- Whether an Agent configuring its own Tools may enable `surface` while
-holding `sets` directly. An Agent with only the User's own-only self-config
-grant holds the Agent baseline: no NAC relation operation, so the held-bounded
-rule refuses every source it would project, even one for a held baseline
-permission. The Engineer's policy delegate set admits a source it holds. -/
-def ownToolEditCaseJson (name : String) (sets : List GrantSets.GrantSet)
-    (surface : ToolPolicy.Surface) (pack : Bool) : Json :=
-  let sources := editToolSources surface pack
-  let initial : Configuration.ToolGrantProjection :=
-    { admins := [userDid],
-      direct := (sets.flatMap GrantSets.GrantSet.permissions).map (agentDid, ·) }
-  let result := Configuration.configureToolGrantGroup initial toolGrantorHousehold
-    sources agentDid true true
-  Json.mkObj [("name", toJson name), ("sets", toJson (sets.map GrantSets.GrantSet.name)),
-    ("sources", toJson (sources.map toolSourceJson)),
-    ("accepted", toJson (!sources.isEmpty && result != initial))]
-
-def ownToolEditCases : List Json :=
-  [ownToolEditCaseJson "own-only-goal" [.agentBaseline] ToolPolicy.ContractCases.agentGoalOnly false,
-   ownToolEditCaseJson "engineer-goal" [.agentBaseline, .policyDelegate]
-     ToolPolicy.ContractCases.agentGoalOnly false]
-
 theorem own_only_grant_cannot_enable_tool_sources :
     let initial : Configuration.ToolGrantProjection :=
       { admins := [userDid],
@@ -1103,21 +1033,6 @@ theorem own_only_grant_cannot_enable_tool_sources :
         Configuration.configureToolGrantGroup initial toolGrantorHousehold
           (editToolSources surface true) agentDid true true == initial := by
   native_decide
-
-/-- Conformance input for `Configuration.repairUsersetSelection`: who asks,
-the native observations the destructive decision rests on (whether NAC is
-enabled, what native NAC reports as admin, which inventory read is used),
-whether repair was requested, and the modeled refusal of a requested repair. -/
-def danglingRepairCaseJson (actor : String) (authority : Configuration.DestructiveAuthority)
-    (repair : Bool) : Json :=
-  let refusal := if repair then
-    (Configuration.destructiveAdminDecision authority).map Configuration.DestructiveRefusal.name
-  else none
-  Json.mkObj [("actor", toJson actor), ("nac_enabled", toJson authority.nacEnabled),
-    ("admin", toJson authority.admin),
-    ("complete_inventory", toJson authority.inventory.isComplete), ("repair", toJson repair),
-    ("refusal", toJson refusal),
-    ("applied", toJson (Configuration.danglingRepairApplied actor authority repair))]
 
 def callbackState : State :=
   { objects := [⟨"nodes", "home", userDid⟩,
@@ -1163,25 +1078,6 @@ def backendCredentialCases : List Json := Id.run do
     backendCredentialCaseJson "inline-secret" allowed true true,
     backendCredentialCaseJson "redacted-history" allowed false true]
 
-def runtimeDefaultChoiceCase (name currentKind nextKind : String)
-    (currentRef nextRef visibleDefault : Option String) : Json :=
-  let current := some (currentKind, _root_.Configuration.BackendAuth.nodeOAuth currentRef)
-  let next := (nextKind, _root_.Configuration.BackendAuth.nodeOAuth nextRef)
-  Json.mkObj [("name", toJson name), ("current_kind", toJson currentKind),
-    ("current_ref", toJson currentRef), ("next_kind", toJson nextKind),
-    ("next_ref", toJson nextRef), ("visible_default", toJson visibleDefault),
-    ("accepted", toJson (InferenceOperations.backendChoiceAllowed (fun _ => visibleDefault) current next))]
-
-def runtimeDefaultChoiceCases : List Json :=
-  [runtimeDefaultChoiceCase "cross-named-default" "ChatGptCodex" "XaiGrokOAuth"
-      (some "a1") (some "g2") (some "g2"),
-   runtimeDefaultChoiceCase "cross-wrong-default" "ChatGptCodex" "XaiGrokOAuth"
-      (some "a1") none (some "g2"),
-   runtimeDefaultChoiceCase "cross-empty-default" "ChatGptCodex" "XaiGrokOAuth"
-      (some "a1") none none,
-   runtimeDefaultChoiceCase "same-provider-cannot-switch" "XaiGrokOAuth" "XaiGrokOAuth"
-      (some "g2") none none]
-
 def backendCredentialNativeCase (revoked : Bool) : Json :=
   let initial := Configuration.backendCredentialFixture
   let state := if revoked then Household.apply initial
@@ -1206,13 +1102,6 @@ def backendCredentialPublicationCase (metadata secret : String) (authorized comm
     ("authorized", toJson authorized), ("committed", toJson committed),
     ("expected_metadata", toJson result.metadataVersion),
     ("expected_secret", toJson result.secretVersion)]
-
-def pluginBackendCase (name : String) (actor : Option String) (revoked : String) : Json :=
-  let state := if revoked == "" then Configuration.pluginBackendFixture else
-    Household.apply Configuration.pluginBackendFixture
-      (.revoke ⟨"configuration", revoked, "reader", .actor "agent"⟩)
-  Json.mkObj [("name", toJson name), ("actor", toJson actor), ("revoked", toJson revoked),
-    ("expected", toJson (Configuration.pluginBackendMayUse state actor))]
 
 def inferenceSelfConfigCase (phase actor document : String) : Json :=
   let state := if phase == "before" then Configuration.inferenceUsersetFixture
@@ -1244,36 +1133,6 @@ def json : Json := Json.mkObj
        Json.mkObj [("full", toJson full), ("asset", toJson name),
          ("retired", toJson (Configuration.desktopResetRetires full asset))])),
    ("backend_credential_cases", toJson backendCredentialCases),
-   ("runtime_default_choice_cases", toJson runtimeDefaultChoiceCases),
-   ("configuration_plugin_backend_cases", toJson [
-      pluginBackendCase "selected" (some "agent") "",
-      pluginBackendCase "sibling" (some "sibling") "",
-      pluginBackendCase "absent" none "",
-      pluginBackendCase "profile_revoked" (some "agent") "profile",
-      pluginBackendCase "backend_revoked" (some "agent") "backend"]),
-   ("backend_discovery_cases", toJson ([(true, true, true, true), (false, true, true, true),
-       (true, false, true, true), (true, true, false, true), (true, true, true, false)].map
-      fun (authorized, doc, connection, committed) => Json.mkObj
-        [("authorized", toJson authorized), ("same_doc", toJson doc),
-         ("same_connection", toJson connection), ("committed", toJson committed),
-         ("published", toJson (Configuration.backendDiscoveryMayPublish authorized doc connection committed))])),
-   ("backend_probe_cases", toJson ([(true, true, true), (false, true, true), (true, false, true), (true, true, false)].map fun (doc, same, committed) =>
-      Json.mkObj [("same_doc", toJson doc), ("same_connection", toJson same), ("committed", toJson committed),
-        ("published", toJson (Configuration.backendProbeMayPublish doc same committed))])),
-   ("backend_removal_cases", toJson ([(true, true, true), (false, true, true),
-       (true, false, true), (true, true, false)].map fun (authorized, matching, committed) =>
-      let (metadata, observation, credential) := Configuration.removeBackendRecords authorized matching committed
-      Json.mkObj [("authorized", toJson authorized), ("matching", toJson matching),
-        ("committed", toJson committed), ("metadata", toJson metadata),
-        ("observation", toJson observation), ("credential", toJson credential)])),
-   ("backend_genesis_distinct", toJson (Configuration.backendGenesis "backend" "credential" "nonce-a" !=
-      Configuration.backendGenesis "backend" "credential" "nonce-b")),
-   ("fresh_backend_origin_cases", toJson ([(true, true, true, true), (false, true, true, true),
-       (true, false, true, true), (true, true, false, true), (true, true, true, false)].map
-      fun (locked, empty, unexposed, committed) => Json.mkObj
-        [("locked", toJson locked), ("empty", toJson empty), ("unexposed", toJson unexposed),
-         ("committed", toJson committed),
-         ("origin", toJson (Configuration.freshBackendOrigin locked empty unexposed committed))])),
    ("backend_credential_publication_cases", toJson [
      backendCredentialPublicationCase "new" "new" true true,
      backendCredentialPublicationCase "new" "other" true true,
@@ -1294,13 +1153,6 @@ def json : Json := Json.mkObj
       sessionToolCaseJson "foreign" false true false])),
    ("tool_grantor_cases", toJson ([toolGrantorCaseJson userDid true,
       toolGrantorCaseJson agentDid true, toolGrantorCaseJson userDid false])),
-   ("own_tool_edit_cases", toJson ownToolEditCases),
-   ("dangling_selection_repair_cases", toJson ([
-      danglingRepairCaseJson "user" ⟨true, true, .acpFiltered⟩ true,
-      danglingRepairCaseJson "user" ⟨true, true, .acpFiltered⟩ false,
-      danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ true,
-      danglingRepairCaseJson "agent" ⟨true, false, .acpFiltered⟩ false,
-      danglingRepairCaseJson "user" ⟨false, true, .acpFiltered⟩ true])),
    ("tool_source_change_cases", toJson ([
       toolSourceChangeCaseJson "present-noop" true false false,
       toolSourceChangeCaseJson "absent-noop" false true false,
@@ -1326,18 +1178,6 @@ def json : Json := Json.mkObj
       Json.mkObj [("actor", toJson actor), ("command", toJson command), ("create", toJson create),
         ("authorized", toJson authorized), ("replacing", toJson replacing), ("delete", toJson delete),
         ("allowed", toJson (Configuration.clientGoalGraphHandoffAllowed actor command create authorized replacing delete))])),
-   ("configuration_atomic_cases", toJson ([false, true].map atomicCaseJson)),
-   ("configuration_provider_cases", toJson
-      [providerCaseJson "normal" agentDid "normal" false false,
-       providerCaseJson "auxiliary" agentDid "auxiliary" false false,
-       providerCaseJson "sibling" siblingDid "normal" false false,
-       providerCaseJson "revoked-tools" agentDid "normal" true false,
-       providerCaseJson "replaced-context" agentDid "auxiliary" false true]),
-   ("configuration_inference_provider_cases", toJson
-      ([inferenceProviderCaseJson "selected" "agent" "",
-        inferenceProviderCaseJson "sibling" "sibling" ""] ++
-       ["profile", "sampling", "execution", "retry", "compaction", "summary-profile"].map
-        fun id => inferenceProviderCaseJson ("revoked-" ++ id) "agent" id)),
    ("configuration_userset_cases", toJson
       [inferenceUsersetCaseJson "selected" "agent" "" false,
        inferenceUsersetCaseJson "sibling" "sibling" "" false,
@@ -1379,7 +1219,6 @@ def json : Json := Json.mkObj
        pluginProfileCaseJson "sibling" (some "sibling") false,
        pluginProfileCaseJson "absent" none false,
        pluginProfileCaseJson "revoked" (some "agent") true]),
-   ("agent_node_manager_invoke_case", agentInvokeManagerCaseJson),
    ("configuration_datastore_tool_use_cases", toJson
       [datastoreToolUseCaseJson "allowed" true true true true,
        datastoreToolUseCaseJson "revoked" false true true true,
