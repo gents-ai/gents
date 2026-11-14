@@ -219,6 +219,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   waits on the `pending_native` write-attempt event, a projection the attempt
   may skip once it holds a terminal outcome; `LostWakeup` drops permit
   semantics, the lost wakeup an enable-then-check wait avoids.
+- `StreamDelivery` — streamed provider text reaching a subscribed client
+  while the provider pauses (#2131, #3803): the provider's chunks and its
+  gated completion, the owned drive loop and stream writer (flush on the
+  first visible bytes, on a due write, or at the batch deadline the drive
+  waits on; Lean `StreamBatch.plan`), the segment append, the app store's
+  request row and the client reader that joins both. `NoWithheldDuringPause`,
+  `ChunksReachClient`, `ObservedBeforeCompletion` and `NoSpuriousFailure`
+  hold for the paced and unpaced cases. `NoFlushTimer` flushes only on the
+  next chunk or completion and `NoAppendOnDue` ignores the writer's due
+  verdict; both strand a chunk during the pause. `RuntimeWakeOnly` is the
+  test reader's lost wake-up and `Budget` its wall-clock visibility budget:
+  the product is the green one in both. TLC2 `2026.11.06.222357` on Linux
+  amd64, Temurin 17, `-workers 4`: green 214 and 72 distinct states, each red
+  configuration violates its named property.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
