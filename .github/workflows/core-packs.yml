@@ -73,7 +73,9 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runner || vars.GENTS_CI_PORTABLE_RUNNER || '["self-hosted","Linux","X64","workstation-1"]') }}
     container: ${{ (inputs.runner || vars.GENTS_CI_PORTABLE_RUNNER) == '' && 'rust:1-bookworm' || '' }}
     env:
-      CORE_PACK_TOOL: target/core-packs-tool/gents
+      # Outside target/: the dependency cache's cleanup empties target/ before
+      # the CLI cache saves.
+      CORE_PACK_TOOL: .core-packs-tool/gents
       # Caps the per-runner Cargo target tree a self-hosted host keeps.
       CORE_PACKS_TARGET_MAX_GIB: ${{ vars.CORE_PACKS_TARGET_MAX_GIB || '60' }}
     defaults:
