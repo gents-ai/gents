@@ -41,9 +41,8 @@ mod live_undo;
 const WAIT: Duration = Duration::from_secs(30);
 
 impl Attachment {
-    /// Retirement is acknowledged before the serving installation has closed
-    /// its store, so the next installation opens only after the store owner
-    /// releases it.
+    /// The serving installation answers the retirement only once it has
+    /// released its store, so the store is free when the attachment exits.
     async fn retire(mut self, paths: &DesktopPaths) -> Result<()> {
         let build = self
             .installation_build
@@ -66,12 +65,10 @@ impl Attachment {
             self.wait_for_exit().await.success(),
             "retired attachment failed"
         );
-        tokio::time::timeout(
-            WAIT,
-            gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir()),
-        )
-        .await
-        .context("the retired installation did not release its store")??;
+        drop(
+            gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
+                .context("the retired installation acknowledged before releasing its store")?,
+        );
         Ok(())
     }
 }
