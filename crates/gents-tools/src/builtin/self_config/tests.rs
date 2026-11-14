@@ -438,6 +438,25 @@ fn generated_agent_materialization_cases_drive_production_agent_materialization(
 }
 
 #[test]
+fn generated_agent_resolution_cases_drive_the_agent_commit_check() {
+    gents_lean_vocab::families::contracts_self_config_agent_resolution::replay::<
+        super::agent::CandidateResolution,
+        String,
+    >(|case| {
+        let candidate = decode_candidate(
+            &serde_json::from_value(serde_json::to_value(&case.candidate).expect("encodes"))
+                .expect("the resolution family's candidate is the materialization's"),
+        );
+        super::agent::candidate_resolution(
+            &candidate,
+            &case.candidate.node_did,
+            &case.target,
+            case.enabled,
+        )
+    });
+}
+
+#[test]
 fn generated_sibling_tools_cases_drive_production_tools_selection() {
     gents_lean_vocab::families::contracts_self_config_sibling_tools::replay::<CommandNetworkMode>(
         |case| {

@@ -273,8 +273,15 @@ pub(super) fn attach_watcher_identities(
     unavailable_agents: &mut RapidHashMap<String, UnavailableAgent>,
 ) {
     // Availability and locally verifiable identity are independent: the watcher
-    // must still observe work for a disabled or otherwise unrunnable agent.
+    // must still observe work for an otherwise unrunnable agent. DefraDB
+    // answers a disabled agent's request scan without its AgentRequest rows,
+    // so scanning as one fails on every pass.
     for (agent_did, reason) in unavailable_agents {
+        if reason.public_reason
+            == gents_protocol::node_readiness::AgentReadinessUnavailableReason::AgentDisabled
+        {
+            continue;
+        }
         let Some(record) = view.agents.get(agent_did) else {
             continue;
         };
