@@ -583,8 +583,18 @@ async fn apply(
             }
         }
         let wired = if wiring.wired && !source.manifest().metadata.plugins.is_empty() {
+            let wire_access = match &access {
+                gents_store::config_client::ConfigAccess::Graphql(endpoint) => {
+                    gents_store::config_client::ConfigAccess::Graphql(runtime_operator_endpoint(
+                        home,
+                        endpoint.url(),
+                        &owner,
+                    )?)
+                }
+                local => local.clone(),
+            };
             gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
-                &access,
+                &wire_access,
                 &owner,
                 home,
                 &source,
@@ -636,6 +646,29 @@ async fn apply(
         "host_tool_roots": host_tool_roots,
         "agents": agents,
     }))
+}
+
+/// The operator endpoint of the runtime serving `home` at `url`: its plugin
+/// wiring route admits only the Node's own DID, so this same-user host signs
+/// as the Node with the home's key, as the desktop's
+/// `gents_desktop_core::local_runtime::runtime_operator_endpoint` does.
+fn runtime_operator_endpoint(
+    home: &Path,
+    url: &str,
+    owner: &str,
+) -> Result<gents_store::config_client::GraphqlEndpoint> {
+    let stored =
+        gents_service::home_state::read_init_config(home)?.context("home is not initialized")?;
+    let runtime = gents_service::home_state::load_initialized_home_identity(home, &stored)?;
+    anyhow::ensure!(
+        runtime.did() == owner,
+        "the runtime serving {} is not this home's Node",
+        home.display()
+    );
+    Ok(
+        gents_store::config_client::GraphqlEndpoint::as_principal(url, owner)
+            .with_client_signing_capability(runtime.client_signing_capability()?)?,
+    )
 }
 
 /// The agents the installed pack `coordinate` ships, each with whether it is
