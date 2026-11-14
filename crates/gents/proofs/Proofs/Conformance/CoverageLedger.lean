@@ -3048,6 +3048,8 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_datastore_write_cached")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "household_backend_credential_native")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "session_publication_task")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "session_publication_client_reservation")

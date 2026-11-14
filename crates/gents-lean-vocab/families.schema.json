@@ -591,6 +591,7 @@
   "household_agent_manager_link_revocation": {"input":{"fields":[["actor","string"]],"struct":"ManagerActorInput"},"output":"bool"},
   "household_automated_request_visibility": {"input":{"fields":[["role","string"]],"struct":"RequestReadInput"},"output":"bool"},
   "household_backend_credential_binding": {"input":{"fields":[["name","string"],["same_node","bool"],["destination_approved","bool"],["credential_version_matches","bool"]],"struct":"BindingInput"},"output":"bool"},
+  "household_backend_credential_native": {"input":{"fields":[["revoked","bool"],["actor","string"],["resource","string"],["doc","string"],["permission","string"]],"struct":"CredentialCheckInput"},"output":"bool"},
   "household_backend_credential_reference_version": {"input":{"fields":[["name","string"],["same_node","bool"],["destination_approved","bool"],["credential_version_matches","bool"]],"struct":"BindingInput"},"output":"bool"},
   "household_backend_metadata_selection": {"input":{"fields":[["name","string"],["actor","string"],["revoked","bool"],["direct","bool"]],"struct":"BackendMetadataInput"},"output":{"fields":[["read","bool"],["update","bool"]],"struct":"BackendMetadataAccess"}},
   "household_backend_observation_authority": {"input":{"fields":[["actor","string"],["object","string"],["permission","string"]],"struct":"ObservationAuthorityInput"},"output":"bool"},

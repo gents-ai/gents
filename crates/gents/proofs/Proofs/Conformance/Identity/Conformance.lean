@@ -1170,22 +1170,6 @@ def runtimeDefaultChoiceCases : List Json :=
    runtimeDefaultChoiceCase "same-provider-cannot-switch" "XaiGrokOAuth" "XaiGrokOAuth"
       (some "g2") none none]
 
-def backendCredentialNativeCase (revoked : Bool) : Json :=
-  let initial := Configuration.backendCredentialFixture
-  let state := if revoked then Household.apply initial
-    (.revoke ⟨"configuration", "backend", "reader", .actor "agent"⟩) else initial
-  let checks := [("agent", "configuration", "backend", "read"),
-    ("agent", "configuration", "backend", "update"),
-    ("agent", "secret_configuration", "credential", "read"),
-    ("runtime", "secret_configuration", "credential", "read"),
-    ("user", "secret_configuration", "credential", "update")]
-  Json.mkObj [("revoked", toJson revoked),
-    ("objects", toJson (state.objects.map objectJson)),
-    ("relations", toJson (state.relations.map relationJson)),
-    ("checks", toJson (checks.map fun (actor, resource, doc, permission) =>
-      Json.mkObj [("actor", toJson actor), ("resource", toJson resource),
-        ("doc", toJson doc), ("permission", toJson permission),
-        ("allowed", toJson (Household.allowed 5 state actor resource doc permission))]))]
 
 def backendCredentialPublicationCase (metadata secret : String) (authorized committed : Bool) : Json :=
   let prior : Configuration.BackendCredentialPublication := ⟨"old", "old"⟩
@@ -1255,8 +1239,6 @@ def json : Json := Json.mkObj
      backendCredentialPublicationCase "new" "other" true true,
      backendCredentialPublicationCase "new" "new" false true,
      backendCredentialPublicationCase "new" "new" true false]),
-   ("backend_credential_native_cases", toJson ([backendCredentialNativeCase false,
-      backendCredentialNativeCase true])),
    ("plugin_delete_cases", toJson pluginDeleteCases),
    ("tool_grant_projection_cases", toJson toolGrantCases),
    ("tool_grant_group_cases", toJson toolGrantGroupCases),

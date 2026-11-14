@@ -76,6 +76,20 @@ def bindingInputs : List BindingInput :=
   [⟨"authorized", true, true, true⟩, ⟨"foreign-node", false, true, true⟩,
    ⟨"unapproved-destination", true, false, true⟩, ⟨"rotated-credential", true, true, false⟩]
 
+structure CredentialCheckInput where
+  revoked : Bool
+  actor : String
+  resource : String
+  doc : String
+  permission : String
+  deriving ToJson
+
+def credentialCheckAllowed (i : CredentialCheckInput) : Bool :=
+  let initial := Configuration.backendCredentialFixture
+  let state := if i.revoked then Household.apply initial
+    (.revoke ⟨"configuration", "backend", "reader", .actor "agent"⟩) else initial
+  Household.allowed 5 state i.actor i.resource i.doc i.permission
+
 end Conformance.HouseholdA
 
 namespace Conformance.Household
@@ -130,5 +144,16 @@ the approved one; only the version varies here. -/
 def backendCredentialReferenceVersion : Family BindingInput Bool where
   inputs := bindingInputs.filter fun i => i.sameNode && i.destinationApproved
   model := fun i => Configuration.runtimeMayUseBackendCredential (bindingAccess i) false false
+
+/-- The backend metadata reader is revoked after the unrevoked checks. -/
+@[conformance_family]
+def backendCredentialNative : Family CredentialCheckInput Bool where
+  inputs := [false, true].flatMap fun revoked =>
+    [("agent", "configuration", "backend", "read"), ("agent", "configuration", "backend", "update"),
+     ("agent", "secret_configuration", "credential", "read"),
+     ("runtime", "secret_configuration", "credential", "read"),
+     ("user", "secret_configuration", "credential", "update")].map
+      fun (actor, resource, doc, permission) => { revoked, actor, resource, doc, permission }
+  model := credentialCheckAllowed
 
 end Conformance.Household
