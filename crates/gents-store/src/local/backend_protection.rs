@@ -28,11 +28,11 @@ pub enum BackendProtectionError {
     NotFresh,
     #[error("fresh backend protection provenance is absent or invalid")]
     InvalidProvenance,
-    /// An existing store carries no provenance marker at all: it was created
-    /// by a release from before backend protection (v1.0.0-rc1 and earlier),
-    /// which this release does not convert.
+    /// An existing store carries no marker of this version's lineage: it was
+    /// created by a release from before backend protection or under an
+    /// earlier lineage version, which this release does not convert.
     #[error(
-        "this home was created by an older Gents version (v1.0.0-rc1 or earlier), which this \
+        "this home was created by an older Gents version, which this \
          release cannot open or convert. Back the home up or delete it, then run `gents` to set \
          up a fresh one. To keep anything, export it first with the release that created it."
     )]
