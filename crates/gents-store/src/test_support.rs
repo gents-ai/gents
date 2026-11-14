@@ -1,4 +1,5 @@
 pub mod acp_policies;
+pub mod bounded_process;
 pub mod relationships;
 pub mod wire_database;
 

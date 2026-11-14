@@ -14,7 +14,8 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use super::{initialization::Initialization, ports, stop, support};
+use super::{ports, stop, support};
+use gents_store::test_support::bounded_process::BoundedProcess;
 use support::Attachment;
 
 #[path = "live_delivery.rs"]
@@ -138,10 +139,17 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
             target.endpoint(),
         ]);
     let root_owned = root.to_owned();
-    let initialized =
-        tokio::task::spawn_blocking(move || Initialization::spawn(&mut command, &root_owned))
-            .await??;
-    let initialized: Value = serde_json::from_slice(&initialized.wait(WAIT).await?)?;
+    let initialized = tokio::task::spawn_blocking(move || {
+        BoundedProcess::spawn(
+            command.as_std_mut(),
+            &root_owned,
+            "init",
+            "fixture initialization",
+        )?
+        .wait(WAIT)
+    })
+    .await??;
+    let initialized: Value = serde_json::from_slice(&initialized)?;
     let node = initialized["node_did"]
         .as_str()
         .context("initialized node DID")?;
