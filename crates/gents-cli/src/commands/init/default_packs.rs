@@ -548,6 +548,14 @@ async fn apply(
             .iter()
             .map(|agent| (agent.coordinate.clone(), agent.agent.clone()))
             .collect();
+        // DefraDB admits a WorkspaceRoot reader only for an enabled Agent of
+        // the root's Node, so an enable turns the agents on before their
+        // grant and back off when it fails.
+        if wiring.agents_active {
+            set_pack_agents_active(&access, &owner, coordinate, true)
+                .await
+                .with_context(|| format!("{coordinate} is installed, but its agents were not turned on"))?;
+        }
         let supplied =
             gents_pack::pack::installer_tool_root(&access, &owner, Some(engineer)).await?;
         let readers = gents_tools::surface::grant_pack_root_readers(
@@ -564,6 +572,9 @@ async fn apply(
         })?;
         if wiring.root_readers {
             if let Some(failed) = readers.iter().find(|reader| reader["failed"].is_string()) {
+                if wiring.agents_active {
+                    set_pack_agents_active(&access, &owner, coordinate, false).await?;
+                }
                 anyhow::bail!(
                     "{}. Enable {coordinate} again, or grant it with: {}",
                     failed["failed"].as_str().unwrap_or_default(),
@@ -608,12 +619,7 @@ async fn apply(
         };
         let agents = set_pack_agents_active(&access, &owner, coordinate, wiring.agents_active)
             .await
-            .with_context(|| {
-                format!(
-                    "{coordinate} is installed, but its agents were not turned {}",
-                    if wiring.agents_active { "on" } else { "off" }
-                )
-            })?;
+            .with_context(|| format!("{coordinate} is installed, but its agents were not left as enabling says"))?;
         Ok::<_, anyhow::Error>((wired, skills, readers, agents))
     }
     .await;

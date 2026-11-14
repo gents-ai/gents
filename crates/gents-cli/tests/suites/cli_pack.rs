@@ -1550,8 +1550,6 @@ fn readiness_of(
 /// and gives the Engineer's surface the pack's plugin tool.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
-    use gents_lean_vocab::families::runtime_startup_degraded_enabled_agent_reason as enabled_family;
-    use gents_lean_vocab::families::runtime_startup_degraded_init_agent_reason as init_family;
     use gents_pack::pack::core_packs::CorePack;
     use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     let tempdir = tempfile::tempdir()?;
@@ -1613,7 +1611,10 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         status["readiness_status"] == "ready",
         "a node with a core pack installed but not enabled is ready: {status}"
     );
-    for case in init_family::cases::<CorePack, Reason>() {
+    for case in gents_lean_vocab::families::runtime_startup_degraded_init_agent_reason::cases::<
+        CorePack,
+        Reason,
+    >() {
         if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
             case.check(serde_json::from_value::<Option<Reason>>(
                 reason.clone().unwrap_or_default(),
@@ -1634,7 +1635,10 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         status["readiness_status"] == "ready",
         "the node is ready after enabling: {status}"
     );
-    for case in enabled_family::cases::<CorePack, Reason>() {
+    for case in gents_lean_vocab::families::runtime_startup_degraded_enabled_agent_reason::cases::<
+        CorePack,
+        Reason,
+    >() {
         if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
             case.check(serde_json::from_value::<Option<Reason>>(
                 reason.clone().unwrap_or_default(),
