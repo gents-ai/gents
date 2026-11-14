@@ -290,7 +290,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
         let agent = deployment["client"]["deployments"].as_array().unwrap().iter()
             .find(|row| row["nodeDid"] == node).unwrap()["agents"].as_array().unwrap().iter()
             .find(|agent| agent["isDefault"] == true).unwrap()["agentDid"].as_str().context("default Agent")?.to_owned();
+        let configured_from = active_generation(&deployment, node).context("the serving runtime reports its active generation")?;
         configure(&mut client, &mut id, node, &agent, &target, goal, &gates, editor, questions.as_ref(), related_work.as_ref(), inventory.as_ref(), undo.as_ref(), fault.as_ref(), replacement).await?;
+        if goal || !gates.is_empty() {
+            wait_configuration_active(&mut client, &mut updates, &mut id, node, configured_from).await?;
+        }
         let opening = if steering || replacement { gates[0].prompt() } else if goal || editor.is_some() { "Acknowledge this session briefly. Do not call tools.".to_owned() } else { "Write 120 short numbered lines about trees. Keep each line to one short sentence and continue until the list is finished. Do not call tools.".to_owned() };
         let receipt = if goal_steering {
             client.try_call(id, "desktop_goal_control", json!({"request":{"nodeDid":node,"agentDid":agent,"action":{"kind":"create","objective":opening,"tokenBudget":"16000"}}})).await?
@@ -626,6 +630,53 @@ async fn configure(
         )
         .await?;
     *id += 1;
+    Ok(())
+}
+
+fn active_generation(snapshot: &Value, node: &str) -> Option<u64> {
+    snapshot["client"]["deployments"]
+        .as_array()?
+        .iter()
+        .find(|row| row["nodeDid"] == node)?["nodeReadiness"]["activeGeneration"]
+        .as_u64()
+}
+
+/// The runtime reconciles a committed configuration after its control
+/// debounce, and router admission checks only that a generation's selected
+/// documents are still visible, so input submitted before the next generation
+/// is active runs with the previous tool surface. These journeys change their
+/// Agent's resolved configuration, so the next generation always differs.
+async fn wait_configuration_active(
+    client: &mut Attachment,
+    updates: &mut Attachment,
+    id: &mut u32,
+    node: &str,
+    before: u64,
+) -> Result<()> {
+    wait_client(
+        client,
+        updates,
+        id,
+        "desktop_client_snapshot",
+        json!({}),
+        |snapshot| {
+            let Some(row) = snapshot["client"]["deployments"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|row| row["nodeDid"] == node))
+            else {
+                return false;
+            };
+            let readiness = &row["nodeReadiness"];
+            readiness["activeGeneration"]
+                .as_u64()
+                .is_some_and(|active| active > before)
+                && readiness["routerGeneration"] == readiness["activeGeneration"]
+                && row["runtime"]["reconcilePhase"] == "idle"
+                && row["chatSafe"] == true
+        },
+    )
+    .await
+    .context("the runtime did not activate the applied configuration")?;
     Ok(())
 }
 
