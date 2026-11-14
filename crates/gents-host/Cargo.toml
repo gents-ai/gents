@@ -68,7 +68,10 @@ uuid.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
-gents = { path = "../gents", features = ["test-home-guard"] }
+gents-host = { path = ".", features = ["test-fixtures"] }
+gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
+gents-workspace-hack = { workspace = true }
+gents = { path = "../gents", features = ["test-fixtures", "typescript"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
 gents-session = { workspace = true, features = ["test-fixtures"] }
 acp.workspace = true
