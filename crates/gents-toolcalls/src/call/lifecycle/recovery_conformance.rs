@@ -377,6 +377,10 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
     }
 }
 
+fn optional_text(value: &serde_json::Value) -> Option<String> {
+    value.as_str().map(str::to_owned)
+}
+
 fn swept(count: usize) -> u64 {
     u64::try_from(count).expect("a sweep count fits u64")
 }
@@ -443,21 +447,17 @@ async fn generated_native_recovery_cases_use_canonical_admission_owner() {
                 .await
                 .unwrap();
         assert_eq!(actual["request_doc_id"], request_doc, "{name}");
-        if input.cause == "parentInterrupted" {
-            assert_eq!(actual["cancel_cause"], "interrupted", "{name}");
-            assert!(actual["tool_failure_class"].is_null(), "{name}");
-        } else {
-            assert_eq!(actual["tool_failure_class"], "external", "{name}");
-        }
         teardown(admission).await;
         case.check(
-            gents_lean_vocab::families::recovery_sweeps_tool_call::Swept {
+            gents_lean_vocab::families::recovery_sweeps_tool_call::SweptRow {
                 terminal_state: actual["lifecycle_state"]
                     .as_str()
                     .expect("recovered row has a lifecycle state")
                     .to_owned(),
                 measure_before: swept(first.tool_calls_recovered),
                 measure_after: swept(second.tool_calls_recovered),
+                cancel_cause: optional_text(&actual["cancel_cause"]),
+                tool_failure_class: optional_text(&actual["tool_failure_class"]),
             },
         );
     }
@@ -506,21 +506,18 @@ async fn generated_terminal_parent_cases_use_canonical_admission_owner() {
         )
         .await
         .unwrap();
-        if input.parent_state == "interrupted" {
-            assert_eq!(actual["cancel_cause"], "interrupted", "{name}");
-            assert!(actual["tool_failure_class"].is_null(), "{name}");
-        } else {
-            assert_eq!(actual["tool_failure_class"], "external", "{name}");
-        }
+        assert_eq!(actual["request_doc_id"], request_doc, "{name}");
         teardown(admission).await;
         case.check(
-            gents_lean_vocab::families::recovery_sweeps_terminal_parent::Swept {
+            gents_lean_vocab::families::recovery_sweeps_terminal_parent::SweptRow {
                 terminal_state: actual["lifecycle_state"]
                     .as_str()
                     .expect("recovered row has a lifecycle state")
                     .to_owned(),
                 measure_before: swept(first.tool_calls_terminalized),
                 measure_after: swept(second.tool_calls_terminalized),
+                cancel_cause: optional_text(&actual["cancel_cause"]),
+                tool_failure_class: optional_text(&actual["tool_failure_class"]),
             },
         );
     }

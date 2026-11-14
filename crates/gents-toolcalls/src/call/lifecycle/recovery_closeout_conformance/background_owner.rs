@@ -132,7 +132,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             gents_session::exec::ownership::ProcessObservation::Running,
             "{name}: the registered worker keeps its process"
         );
-        let left_state = super::lifecycle_state(&tool.access().unwrap(), &tool_doc_id).await;
+        let left_row = super::recovered_row(&tool.access().unwrap(), &tool_doc_id).await;
         let left_again = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &node,
             &node_did,
@@ -149,10 +149,12 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         )
         .await;
         left_to_worker.push((
-            left_state,
+            left_row.lifecycle_state,
             super::swept(report.tool_calls_terminalized),
             super::swept(left_again.tool_calls_terminalized),
             super::notice_reason(&left_notifications),
+            left_row.cancel_cause,
+            left_row.tool_failure_class,
         ));
 
         if session_stopped {
@@ -263,24 +265,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 },
             );
         }
-        let escaped = gents_store::graphql::escape_graphql_string(&tool_doc_id);
-        let response = tool
-            .access()
-            .unwrap()
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state cancel_cause }} }}"#
-            ))
-            .await
-            .unwrap();
-        let row = &response["data"]["AgentToolCall"][0];
-        assert_eq!(
-            row["cancel_cause"],
-            if session_stopped {
-                "userCancelled"
-            } else {
-                "interrupted"
-            }
-        );
+        let row = super::recovered_row(&tool.access().unwrap(), &tool_doc_id).await;
         let (notifications, _) = completion_obligations(
             &tool.access().unwrap(),
             &session_id,
@@ -290,13 +275,12 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         .await;
         settled.push((
             session_stopped,
-            row["lifecycle_state"]
-                .as_str()
-                .expect("the tool row has a lifecycle state")
-                .to_owned(),
+            row.lifecycle_state,
             super::swept(report.tool_calls_terminalized),
             super::swept(again.tool_calls_terminalized),
             super::notice_reason(&notifications),
+            row.cancel_cause,
+            row.tool_failure_class,
         ));
         node.shutdown().await.expect("shut down test node");
     }
@@ -306,23 +290,31 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
     );
     for case in gents_lean_vocab::families::recovery_sweeps_orphan_live_worker::cases() {
         let input = &case.input;
-        let (terminal_state, measure_before, measure_after, notification_reason) =
-            if input.owner_task_deleted || input.owner_session_stopped {
-                let (_, state, before, after, reason) = settled
-                    .iter()
-                    .find(|observed| observed.0 == input.owner_session_stopped)
-                    .cloned()
-                    .expect("a fixture settles each owner stop");
-                (state, before, after, reason)
-            } else {
-                left_to_worker[0].clone()
-            };
+        let (
+            terminal_state,
+            measure_before,
+            measure_after,
+            notification_reason,
+            cancel_cause,
+            tool_failure_class,
+        ) = if input.owner_task_deleted || input.owner_session_stopped {
+            let (_, state, before, after, reason, cancel, failure) = settled
+                .iter()
+                .find(|observed| observed.0 == input.owner_session_stopped)
+                .cloned()
+                .expect("a fixture settles each owner stop");
+            (state, before, after, reason, cancel, failure)
+        } else {
+            left_to_worker[0].clone()
+        };
         case.check(
             gents_lean_vocab::families::recovery_sweeps_orphan_live_worker::OrphanSettled {
                 terminal_state,
                 measure_before,
                 measure_after,
                 notification_reason,
+                cancel_cause,
+                tool_failure_class,
             },
         );
     }

@@ -96,21 +96,39 @@ pub(super) fn notice_reason(notifications: &[String]) -> Option<String> {
     }
 }
 
+pub(super) struct RecoveredRow {
+    pub(super) lifecycle_state: String,
+    pub(super) cancel_cause: Option<String>,
+    pub(super) tool_failure_class: Option<String>,
+}
+
+pub(super) async fn recovered_row(
+    access: &gents_store::config_client::ConfigAccess,
+    tool_doc_id: &str,
+) -> RecoveredRow {
+    let escaped = gents_store::graphql::escape_graphql_string(tool_doc_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state cancel_cause tool_failure_class }} }}"#
+        ))
+        .await
+        .unwrap();
+    let row = &response["data"]["AgentToolCall"][0];
+    RecoveredRow {
+        lifecycle_state: row["lifecycle_state"]
+            .as_str()
+            .expect("the tool row has a lifecycle state")
+            .to_owned(),
+        cancel_cause: row["cancel_cause"].as_str().map(str::to_owned),
+        tool_failure_class: row["tool_failure_class"].as_str().map(str::to_owned),
+    }
+}
+
 async fn lifecycle_state(
     access: &gents_store::config_client::ConfigAccess,
     tool_doc_id: &str,
 ) -> String {
-    let escaped = gents_store::graphql::escape_graphql_string(tool_doc_id);
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
-        ))
-        .await
-        .unwrap();
-    response["data"]["AgentToolCall"][0]["lifecycle_state"]
-        .as_str()
-        .expect("the tool row has a lifecycle state")
-        .to_owned()
+    recovered_row(access, tool_doc_id).await.lifecycle_state
 }
 
 #[cfg(unix)]
@@ -195,8 +213,11 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
             ))
             .await
             .unwrap();
-        let row = &response["data"]["AgentToolCall"][0];
-        assert_eq!(row["status"], "completed", "{name}");
+        assert_eq!(
+            response["data"]["AgentToolCall"][0]["status"], "completed",
+            "{name}"
+        );
+        let row = recovered_row(&access, &tool_doc_id).await;
         let session_id = format!("session-{fixture_name}");
         let (notifications, wakes) = completion_obligations(
             &access,
@@ -222,13 +243,12 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
         case.check(
             gents_lean_vocab::families::recovery_sweeps_orphan_accepted::OrphanSettled {
-                terminal_state: row["lifecycle_state"]
-                    .as_str()
-                    .expect("the tool row has a lifecycle state")
-                    .to_owned(),
+                terminal_state: row.lifecycle_state,
                 measure_before: swept(first.tool_calls_terminalized),
                 measure_after: swept(second.tool_calls_terminalized),
                 notification_reason: notice_reason(&notifications),
+                cancel_cause: row.cancel_cause,
+                tool_failure_class: row.tool_failure_class,
             },
         );
     }
@@ -291,7 +311,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         )
         .await
         .unwrap();
-        let terminal_state = lifecycle_state(&access, &tool_doc_id).await;
+        let row = recovered_row(&access, &tool_doc_id).await;
         let second = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
             &admission.node_did,
@@ -315,10 +335,12 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         std::fs::remove_dir_all(admission.path).expect("remove exact recovery fixture");
         case.check(
             gents_lean_vocab::families::recovery_sweeps_orphan_missing_parent::OrphanSettled {
-                terminal_state,
+                terminal_state: row.lifecycle_state,
                 measure_before: swept(first.tool_calls_terminalized),
                 measure_after: swept(second.tool_calls_terminalized),
                 notification_reason: notice_reason(&notifications),
+                cancel_cause: row.cancel_cause,
+                tool_failure_class: row.tool_failure_class,
             },
         );
     }

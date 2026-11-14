@@ -15,6 +15,17 @@ structure Swept where
   measureAfter : Nat
   deriving ToJson
 
+structure SweptRow where
+  terminalState : String
+  measureBefore : Nat
+  measureAfter : Nat
+  cancelCause : Option String
+  toolFailureClass : Option String
+  deriving ToJson
+
+def SweptRow.swept (row : SweptRow) : Swept :=
+  ⟨row.terminalState, row.measureBefore, row.measureAfter⟩
+
 def sweptDecreasesOrDefers (preState : String) (swept : Swept) : Bool :=
   swept.measureAfter == 0 &&
     (decide (swept.measureBefore > swept.measureAfter) ||
@@ -112,7 +123,7 @@ def toolCallOf (i : ToolCallInput) : ToolCallRecoveryRow :=
     ((toolCauseOf i.cause).getD .deadlineExceeded)
 
 @[conformance_family]
-def toolCall : Family ToolCallInput Swept where
+def toolCall : Family ToolCallInput SweptRow where
   inputs := toolCallRows.map fun (name, row) =>
     { name, preState := row.call.state.toDefraDB, awaitMode := row.call.awaitMode.toDefraDB
       cause := row.cause.toContract }
@@ -120,7 +131,9 @@ def toolCall : Family ToolCallInput Swept where
     let row := toolCallOf i
     { terminalState := (toolCallRecover row).call.state.toDefraDB
       measureBefore := toolCallRecoveryMeasure .native row
-      measureAfter := toolCallRecoveryMeasure .native (toolCallRecover row) }
+      measureAfter := toolCallRecoveryMeasure .native (toolCallRecover row)
+      cancelCause := sweptCancelCause (some row.cause)
+      toolFailureClass := sweptFailureClass (some row.cause) }
 
 structure TerminalParentInput where
   name : String
@@ -138,7 +151,7 @@ def terminalParentRows : List (String × RequestState) :=
   , ("live_running_tool_parent_terminal_to_failed", .completed) ]
 
 @[conformance_family]
-def terminalParent : Family TerminalParentInput Swept where
+def terminalParent : Family TerminalParentInput SweptRow where
   inputs := terminalParentRows.map fun (name, parent) =>
     { name, preState := (terminalParentRow parent).call.state.toDefraDB
       parentState := parent.toDefraDB }
@@ -146,7 +159,9 @@ def terminalParent : Family TerminalParentInput Swept where
     let row := terminalParentRow ((RequestState.fromDefraDB? i.parentState).getD .completed)
     { terminalState := (terminalParentToolRecover row).call.state.toDefraDB
       measureBefore := terminalParentToolMeasure row
-      measureAfter := terminalParentToolMeasure (terminalParentToolRecover row) }
+      measureAfter := terminalParentToolMeasure (terminalParentToolRecover row)
+      cancelCause := sweptCancelCause (sweptCause row)
+      toolFailureClass := sweptFailureClass (sweptCause row) }
 
 structure OrphanInput where
   name : String
@@ -170,6 +185,8 @@ structure OrphanSettled where
   measureBefore : Nat
   measureAfter : Nat
   notificationReason : Option String
+  cancelCause : Option String
+  toolFailureClass : Option String
   deriving ToJson
 
 def orphanRow
@@ -236,7 +253,9 @@ def orphanSettled (i : OrphanInput) : OrphanSettled :=
     measureBefore := orphanedBackgroundToolMeasure row
     measureAfter := orphanedBackgroundToolMeasure recovered
     notificationReason :=
-      (orphanedBackgroundToolCause row).bind ToolRecoveryCause.notificationReason }
+      (orphanedBackgroundToolCause row).bind ToolRecoveryCause.notificationReason
+    cancelCause := sweptCancelCause (orphanedBackgroundToolCause row)
+    toolFailureClass := sweptFailureClass (orphanedBackgroundToolCause row) }
 
 /-- The orphan classifier decides every unregistered background row whose
 parent resolves, including the still-running verdict no test host can
@@ -509,9 +528,9 @@ theorem orphan_families_cover_every_orphan_row :
 theorem sweeps_decrease_or_defer :
     request.inputs.all (fun i => sweptDecreasesOrDefers i.preState (request.model i)) &&
     inference.inputs.all (fun i => sweptDecreasesOrDefers i.preState (inference.model i)) &&
-    toolCall.inputs.all (fun i => sweptDecreasesOrDefers i.preState (toolCall.model i)) &&
+    toolCall.inputs.all (fun i => sweptDecreasesOrDefers i.preState (toolCall.model i).swept) &&
     terminalParent.inputs.all (fun i =>
-      sweptDecreasesOrDefers i.preState (terminalParent.model i)) &&
+      sweptDecreasesOrDefers i.preState (terminalParent.model i).swept) &&
     backgroundCompletion.inputs.all (fun i =>
       sweptDecreasesOrDefers i.preState (backgroundCompletion.model i)) &&
     taskHook.inputs.all (fun i => sweptDecreasesOrDefers i.preState (taskHook.model i)) &&
