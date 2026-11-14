@@ -219,6 +219,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   waits on the `pending_native` write-attempt event, a projection the attempt
   may skip once it holds a terminal outcome; `LostWakeup` drops permit
   semantics, the lost wakeup an enable-then-check wait avoids.
+- `GuestAllowance` — a computing plugin guest that never calls the host and
+  is stopped only by its compute allowance (Lean `allowanceTicks`), an epoch
+  deadline advanced by the WASM host's ticker thread. `MCGuestAllowance`
+  (the ticker advances the epoch by elapsed periods) holds;
+  `MCGuestAllowanceWakeCounted` (the shipped ticker, one increment per wake,
+  every wake late) fails `StopsAtAllowance` and `WakeCountedNotLost` shows
+  that stop is late, not lost; `Punctual` holds with on-time wakes;
+  `Unchecked` (no epoch checks in loops) never stops the guest;
+  `CancelLate` shows a cancel can find the guest already stopped.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
