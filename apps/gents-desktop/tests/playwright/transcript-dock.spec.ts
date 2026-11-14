@@ -35,13 +35,9 @@ async function widthsDuring(page: Page, act: () => Promise<void>) {
 
 const distinct = (values: number[]) => [...new Set(values)];
 
-test("opening and closing the dock lays the pane out once", async ({
+test("opening and closing the dock lays the pane out once @own-viewport", async ({
   page,
-}, testInfo) => {
-  test.skip(
-    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
-    "one layout per engine",
-  );
+}) => {
   await page.setViewportSize({ width: 1500, height: 900 });
   await gotoHarness(page, "mobile-performance");
   await page.locator('[data-testid="session-session-large"]').click();
@@ -61,13 +57,9 @@ test("opening and closing the dock lays the pane out once", async ({
   expect(distinct(closing.map((w) => w.dock).filter((w) => w > 0))).toHaveLength(1);
 });
 
-test("dragging the divider lays the pane out once, on release", async ({
+test("dragging the divider lays the pane out once, on release @own-viewport", async ({
   page,
-}, testInfo) => {
-  test.skip(
-    !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
-    "one layout per engine",
-  );
+}) => {
   await page.setViewportSize({ width: 1500, height: 900 });
   await gotoHarness(page, "mobile-performance");
   await page.locator('[data-testid="session-session-large"]').click();
@@ -168,7 +160,7 @@ for (const rest of ["remembered", "widest"] as const) {
   });
 }
 
-test("Show panel with nothing open shows the panels to open, and opens the one picked", async ({
+test("Show panel with nothing open shows the panels to open, and opens the one picked @own-viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1500, height: 900 });
@@ -197,7 +189,7 @@ test("Show panel with nothing open shows the panels to open, and opens the one p
   await expect(page.getByRole("menuitem", { name: "Show panel" })).toBeVisible();
 });
 
-test("the dock's + opens a panel that isn't open yet, and stays in view when tabs overflow", async ({
+test("the dock's + opens a panel that isn't open yet, and stays in view when tabs overflow @own-viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1500, height: 900 });
@@ -237,7 +229,7 @@ test("the dock's + opens a panel that isn't open yet, and stays in view when tab
   await expect(add).toHaveCount(0);
 });
 
-test("renaming keeps field focus, then the menu resumes native focus return", async ({
+test("renaming keeps field focus, then the menu resumes native focus return @own-viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1500, height: 900 });
@@ -272,7 +264,7 @@ test("renaming keeps field focus, then the menu resumes native focus return", as
   await expect(composer).toBeFocused();
 });
 
-test("the add-panel trigger stays fixed while its dock expands during a press", async ({
+test("the add-panel trigger stays fixed while its dock expands during a press @own-viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1500, height: 900 });

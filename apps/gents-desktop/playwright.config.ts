@@ -2,6 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
+import { OWN_VIEWPORT } from "./tests/playwright/ownViewport";
+
 const viteBin = join(
   dirname(createRequire(import.meta.url).resolve("vite/package.json")),
   "bin/vite.js",
@@ -48,6 +50,9 @@ export default defineConfig({
     },
     {
       name: "chromium-laptop",
+      /* a test that sets its own window size is the same test here as on
+         chromium-desktop (tests/playwright/ownViewport.ts) */
+      grepInvert: new RegExp(OWN_VIEWPORT),
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 800 },
@@ -68,6 +73,7 @@ export default defineConfig({
     },
     {
       name: "chromium-narrow",
+      grepInvert: new RegExp(OWN_VIEWPORT),
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 390, height: 844 },
