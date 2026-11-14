@@ -36,6 +36,20 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # A runner keeps its Cargo target tree between jobs only for pushes to main
+  # and pull requests from this repository's own branches. Fork pull requests
+  # and every other event build in a job-scoped tree, so build outputs,
+  # build-script outputs included, never cross into another trust domain's job.
+  # test-rust-build-space.py evaluates this condition per event.
+  GENTS_CI_KEEP_TARGET_TREE: >-
+    ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'pull_request' &&
+    github.event.pull_request.head.repo.full_name == github.repository) }}
+  # Per-runner kept-tree cap and host free-space floor in GiB: an integer, or a
+  # JSON object from runner name to integer with an optional "default" entry.
+  # Unset, ensure-rust-build-space.py applies its defaults.
+  GENTS_CI_TARGET_MAX_GIB: ${{ vars.GENTS_CI_TARGET_MAX_GIB }}
+  GENTS_CI_TARGET_FLOOR_GIB: ${{ vars.GENTS_CI_TARGET_FLOOR_GIB }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
@@ -159,9 +173,10 @@ jobs:
       fail-fast: false
       matrix:
         suite: ${{ fromJSON(inputs.rust_suite != '' && inputs.rust_suite != 'all' && format('["{0}"]', inputs.rust_suite) || '["runtime","support","desktop","cli"]') }}
-    # Each job starts from an empty RUNNER_TEMP target tree; the size-capped
-    # host sccache service supplies cached rlibs. Binaries, test harnesses,
-    # proc macros, and build scripts are not cacheable and relink every run.
+    # A trusted run keeps each runner's capped Cargo target tree between jobs,
+    # so it relinks only what its change touched; other runs start from an
+    # empty RUNNER_TEMP tree. The size-capped host sccache service supplies
+    # rlibs either way (setup-rust-build-cache.sh).
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
