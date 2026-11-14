@@ -41,6 +41,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   drops the cadence premise and loses an admission to back-to-back renewals;
   `StartWitness` reproduces the traced renewal/dispatch-start conflict that
   green absorbs.
+- `LeaseRenewalStarvation` — one request's execution lease, its owner and
+  its renewal task on the owner's runtime, beside the wall clock (#3704).
+  The claim starts the lease and the renewal task together; the renewal
+  polls every quarter lease and renews once half a lease remains; the
+  publication fence admits output only from the owning generation before
+  its deadline (Lean `RequestExecutionLease`). The owner also runs one
+  synchronous step that holds its runtime thread, the first Lean snapshot
+  read of a test. `SingleWriter` holds whatever the owner's runtime does
+  (`Fenced`); `OwnerPublishes` and `LeaseHeld` hold when the step runs
+  before the claim (green), off the runtime (`OffRuntime`) or for less than
+  half a lease (`BoundedSync`). RED: `SyncInsideLease` is the failing test's
+  order and breaks `OwnerPublishes`; `MarginSpent` spends half a lease and
+  breaks `LeaseHeld`; `Unfenced` drops the deadline check and breaks
+  `SingleWriter`.
 - `ClientSubmissionContention` — a User's optimistic chat send (Lean
   `ClientOptimisticSend`) racing writes to the documents it reads. The client
   picks the request identity, shows the message pending, keeps its payload
@@ -320,6 +334,20 @@ with only running children writing, `RenewalBudget` violates
 ./scripts/run-tlc.sh MCBackgroundAdmissionContentionStartWitness
 ```
 
+For LeaseRenewalStarvation — the green model (the synchronous step before
+the claim) and the `BoundedSync`, `OffRuntime` and `Fenced` models check
+clean; the three diagnostics are EXPECTED to report the violation named in
+their config:
+```bash
+./scripts/run-tlc.sh MCLeaseRenewalStarvation
+./scripts/run-tlc.sh MCLeaseRenewalStarvationBoundedSync
+./scripts/run-tlc.sh MCLeaseRenewalStarvationOffRuntime
+./scripts/run-tlc.sh MCLeaseRenewalStarvationFenced
+./scripts/run-tlc.sh MCLeaseRenewalStarvationSyncInsideLease
+./scripts/run-tlc.sh MCLeaseRenewalStarvationMarginSpent
+./scripts/run-tlc.sh MCLeaseRenewalStarvationUnfenced
+```
+
 For SessionHeadObservation — the green model (Lean order, head-seeded
 reader, claim and refusal paths, both random id orders) checks clean,
 including `ReplyObserved`:
@@ -512,6 +540,13 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCBackgroundAdmissionContentionUnspaced.cfg` | as green, `RenewalSpaced = FALSE` | `NoConflictLoss` intentionally VIOLATED: two back-to-back renewals and two children exhaust call 2's 4 receipt attempts | 33,653 distinct states before counterexample; 68,174 generated | 25 | <1s |
 | `MCBackgroundAdmissionContentionRenewalWitness.cfg` | green constants | `RenewalNeverLost` intentionally VIOLATED: admission bumps exhaust a renewal poll, which green's re-drive recovers | 286,417 distinct states before counterexample; 580,008 generated | 33 | 1s |
 | `MCBackgroundAdmissionContentionStartWitness.cfg` | green constants | `StartNeverConflicts` intentionally VIOLATED: a renewal commits while call 1's dispatch start is open, the traced conflict | 46 distinct states before counterexample; 94 generated | 7 | <1s |
+| `MCLeaseRenewalStarvation.cfg` | `Lease = 4`, `Horizon = 14`, `MaxSync = 8`, step before the claim, fenced | Passes `TypeOK`, `SingleWriter`, `OwnerPublishes`, `LeaseHeld` | 2,511 distinct states; 3,651 generated | 33 | <1s (Linux x86_64, OpenJDK 17.0.21, 4 workers) |
+| `MCLeaseRenewalStarvationBoundedSync.cfg` | as green, step inside the lease, `MaxSync = 1` | Passes the same; at `Lease = 8`, `Horizon = 20`, `MaxSync = 3` also passes | 2,001 distinct states; 3,010 generated | 33 | <1s |
+| `MCLeaseRenewalStarvationOffRuntime.cfg` | as green, step inside the lease, off the runtime | Passes the same | 3,939 distinct states; 7,635 generated | 33 | <1s |
+| `MCLeaseRenewalStarvationFenced.cfg` | as green, step inside the lease | Passes `TypeOK`, `SingleWriter` | 12,190 distinct states; 21,739 generated | 33 | <1s |
+| `MCLeaseRenewalStarvationSyncInsideLease.cfg` | as `Fenced` | `OwnerPublishes` intentionally VIOLATED: Claim, SyncStart, Tick past the deadline, SyncEnd, Publish rejected | 257 distinct states before counterexample; 306 generated | 11 | <1s |
+| `MCLeaseRenewalStarvationMarginSpent.cfg` | as `BoundedSync`, `MaxSync = 2` | `LeaseHeld` intentionally VIOLATED: Claim, Poll skips, SyncStart as the renewal comes due, Tick to the deadline, SyncEnd; at `Lease = 8`, `MaxSync = 4` also fails | 540 distinct states before counterexample; 704 generated | 14 | <1s |
+| `MCLeaseRenewalStarvationUnfenced.cfg` | as `Fenced`, `FenceDeadline = FALSE` | `SingleWriter` intentionally VIOLATED: the starved owner's publication after its deadline is accepted | 228 distinct states before counterexample; 275 generated | 11 | <1s |
 | `MCClientSubmissionContention.cfg` | `Publications = 3`, `Attempts = 4`, `Redrive`, `ReserveRedrive`, `LostReply`, `Refusals`, `MaxSends = 3`, no `RetryFreshId`, no `PayloadLost` | Passes `TypeOK`, `NoConflictLoss`, `CreatedOnce`, `RetainedUntilConfirmed`, `FailedOffersRetry`, `PendingResolves`, `EverySendSettles` | 33,960 distinct states; 219,232 generated | 23 | 3s (OpenJDK 25, 4 workers) |
 | `MCClientSubmissionContentionSingleAttempt.cfg` | `Publications = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Compose, ReserveCommit, AgentPublish, SubmitCommit | 36 distinct states; 58 generated | 8 | <1s |
 | `MCClientSubmissionContentionReserveSingleAttempt.cfg` | `Publications = 1`, `ReserveRedrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Compose, AgentPublish, ReserveCommit | 36 distinct states; 58 generated | 8 | <1s |
