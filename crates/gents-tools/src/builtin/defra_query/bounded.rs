@@ -744,24 +744,12 @@ mod tests {
 
     #[tokio::test]
     async fn signer_reads_follow_the_document_signer_model() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_collection("type SignedNote { label: String step: Int }")
-            .await
-            .unwrap();
-        let reader = gents_store::test_support::test_identity("signer-reader");
-        let other = gents_store::test_support::test_identity("signer-other");
-        let reader_did = gents_store::identity::NodeIdentity::did(&reader).to_owned();
-        let other_did = gents_store::identity::NodeIdentity::did(&other).to_owned();
-        let access_for = |writer: &str| match writer {
-            "reader" => {
-                ConfigAccess::local_as(node.clone(), ::identity::Did::new(&reader_did).unwrap())
-            }
-            "other" => {
-                ConfigAccess::local_as(node.clone(), ::identity::Did::new(&other_did).unwrap())
-            }
-            "unsigned" => ConfigAccess::local(node.clone()),
-            other => panic!("unknown writer {other}"),
-        };
+        let mut store = crate::test_support::MixedSigningStore::new(
+            "type SignedNote { label: String step: Int }",
+        )
+        .await;
+        let reader_did = store.agent_did(0);
+        let other_did = store.agent_did(1);
         let histories = [
             ("unsigned", vec!["unsigned"]),
             ("by_reader", vec!["reader"]),
@@ -771,31 +759,42 @@ mod tests {
             ("other_then_reader", vec!["other", "reader"]),
             ("reader_then_unsigned", vec!["reader", "unsigned"]),
         ];
-        for (label, writers) in &histories {
-            let mut doc_id = None::<String>;
-            for (step, writer) in writers.iter().enumerate() {
-                let mutation = match &doc_id {
-                    None => format!(
-                        r#"mutation {{ add_SignedNote(input: {{label: "{label}", step: {step}}}) {{ _docID }} }}"#
-                    ),
-                    Some(id) => format!(
-                        r#"mutation {{ update_SignedNote(filter: {{_docID: {{_eq: "{id}"}}}}, input: {{step: {step}}}) {{ _docID }} }}"#
-                    ),
-                };
-                let response = access_for(writer)
-                    .transact_write("test.signed_note", |txn| {
-                        let mutation = &mutation;
-                        Box::pin(async move { txn.execute(mutation).await })
-                    })
-                    .await
-                    .unwrap();
-                doc_id.get_or_insert_with(|| {
-                    gents_store::graphql::created_doc_id(&response, "SignedNote")
-                        .unwrap()
-                        .to_owned()
-                });
+        let mut written = vec![(0, None::<String>); histories.len()];
+        let mut signing = false;
+        while written
+            .iter()
+            .zip(&histories)
+            .any(|((step, _), (_, writers))| *step < writers.len())
+        {
+            store.reopen(signing).await;
+            for ((step, doc_id), (label, writers)) in written.iter_mut().zip(&histories) {
+                while let Some(writer) = writers.get(*step) {
+                    let access = match (*writer, signing) {
+                        ("reader", true) => store.agent_access(0),
+                        ("other", true) => store.agent_access(1),
+                        ("unsigned", false) => store.unsigned_access(),
+                        _ => break,
+                    };
+                    let mutation = match &doc_id {
+                        None => format!(
+                            r#"mutation {{ add_SignedNote(input: {{label: "{label}", step: {step}}}) {{ _docID }} }}"#
+                        ),
+                        Some(id) => format!(
+                            r#"mutation {{ update_SignedNote(filter: {{_docID: {{_eq: "{id}"}}}}, input: {{step: {step}}}) {{ _docID }} }}"#
+                        ),
+                    };
+                    let response = access.write("test.signed_note", &mutation).await.unwrap();
+                    doc_id.get_or_insert_with(|| {
+                        gents_store::graphql::created_doc_id(&response, "SignedNote")
+                            .unwrap()
+                            .to_owned()
+                    });
+                    *step += 1;
+                }
             }
+            signing = !signing;
         }
+        let node = store.node().clone();
         let tool = BoundedQueryTool::new(
             ConfigAccess::local(node.clone()),
             QueryToolDecl {
@@ -851,7 +850,7 @@ mod tests {
                 signer,
             });
         }
-        node.shutdown().await.expect("shut down test node");
+        store.shutdown().await;
     }
 
     #[test]

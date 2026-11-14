@@ -9,7 +9,10 @@ namespace DocumentSigner
 /-- The name a surface lists; no create may write it. -/
 def reservedField : String := "_signer"
 
-/-- Who signed one commit, as the store's signature header names it. -/
+/-- Who signed one commit, as the store's signature header names it. A commit
+is one composite block: DefraDB writes one per create or update and signs it
+with the writer's key, while an update's field blocks carry no signature, so
+only composite blocks name the writer. -/
 inductive Commit where
   | unsigned
   | reader

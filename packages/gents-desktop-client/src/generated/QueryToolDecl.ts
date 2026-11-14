@@ -8,5 +8,10 @@ import type { WriteToolField } from "./WriteToolField.js";
 export type QueryToolDecl = { tool_name: string, collection: string, description?: string,
 /**
  * Projection allowlist; omit `fields` at call time to return all of these.
+ * `_signer` is the DID that signed every commit of the document, or null.
  */
-fields?: Array<string>, filter_fields?: Array<WriteToolField>, };
+fields?: Array<string>,
+/**
+ * Exact-match filters; `_signer` keeps documents that DID signed.
+ */
+filter_fields?: Array<WriteToolField>, };

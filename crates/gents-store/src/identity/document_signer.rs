@@ -1,8 +1,10 @@
 use rapidhash::{HashMapExt, RapidHashMap};
-use serde_json::Value;
 
 use crate::config_client::{ConfigClientError, ConfigRead};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{
+    composite_commits_at, escape_graphql_string, CommitSignature, CompositeCommit,
+    GraphqlResponseError,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentSignerError {
@@ -12,13 +14,20 @@ pub enum DocumentSignerError {
         #[source]
         source: ConfigClientError,
     },
+    #[error("decoding the commit history of document {doc_id}")]
+    Decode {
+        doc_id: String,
+        #[source]
+        source: GraphqlResponseError,
+    },
     #[error("the store returned no commit history for document {doc_id}")]
     MissingHistory { doc_id: String },
 }
 
-/// The DID that signed every commit of each document, read from the
-/// commits' signature headers. A document with an unsigned commit, a
-/// signature naming no key, or commits from two identities maps to `None`.
+/// The DID that signed every composite commit (each create and update) of
+/// each document, read from the commits' signature headers. A document with
+/// an unsigned composite commit, a signature naming no key, or composite
+/// commits from two identities maps to `None`.
 pub async fn document_signers(
     reader: &dyn ConfigRead,
     doc_ids: &[&str],
@@ -32,7 +41,7 @@ pub async fn document_signers(
         .enumerate()
         .map(|(index, doc_id)| {
             format!(
-                r#"d{index}: _commits(docID: "{}") {{ signature {{ identity type }} }}"#,
+                r#"d{index}: _commits(docID: "{}") {{ cid height fieldName signature {{ identity type }} }}"#,
                 escape_graphql_string(doc_id)
             )
         })
@@ -46,36 +55,43 @@ pub async fn document_signers(
             source,
         })?;
     for (index, doc_id) in doc_ids.iter().enumerate() {
-        let commits = response["data"][format!("d{index}")]
-            .as_array()
-            .filter(|commits| !commits.is_empty())
-            .ok_or_else(|| DocumentSignerError::MissingHistory {
-                doc_id: (*doc_id).to_owned(),
+        let field = format!("d{index}");
+        let commits =
+            composite_commits_at(response["data"].get(&field), &field).map_err(|source| {
+                DocumentSignerError::Decode {
+                    doc_id: (*doc_id).to_owned(),
+                    source,
+                }
             })?;
-        signers.insert((*doc_id).to_owned(), sole_signer(commits));
+        if commits.is_empty() {
+            return Err(DocumentSignerError::MissingHistory {
+                doc_id: (*doc_id).to_owned(),
+            });
+        }
+        signers.insert((*doc_id).to_owned(), sole_signer(&commits));
     }
     Ok(signers)
 }
 
-fn sole_signer(commits: &[Value]) -> Option<String> {
+fn sole_signer(commits: &[CompositeCommit]) -> Option<String> {
     let mut signers = commits
         .iter()
-        .map(|commit| commit_signer(&commit["signature"]));
+        .map(|commit| commit.signature.as_ref().and_then(commit_signer));
     let first = signers.next()??;
     signers
         .all(|signer| signer.as_deref() == Some(first.as_str()))
         .then_some(first)
 }
 
-fn commit_signer(signature: &Value) -> Option<String> {
-    let key_type = match signature["type"].as_str()? {
+fn commit_signer(signature: &CommitSignature) -> Option<String> {
+    let key_type = match signature.signature_type.as_str() {
         "ES256K" => crypto::KeyType::Secp256k1,
         "ES256" => crypto::KeyType::Secp256r1,
         "EdDSA" => crypto::KeyType::Ed25519,
         "BLS_AUG_V1" => crypto::KeyType::Bls12381,
         _ => return None,
     };
-    crypto::public_key_from_string(key_type, signature["identity"].as_str()?)
+    crypto::public_key_from_string(key_type, &signature.identity)
         .ok()?
         .did()
         .ok()
