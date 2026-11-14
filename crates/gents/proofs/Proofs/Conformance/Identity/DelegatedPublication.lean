@@ -110,10 +110,11 @@ structure RecoveryOutput where
   targetRead : Bool
   deriving ToJson
 
-/-- The served recovery fixture publishes a signed delegated request whose
-session carries no creation receipt for it, so recovery finds no exact
-receipt. -/
-def recoveryNames : List String := ["wrong-receipt"]
+/-- The served recovery fixture publishes a parent-signed delegated request
+whose session carries no creation receipt for it, so the creator's recovery
+finds no exact receipt; for a foreign owner the node owner writes that signed
+request and the parent asks the publication owner to complete it. -/
+def recoveryNames : List String := ["wrong-receipt", "wrong-owner"]
 
 @[conformance_family]
 def recoveryReceipt : Family CaseInput RecoveryOutput where
@@ -226,17 +227,15 @@ private def observation (c : Case) : Observation :=
     otherUserAdmin := Identity.Household.allowed 5 s.household "other-user" "sessions" b.sessionDoc "delete"
     claim := claimOf c }
 
-/-- model-production-gap: no production path reaches six cases.
+/-- model-production-gap: no production path reaches five cases.
 `wrong-physical-session` and `wrong-physical-agent`: the `agent_new` commit
 binds the physical session and Agent documents and then signs in the same
 transaction, so no signature names other documents. `missing-creation-receipt`:
 the receipt is issued in that transaction after the opening it needs is staged,
-signed and starter-verified there. `wrong-owner`: the creator is the native
-owner of the documents its transaction creates. `partial-grants` and
-`partial-then-recover`: each relation set is staged atomically with its
-pending marker.
+signed and starter-verified there. `partial-grants` and `partial-then-recover`:
+each relation set is staged atomically with its pending marker.
 
-Model and production disagree on two cases. `invoke-denied`: the model commits
+Model and production disagree on four cases. `invoke-denied`: the model commits
 without the parent's invoke grant (`commit`,
 Proofs/Session/Identity/DelegatedPublication.lean:58) and denies only at claim
 (`claim`, line 131); production's `agent_new` transaction refuses the commit
@@ -246,20 +245,21 @@ Agent revoke its session's parent relation
 (Proofs/Session/Identity/DelegatedPublicationCases.lean:38); production refuses
 the parent Agent's `delete_resource_relationship`
 (crates/gents-store/src/config_client/relationships.rs:147) with NotAuthorized
-get-collection.
-
-Model and production also disagree on the claim's native commit conflict
-(`invoke-revoked-at-commit`, `marker-commit-conflict`,
-`same-agent-marker-conflict`). The model's claim ends in `conflict` when its
-native commit conflicts (`claim`, Proofs/Session/Identity/DelegatedPublication.lean:126,
-through `decideClaim`). Production claims in `transact_write`
+get-collection. `invoke-revoked-at-commit` and `same-agent-marker-conflict`:
+the model's claim ends in `conflict` when its native commit conflicts (`claim`,
+line 126); production claims in `transact_write`
 (crates/gents-session/src/request/lifecycle/claim.rs:273), whose ConflictRetry
 mode (crates/gents-store/src/config_client/txn/transact_entry.rs:106) reruns a
-conflicted attempt, so the observable result is the rerun's decision. Holding
+conflicted attempt, so the observable result is the rerun's decision; holding
 the claim at its commit boundary while the User revoked the parent's
-`session_writer` gave a denied claim; holding it while the author rewrote both
-markers complete gave a committed claim (whether that rewrite raised a native
-conflict was not established). -/
+`session_writer` gave a denied claim.
+
+`marker-commit-conflict` is inconclusive: holding the claim at its commit
+boundary while the author rewrote both markers complete gave a committed claim,
+but no native conflict was shown, so neither the retry nor a missing conflict
+is established. The safety direction, a marker reset to pending between the
+claim's check and its commit, is untested; whether that claim must fail is a
+question for the maintainer. -/
 @[conformance_family]
 def unreached : Family CaseInput Observation where
   inputs := (cases.filter fun c =>
