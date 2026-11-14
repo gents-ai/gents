@@ -1,12 +1,27 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use super::{default_data_dir, HomeError, Result, RUNTIME_STARTUP_LOCK_FILE_NAME};
 
+/// The lock file holds the holder's pid on its first line. A holder that
+/// begins to stop appends [`RELEASING`] before it releases anything, and never
+/// withdraws it, so an opener that finds the lock held reads whether the
+/// holder is in the act of shutting down (Lean `StoreHandoff`). The append is
+/// one small write: a concurrent reader sees none of it (the holder still
+/// serves at that read) or a prefix of it, and any byte after the pid line
+/// counts as the declaration.
+const RELEASING: &[u8] = b"releasing\n";
+
+/// Fields drop in order: the OS lock is released before the release notice
+/// fires, so a notified waiter always finds the lock free.
 #[derive(Debug)]
 pub struct StoreLock {
-    _lock: crate::local::file_lock::FileLock,
+    lock: crate::local::file_lock::FileLock,
     path: PathBuf,
+    releasing: AtomicBool,
+    released: tokio::sync::watch::Sender<()>,
 }
 
 impl StoreLock {
@@ -14,10 +29,110 @@ impl StoreLock {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Declares in the lock file that this holder has begun to stop, so a
+    /// process that opens the store meanwhile waits for its release instead
+    /// of being refused. Call it before the shutdown that ends in the release.
+    pub fn declare_releasing(&self) -> std::io::Result<()> {
+        use std::io::Write as _;
+        if self.releasing.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        // The holder's own cursor stands after its pid line.
+        let mut file = self.lock.file();
+        file.write_all(RELEASING)?;
+        file.flush()
+    }
+
+    /// Resolves once this lock has been released, wherever its last owner
+    /// drops it.
+    pub fn release_notice(&self) -> StoreRelease {
+        StoreRelease(self.released.subscribe())
+    }
+}
+
+/// A holder's stop, retire or quit is acknowledged only after this resolves
+/// (Lean `ClientInstallation.acknowledgement_requires_closed_store`).
+#[derive(Debug)]
+pub struct StoreRelease(tokio::sync::watch::Receiver<()>);
+
+impl StoreRelease {
+    pub async fn released(mut self) {
+        // The sender never sends: `changed` returns only when it drops.
+        while self.0.changed().await.is_ok() {}
+    }
 }
 
 pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
     lock_store_with_wait(home_dir, data_dir, false)
+}
+
+/// What a try of the store lock decides (Lean `StoreHandoff.decide`).
+#[derive(Debug)]
+pub enum StoreAttempt {
+    Acquired(StoreLock),
+    /// The holder declared that it is releasing.
+    Wait(StoreLockHeld),
+    Refused(StoreLockHeld),
+}
+
+pub fn try_store(home_dir: &Path, data_dir: &Path) -> Result<StoreAttempt> {
+    match lock_store(home_dir, data_dir) {
+        Ok(lock) => Ok(StoreAttempt::Acquired(lock)),
+        Err(HomeError::LockHeld(held)) if held.releasing => Ok(StoreAttempt::Wait(held)),
+        Err(HomeError::LockHeld(held)) => Ok(StoreAttempt::Refused(held)),
+        Err(error) => Err(error),
+    }
+}
+
+/// Opens the store for a process that may start while its previous holder is
+/// still shutting down. A serving holder is refused at once with its pid and
+/// how to stop it. A holder that declared its release is awaited on the OS
+/// lock itself, for at most `release_wait`, the opening operation's own
+/// deadline; past it the holder is reported as still releasing. The wait runs
+/// on a dedicated OS thread (see [`wait_for_store_release`]): an abandoned
+/// wait drops the lock it later acquires.
+pub async fn acquire_store(
+    home_dir: &Path,
+    data_dir: &Path,
+    release_wait: Duration,
+) -> Result<StoreLock> {
+    match try_store(home_dir, data_dir)? {
+        StoreAttempt::Acquired(lock) => Ok(lock),
+        StoreAttempt::Refused(held) => Err(HomeError::LockHeld(held)),
+        StoreAttempt::Wait(held) => {
+            tracing::info!(
+                home = %home_dir.display(),
+                holder_pid = held.holder_pid,
+                "waiting for the store's previous holder to release it"
+            );
+            let (receive, worker) = start_store_acquire_waiter(home_dir, data_dir)?;
+            drop(worker);
+            match tokio::time::timeout(release_wait, receive).await {
+                Ok(acquired) => acquired.map_err(HomeError::ReleaseWaiterStopped)?,
+                Err(_) => Err(HomeError::LockHeld(held)),
+            }
+        }
+    }
+}
+
+fn start_store_acquire_waiter(
+    home_dir: &Path,
+    data_dir: &Path,
+) -> Result<(
+    tokio::sync::oneshot::Receiver<Result<StoreLock>>,
+    std::thread::JoinHandle<()>,
+)> {
+    let home_dir = home_dir.to_path_buf();
+    let data_dir = data_dir.to_path_buf();
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let worker = std::thread::Builder::new()
+        .name("gents-store-acquire-wait".into())
+        .spawn(move || {
+            let _ = send.send(lock_store_with_wait(&home_dir, &data_dir, true));
+        })
+        .map_err(HomeError::StartReleaseWaiter)?;
+    Ok((receive, worker))
 }
 
 /// Wait for the current store owner to release its OS lock, then release the
@@ -101,6 +216,9 @@ pub fn lock_store_at(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
 pub struct StoreLockHeld {
     pub home: PathBuf,
     pub holder_pid: Option<u32>,
+    /// The holder declared that it is stopping; reported only once the
+    /// opener's own deadline passed while it waited for the release.
+    pub releasing: bool,
 }
 
 impl std::fmt::Display for StoreLockHeld {
@@ -110,6 +228,12 @@ impl std::fmt::Display for StoreLockHeld {
             .map(|pid| format!(" (process {pid})"))
             .unwrap_or_default();
         let home = self.home.display();
+        if self.releasing {
+            return write!(
+                f,
+                "the Gents runtime{holder} that was using {home} is still shutting down and has not released it. Try again once that process has exited; if it does not exit, stop it: `gents runtime service stop --home {home}` if it runs as the background service"
+            );
+        }
         write!(
             f,
             "another Gents runtime{holder} is already using {home}. Stop it first: `gents runtime service stop --home {home}` if it runs as the background service, or Ctrl-C in the terminal running `gents runtime server`"
@@ -135,11 +259,18 @@ fn lock_path_with_wait(home_dir: &Path, path: PathBuf, wait: bool) -> Result<Sto
         match file.try_lock() {
             Ok(()) => {}
             Err(fs::TryLockError::WouldBlock) => {
-                let mut holder = String::new();
-                let _ = (&mut file).take(32).read_to_string(&mut holder);
+                let mut declared = Vec::new();
+                let _ = (&mut file).take(64).read_to_end(&mut declared);
+                let (pid, releasing) = match declared.iter().position(|byte| *byte == b'\n') {
+                    Some(end) => (&declared[..end], end + 1 < declared.len()),
+                    None => (&declared[..], false),
+                };
                 return Err(HomeError::LockHeld(StoreLockHeld {
                     home: home_dir.to_path_buf(),
-                    holder_pid: holder.trim().parse::<u32>().ok(),
+                    holder_pid: std::str::from_utf8(pid)
+                        .ok()
+                        .and_then(|pid| pid.trim().parse::<u32>().ok()),
+                    releasing,
                 }));
             }
             Err(fs::TryLockError::Error(source)) => {
@@ -151,8 +282,10 @@ fn lock_path_with_wait(home_dir: &Path, path: PathBuf, wait: bool) -> Result<Sto
     file.rewind()?;
     writeln!(file, "{}", std::process::id())?;
     Ok(StoreLock {
-        _lock: crate::local::file_lock::FileLock::adopt(file),
+        lock: crate::local::file_lock::FileLock::adopt(file),
         path,
+        releasing: AtomicBool::new(false),
+        released: tokio::sync::watch::Sender::new(()),
     })
 }
 

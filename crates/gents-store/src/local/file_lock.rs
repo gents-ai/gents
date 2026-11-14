@@ -35,6 +35,10 @@ impl FileLock {
     pub fn adopt(file: File) -> Self {
         Self(file)
     }
+
+    pub(crate) fn file(&self) -> &File {
+        &self.0
+    }
 }
 
 impl Drop for FileLock {
