@@ -1396,10 +1396,28 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "logical_output_obligation_contracts_gate")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "completion_retry_cases"
-      "completionRetry"
-      "Retry policy and canonical-execution composition are executable Lean witnesses. The native owned loop must still implement retraction-before-retry and immutable acceptance before this is consumer coverage.")
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_pre_stream")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_mid_stream")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_no_visible_output")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_origin_class")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "completion_retry_contracts_retraction_unreached"
+      "model-production-gap: production has no API to attempt these retry-machine actions: a schedule before a durable retraction, an uncommitted retraction, a failure or a schedule after acceptance, and an accepted-tool-failure observation on the retry machine.")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "completion_retry_contracts_loop_witness")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "Proofs.Conformance.FleetSlotAccounting"
@@ -1497,10 +1515,9 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_managed_exec_liveness_tool")
       "managed-exec" [Surface.agentFacing]
-  , tagged (followUpCoverage
-      "managed_exec_tool_boundary_cases"
-      "ManagedExecToolBoundaryCases"
-      "Drive each generated native-tool route through its actual managed process boundary. Names and processTree flags are not evidence of runtime routing.")
+  , tagged (consumerCoverage
+      "family"
+      "managed_exec_tool_route")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage "family" "pairing_reconcile_supervisor_shutdown_race")
       "pairing-reconcile" [Surface.runtimeInternal]
