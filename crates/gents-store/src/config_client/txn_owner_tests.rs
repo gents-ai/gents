@@ -256,7 +256,7 @@ async fn fill_write_gate(
 
 #[derive(Clone, Default)]
 struct EventCapture {
-    events: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
+    events: CapturedEvents,
 }
 
 #[derive(Default)]
@@ -298,15 +298,41 @@ where
     }
 }
 
+type CapturedEvents = Arc<Mutex<Vec<BTreeMap<String, String>>>>;
+
+fn write_attempt_capture() -> (CapturedEvents, tracing::Dispatch) {
+    crate::test_support::enable_scoped_event_capture();
+    let telemetry = EventCapture::default();
+    let events = Arc::clone(&telemetry.events);
+    (
+        events,
+        tracing::Dispatch::new(Registry::default().with(telemetry)),
+    )
+}
+
+#[test]
+fn write_attempt_capture_sees_a_callsite_first_reached_on_an_unsubscribed_thread() {
+    fn emit() {
+        tracing::info!(target: WRITE_ATTEMPT_EVENT_TARGET, "probe");
+    }
+    let (events, subscriber) = write_attempt_capture();
+    let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
+
+    std::thread::spawn(emit)
+        .join()
+        .expect("unsubscribed thread reaches the callsite first");
+    emit();
+
+    assert_eq!(lock(&events).len(), 1);
+}
+
 #[tokio::test]
 async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection("type WriteTelemetryLevelProbe { value: String }")
         .await
         .unwrap();
-    let telemetry = EventCapture::default();
-    let events = Arc::clone(&telemetry.events);
-    let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let (events, subscriber) = write_attempt_capture();
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
     ConfigAccess::transact_local_write(&node, None, "test.clean_noop", |_| {
@@ -348,9 +374,7 @@ async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let gate = super::mutation_write_gate(&node);
     let held = fill_write_gate(&gate, "test.hold_auto_commit_gate").await;
-    let telemetry = EventCapture::default();
-    let events = Arc::clone(&telemetry.events);
-    let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let (events, subscriber) = write_attempt_capture();
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
     let result = tokio::time::timeout(
@@ -636,9 +660,7 @@ async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
     let tracker_for_begin = Arc::clone(&tracker);
     let begins = Arc::new(AtomicUsize::new(0));
     let begins_for_begin = Arc::clone(&begins);
-    let telemetry = EventCapture::default();
-    let events = Arc::clone(&telemetry.events);
-    let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let (events, subscriber) = write_attempt_capture();
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
     let mut transaction = Box::pin(super::transact_owned(
@@ -986,9 +1008,7 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let gate = super::mutation_write_gate(&node);
     let held = fill_write_gate(&gate, "test.cancel_before_begin").await;
-    let telemetry = EventCapture::default();
-    let events = Arc::clone(&telemetry.events);
-    let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let (events, subscriber) = write_attempt_capture();
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
     let mut transaction = Box::pin(ConfigAccess::transact_local_write(
         &node,
@@ -1132,9 +1152,7 @@ async fn nested_idempotent_write_does_not_replay_the_ownership_violation() {
     let outer_attempts_for_callback = Arc::clone(&outer_attempts);
     let inner_attempts_for_callback = Arc::clone(&inner_attempts);
     let node_for_callback = Arc::clone(&node);
-    let telemetry = EventCapture::default();
-    let events = Arc::clone(&telemetry.events);
-    let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let (events, subscriber) = write_attempt_capture();
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
 
     let error =
@@ -2473,9 +2491,7 @@ async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
         .add_collection("type AbortedTransactionProbe { value: String }")
         .await
         .unwrap();
-    let telemetry = EventCapture::default();
-    let events = Arc::clone(&telemetry.events);
-    let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
+    let (events, subscriber) = write_attempt_capture();
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
     let registered = Arc::new(Mutex::new(None));
     let registered_for_callback = Arc::clone(&registered);
