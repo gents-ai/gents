@@ -41,5 +41,4 @@ fn lean_executable_contracts_cover_initial_domains() {
             case.sweep_id
         );
     }
-    assert_eq!(lean_transcript_cases().len(), 11);
 }

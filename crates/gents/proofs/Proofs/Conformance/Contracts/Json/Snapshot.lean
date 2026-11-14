@@ -25,6 +25,7 @@ import Proofs.Conformance.SessionOrigin
 import Proofs.Conformance.MailboxContent
 import Proofs.Conformance.ManualRequest
 import Proofs.Conformance.PendingRejection
+import Proofs.Conformance.TranscriptCases
 import Proofs.Conformance.ManagedExecSpawn
 import Proofs.Conformance.PluginBind
 import Proofs.Conformance.OperatorProtection
@@ -440,9 +441,6 @@ def snapshotPluginCasesJson : String :=
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"transcript_conformance_cases\":"
-      ++ jsonArray
-        (transcriptConformanceCases.map transcriptCaseJson) ++ ","
 
 
 def snapshotJson : String :=

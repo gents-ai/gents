@@ -2844,14 +2844,18 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "contracts_interrupt_in_flight")
       "background-tools" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "transcript_conformance_cases"
-      "TranscriptConformanceCases"
-      "Native owners cover ordering, model-scripted parallel completion, pair closure, and abandonment. Full coverage needs transaction fault injection for lost-ack duplicate delivery replay and a permissive orphan-result publication owner.")
+  , tagged (consumerWithFollowUp
+      "family"
+      "transcript_cases_native_completion"
+      "Native owners cover ordering, model-scripted parallel completion and pair closure. Full coverage needs transaction fault injection for lost-ack duplicate delivery replay and a permissive orphan-result publication owner.")
       "transcript" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "transcript_conformance_cases"
-      "TranscriptConformanceCases")
+      "family"
+      "transcript_cases_native_abandon")
+      "transcript" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "transcript_cases_snapshot_projection")
       "transcript" [Surface.operatorUi]
   , tagged (consumerCoverage "family" "agent_identity_permission_decide")
       "identity-permission" [Surface.api]
