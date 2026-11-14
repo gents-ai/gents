@@ -196,12 +196,14 @@ impl LiveBridgeFixture {
             agent.shutdown().await?;
         }
 
+        self.remote_core.shutdown().await?;
+        self.desktop_core.shutdown().await?;
+
+        // The runtime's shutdown waits for in-flight HTTP requests, so the
+        // clients' subscriptions to it end first.
         if let Some(home) = &self.runtime_home {
             home.node.shutdown().await?;
         }
-
-        self.remote_core.shutdown().await?;
-        self.desktop_core.shutdown().await?;
         if std::env::var_os("GENTS_TAURI_LIVE_RETAIN_DATA").is_some() {
             if let Some(tempdir) = self.tempdir.lock().await.take() {
                 let retained = tempdir.keep();
@@ -605,7 +607,6 @@ mod tests {
 
     #[test]
     fn live_fixture_writes_skill_create_delete_to_runtime() -> Result<()> {
-        let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start(MODEL_NAME, "ok").await?;
             let fixture =
@@ -618,7 +619,6 @@ mod tests {
 
     #[test]
     fn live_fixture_desktop_chat_slash_skill_loads_on_node() -> Result<()> {
-        let _guard = live_fixture_test_lock();
         run_on_live_runtime(async {
             let mock = MockChatEndpoint::start_with_held_prompt(MODEL_NAME, "skill loaded").await?;
             let fixture =
@@ -889,13 +889,6 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    fn live_fixture_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .expect("live fixture test lock poisoned")
     }
 
     async fn bind_skill_to_agent_context(

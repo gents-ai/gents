@@ -111,8 +111,8 @@ async fn interrupt_routes_same_logical_id_to_the_explicit_runtime() {
         .unwrap();
     assert!(latch(core, first_did, "same-id").await.is_none());
     assert!(latch(core, second_did, "same-id").await.is_some());
-    second.shutdown().await;
     served.shutdown().await;
+    second.shutdown().await;
 }
 
 #[tokio::test]

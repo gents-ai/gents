@@ -1504,6 +1504,7 @@ async fn revoked_user_is_answered_with_omitted_roots() {
         0,
         "nothing is visible to the revoked User"
     );
+    drop((open, resubscribed));
     home.shutdown().await;
 }
 
